@@ -4,9 +4,10 @@ These tests never require a real Houdini or a real ``hrpyc`` module. Instead
 they inject light-weight fakes that emulate the small surface area the plugin
 depends on:
 
-- ``hrpyc.ThreadedServer(...)`` -> object with ``._listen()`` / ``.start()`` /
-  ``.close()`` and a ``.logger`` attribute, which runs its ``authenticator`` on
-  every accepted socket exactly as rpyc's server does.
+- ``hrpyc.ThreadedServer(...)`` -> object with ``._listen()`` / ``.accept()`` /
+  ``.start()`` / ``.close()``, ``.active`` / ``.port`` and a ``.logger``
+  attribute, which runs its ``authenticator`` on every accepted socket exactly
+  as rpyc's server does.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
 
 The plugin package lives under ``houdini_plugin/python`` and is not installed,
@@ -34,7 +35,8 @@ class FakeThreadedServer:
 
     It binds a real TCP socket with rpyc's phases: ``__init__`` binds (so a
     port collision surfaces there), ``_listen()`` starts accepting and sets
-    ``active``, and ``start()`` blocks draining the accept queue. This keeps the
+    ``active``, ``accept()`` admits one client, and ``start()`` blocks draining
+    the accept queue. This keeps the
     tests honest about "the listener is reachable" while remaining fully
     hermetic (no Houdini, no rpyc protocol). Each accepted socket goes through
     ``authenticator`` first, as in rpyc; ``authenticated`` and ``rejected``
@@ -91,17 +93,27 @@ class FakeThreadedServer:
             self.port = self._sock.getsockname()[1]
         self.active = True
 
+    def accept(self) -> None:
+        # As rpyc: a timeout is a tick; any other socket error means the
+        # listener was closed under us and surfaces as EOFError to the loop.
+        try:
+            conn, _ = self._sock.accept()
+        except TimeoutError:
+            return
+        except OSError as exc:
+            raise EOFError from exc
+        with conn:
+            self._admit(conn)
+
     def start(self) -> None:
         self._listen()
-        while not self._closed:
-            try:
-                conn, _ = self._sock.accept()
-            except OSError:
-                if self._closed:
-                    return
-                continue
-            with conn:
-                self._admit(conn)
+        try:
+            while self.active:
+                self.accept()
+        except EOFError:
+            pass
+        finally:
+            self.close()
 
     def _admit(self, conn: socket.socket) -> None:
         # Mirrors rpyc.utils.server.Server._authenticate_and_serve_client: no
@@ -118,8 +130,8 @@ class FakeThreadedServer:
             self.authenticated += 1
 
     def close(self) -> None:
-        # The socket stays referenced: the accept loop's next accept() raises
-        # OSError on it and the loop sees _closed, with no attribute to race on.
+        # The socket stays referenced: an in-flight accept() raises OSError on
+        # it, which accept() reports as EOFError, with no attribute to race on.
         self._closed = True
         self.active = False
         self._sock.close()

@@ -20,6 +20,7 @@ from houdini_mcp_plugin.listener import (
     DEFAULT_PORT,
     ListenerConfig,
     RemoteListener,
+    _serve,
     resolve_security_policy,
 )
 
@@ -166,7 +167,7 @@ class TestStartAwaitsReadiness:
     ):
         """Readiness is the listen state, not the accept loop's scheduling.
 
-        The serve thread here stalls forever before draining a single accept,
+        The serve thread here stalls forever in its first accept,
         standing in for a scheduler that never gets round to it. ``start()``
         still reports success, and a client still connects: the kernel queues
         the connection on the listening socket. This is deterministic, not a
@@ -180,7 +181,7 @@ class TestStartAwaitsReadiness:
         never = threading.Event()
 
         class StalledServer(FakeThreadedServer):
-            def start(self) -> None:
+            def accept(self) -> None:
                 never.wait()
 
         hrpyc = FakeHrpycModule()
@@ -198,6 +199,28 @@ class TestStartAwaitsReadiness:
         finally:
             listener.stop()
             never.set()
+
+    def test_serve_thread_is_a_no_op_for_a_server_closed_before_it_ran(self, free_port):
+        """stop() may land before the serve thread is scheduled.
+
+        rpyc's ``start()`` would re-run ``_listen()`` on the closed socket and
+        die with EBADF; the thread body serves only while active, so a server
+        closed first is finished before the loop begins.
+        """
+        from tests.plugin.conftest import FakeThreadedServer
+
+        class CountingServer(FakeThreadedServer):
+            accepts = 0
+
+            def accept(self) -> None:
+                self.accepts += 1
+                super().accept()
+
+        server = CountingServer(object(), hostname="127.0.0.1", port=free_port)
+        server._listen()
+        server.close()
+        _serve(server)
+        assert server.accepts == 0
 
     def test_port_zero_reports_the_port_the_kernel_chose(self, fake_hou, fake_hrpyc):
         """rpyc resolves a port-0 bind in ``_listen()``; start() reports that port."""

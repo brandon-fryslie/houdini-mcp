@@ -142,7 +142,7 @@ class TestListenerDerivesFromSharedHandshake:
             assert authenticate(server_side) == (server_side, None)
             assert client.recv(len(expected)) == expected
             assert server_side.gettimeout() is None  # restored for rpyc
-        # The listener's own start-up reachability probe logs first, at info.
+        # The handshake logger is the only one captured here, so its line is last.
         assert (caplog.records[-1].levelno, caplog.records[-1].getMessage()[:25]) == (
             logging.INFO,
             "accepted hrpyc token from",

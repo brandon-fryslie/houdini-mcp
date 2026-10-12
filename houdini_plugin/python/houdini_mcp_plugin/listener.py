@@ -241,6 +241,23 @@ def _probe_reachable(host: str, port: int, timeout: float) -> bool:
         return False
 
 
+def _serve(server: Any) -> None:
+    """Drain the accept queue of a listening server until it is closed.
+
+    This is rpyc's ``start()`` loop without its leading ``_listen()``: the
+    listener has already run that, and ``start()`` would run it again on the
+    closed socket when ``stop()`` lands before this thread is scheduled. A
+    server closed before the thread runs is simply not active, so nothing runs.
+    """
+    try:
+        while server.active:
+            server.accept()
+    except EOFError:
+        pass  # rpyc's accept(): the listener was closed under it by stop()
+    finally:
+        server.close()
+
+
 def firewall_guidance(host: str, port: int) -> list[str]:
     """Return human-readable firewall / connectivity guidance."""
     guidance = [
@@ -371,10 +388,7 @@ class RemoteListener:
                     "running": False,
                     "host": cfg.host,
                     "port": cfg.port,
-                    "message": (
-                        f"Failed to bind hrpyc listener on {cfg.host}:{cfg.port} "
-                        f"(address in use or not permitted): {exc}"
-                    ),
+                    "message": f"Failed to bind hrpyc listener on {cfg.host}:{cfg.port}: {exc}",
                 }
             except Exception as exc:  # noqa: BLE001 - report any startup failure cleanly
                 logger.error("Failed to start hrpyc listener: %s", exc)
@@ -445,12 +459,18 @@ class RemoteListener:
         # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
         # own ``active`` state, established here synchronously rather than raced
         # against the serve thread. This is rpyc's readiness protocol: its own
-        # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``, and
-        # ``start()`` skips the listen once ``active`` is set. The thread only
-        # drains the accept queue, so nothing waits on it.
+        # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``.
         try:
             server._listen()
-            threading.Thread(target=server.start, name="houdini-hrpyc", daemon=True).start()
+            # [LAW:parse-dont-validate] the server's public readiness bits are what
+            # everything after this reads; a server that does not report them fails here.
+            if not (server.active and server.port):
+                raise RuntimeError(
+                    f"hrpyc server did not report accepting connections on {cfg.host}:{cfg.port}"
+                )
+            threading.Thread(
+                target=_serve, args=(server,), name="houdini-hrpyc", daemon=True
+            ).start()
         except BaseException:
             self._close_server(server)
             raise
