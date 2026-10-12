@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reported at every detail level, and a forced cook always reports.
   - `list_node_types` and `find_nodes` drop the deprecated `max_results` and
     `offset` aliases; `limit` and `cursor` are the paging parameters, as on
-    `list_children`.
+    `list_children`. List responses drop the `count` and `next_offset` aliases
+    of `returned` and `cursor`.
   - `execute_code` resolves `policy`, `allow_dangerous`, `allow_heavy_geometry`
     and `HOUDINI_MCP_ALLOW_BYPASS` once into one grant, reported as
     `audit.granted`. `allow_dangerous` no longer unlocks heavy geometry, and
@@ -30,10 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
   `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
   through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
-  three, and every response carries the same keys (`count`, `total`, `returned`,
-  `has_more`, `offset`, plus `cursor`/`next_offset`/`warning` when a further page
-  exists). `list_children.count` now means items returned, like the other two
-  tools; `list_node_types` no longer emits `total_matched` (use `total`).
+  three, and every response carries the same keys (`total`, `returned`,
+  `has_more`, `offset`, plus `cursor`/`warning` when a further page exists);
+  `list_node_types` no longer emits `total_matched` (use `total`).
 
 ### Fixed
 

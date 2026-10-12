@@ -34,6 +34,7 @@ import logging
 import os
 import threading
 import traceback
+from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
@@ -66,6 +67,16 @@ Policy = Literal["read-only", "normal"]
 VALID_POLICIES: tuple[str, ...] = get_args(Policy)
 DEFAULT_POLICY: Policy = "normal"
 
+# Where a grant came from: the MCP request, or a server tool that wrote the code itself.
+GrantSource = Literal["request", "trusted"]
+
+# [LAW:one-source-of-truth] The execution limits, stated once for the public
+# tool and for every server-side entry.
+DEFAULT_MAX_STDOUT_SIZE = 100000
+DEFAULT_MAX_STDERR_SIZE = 100000
+DEFAULT_MAX_DIFF_NODES = 1000
+DEFAULT_TIMEOUT = 30
+
 # Named undo group used to wrap execution so a timeout can roll back.
 _UNDO_GROUP_LABEL = "houdini-mcp execute_code"
 
@@ -94,6 +105,7 @@ class ExecutionGrant:
     """
 
     policy: str
+    source: GrantSource
     bypass_config_enabled: bool
     dangerous_requested: bool
     heavy_geometry_requested: bool
@@ -110,10 +122,14 @@ class ExecutionGrant:
         allow_heavy_geometry: bool,
         bypass_config_enabled: bool,
     ) -> "ExecutionGrant":
-        """The public decision: a bypass needs an opt-in policy, the request flag AND the config."""
-        bypassable = policy != "read-only"
+        """The public decision: a bypass needs policy "normal", the request flag AND the config.
+
+        Any other policy - read-only, or a value that does not exist - grants nothing.
+        """
+        bypassable = policy == "normal"
         return cls(
             policy=policy,
+            source="request",
             bypass_config_enabled=bypass_config_enabled,
             dangerous_requested=allow_dangerous,
             heavy_geometry_requested=allow_heavy_geometry,
@@ -131,6 +147,7 @@ class ExecutionGrant:
         """
         return cls(
             policy=DEFAULT_POLICY,
+            source="trusted",
             bypass_config_enabled=bypass_config_enabled,
             dangerous_requested=False,
             heavy_geometry_requested=True,
@@ -138,12 +155,6 @@ class ExecutionGrant:
             dangerous=False,
             heavy_geometry=True,
         )
-
-    def denial_reason(self, requested: bool, pattern_reason: str) -> str:
-        """Why a capability is absent: the config gate, when enabling it would have helped."""
-        if requested and self.mutation and not self.bypass_config_enabled:
-            return "bypass_config_disabled"
-        return pattern_reason
 
     def as_audit(self) -> dict[str, bool]:
         return {
@@ -171,6 +182,74 @@ class DetectedPatterns:
 
 
 _NO_PATTERNS = DetectedPatterns(mutation=[], dangerous=[], heavy_geometry=[])
+
+
+@dataclass(frozen=True)
+class _BypassGate:
+    """One request-flag capability: where it is scanned, where it is granted, how a refusal reads."""
+
+    capability: str  # the audit key, and the prefix of the refusal's patterns field
+    flag: str  # the request flag that asks for it
+    pattern_reason: str  # blocked_reason when the code needs it and the grant lacks it
+    found: str  # what the scan found
+    alternative: str  # a bounded tool to reach for first, or nothing
+    patterns: Callable[[DetectedPatterns], list[str]]
+    requested: Callable[[ExecutionGrant], bool]
+    granted: Callable[[ExecutionGrant], bool]
+
+
+# [LAW:one-type-per-behavior] Dangerous and heavy-geometry access differ only in
+# these values; the gate that refuses them is written once below.
+_BYPASS_GATES: tuple[_BypassGate, ...] = (
+    _BypassGate(
+        capability="dangerous",
+        flag="allow_dangerous",
+        pattern_reason="dangerous_pattern",
+        found="Dangerous operations detected in code",
+        alternative="",
+        patterns=lambda detected: detected.dangerous,
+        requested=lambda grant: grant.dangerous_requested,
+        granted=lambda grant: grant.dangerous,
+    ),
+    _BypassGate(
+        capability="heavy_geometry",
+        flag="allow_heavy_geometry",
+        pattern_reason="heavy_geometry",
+        found="Heavy geometry access detected in code",
+        alternative="Use get_geo_summary() for bounded geometry inspection, or ",
+        patterns=lambda detected: detected.heavy_geometry,
+        requested=lambda grant: grant.heavy_geometry_requested,
+        granted=lambda grant: grant.heavy_geometry,
+    ),
+)
+
+
+def _bypass_refusal(gate: _BypassGate, grant: ExecutionGrant) -> tuple[str, str, str]:
+    """``(blocked_reason, message, hint)`` for code that needs ``gate`` under ``grant``.
+
+    The refusal is one of the grant's own states - the policy forbids it, the
+    config forbids it, or nobody asked - and the hint names the input that
+    would change the answer, never one that cannot.
+    """
+    if not grant.mutation:
+        return (
+            gate.pattern_reason,
+            f"{gate.found} under policy {grant.policy!r}, which permits inspection only.",
+            f"{gate.alternative}Re-run with policy='normal' and {gate.flag}=True on a server "
+            "with HOUDINI_MCP_ALLOW_BYPASS enabled.",
+        )
+    if gate.requested(grant) and not grant.bypass_config_enabled:
+        return (
+            "bypass_config_disabled",
+            f"Bypass requested ({gate.flag}=True) but server config "
+            "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
+            "Enable HOUDINI_MCP_ALLOW_BYPASS on the server; the request flag alone grants nothing.",
+        )
+    return (
+        gate.pattern_reason,
+        gate.found,
+        f"{gate.alternative}Set {gate.flag}=True AND enable HOUDINI_MCP_ALLOW_BYPASS to proceed.",
+    )
 
 
 def _resolve_undo_primitive(hou: Any) -> Any | None:
@@ -222,6 +301,7 @@ def _build_audit(
     """Assemble the structured audit block returned with every response."""
     return {
         "policy": grant.policy,
+        "source": grant.source,
         "allow_dangerous_requested": grant.dangerous_requested,
         "allow_heavy_geometry_requested": grant.heavy_geometry_requested,
         "bypass_config_enabled": grant.bypass_config_enabled,
@@ -271,10 +351,10 @@ def _blocked(
 def execute_code(
     code: str,
     capture_diff: bool = False,
-    max_stdout_size: int = 100000,
-    max_stderr_size: int = 100000,
-    max_diff_nodes: int = 1000,
-    timeout: int = 30,
+    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
+    timeout: int = DEFAULT_TIMEOUT,
     allow_dangerous: bool = False,
     host: str = "localhost",
     port: int = 18811,
@@ -305,34 +385,23 @@ def execute_code(
         Dict with execution result including stdout/stderr, scene changes,
         a structured ``audit`` block, and (on timeout) a ``rollback`` block.
     """
-    bypass_config = _bypass_config_enabled()
-
-    # [LAW:parse-dont-validate] Fail closed on unknown values before any permission exists.
+    grant = ExecutionGrant.resolve(
+        policy=policy,
+        allow_dangerous=allow_dangerous,
+        allow_heavy_geometry=allow_heavy_geometry,
+        bypass_config_enabled=_bypass_config_enabled(),
+    )
+    # [LAW:parse-dont-validate] An unknown policy already holds no permission;
+    # refuse it by name so the caller learns the value, not a mutation refusal.
     if policy not in VALID_POLICIES:
-        unknown = ExecutionGrant(
-            policy=policy,
-            bypass_config_enabled=bypass_config,
-            dangerous_requested=allow_dangerous,
-            heavy_geometry_requested=allow_heavy_geometry,
-            mutation=False,
-            dangerous=False,
-            heavy_geometry=False,
-        )
         return _blocked(
             code=code,
-            grant=unknown,
+            grant=grant,
             detected=_NO_PATTERNS,
             reason="unknown_policy",
             message=f"Unknown policy {policy!r}. Valid policies: {', '.join(VALID_POLICIES)}.",
             hint=f"Pass policy as one of: {', '.join(VALID_POLICIES)}.",
         )
-
-    grant = ExecutionGrant.resolve(
-        policy=policy,
-        allow_dangerous=allow_dangerous,
-        allow_heavy_geometry=allow_heavy_geometry,
-        bypass_config_enabled=bypass_config,
-    )
     return _execute_with_grant(
         code,
         grant,
@@ -351,11 +420,11 @@ def _execute_with_grant(
     code: str,
     grant: ExecutionGrant,
     *,
-    capture_diff: bool,
-    max_stdout_size: int,
-    max_stderr_size: int,
-    max_diff_nodes: int,
-    timeout: int,
+    capture_diff: bool = False,
+    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
+    timeout: int = DEFAULT_TIMEOUT,
     host: str,
     port: int,
 ) -> dict[str, Any]:
@@ -367,8 +436,9 @@ def _execute_with_grant(
     global _before_scene, _after_scene
 
     logger.debug(
-        "execute_code policy=%s granted=%s config=%s requested dangerous=%s heavy=%s",
+        "execute_code policy=%s source=%s granted=%s config=%s requested dangerous=%s heavy=%s",
         grant.policy,
+        grant.source,
         grant.as_audit(),
         grant.bypass_config_enabled,
         grant.dangerous_requested,
@@ -426,53 +496,29 @@ def _execute_with_grant(
             mutation_patterns=detected.mutation,
         )
 
-    if detected.dangerous and not grant.dangerous:
-        reason = grant.denial_reason(grant.dangerous_requested, "dangerous_pattern")
-        return _blocked(
-            code=code,
-            grant=grant,
-            detected=detected,
-            reason=reason,
-            message=(
-                "Bypass requested (allow_dangerous=True) but server config "
-                "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed."
-                if reason == "bypass_config_disabled"
-                else "Dangerous operations detected in code"
-            ),
-            hint="Set allow_dangerous=True AND enable HOUDINI_MCP_ALLOW_BYPASS to proceed.",
-            dangerous_patterns=detected.dangerous,
-            bypass_requested=grant.dangerous_requested,
-            bypass_config_enabled=grant.bypass_config_enabled,
-        )
-
-    if detected.heavy_geometry and not grant.heavy_geometry:
-        reason = grant.denial_reason(grant.heavy_geometry_requested, "heavy_geometry")
-        return _blocked(
-            code=code,
-            grant=grant,
-            detected=detected,
-            reason=reason,
-            message=(
-                "Heavy geometry bypass requested but server config "
-                "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed."
-                if reason == "bypass_config_disabled"
-                else "Heavy geometry access detected in code"
-            ),
-            hint=(
-                "Use get_geo_summary() for bounded geometry inspection, or set "
-                "allow_heavy_geometry=True AND enable HOUDINI_MCP_ALLOW_BYPASS."
-            ),
-            heavy_geometry_patterns=detected.heavy_geometry,
-            bypass_requested=grant.heavy_geometry_requested,
-            bypass_config_enabled=grant.bypass_config_enabled,
-        )
+    for gate in _BYPASS_GATES:
+        patterns = gate.patterns(detected)
+        if patterns and not gate.granted(grant):
+            reason, message, hint = _bypass_refusal(gate, grant)
+            return _blocked(
+                code=code,
+                grant=grant,
+                detected=detected,
+                reason=reason,
+                message=message,
+                hint=hint,
+                bypass_requested=gate.requested(grant),
+                bypass_config_enabled=grant.bypass_config_enabled,
+                **{f"{gate.capability}_patterns": patterns},
+            )
 
     # Emit the durable bypass audit BEFORE execution so a later exception
     # cannot skip the server-side trail. Source code and secrets are excluded.
     if detected.dangerous or detected.heavy_geometry:
         logger.warning(
-            "execute_code approved bypass policy=%s dangerous=%s heavy=%s code_sha256=%s",
+            "execute_code approved bypass policy=%s source=%s dangerous=%s heavy=%s code_sha256=%s",
             grant.policy,
+            grant.source,
             detected.dangerous,
             detected.heavy_geometry,
             hashlib.sha256(code.encode("utf-8", "replace")).hexdigest(),

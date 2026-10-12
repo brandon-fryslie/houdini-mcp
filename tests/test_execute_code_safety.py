@@ -262,6 +262,20 @@ class TestPolicyProfiles:
             port=18811,
         )
         assert result["audit"]["blocked_reason"] == "heavy_geometry"
+        assert "HOUDINI_MCP_ALLOW_BYPASS is disabled" not in result["message"]
+        assert "policy='normal'" in result["hint"]
+
+    def test_config_denial_hint_names_the_config(self, mock_connection, deny_bypass_config):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "hou.node('/obj/geo1').geometry()",
+            allow_heavy_geometry=True,
+            host="localhost",
+            port=18811,
+        )
+        assert result["audit"]["blocked_reason"] == "bypass_config_disabled"
+        assert result["hint"].startswith("Enable HOUDINI_MCP_ALLOW_BYPASS")
 
 
 # ---------------------------------------------------------------------------
@@ -419,11 +433,28 @@ class TestAuditFields:
         from houdini_mcp.tools import execute_code
 
         with caplog.at_level(logging.WARNING):
-            execute_code("hou.exit()", host="localhost", port=18811)
-        assert any(
-            "execute_code" in r.message.lower() and "block" in r.message.lower()
-            for r in caplog.records
-        )
+            execute_code("hou.exit()", policy="normal", host="localhost", port=18811)
+        [record] = [
+            r.message for r in caplog.records if r.message.startswith("execute_code blocked:")
+        ]
+        assert "dangerous_pattern" in record
+        assert "policy=normal" in record
+        assert "hou.exit()" in record
+
+    def test_resolved_grant_is_logged(self, mock_connection, deny_bypass_config, caplog):
+        """The debug event carries every input the grant was resolved from and what it granted."""
+        import logging
+
+        from houdini_mcp.tools import execute_code
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.code"):
+            execute_code("print('x')", allow_dangerous=True, host="localhost", port=18811)
+        [record] = [
+            r.message for r in caplog.records if r.message.startswith("execute_code policy=")
+        ]
+        assert "policy=normal source=request" in record
+        assert "'mutation': True, 'dangerous': False, 'heavy_geometry': False" in record
+        assert "config=False requested dangerous=True heavy=False" in record
 
     def test_approved_bypass_is_logged_without_source(
         self, mock_connection, allow_bypass_config, caplog
@@ -447,6 +478,28 @@ class TestAuditFields:
         assert records
         assert all(secret_source not in message and "marker" not in message for message in records)
         assert result["audit"]["code_sha256"] in records[-1]
+        assert "source=request" in records[-1]
+
+    def test_trusted_grant_is_distinguishable_in_audit_and_log(
+        self, mock_connection, deny_bypass_config, caplog
+    ):
+        """A server-authored grant never reads as a public bypass that slipped past the config."""
+        import logging
+
+        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant
+        from tests.conftest import MockHouNode
+
+        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
+        grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
+        with caplog.at_level(logging.WARNING):
+            result = _execute_with_grant(
+                "hou.node('/obj/geo1').geometry()", grant, host="localhost", port=18811
+            )
+        assert result["status"] == "success"
+        assert result["audit"]["source"] == "trusted"
+        assert result["audit"]["bypass_config_enabled"] is False
+        [record] = [r.message for r in caplog.records if "approved bypass" in r.message]
+        assert "source=trusted" in record
 
 
 # ---------------------------------------------------------------------------

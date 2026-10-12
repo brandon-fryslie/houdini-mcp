@@ -73,9 +73,9 @@ class TestResponsePagination:
         result = _page(items, limit=10)
         assert result["items"] == items[:10]
         assert result["total"] == 25
-        assert result["returned"] == result["count"] == 10
+        assert result["returned"] == 10
         assert result["has_more"] is True
-        assert result["cursor"] == result["next_offset"] == 10
+        assert result["cursor"] == 10
         assert "cursor=10" in result["warning"]
 
     def test_paginate_with_cursor(self):
@@ -129,13 +129,11 @@ class TestOnePagingContract:
     """Every list tool pages the same arguments the same way and emits the same keys."""
 
     PAGING_KEYS = {
-        "count",
         "total",
         "returned",
         "has_more",
         "offset",
         "cursor",
-        "next_offset",
         "warning",
     }
 
@@ -162,34 +160,32 @@ class TestOnePagingContract:
         for tool in self._tools(mock_connection):
             result = tool(limit=0, cursor=-7)
             assert result["status"] == "success"
-            assert result["returned"] == result["count"] == 1
+            assert result["returned"] == 1
             assert result["offset"] == 0
             assert result["has_more"] is True
-            assert result["cursor"] == result["next_offset"] == 1
+            assert result["cursor"] == 1
             assert "cursor=1" in result["warning"]
 
     def test_second_page_has_identical_contract_shape(self, mock_connection):
         pages = [self._paging(tool(limit=5, cursor=5)) for tool in self._tools(mock_connection)]
         for page in pages:
             assert set(page) == {
-                "count",
                 "total",
                 "returned",
                 "has_more",
                 "offset",
                 "cursor",
-                "next_offset",
                 "warning",
             }
             assert page["offset"] == 5
-            assert page["returned"] == page["count"] == 5
-            assert page["cursor"] == page["next_offset"] == 10
+            assert page["returned"] == 5
+            assert page["cursor"] == 10
 
     def test_last_page_omits_continuation_everywhere(self, mock_connection):
         for tool in self._tools(mock_connection):
             result = tool(limit=500, cursor=0)
             assert result["has_more"] is False
-            assert not ({"cursor", "next_offset", "warning"} & set(result))
+            assert not ({"cursor", "warning"} & set(result))
 
     def test_oversized_limit_is_capped_everywhere(self, mock_connection):
         from houdini_mcp.tools._common import PAGE_LIMIT_MAX
@@ -212,7 +208,7 @@ class TestOnePagingContract:
             # advances by exactly what was returned.
             assert result["total"] == PAGE_LIMIT_MAX + 1
             assert 0 < result["returned"] <= PAGE_LIMIT_MAX
-            assert result["cursor"] == result["next_offset"] == result["returned"]
+            assert result["cursor"] == result["returned"]
 
     def test_list_children_keeps_both_warnings(self, mock_connection):
         from houdini_mcp.tools.nodes import list_children
@@ -280,7 +276,7 @@ class TestCapOnPagedPayloads:
             max_bytes=2000,
         )
         assert result["children_truncated"] is True
-        assert not ({"offset", "cursor", "next_offset", "has_more"} & set(result))
+        assert not ({"offset", "cursor", "has_more"} & set(result))
 
     def test_capped_page_keeps_the_tool_warning_and_replaces_the_paging_one(self):
         from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
@@ -308,9 +304,9 @@ class TestCapOnPagedPayloads:
         result = apply_response_cap(data, max_bytes=900)
         kept = len(result["matches"])
         assert 0 < kept < 100
-        assert result["returned"] == result["count"] == kept
+        assert result["returned"] == kept
         assert result["offset"] == 40
-        assert result["cursor"] == result["next_offset"] == 40 + kept
+        assert result["cursor"] == 40 + kept
 
     def test_minimal_fallback_delivers_nothing_and_says_so(self):
         from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
@@ -322,10 +318,10 @@ class TestCapOnPagedPayloads:
         result = apply_response_cap(data, max_bytes=300)
         assert result["_truncated"] is True
         assert "matches" not in result
-        assert result["returned"] == result["count"] == 0
+        assert result["returned"] == 0
         assert result["offset"] == 5
         assert result["has_more"] is True
-        assert result["cursor"] == result["next_offset"] == 5
+        assert result["cursor"] == 5
 
     def test_joined_warning_has_no_period_before_the_separator(self):
         from houdini_mcp.tools._common import join_warnings
@@ -343,7 +339,7 @@ class TestCapOnPagedPayloads:
 
         result = apply_response_cap(data, max_bytes=600)
         assert result["offset"] == 7
-        assert result["cursor"] == result["next_offset"] == 8
+        assert result["cursor"] == 8
         assert result["returned"] == 1
 
     def test_paged_payload_with_two_list_fields_is_refused(self):
@@ -371,13 +367,6 @@ class TestLegacyPaginationCompatibility:
             list_children("/obj", False, 10, 1000, True, "localhost", 18811)["status"] == "success"
         )
         assert find_nodes("/obj", "*", None, "localhost", 18811)["status"] == "success"
-
-    def test_next_offset_alias_is_preserved(self, mock_connection):
-        from houdini_mcp.tools.nodes import list_node_types
-
-        result = list_node_types(limit=1, cursor=0, host="localhost", port=18811)
-        assert result["has_more"] is True
-        assert result["next_offset"] == result["cursor"] == 1
 
     def test_find_nodes_clamps_zero_limit(self, mock_connection):
         from houdini_mcp.tools.nodes import find_nodes
@@ -831,7 +820,6 @@ class TestSemanticTruncation:
                 "status": "success",
                 "children": [{"name": f"n{i}", "detail": "x" * 300} for i in range(20)],
                 "returned": 20,
-                "count": 20,
                 "total": 20,
                 "has_more": False,
                 "offset": 0,
@@ -840,9 +828,9 @@ class TestSemanticTruncation:
         )
         preserved = len(result["children"])
         assert 0 < preserved < 20
-        assert result["returned"] == result["count"] == preserved
+        assert result["returned"] == preserved
         assert result["has_more"] is True
-        assert result["cursor"] == result["next_offset"] == preserved
+        assert result["cursor"] == preserved
 
     def test_nested_geometry_categories_keep_bounded_prefixes(self):
         from houdini_mcp.tools._common import apply_response_cap
@@ -874,7 +862,7 @@ class TestSemanticTruncation:
         assert result["error_nodes"]
         assert result["error_nodes_truncated"] is True
 
-    def test_capped_page_preserves_next_offset(self):
+    def test_capped_page_rebuilds_cursor(self):
         from houdini_mcp.tools._common import apply_response_cap
 
         result = apply_response_cap(
@@ -882,16 +870,14 @@ class TestSemanticTruncation:
                 "status": "success",
                 "children": [{"name": f"n{i}", "detail": "x" * 300} for i in range(20)],
                 "returned": 20,
-                "count": 20,
                 "total": 100,
                 "has_more": True,
                 "offset": 0,
                 "cursor": 20,
-                "next_offset": 20,
             },
             max_bytes=1400,
         )
-        assert result["next_offset"] == result["cursor"] == len(result["children"])
+        assert result["cursor"] == len(result["children"])
 
 
 def _json_size(value):
@@ -1115,9 +1101,9 @@ class TestOversizedResponseRetainsUsefulData:
         assert result["node_path"] == "/obj/geo1"
         assert result["total"] == 5000
         preserved = len(result["children"])
-        assert result["returned"] == result["count"] == preserved
+        assert result["returned"] == preserved
         assert result["has_more"] is True
-        assert result["cursor"] == result["next_offset"] == preserved
+        assert result["cursor"] == preserved
 
     def test_minimal_response_not_metadata_only(self):
         """Even minimal fallback response includes useful info."""

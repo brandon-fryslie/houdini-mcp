@@ -427,6 +427,24 @@ class TestEdgeCases:
             "/obj/geo1", detail="compact", cook_info="force_cook", host="localhost", port=18811
         )
 
+    def test_get_node_info_logs_its_axes_and_keys(self, mock_connection, caplog):
+        import logging
+
+        from houdini_mcp.tools import get_node_info
+
+        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
+            result = get_node_info(
+                "/obj/geo1", detail="compact", cook_info="inspect", host="localhost", port=18811
+            )
+        [record] = [
+            r.message for r in caplog.records if r.message.startswith("get_node_info path=")
+        ]
+        assert record.startswith(
+            "get_node_info path=/obj/geo1 detail=compact cook_info=inspect keys="
+        )
+        assert record.endswith(f"keys={sorted(result)}")
+
     def test_unknown_detail_or_cook_info_fails_loudly(self, mock_connection):
         from houdini_mcp.tools import get_node_info
 

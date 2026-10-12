@@ -228,11 +228,7 @@ print(json.dumps(result))
     exec_result = _execute_with_grant(
         geo_analysis_code,
         ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=_bypass_config_enabled()),
-        capture_diff=False,
         max_stdout_size=500000,  # Allow larger output for geo data
-        max_stderr_size=100000,
-        max_diff_nodes=1000,
-        timeout=30,
         host=host,
         port=port,
     )

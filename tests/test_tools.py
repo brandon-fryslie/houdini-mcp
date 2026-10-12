@@ -1082,7 +1082,7 @@ class TestListNodeTypes:
 
         assert result["status"] == "success"
         assert "node_types" in result
-        assert result["count"] > 0
+        assert result["returned"] > 0
 
     def test_list_node_types_with_category(self, mock_connection):
         """Test listing node types with category filter."""
@@ -1102,7 +1102,7 @@ class TestListNodeTypes:
         result = list_node_types("NonExistentCategory", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 0
+        assert result["returned"] == 0
 
     def test_list_node_types_limit_default(self, mock_connection):
         """Test that default limit limits output to 100."""
@@ -1112,7 +1112,7 @@ class TestListNodeTypes:
 
         assert result["status"] == "success"
         # Default limit should be 100
-        assert result["count"] <= 100
+        assert result["returned"] <= 100
         assert len(result["node_types"]) <= 100
 
     def test_list_node_types_limit_custom(self, mock_connection):
@@ -1122,7 +1122,7 @@ class TestListNodeTypes:
         result = list_node_types(None, limit=50, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] <= 50
+        assert result["returned"] <= 50
         assert len(result["node_types"]) <= 50
 
     def test_list_node_types_limit_capped_at_500(self, mock_connection):
@@ -1134,7 +1134,7 @@ class TestListNodeTypes:
 
         assert result["status"] == "success"
         # Should be capped at 500
-        assert result["count"] <= 500
+        assert result["returned"] <= 500
         assert len(result["node_types"]) <= 500
 
     def test_list_node_types_limit_minimum(self, mock_connection):
@@ -1144,7 +1144,7 @@ class TestListNodeTypes:
         result = list_node_types(None, limit=0, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 1
+        assert result["returned"] == 1
         assert result["cursor"] == 1
 
     def test_list_node_types_name_filter(self, mock_connection):
@@ -1169,7 +1169,7 @@ class TestListNodeTypes:
         assert result_lower["status"] == "success"
         assert result_upper["status"] == "success"
         # Should return same results regardless of case
-        assert result_lower["count"] == result_upper["count"]
+        assert result_lower["returned"] == result_upper["returned"]
 
     def test_list_node_types_name_filter_no_matches(self, mock_connection):
         """Test name_filter with no matches returns empty list."""
@@ -1180,7 +1180,7 @@ class TestListNodeTypes:
         )
 
         assert result["status"] == "success"
-        assert result["count"] == 0
+        assert result["returned"] == 0
         assert len(result["node_types"]) == 0
 
     def test_list_node_types_category_and_name_filter_combined(self, mock_connection):
@@ -1214,7 +1214,7 @@ class TestListNodeTypes:
         result = list_node_types(None, limit=5, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        if result["count"] >= 5:
+        if result["returned"] >= 5:
             # If we hit the limit, warning should be present
             assert "warning" in result
             assert f"cursor={result['cursor']}" in result["warning"]
@@ -1229,9 +1229,9 @@ class TestListNodeTypes:
         result = list_node_types(None, limit=10, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] <= 10
+        assert result["returned"] <= 10
         # count should match length of node_types list
-        assert result["count"] == len(result["node_types"])
+        assert result["returned"] == len(result["node_types"])
 
 
 class TestInternalHelpers:
@@ -1344,7 +1344,7 @@ class TestListChildren:
 
         assert result["status"] == "success"
         assert result["node_path"] == "/obj/geo1"
-        assert result["count"] == 2
+        assert result["returned"] == 2
         assert len(result["children"]) == 2
 
         # Check grid node (no inputs)
@@ -1381,7 +1381,7 @@ class TestListChildren:
         )
 
         assert result["status"] == "success"
-        assert result["count"] == 2  # subnet and sphere
+        assert result["returned"] == 2  # subnet and sphere
 
         paths = [c["path"] for c in result["children"]]
         assert "/obj/geo1/subnet1" in paths
@@ -1404,7 +1404,7 @@ class TestListChildren:
 
         assert result["status"] == "success"
         # Should only get level1 and level2 (depth 1)
-        assert result["count"] <= 2
+        assert result["returned"] <= 2
 
     def test_list_children_max_nodes(self, mock_connection):
         """Test max_nodes limit is respected."""
@@ -1423,7 +1423,7 @@ class TestListChildren:
         )
 
         assert result["status"] == "success"
-        assert result["count"] == 10
+        assert result["returned"] == 10
         assert "warning" in result
 
     def test_list_children_node_not_found(self, mock_connection):
@@ -1445,7 +1445,7 @@ class TestListChildren:
         result = list_children("/obj/geo1", False, 10, 1000, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 0
+        assert result["returned"] == 0
         assert result["children"] == []
 
     def test_list_children_compact_mode(self, mock_connection):
@@ -1466,7 +1466,7 @@ class TestListChildren:
         )
 
         assert result["status"] == "success"
-        assert result["count"] == 2
+        assert result["returned"] == 2
 
         # In compact mode, only path/name/type should be present
         for child in result["children"]:
@@ -1503,9 +1503,9 @@ class TestListChildren:
         result = list_children(
             "/obj/geo1", compact=True, limit=10, cursor=10, host="localhost", port=18811
         )
-        assert result["returned"] == result["count"] == 10
+        assert result["returned"] == 10
         assert result["total"] == 50
-        assert result["cursor"] == result["next_offset"] == 20
+        assert result["cursor"] == 20
         assert result["offset"] == 10
 
     def test_compact_payload_is_at_least_sixty_percent_smaller(self, mock_connection):
@@ -1552,7 +1552,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 2
+        assert result["returned"] == 2
         assert result["pattern"] == "noise*"
 
         names = [m["name"] for m in result["matches"]]
@@ -1572,7 +1572,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "noise", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 1
+        assert result["returned"] == 1
         assert result["matches"][0]["name"] == "my_noise_node"
 
     def test_find_nodes_type_filter(self, mock_connection):
@@ -1588,7 +1588,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "*", "sphere", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 2
+        assert result["returned"] == 2
         assert result["node_type_filter"] == "sphere"
 
         for match in result["matches"]:
@@ -1610,7 +1610,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 1
+        assert result["returned"] == 1
         assert result["matches"][0]["path"] == "/obj/geo1/subnet1/noise1"
 
     def test_find_nodes_limit(self, mock_connection):
@@ -1626,7 +1626,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "*", None, limit=10, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 10
+        assert result["returned"] == 10
         assert "warning" in result
 
     def test_find_nodes_root_not_found(self, mock_connection):
@@ -1649,7 +1649,7 @@ class TestFindNodes:
         result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["count"] == 0
+        assert result["returned"] == 0
         assert result["matches"] == []
 
     def test_find_nodes_pagination_cursor(self, mock_connection):
@@ -1665,14 +1665,14 @@ class TestFindNodes:
         # Get first page
         result1 = find_nodes("/obj", "*", None, limit=10, cursor=0, host="localhost", port=18811)
         assert result1["status"] == "success"
-        assert result1["count"] == 10
+        assert result1["returned"] == 10
         # When limit is hit, we have a warning about more results
         assert "warning" in result1
 
         # Get second page
         result2 = find_nodes("/obj", "*", None, limit=10, cursor=10, host="localhost", port=18811)
         assert result2["status"] == "success"
-        assert result2["count"] == 10
+        assert result2["returned"] == 10
         assert result2.get("offset") == 10
 
         # Verify different nodes returned

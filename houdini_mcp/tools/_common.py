@@ -621,7 +621,7 @@ def _add_response_metadata(
     if size_bytes > RESPONSE_SIZE_LARGE_THRESHOLD:
         result["_response_size_warning"] = (
             f"Large response ({size_bytes // 1024}KB). "
-            "Consider a compact detail level, a smaller limit, or adding filters."
+            "Consider requesting fewer items, less detail, or adding a filter."
         )
     elif size_bytes > RESPONSE_SIZE_WARNING_THRESHOLD:
         result["_response_size_note"] = f"Response size: {size_bytes // 1024}KB"
@@ -1140,16 +1140,11 @@ def is_paged(data: dict[str, Any]) -> bool:
 
 
 def paging_fields(page: Page[Any]) -> dict[str, Any]:
-    """The paging response contract every list tool emits.
-
-    ``count`` and ``next_offset`` are aliases (of ``returned`` and ``cursor``)
-    that existing clients read; they are derived here and nowhere else.
-    """
+    """The paging response contract every list tool emits."""
     # [LAW:single-enforcer] [LAW:one-source-of-truth] One builder for the contract;
     # tools spread this dict and never hand-write a paging key.
     returned = len(page.items)
     fields: dict[str, Any] = {
-        "count": returned,
         "total": page.total,
         "returned": returned,
         "has_more": page.has_more,
@@ -1158,7 +1153,6 @@ def paging_fields(page: Page[Any]) -> dict[str, Any]:
     if page.has_more:
         next_page = page.offset + returned
         fields["cursor"] = next_page
-        fields["next_offset"] = next_page
         fields["warning"] = (
             f"Returned {returned} of {page.total} starting at offset {page.offset}. "
             f"Use cursor={next_page} for the next page"
@@ -1285,7 +1279,6 @@ def apply_response_cap(
         "count",
         "offset",
         "cursor",
-        "next_offset",
         "has_more",
         "pattern",
         "category",
