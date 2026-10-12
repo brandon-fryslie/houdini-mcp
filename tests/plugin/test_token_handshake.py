@@ -33,7 +33,6 @@ def _serve(authenticator: handshake.Authenticator | None) -> Iterator[int]:
         authenticator=authenticator,
         protocol_config={"allow_all_attrs": True},
     )
-    server.logger.quiet = True
     server._listen()  # accepting before the thread exists, as the plugin does
     thread = threading.Thread(target=server.start, daemon=True)
     thread.start()

@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string literals is no longer flagged: the gate reads the same AST `exec`
   compiles, once per request. Code that does not parse is refused with
   `blocked_reason="syntax_error"`.
+- **Listener depends on a declared server contract that real hrpyc satisfies**
+  (houdini-laws-etg.zu6): `listener.HrpycModule` and `listener.HrpycServer`
+  declare the rpyc surface the listener drives; the test fake and real rpyc are
+  both held to it by `tests/plugin/test_hrpyc_contract.py`, which also starts
+  the listener on port 0 against real rpyc, over IPv4 and IPv6 (`::1`/`::`
+  binds now reach rpyc as IPv6; before, only the fake accepted them). A
+  server that fails to close is reported by `stop()` as `error_type:
+  "close"` and released. rpyc's per-connection log lines
+  now go to `houdini_mcp_plugin.listener.rpyc` (the previous "quiet" switch
+  only existed on the fake). The plugin packages are type-checked in CI, and
+  that check fails the build.
 
 - **Flags have a cap and an exit plan; the permission decision is one value**
   (houdini-laws-etg.pic):

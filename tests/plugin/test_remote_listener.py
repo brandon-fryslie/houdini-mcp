@@ -115,7 +115,7 @@ class TestStartStop:
 
         assert result["status"] == "success"
         assert listener.is_running() is False
-        assert fake_hrpyc.servers[0]._closed is True
+        assert fake_hrpyc.servers[0].active is False
 
     def test_stop_is_idempotent(self, fake_hrpyc, fake_hou, free_port):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
@@ -146,8 +146,8 @@ class TestStartStop:
         assert result["port"] == new_port
         assert listener.is_running() is True
         # First server closed, second server open.
-        assert fake_hrpyc.servers[0]._closed is True
-        assert fake_hrpyc.servers[1]._closed is False
+        assert fake_hrpyc.servers[0].active is False
+        assert fake_hrpyc.servers[1].active is True
 
     def test_reload_when_not_running_just_starts(self, fake_hrpyc, fake_hou, free_port):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
