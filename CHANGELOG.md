@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists). `list_children.count` now means items returned, like the other two
   tools; `list_node_types` no longer emits `total_matched` (use `total`).
 
+### Fixed
+
+- **Token handshake has one definition** (`houdini_mcp_handshake`, in the plugin tree and shipped with the server): the MCP
+  server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
+  with a token is reachable from the server (previously only the verify script
+  could connect to it). The listener's authenticator and the verify script's
+  client side derive from the same module instead of hand-mirrored copies. The
+  token is sent length-prefixed and the listener acknowledges a correct one,
+  so a client presenting a wrong token gets a distinct, non-retried error
+  instead of "Houdini is not running", and a token sent to a listener that
+  never answers is a bounded timeout instead of a 30s hang; both sides bound
+  the handshake wait, and the listener logs each accepted and rejected
+  handshake. A client with no token against a tokened listener is still
+  reported as a connection failure, which now names the token as a cause.
+
 ### Added
 
 - **Remote hrpyc listener activation** (`houdini_mcp_plugin.listener`): the

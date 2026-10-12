@@ -37,7 +37,7 @@ def in_process_houdini(
         raise AssertionError("rpyc must not be used when Houdini is in-process")
 
     monkeypatch.setitem(sys.modules, "hou", mock_hou)
-    monkeypatch.setattr(conn_module.rpyc.classic, "connect", _no_rpyc)
+    monkeypatch.setattr(conn_module.handshake, "connect", _no_rpyc)
     monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
     use_in_process_houdini()
     yield mock_hou

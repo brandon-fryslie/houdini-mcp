@@ -5,7 +5,8 @@ they inject light-weight fakes that emulate the small surface area the plugin
 depends on:
 
 - ``hrpyc.ThreadedServer(...)`` -> object with ``.start()`` / ``.close()`` and
-  a ``.logger`` attribute.
+  a ``.logger`` attribute, which runs its ``authenticator`` on every accepted
+  socket exactly as rpyc's server does.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
 
 The plugin package lives under ``houdini_plugin/python`` and is not installed,
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rpyc.utils.authenticators import AuthenticationError
 
 # Make the plugin package importable without installing it.
 _PLUGIN_PATH = Path(__file__).resolve().parents[2] / "houdini_plugin" / "python"
@@ -34,7 +36,9 @@ class FakeThreadedServer:
     When started, it actually binds a real TCP socket so that the plugin's
     reachability probe (``socket.create_connection``) succeeds. This keeps the
     tests honest about the "listener is actually reachable" behaviour while
-    remaining fully hermetic (no Houdini, no rpyc protocol).
+    remaining fully hermetic (no Houdini, no rpyc protocol). Each accepted socket
+    goes through ``authenticator`` first, as in rpyc; ``authenticated`` and
+    ``rejected`` count the outcomes so a test can assert the handshake ran.
     """
 
     def __init__(
@@ -65,6 +69,8 @@ class FakeThreadedServer:
         self._closed = False
         self.started = False
         self.bound_port = port
+        self.authenticated = 0
+        self.rejected = 0
 
         if self._fail_bind:
             raise OSError(98, "Address already in use")
@@ -88,13 +94,29 @@ class FakeThreadedServer:
                 try:
                     self._sock.settimeout(0.1)
                     conn, _ = self._sock.accept()
-                    conn.close()
                 except (TimeoutError, OSError):
                     if self._closed:
                         return
+                    continue
+                with conn:
+                    self._admit(conn)
 
         self._thread = threading.Thread(target=_serve, daemon=True)
         self._thread.start()
+
+    def _admit(self, conn: socket.socket) -> None:
+        # Mirrors rpyc.utils.server.Server._authenticate_and_serve_client: no
+        # authenticator admits everyone; a rejection closes the socket and the
+        # server keeps serving.
+        if self.authenticator is None:
+            self.authenticated += 1
+            return
+        try:
+            self.authenticator(conn)
+        except AuthenticationError:
+            self.rejected += 1
+        else:
+            self.authenticated += 1
 
     def close(self) -> None:
         self._closed = True

@@ -58,8 +58,8 @@ class TestRenderViewportValidation:
         """Test handling of connection errors."""
         from houdini_mcp.tools import render_viewport
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = render_viewport(host="localhost", port=18811)
 
         assert result["status"] == "error"
@@ -373,8 +373,8 @@ class TestRenderQuadViewValidation:
         """Test handling of connection errors."""
         from houdini_mcp.tools import render_quad_view
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = render_quad_view(host="localhost", port=18811)
 
         assert result["status"] == "error"
@@ -551,8 +551,8 @@ class TestListRenderNodes:
         """Test handling of connection errors."""
         from houdini_mcp.tools import list_render_nodes
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = list_render_nodes(host="localhost", port=18811)
 
         assert result["status"] == "error"
@@ -577,8 +577,8 @@ class TestGetRenderSettings:
         """Test handling of connection errors."""
         from houdini_mcp.tools import get_render_settings
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = get_render_settings("/out/karma1", host="localhost", port=18811)
 
         assert result["status"] == "error"
@@ -600,8 +600,8 @@ class TestSetRenderSettings:
         """Test handling of connection errors."""
         from houdini_mcp.tools import set_render_settings
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = set_render_settings(
                 "/out/karma1", {"samplesperpixel": 64}, host="localhost", port=18811
             )
@@ -627,8 +627,8 @@ class TestCreateRenderNode:
         """Test handling of connection errors."""
         from houdini_mcp.tools import create_render_node
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = create_render_node("karma", host="localhost", port=18811)
 
         assert result["status"] == "error"

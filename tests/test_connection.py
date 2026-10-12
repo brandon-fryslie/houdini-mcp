@@ -50,8 +50,8 @@ class TestConnect:
                 raise ConnectionError("Connection refused")
             return mock_conn
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect = mock_connect
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect = mock_connect
             connection, hou = connect("localhost", 18811, max_retries=3, retry_delay=0.01)
 
         assert call_count[0] == 2  # Failed once, succeeded on retry
@@ -59,8 +59,8 @@ class TestConnect:
 
     def test_connect_all_retries_fail(self, reset_connection_state):
         """Test connection failure after all retries exhausted."""
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
 
             with pytest.raises(HoudiniConnectionError) as exc_info:
                 connect("localhost", 18811, max_retries=2, retry_delay=0.01)
@@ -83,8 +83,8 @@ class TestConnect:
                 raise ConnectionError("Connection refused")
             return mock_conn
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect = mock_connect
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect = mock_connect
             connect("localhost", 18811, max_retries=3, retry_delay=0.05, jitter=False)
 
         assert len(call_times) == 3
@@ -112,8 +112,8 @@ class TestConnect:
         all_delay_diffs = []
         for _ in range(3):
             delays.clear()
-            with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-                mock_rpyc.classic.connect = mock_connect
+            with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+                mock_rpyc.connect = mock_connect
                 connect("localhost", 18811, max_retries=3, retry_delay=0.1, jitter=True)
 
             if len(delays) >= 2:
@@ -127,16 +127,16 @@ class TestConnect:
 
     def test_connect_custom_host_port(self, mock_rpyc_with_reset):
         """Test connect with custom host and port."""
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             from tests.conftest import MockHouModule, MockRpycConnection
 
             mock_hou = MockHouModule()
             mock_conn = MockRpycConnection(mock_hou)
-            mock_rpyc.classic.connect.return_value = mock_conn
+            mock_rpyc.connect.return_value = mock_conn
 
             connect("192.168.1.100", 19999)
 
-            mock_rpyc.classic.connect.assert_called_with("192.168.1.100", 19999)
+            assert mock_rpyc.connect.call_args.args == ("192.168.1.100", 19999)
 
 
 class TestIsConnected:
@@ -267,16 +267,16 @@ class TestEnsureConnected:
 
     def test_ensure_connected_uses_provided_host_port(self, reset_connection_state):
         """Test ensure_connected uses provided host and port."""
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             from tests.conftest import MockHouModule, MockRpycConnection
 
             mock_hou = MockHouModule()
             mock_conn = MockRpycConnection(mock_hou)
-            mock_rpyc.classic.connect.return_value = mock_conn
+            mock_rpyc.connect.return_value = mock_conn
 
             ensure_connected("custom-host", 12345)
 
-            mock_rpyc.classic.connect.assert_called_with("custom-host", 12345)
+            assert mock_rpyc.connect.call_args.args == ("custom-host", 12345)
 
 
 class TestGetHou:
@@ -355,8 +355,8 @@ class TestPing:
 
         mock_conn = MockRpycConnection(mock_hou)
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.return_value = mock_conn
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
             result = ping("localhost", 18811)
 
         assert result is True
@@ -364,8 +364,8 @@ class TestPing:
 
     def test_ping_failure(self):
         """Test ping returns False when Houdini is not reachable."""
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = ping("localhost", 18811)
 
         assert result is False
@@ -376,8 +376,8 @@ class TestPing:
 
         mock_conn = MockRpycConnection(mock_hou)
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.return_value = mock_conn
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
             ping("localhost", 18811)
 
         assert mock_conn._closed is True

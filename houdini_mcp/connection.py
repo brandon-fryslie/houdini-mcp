@@ -2,7 +2,7 @@
 
 Note: We use rpyc.classic directly instead of hrpyc because:
 1. hrpyc is bundled with Houdini and not available on PyPI
-2. rpyc.classic.connect() provides the same functionality
+2. a classic connection (opened by houdini_mcp_handshake) provides the same functionality
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
@@ -15,7 +15,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any, NamedTuple, TypeVar
 
-import rpyc
+import houdini_mcp_handshake as handshake
 
 logger = logging.getLogger("houdini_mcp.connection")
 
@@ -104,9 +104,9 @@ class InProcessConnection:
 
 def _open_rpyc(host: str, port: int) -> Any:
     logger.info(f"Connecting to Houdini at {host}:{port}")
-    # Use rpyc.classic.connect for simple SlaveService connection
-    # Note: rpyc.classic.connect() does not accept config parameter
-    return rpyc.classic.connect(host, port)
+    # [LAW:one-source-of-truth] the token handshake, and the reading of its
+    # token, are houdini_mcp_handshake's; this is the MCP server's client side.
+    return handshake.connect(host, port, token=handshake.token_from_env())
 
 
 def _open_in_process(host: str, port: int) -> InProcessConnection:
@@ -132,7 +132,9 @@ REMOTE_HOUDINI = HoudiniTarget(
     _open_rpyc,
     lambda host, port: f"{host}:{port}",
     "Make sure Houdini is running with RPC server enabled "
-    "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell).",
+    "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
+    "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
+    "(a listener that rejects this client's stream looks like one that is not running).",
 )
 IN_PROCESS_HOUDINI = HoudiniTarget(
     _open_in_process,

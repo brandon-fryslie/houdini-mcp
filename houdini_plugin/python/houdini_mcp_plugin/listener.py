@@ -27,9 +27,10 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 
@@ -112,14 +113,9 @@ class ListenerConfig:
             port = int(port_str) if port_str else DEFAULT_PORT
         except ValueError:
             port = DEFAULT_PORT
-        token = os.getenv("HOUDINI_RPC_TOKEN") or None
+        token = token_from_env()
         trusted = _env_flag("HOUDINI_RPC_TRUSTED_NETWORK")
         return cls(host=host, port=port, trusted_network=trusted, token=token)
-
-
-# An rpyc authenticator: takes the accepted socket, returns ``(sock, credentials)``
-# or raises ``AuthenticationError``.
-Authenticator = Callable[[Any], tuple[Any, Any]]
 
 
 @dataclass
@@ -168,7 +164,7 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     """
     loopback = is_loopback_host(config.host)
     try:
-        authenticator = _make_token_authenticator(config.token) if config.token else None
+        authenticator = token_authenticator(config.token) if config.token else None
     except ImportError as exc:
         # [LAW:no-silent-failure] a configured token is enforced or nothing binds;
         # the refusal is a policy outcome, handled by the same path as every other.
@@ -177,9 +173,10 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
             loopback_only=loopback,
             authenticator=None,
             reason=(
-                f"refusing to bind {config.host!r}: a token is configured but the installed "
-                f"rpyc cannot enforce it (rpyc.utils.authenticators unavailable: {exc}). "
-                "Install an rpyc that provides it, or unset the token."
+                f"refusing to bind {config.host!r}: a token is configured but this Houdini "
+                f"cannot enforce it ({exc}). houdini_mcp_handshake ships beside this plugin "
+                "and needs an rpyc that provides rpyc.utils.authenticators; fix that, or "
+                "unset the token."
             ),
         )
 
@@ -633,33 +630,3 @@ class RemoteListener:
             "warnings": warnings,
             "guidance": firewall_guidance(cfg.host, bound_port),
         }
-
-
-def _make_token_authenticator(token: str) -> Authenticator:
-    """Build an rpyc authenticator that enforces a shared-secret handshake.
-
-    [LAW:no-silent-failure] A configured token is enforced or nothing starts: if
-    rpyc's authentication primitives cannot be imported, the ImportError
-    propagates to :func:`resolve_security_policy`, which refuses the bind instead
-    of degrading to an unauthenticated listener.
-    """
-    from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
-
-    expected = token.encode("utf-8")
-    length = len(expected)
-
-    def authenticate(sock: Any) -> tuple[Any, Any]:
-        # Read exactly len(token) bytes; compare in constant-ish time.
-        import hmac  # noqa: PLC0415
-
-        received = b""
-        while len(received) < length:
-            chunk = sock.recv(length - len(received))
-            if not chunk:
-                break
-            received += chunk
-        if not hmac.compare_digest(received, expected):
-            raise AuthenticationError("invalid hrpyc token")
-        return sock, None
-
-    return authenticate

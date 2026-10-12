@@ -516,11 +516,11 @@ def mock_connection(mock_hou: MockHouModule) -> Generator[MockHouModule, None, N
 
 @pytest.fixture
 def mock_rpyc(mock_hou: MockHouModule) -> Generator[MockHouModule, None, None]:
-    """Patch rpyc.classic.connect to return mock connection."""
+    """Patch the handshake connect seam to return a mock connection."""
     mock_conn = MockRpycConnection(mock_hou)
 
-    with patch("houdini_mcp.connection.rpyc") as mock_rpyc_module:
-        mock_rpyc_module.classic.connect.return_value = mock_conn
+    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
+        mock_rpyc_module.connect.return_value = mock_conn
         yield mock_hou
 
 
@@ -542,11 +542,11 @@ def reset_connection_state() -> Generator[None, None, None]:
 def mock_rpyc_with_reset(
     mock_hou: MockHouModule, reset_connection_state: None
 ) -> Generator[MockHouModule, None, None]:
-    """Patch rpyc and reset connection state."""
+    """Patch the handshake connect seam and reset connection state."""
     mock_conn = MockRpycConnection(mock_hou)
 
-    with patch("houdini_mcp.connection.rpyc") as mock_rpyc_module:
-        mock_rpyc_module.classic.connect.return_value = mock_conn
+    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
+        mock_rpyc_module.connect.return_value = mock_conn
         yield mock_hou
 
 

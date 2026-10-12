@@ -121,7 +121,8 @@ If you have the Houdini MCP plugin installed:
 - By default the listener binds to `127.0.0.1` (loopback-only). To let a
   remote client (e.g. the Docker gateway on another host) connect, set
   `HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1`
-  or `HOUDINI_RPC_TOKEN`. See [docs/remote-listener.md](docs/remote-listener.md).
+  or `HOUDINI_RPC_TOKEN` (set the same token in the MCP server's environment).
+  See [docs/remote-listener.md](docs/remote-listener.md).
 
 Or manually in Houdini's Python Shell (unchanged, still supported):
 ```python
@@ -183,6 +184,7 @@ Environment variables:
 |----------|---------|-------------|
 | `HOUDINI_HOST` | `localhost` | Houdini machine IP/hostname |
 | `HOUDINI_PORT` | `18811` | hrpyc server port |
+| `HOUDINI_RPC_TOKEN` | *(unset)* | Shared secret the Houdini listener enforces; must match the listener's |
 | `MCP_PORT` | `3055` | MCP server HTTP port |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse) |
 | `LOG_LEVEL` | `INFO` | Logging level |

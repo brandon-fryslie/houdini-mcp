@@ -69,8 +69,11 @@ Issues = "https://github.com/oculairmedia/houdini-mcp/issues"
 houdini-mcp = "houdini_mcp.server:run_server"
 
 [tool.setuptools.packages.find]
-where = ["."]
+# houdini_mcp_handshake is defined once, in the plugin tree (Houdini's path), and
+# ships in this distribution from that same source. The plugin itself does not.
+where = [".", "houdini_plugin/python"]
 include = ["houdini_mcp*"]
+exclude = ["houdini_mcp_plugin*"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]
