@@ -25,11 +25,12 @@ Codex Desktop
 
 ## Python Dependencies
 
-Install the project into the normal Python used by Codex; `pyproject.toml` declares
-its dependencies, so there is no package list to keep in step with it:
+Install the cloned project, editable, into the normal Python used by Codex;
+`pyproject.toml` declares its dependencies, so there is no package list to keep
+in step with it, and a `git pull` is picked up without reinstalling:
 
 ```powershell
-python -m pip install --user C:\Users\<user>\Documents\Codex\tools\houdini-mcp
+python -m pip install --user -e C:\Users\<user>\Documents\Codex\tools\houdini-mcp
 ```
 
 The project pins `rpyc` to the 5.x line because Houdini's bundled `hrpyc` is not compatible with RPyC 6.x.
@@ -78,11 +79,6 @@ Create a small launcher script, for example `run_houdini_mcp.py`:
 
 ```python
 import os
-import sys
-
-REPO = r"C:\Users\<user>\Documents\Codex\tools\houdini-mcp"
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
 
 os.environ["MCP_TRANSPORT"] = "stdio"
 os.environ.setdefault("HOUDINI_HOST", "127.0.0.1")

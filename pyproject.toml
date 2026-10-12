@@ -52,6 +52,12 @@ dev = [
     "twine>=6.0",
 ]
 
+[tool.uv]
+# The one declaration of the uv line this lock is written by. setup-uv@v6 reads it
+# (no version-file input needed) and uv refuses to run outside it, so the Docker
+# image tag below either matches this or fails the build.
+required-version = "~=0.12.15"
+
 [project.urls]
 Homepage = "https://github.com/oculairmedia/houdini-mcp"
 Repository = "https://github.com/oculairmedia/houdini-mcp"

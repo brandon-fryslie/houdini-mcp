@@ -1,15 +1,21 @@
 FROM python:3.11-slim
+# Must satisfy [tool.uv].required-version in pyproject.toml - uv checks it and fails otherwise.
 COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /bin/uv
+# The cache is a build mount on another filesystem, so hardlinks cannot work; compile
+# bytecode at build time rather than on every container start.
+ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
 
 WORKDIR /app
 
 # Dependencies first, from the lock alone, so a source edit does not rebuild this layer.
 # The uv download cache lives in a build mount, not in the image.
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
-# Then the package itself, as a regular (non-editable) install into the same .venv.
+# Then the package itself (README.md is its long_description), as a regular
+# (non-editable) install into the same .venv.
+COPY README.md ./
 COPY houdini_mcp/ ./houdini_mcp/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
