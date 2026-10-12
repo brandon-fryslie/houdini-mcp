@@ -1,5 +1,5 @@
 # Pre-commit hooks for houdini-mcp
-# Install with: pip install pre-commit && pre-commit install
+# Install with: uv sync && uv run pre-commit install
 
 repos:
   # General file checks
@@ -17,38 +17,35 @@ repos:
       - id: debug-statements
       - id: check-docstring-first
 
-  # Python code formatting with Ruff (fast, replaces black + isort)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
-    hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-      - id: ruff-format
-
-  # Type checking with mypy
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
-    hooks:
-      - id: mypy
-        additional_dependencies:
-          - types-requests
-        args: [--ignore-missing-imports, --no-strict-optional]
-        exclude: ^tests/
-
-  # Security checks
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.2
-    hooks:
-      - id: bandit
-        args: ['-c', 'pyproject.toml', '-r', 'houdini_mcp/']
-        additional_dependencies: ['bandit[toml]']
-
-# Local hooks for running tests
+  # Project tools run from the uv environment, so their versions come from
+  # uv.lock - the same ones CI runs - instead of a second pin here.
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff-format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        exclude: ^tests/
+      - id: bandit
+        name: bandit
+        entry: uv run bandit -c pyproject.toml -r houdini_mcp/
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: pytest-check
         name: pytest
-        entry: python3 -m pytest tests/ -x -q --tb=short
+        entry: uv run pytest tests/ -x -q --tb=short
         language: system
         types: [python]
         pass_filenames: false
@@ -61,4 +58,4 @@ ci:
   autoupdate_branch: ''
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
   autoupdate_schedule: weekly
-  skip: [pytest-check]  # Skip tests in CI (GitHub Actions handles this)
+  skip: [ruff, ruff-format, mypy, bandit, pytest-check]  # need uv; GitHub Actions runs them
