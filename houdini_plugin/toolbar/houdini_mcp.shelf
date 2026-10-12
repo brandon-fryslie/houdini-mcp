@@ -18,14 +18,15 @@ The MCP server allows AI assistants to control Houdini
 through the Model Context Protocol.
 
 In stdio mode, the server runs in-process and communicates
-via standard input/output. It serves until the MCP client
-closes stdin; there is no shelf Stop.
+via standard input/output. It reads this Houdini's own stdin,
+so it serves whatever launched Houdini with a stdio pipe, and
+it serves until that client closes stdin; there is no shelf Stop.
     ]]></helpText>
     <script scriptType="python"><![CDATA[
 import hou
 
 try:
-    from houdini_mcp_plugin import start_server, is_server_running
+    from houdini_mcp_plugin import AlreadyServing, start_server
 except ImportError as e:
     hou.ui.displayMessage(
         f"Failed to import houdini_mcp_plugin:\n{e}\n\n"
@@ -35,31 +36,25 @@ except ImportError as e:
     )
 else:
     try:
-        if is_server_running():
-            hou.ui.displayMessage(
-                "MCP Server is already running.",
-                title="Houdini MCP"
-            )
-        elif start_server(use_thread=True):
-            hou.ui.displayMessage(
-                "MCP Server started successfully.\n\n"
-                "The server is now listening for MCP connections via stdio.",
-                title="Houdini MCP"
-            )
-        else:
-            hou.ui.displayMessage(
-                "Failed to start MCP Server.\n\n"
-                "Check the Houdini console for error details.",
-                title="Houdini MCP",
-                severity=hou.severityType.Error
-            )
+        start_server(use_thread=True)
+    except AlreadyServing:
+        hou.ui.displayMessage(
+            "MCP Server is already running.",
+            title="Houdini MCP"
+        )
     except Exception as e:
-        # start_server raises when binding to this Houdini fails (for example
-        # houdini_mcp is not installed into Houdini's Python); e names the cause.
+        # binding to this Houdini failed (for example houdini_mcp is not
+        # installed into Houdini's Python); e names the cause.
         hou.ui.displayMessage(
             f"Error starting MCP Server:\n{e}",
             title="Houdini MCP",
             severity=hou.severityType.Error
+        )
+    else:
+        hou.ui.displayMessage(
+            "MCP Server started successfully.\n\n"
+            "The server is now listening for MCP connections via stdio.",
+            title="Houdini MCP"
         )
     ]]></script>
   </tool>

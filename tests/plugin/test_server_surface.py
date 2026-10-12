@@ -197,18 +197,25 @@ class TestPluginStartsTheSharedServer:
         import houdini_mcp.server as shared_server
 
         stdin_closed = threading.Event()
-        state: dict[str, Any] = {"runs": 0, "running_during_serve": None, "stdin": stdin_closed}
+        state: dict[str, Any] = {
+            "runs": 0,
+            "running_during_serve": None,
+            "stdin": stdin_closed,
+            "stdin_closed_in_time": None,
+        }
 
         def fake_serve(**_kwargs: Any) -> None:
             from houdini_mcp_plugin import server as plugin_server
 
             state["runs"] += 1
             state["running_during_serve"] = plugin_server.is_server_running()
-            assert stdin_closed.wait(5), "test never closed stdin"
+            # recorded, not asserted: an assertion on the serving thread never reaches pytest
+            state["stdin_closed_in_time"] = stdin_closed.wait(5)
 
         monkeypatch.setattr(shared_server, "serve", fake_serve)
         yield state
         stdin_closed.set()
+        assert state["stdin_closed_in_time"] is not False, "test never closed stdin"
 
     def test_start_server_binds_in_process_and_serves_stdio(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
@@ -222,14 +229,15 @@ class TestPluginStartsTheSharedServer:
 
         monkeypatch.setattr(shared_server, "serve", fake_serve)
 
-        assert plugin_server.start_server(use_thread=False) is True
+        plugin_server.start_server(use_thread=False)
 
         assert runs == [{"target": IN_PROCESS_HOUDINI, "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
 
-    def test_failed_foreground_serve_is_not_left_running(
+    def test_failed_foreground_serve_raises_and_is_not_left_running(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
     ) -> None:
+        """The `hython -c` entry exits non-zero on a failed serve."""
         import houdini_mcp.server as shared_server
 
         def failing_serve(**_kwargs: Any) -> None:
@@ -237,7 +245,8 @@ class TestPluginStartsTheSharedServer:
 
         monkeypatch.setattr(shared_server, "serve", failing_serve)
 
-        assert plugin_server.start_server(use_thread=False) is False
+        with pytest.raises(OSError, match="stdin closed"):
+            plugin_server.start_server(use_thread=False)
         assert plugin_server.is_server_running() is False
 
     def test_running_state_is_the_serving_thread(
@@ -245,7 +254,7 @@ class TestPluginStartsTheSharedServer:
     ) -> None:
         assert plugin_server.is_server_running() is False
 
-        assert plugin_server.start_server(use_thread=True) is True
+        plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is True
 
         held_serve["stdin"].set()
@@ -255,15 +264,21 @@ class TestPluginStartsTheSharedServer:
         assert held_serve["running_during_serve"] is True
 
     def test_second_start_is_refused_before_the_first_thread_runs(
-        self, plugin_server: Any, held_serve: dict[str, Any], caplog: pytest.LogCaptureFixture
+        self, plugin_server: Any, held_serve: dict[str, Any]
     ) -> None:
         """Two quick Start clicks: the guard holds from the moment start is accepted."""
-        with caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"):
-            first = plugin_server.start_server(use_thread=True)
-            second = plugin_server.start_server(use_thread=True)
+        started: list[threading.Thread] = []
 
-        assert (first, second) == (True, False)
-        assert "already serving" in caplog.text
+        with pytest.MonkeyPatch.context() as unscheduled:
+            unscheduled.setattr(threading.Thread, "start", lambda thread: started.append(thread))
+            plugin_server.start_server(use_thread=True)
+            with pytest.raises(plugin_server.AlreadyServing):
+                plugin_server.start_server(use_thread=True)
+        assert held_serve["runs"] == 0
+        assert plugin_server.is_server_running() is True
+
+        [thread] = started
+        thread.start()
         held_serve["stdin"].set()
         _wait_until_stopped(plugin_server)
         assert held_serve["runs"] == 1
@@ -279,7 +294,7 @@ class TestPluginStartsTheSharedServer:
         monkeypatch.setattr(shared_server, "serve", failing_serve)
 
         with caplog.at_level("ERROR", logger="houdini_mcp_plugin.server"):
-            assert plugin_server.start_server(use_thread=True) is True
+            plugin_server.start_server(use_thread=True)
             _wait_until_stopped(plugin_server)
 
         assert plugin_server.is_server_running() is False
@@ -299,7 +314,7 @@ class TestPluginStartsTheSharedServer:
                 plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is False
 
-        assert plugin_server.start_server(use_thread=True) is True
+        plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is True
         held_serve["stdin"].set()
         _wait_until_stopped(plugin_server)

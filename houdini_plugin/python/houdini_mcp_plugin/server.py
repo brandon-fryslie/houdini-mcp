@@ -56,15 +56,13 @@ class StdioServer:
     def is_serving(self) -> bool:
         return self._serving is not None
 
-    def start(self, *, block: bool) -> bool:
+    def start(self, *, block: bool) -> None:
         """Serve stdio on a background thread, or on this thread until EOF.
-
-        Returns:
-            True once a background server is started, or once a blocking one
-            has served to EOF; False when a blocking serve ended with an error.
 
         Raises:
             AlreadyServing: a server is serving; nothing is started.
+            Exception: binding to this Houdini failed, or (blocking only) the
+                transport failed; the caller is the one that reports it.
         """
         with self._lock:
             if self._serving is not None:
@@ -75,7 +73,9 @@ class StdioServer:
             if block:
                 self._serving = threading.current_thread()
             else:
-                self._serving = threading.Thread(target=self._serve, args=(run,), daemon=True)
+                self._serving = threading.Thread(
+                    target=self._serve_in_background, args=(run,), daemon=True
+                )
                 try:
                     self._serving.start()
                 except BaseException:
@@ -83,48 +83,43 @@ class StdioServer:
                     # itself; one that never started is cleared by the start that failed
                     self._serving = None
                     raise
-                return True
-        return self._serve(run)
+                return
+        self._serve(run)
 
-    def _serve(self, run: Callable[[], None]) -> bool:
-        """Run the transport to its end; the outcome is logged before state clears."""
+    def _serve(self, run: Callable[[], None]) -> None:
+        """Run the transport to its end; state clears however it ends."""
         try:
             run()
-        except Exception:
-            # [LAW:no-silent-failure] on a background thread this is the only report
-            logger.exception("MCP server failed")
-            return False
-        else:
-            logger.info("MCP server stopped: client closed stdin")
-            return True
         finally:
             with self._lock:
                 self._serving = None
+        logger.info("MCP server stopped: client closed stdin")
+
+    def _serve_in_background(self, run: Callable[[], None]) -> None:
+        try:
+            self._serve(run)
+        except Exception:
+            # [LAW:no-silent-failure] a thread has no caller; the log is the report
+            logger.exception("MCP server failed")
 
 
 _stdio = StdioServer()
 
 
-def start_server(use_thread: bool = True) -> bool:
+def start_server(use_thread: bool = True) -> None:
     """Start the MCP server.
 
     Args:
         use_thread: If True, run in a background thread. If False, block until
             the client closes stdin.
 
-    Returns:
-        True if the server started (and, when blocking, served to EOF without
-        error); False if one is already serving or the serve failed.
-
     Raises:
-        Whatever binding the shared server to this Houdini raised: nothing was
-        started, and the caller (shelf or ``hython -c``) shows the cause.
+        AlreadyServing: a server is already serving this process's stdin.
+        Exception: binding the shared server to this Houdini failed, or a
+            blocking serve failed. Nothing is left running; the caller (shelf
+            or ``hython -c``) shows the cause.
     """
-    try:
-        return _stdio.start(block=not use_thread)
-    except AlreadyServing as e:
-        logger.warning(str(e))
-        return False
+    _stdio.start(block=not use_thread)
 
 
 def is_server_running() -> bool:

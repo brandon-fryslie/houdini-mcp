@@ -36,7 +36,7 @@ from .remote import (
     start_hrpyc_server,
     stop_hrpyc_server,
 )
-from .server import is_server_running, start_server
+from .server import AlreadyServing, is_server_running, start_server
 from .ws_client import (
     Action,
     ActionType,
@@ -61,6 +61,7 @@ __all__ = [
     # stdio mode (MCP server in Houdini)
     "start_server",
     "is_server_running",
+    "AlreadyServing",
     # remote mode (hrpyc for external MCP server)
     "start_hrpyc_server",
     "stop_hrpyc_server",
