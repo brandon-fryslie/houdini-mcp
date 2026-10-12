@@ -42,7 +42,6 @@ __all__ = [
     "quick_health_check",
     "DEFAULT_OPERATION_TIMEOUT",
     # Error handling
-    "_handle_connection_error",
     "handle_connection_errors",  # Decorator for consistent error handling
     "tool_error_response",
     # Code safety
@@ -155,7 +154,7 @@ def tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
     return {
         "status": "error",
         "message": str(e),
-        "traceback": traceback.format_exc(),
+        "traceback": "".join(traceback.format_exception(e)),
     }
 
 

@@ -65,16 +65,23 @@ the render tools that need their own `try` block):
 **Location:** `houdini_mcp/connection.py`
 
 Only a failure of the link itself is connection loss. `transport_failure(exc)` returns a
-`TransportFailure` proof, or `None`, and it is the only way to get one:
+`TransportFailure` proof, or `None`, and the installed `HoudiniTarget` is what decides:
 
-- The type must be one rpyc's channel raises: `EOFError` (peer closed),
-  `ConnectionError` and its subclasses (refused, reset, aborted, broken pipe), or
-  `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout` is one).
-  `OSError` is deliberately not admitted: it is also the base of `FileNotFoundError`
-  and `PermissionError`, which are the tool's errors, not the link's.
-- The exception must not have been raised inside Houdini. rpyc rebuilds a remote
+- Over rpyc (`REMOTE_HOUDINI`), the type must be one the channel raises: `EOFError`
+  (peer closed), `ConnectionError` and its subclasses (refused, reset, aborted, broken
+  pipe), or `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout`
+  is that same class). `OSError` is deliberately not admitted: it is also the base of
+  `FileNotFoundError` and `PermissionError`, which are the tool's errors, not the link's.
+  And the exception must not have been raised inside Houdini: rpyc rebuilds a remote
   exception locally as the same class and tags it with `_remote_tb`; a `TimeoutError`
   carrying that tag came over an intact link and is reported as its own kind.
+- In-process (`IN_PROCESS_HOUDINI`, the plugin's stdio server) there is no link to lose,
+  so nothing is a transport failure.
+
+Opening the link is classified separately (`HoudiniTarget.open_failure`): before a
+connection exists only the socket layer can raise an `OSError`, so at connect time the
+whole family - unreachable network, unresolved host, refused or denied socket, a
+stalled handshake - is retried. A rejected token raises `HandshakeError` and is not.
 
 A bad save or render path, a denied file, or a Houdini operation error therefore never
 tears the session down and never reports `connection_error` / `recoverable: True`.
@@ -123,7 +130,6 @@ Takes a `TransportFailure` (so it cannot be called for anything else) and:
     max_delay=30.0,
     exponential_base=2.0,
     jitter=True,  # Prevents thundering herd
-    retryable_exceptions=_TRANSPORT_EXCEPTIONS,  # the same set transport_failure() admits
 )
 def connect_to_houdini(): ...
 ```

@@ -1,10 +1,12 @@
 """Tests for the Houdini connection manager."""
 
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from houdini_mcp.connection import (
+    IN_PROCESS_HOUDINI,
     HoudiniConnectionError,
     HoudiniOperationError,
     TransportFailure,
@@ -61,17 +63,46 @@ class TestConnect:
         assert call_count[0] == 2  # Failed once, succeeded on retry
         assert hou is not None
 
-    def test_connect_does_not_retry_a_non_transport_error(self, reset_connection_state):
+    def test_connect_does_not_retry_a_rejected_token(self, reset_connection_state):
         """A failure that is not the link itself fails at once, with its cause attached."""
+        from houdini_mcp_handshake import HandshakeError
+
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
-            mock_rpyc.connect.side_effect = PermissionError("socket denied")
+            mock_rpyc.connect.side_effect = HandshakeError("listener closed on the token")
 
             with pytest.raises(HoudiniConnectionError) as exc_info:
                 connect("localhost", 18811, max_retries=3, retry_delay=0.01)
 
         assert mock_rpyc.connect.call_count == 1
         assert "Non-retryable" in str(exc_info.value)
-        assert isinstance(exc_info.value.__cause__, PermissionError)
+        assert isinstance(exc_info.value.__cause__, HandshakeError)
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            OSError(101, "Network is unreachable"),
+            socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+            PermissionError("socket denied"),
+            TimeoutError("listener did not acknowledge the token"),
+            EOFError("peer closed the connection during the handshake"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_connect_retries_whatever_the_socket_layer_raises(
+        self, reset_connection_state, mock_hou, exc
+    ):
+        """Before the link exists, every OSError is the link's: a Houdini still booting
+        or a laptop rejoining the network gets the retry, not a bad-path verdict."""
+        from tests.conftest import MockRpycConnection
+
+        mock_conn = MockRpycConnection(mock_hou)
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = [exc, mock_conn]
+            _, hou = connect("localhost", 18811, max_retries=3, retry_delay=0.01)
+
+        assert mock_rpyc.connect.call_count == 2
+        assert hou is not None
 
     def test_connect_all_retries_fail(self, reset_connection_state):
         """Test connection failure after all retries exhausted."""
@@ -447,11 +478,6 @@ class TestTransportFailure:
         assert isinstance(failure, TransportFailure)
         assert failure.exc is exc
 
-    def test_rpyc_sync_timeout_is_a_transport_failure(self):
-        from rpyc.core.async_ import AsyncResultTimeout
-
-        assert transport_failure(AsyncResultTimeout("result expired")) is not None
-
     @pytest.mark.parametrize(
         "exc",
         [
@@ -476,6 +502,23 @@ class TestTransportFailure:
         remote = raised_inside_houdini(exc)
         assert isinstance(remote, type(exc))  # same class on arrival...
         assert transport_failure(remote) is None  # ...but the link is intact
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            EOFError("truncated pickle"),
+            ConnectionResetError("render farm reset"),
+            TimeoutError("cook timed out"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_in_process_there_is_no_link_to_lose(self, monkeypatch, exc):
+        """The stdio plugin runs in Houdini's interpreter: no rpyc, no ``_remote_tb`` tag,
+        and no transport, so the same exceptions are the code's own."""
+        import houdini_mcp.connection as conn_module
+
+        monkeypatch.setattr(conn_module, "_target", IN_PROCESS_HOUDINI)
+        assert transport_failure(exc) is None
 
 
 class TestSafeExecute:
