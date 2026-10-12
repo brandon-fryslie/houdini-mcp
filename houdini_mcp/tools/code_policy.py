@@ -38,7 +38,12 @@ __all__ = [
 
 def parse_code(code: str) -> ast.Module:
     """Parse user code; raises ``SyntaxError`` so the caller can refuse loudly."""
-    return ast.parse(code)
+    try:
+        return ast.parse(code)
+    except ValueError as exc:
+        # Early 3.11 releases report a null byte as ValueError; it is still
+        # a program the gates cannot read [LAW:no-silent-failure].
+        raise SyntaxError(str(exc)) from exc
 
 
 def _dotted_chain(node: ast.expr) -> list[str] | None:
@@ -93,17 +98,25 @@ def _names(tree: ast.Module) -> _Names:
             for alias in node.names:
                 aliases[alias.asname or alias.name] = (*node.module.split("."), alias.name)
 
+    # Assignments alias to a fixpoint: ``x = h`` may precede ``h = hou`` in
+    # walk order, and neither source order nor nesting changes what x names.
     aliased_targets: set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        chain = _dotted_chain(node.value)
-        if chain is None or chain[0] not in aliases:
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                aliases[target.id] = aliases[chain[0]] + tuple(chain[1:])
-                aliased_targets.add(id(target))
+    assigns = [
+        (node, chain)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and (chain := _dotted_chain(node.value)) is not None
+    ]
+    grew = True
+    while grew:
+        grew = False
+        for node, chain in assigns:
+            if chain[0] not in aliases:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and id(target) not in aliased_targets:
+                    aliases[target.id] = aliases[chain[0]] + tuple(chain[1:])
+                    aliased_targets.add(id(target))
+                    grew = True
 
     bound: set[str] = set()
     for node in ast.walk(tree):
@@ -258,6 +271,12 @@ def _rail_refusal(path: tuple[str, ...]) -> str | None:
         return f"{'.'.join(path[:2])} - blocked module"
     if len(path) > 1 and path[1] not in rails:
         return f"{path[0]}.{path[1]} - restricted member of {path[0]}"
+    # An admitted member may itself be a module (``os.path.os``) or expose its
+    # internals through dunders; below the first hop, a railed name or a
+    # private name is refused.
+    for hop in path[2:]:
+        if hop in MODULE_RAILS or hop.startswith("_"):
+            return f"{'.'.join(path)} - reaches {hop} through {path[0]}.{path[1]}"
     return None
 
 
@@ -322,7 +341,7 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if names.is_local(node.id):
                 continue
-            if node.id in DYNAMIC_EXECUTION_NAMES:
+            if node.id in DYNAMIC_EXECUTION_NAMES and node.id not in names.aliases:
                 detected.append(f"{node.id} - dynamic code execution")
             elif node.id == "open" and id(node) not in open_callees:
                 detected.append("open referenced without a call - file writing cannot be ruled out")
@@ -843,6 +862,10 @@ READ_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
         "inputConnectors",
         "outputConnectors",
         "inputNames",
+        "inputName",
+        "outputName",
+        "inputLabel",
+        "outputLabel",
         "inputLabels",
         "outputNames",
         "outputLabels",
@@ -891,6 +914,7 @@ READ_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
         # --- UI (read side) ---
         "ui",
         "curDesktop",
+        "currentNode",
         "desktops",
         "panes",
         "paneTabs",

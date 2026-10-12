@@ -699,6 +699,7 @@ class TestReadOnlyIsAnAllowlist:
             "import itertools\nprint(list(itertools.chain.from_iterable([[1], [2]])))",
             "import json\nj = json\nprint(j.dumps({}))",
             "try:\n    hou.node('/x').name()\nexcept OSError as e:\n    print(e)",
+            "for c in hou.node('/obj/geo1').inputConnections():\n    print(c.inputName(), c.outputLabel())",
         ],
     )
     def test_inspection_programs_are_admitted(self, mock_connection, code):
@@ -754,6 +755,13 @@ class TestNormalPolicyModuleRails:
             "o = open\no('/x', 'w').write('hi')",
             "import functools\nw = functools.partial(open, mode='w')",
             "list(map(open, ['/a']))",
+            # An alias is resolved whatever order or nesting its steps appear in.
+            "if True:\n    h = hou\nx = h\nx.exit()",
+            "import os\nif True:\n    p = os\nq = p\nq.remove('/x')",
+            # An admitted member that is itself a module does not reopen the rails.
+            "import os\nos.path.os.remove('/x')",
+            "import os.path as osp\nosp.os.system('id')",
+            "import os\nos.environ.__class__",
         ],
     )
     def test_file_and_import_operations_are_dangerous(self, code):
@@ -782,6 +790,7 @@ class TestNormalPolicyModuleRails:
             "http = hou.node('/obj')\nprint(http.name())",
             "io = hou.node('/obj')\nprint(io.name())",
             "compile = 5\nprint(compile)",
+            "from re import compile\nprint(compile('a'))",
         ],
     )
     def test_read_side_of_railed_modules_is_admitted(self, code):
@@ -839,3 +848,11 @@ class TestSyntaxGate:
         result = execute_code("  print(1)", policy="read-only", host="localhost", port=18811)
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
+
+    def test_null_byte_is_a_parse_failure_without_a_line(self, mock_connection):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code("print(1)\x00", host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "syntax_error"
+        assert "None" not in result["message"]

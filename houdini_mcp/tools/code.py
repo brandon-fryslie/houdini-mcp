@@ -262,12 +262,11 @@ def execute_code(
         tree = parse_code(code)
     except SyntaxError as exc:
         # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
-        logger.warning(
-            "execute_code blocked: code does not parse (line %s): %s", exc.lineno, exc.msg
-        )
+        location = f" (line {exc.lineno})" if exc.lineno is not None else ""
+        logger.warning("execute_code blocked: code does not parse%s: %s", location, exc.msg)
         return {
             "status": "error",
-            "message": f"Code does not parse: {exc.msg} (line {exc.lineno})",
+            "message": f"Code does not parse: {exc.msg}{location}",
             "traceback": "".join(traceback.format_exception_only(exc)),
             "policy": policy,
             "audit": _build_audit(
