@@ -175,9 +175,9 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
             authenticator=None,
             reason=(
                 f"refusing to bind {config.host!r}: a token is configured but this Houdini "
-                f"cannot enforce it ({exc}). Make houdini_mcp importable (it defines the "
-                "handshake) with an rpyc that provides rpyc.utils.authenticators, or unset "
-                "the token."
+                f"cannot enforce it ({exc}). Install the houdini-mcp package into Houdini's "
+                "Python (hython -m pip install <repo>) so houdini_mcp.handshake is importable "
+                "with an rpyc that provides rpyc.utils.authenticators, or unset the token."
             ),
         )
 

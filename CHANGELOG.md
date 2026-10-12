@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
   with a token is reachable from the server (previously only the verify script
   could connect to it). The listener's authenticator and the verify script's
-  client side derive from the same module instead of hand-mirrored copies.
+  client side derive from the same module instead of hand-mirrored copies. The
+  listener now acknowledges a correct token, so a rejected or missing token is
+  a distinct, non-retried error on the client instead of "Houdini is not
+  running" or a 30s hang; both sides bound the handshake wait. A tokened bind
+  needs `houdini_mcp` importable inside Houdini (`hython -m pip install <repo>`).
 
 ### Added
 

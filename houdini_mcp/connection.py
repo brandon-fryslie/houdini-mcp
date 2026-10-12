@@ -36,9 +36,6 @@ DEFAULT_MAX_DELAY = 30.0  # maximum delay cap
 DEFAULT_TIMEOUT = 10.0  # seconds
 DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - reduced from 60
 DEFAULT_OPERATION_TIMEOUT = 45.0  # max time for any single tool operation
-# The listener's shared secret, if the operator configured one (HOUDINI_RPC_TOKEN
-# on both sides). Presented on every connect; see houdini_mcp.handshake.
-RPC_TOKEN: str | None = os.getenv("HOUDINI_RPC_TOKEN") or None
 
 # Retryable exceptions for connection and RPC operations
 RETRYABLE_EXCEPTIONS = (
@@ -135,11 +132,20 @@ def retry_with_backoff(
     return decorator
 
 
+def rpc_token() -> str | None:
+    """The listener's shared secret, if the operator configured one.
+
+    [LAW:one-source-of-truth] the one reader of HOUDINI_RPC_TOKEN, read when a
+    connection is opened so every connect and ping presents the same value and
+    an environment set after import is honored.
+    """
+    return os.getenv("HOUDINI_RPC_TOKEN") or None
+
+
 def _do_connect(
     host: str,
     port: int,
     sync_timeout: float,
-    token: str | None,
 ) -> tuple[Any, Any]:
     """
     Internal function to establish a single connection attempt.
@@ -152,7 +158,7 @@ def _do_connect(
 
     # [LAW:one-source-of-truth] the token handshake is houdini_mcp.handshake's;
     # this is the MCP server deriving its client side from it.
-    _connection = handshake.connect(host, port, token=token)
+    _connection = handshake.connect(host, port, token=rpc_token())
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -180,7 +186,6 @@ def connect(
     retry_delay: float = DEFAULT_RETRY_DELAY,
     sync_timeout: float = DEFAULT_SYNC_TIMEOUT,
     jitter: bool = True,
-    token: str | None = RPC_TOKEN,
 ) -> tuple[Any, Any]:
     """
     Connect to Houdini RPC server using rpyc with retry logic.
@@ -195,7 +200,6 @@ def connect(
         retry_delay: Initial delay between retries in seconds (default: 1.0)
         sync_timeout: Timeout for synchronous RPC calls in seconds (default: 30)
         jitter: If True, add random jitter to delays (default: True)
-        token: Shared secret the listener enforces (default: HOUDINI_RPC_TOKEN)
 
     Returns:
         Tuple of (connection, hou module)
@@ -208,7 +212,7 @@ def connect(
 
     for attempt in range(max_retries):
         try:
-            return _do_connect(host, port, sync_timeout, token)
+            return _do_connect(host, port, sync_timeout)
 
         except RETRYABLE_EXCEPTIONS as e:
             last_error = e
@@ -394,7 +398,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     """
     try:
         # timeout is not enforced at connection level for classic connections
-        conn = handshake.connect(host, port, token=RPC_TOKEN)
+        conn = handshake.connect(host, port, token=rpc_token())
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

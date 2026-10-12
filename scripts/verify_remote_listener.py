@@ -64,6 +64,7 @@ def _rpyc_check(host: str, port: int) -> bool:
     """Connect via rpyc.classic and read the Houdini version (read-only)."""
     try:
         from houdini_mcp import handshake  # noqa: PLC0415
+        from houdini_mcp.connection import rpc_token  # noqa: PLC0415
     except ImportError as exc:
         print(
             f"[verify] rpyc/houdini_mcp not importable in this environment ({exc}); "
@@ -71,11 +72,10 @@ def _rpyc_check(host: str, port: int) -> bool:
         )
         return False
 
-    # [LAW:one-source-of-truth] the client side of the token handshake is the
-    # shared module's, not a copy kept here.
-    token = os.getenv("HOUDINI_RPC_TOKEN") or None
+    # [LAW:one-source-of-truth] the client side of the token handshake, and the
+    # reading of HOUDINI_RPC_TOKEN, are the server package's, not copies kept here.
     try:
-        conn = handshake.connect(host, port, token=token)
+        conn = handshake.connect(host, port, token=rpc_token())
         hou = conn.modules.hou
         version = hou.applicationVersionString()
         hip = hou.hipFile.path()

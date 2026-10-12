@@ -60,9 +60,12 @@ created** — there is no code path that silently binds `0.0.0.0` without auth.
   enforces its server side and the MCP server (`HOUDINI_RPC_TOKEN` in the
   server's environment) and `scripts/verify_remote_listener.py` present its
   client side. Set the same `HOUDINI_RPC_TOKEN` on both machines. The listener
-  imports it only when a token is configured, so Houdini must be able to import
-  `houdini_mcp` (the package JSON puts the repo on `PYTHONPATH`) for a tokened
-  bind; otherwise the bind is refused.
+  acknowledges a correct token with one byte, so a client learns at connect
+  time whether it was rejected or whether the listener is not enforcing a
+  token at all. The listener imports the handshake only when a token is
+  configured, so a tokened bind needs the `houdini-mcp` package installed into
+  Houdini's Python (`hython -m pip install <repo>`, the same install the stdio
+  mode uses); otherwise the bind is refused with a message saying so.
 - A configured token is always enforced: if the installed `rpyc` cannot provide
   the authenticator primitives, the security policy refuses the bind (a
   `security` error from `start()`, or `SecurityError` with `raise_on_policy`)
