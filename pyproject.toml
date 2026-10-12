@@ -26,15 +26,15 @@ dependencies = [
     "fastmcp>=0.1.0",
     # rpyc MUST be 5.x - version 6.x has protocol incompatibility with Houdini's hrpyc
     "rpyc>=5.0.0,<6.0.0",
-    "python-dotenv>=1.0.0",
     # For get_houdini_help web scraping
     "requests>=2.28.0",
     "beautifulsoup4>=4.11.0",
-    # For summarization's Claude proxy calls
-    "httpx>=0.27.0",
+    # Imported directly (tools/summarization.py, server.py); not left to fastmcp's transitive set
+    "httpx>=0.28",
+    "starlette>=1.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -42,11 +42,21 @@ dev = [
     # Property-based / stateful tests (outbound WSS state-machine core,
     # execute_code safety-rail evasion fuzzing).
     "hypothesis>=6.100.0",
-    "ruff>=0.8.0",
+    # Held at the line CI ran; 0.17 reformats Markdown fences in 12 docs - lifted by houdini-tuneup-ef3.btk
+    "ruff>=0.13,<0.14",
     "mypy>=1.0.0",
+    "types-requests",
     "pre-commit>=3.0.0",
     "bandit[toml]>=1.7.0",
+    # `twine check` on the wheel/sdist in the CI build job
+    "twine>=6.0",
 ]
+
+[tool.uv]
+# The one declaration of the uv line this lock is written by. setup-uv@v6 reads it
+# (no version-file input needed) and uv refuses to run outside it, so the Docker
+# image tag below either matches this or fails the build.
+required-version = "~=0.12.15"
 
 [project.urls]
 Homepage = "https://github.com/oculairmedia/houdini-mcp"

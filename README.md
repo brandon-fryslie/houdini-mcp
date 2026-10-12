@@ -61,7 +61,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```bash
    # Windows
    copy houdini_plugin %USERPROFILE%\Documents\houdini20.5\packages\houdini_mcp
-   
+
    # Linux/Mac
    cp -r houdini_plugin ~/houdini20.5/packages/houdini_mcp
    ```
@@ -70,7 +70,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```bash
    # Windows
    copy houdini_plugin\houdini_mcp.json %USERPROFILE%\Documents\houdini20.5\packages\
-   
+
    # Linux/Mac
    cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
    ```
@@ -167,10 +167,10 @@ docker compose up -d
 # Clone and install
 git clone https://github.com/oculairmedia/houdini-mcp.git
 cd houdini-mcp
-pip install -r requirements.txt
+uv sync
 
 # Run
-HOUDINI_HOST=192.168.50.90 python -m houdini_mcp
+HOUDINI_HOST=192.168.50.90 uv run python -m houdini_mcp
 ```
 
 ## Configuration
@@ -499,14 +499,14 @@ Add as an MCP server in Letta's configuration to give agents Houdini control.
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -r requirements.txt pytest
+# Install runtime + dev dependencies from the lockfile
+uv sync
 
 # Run tests
-pytest tests/
+uv run pytest
 
 # Run server locally
-python -m houdini_mcp
+uv run python -m houdini_mcp
 ```
 
 ## Troubleshooting
