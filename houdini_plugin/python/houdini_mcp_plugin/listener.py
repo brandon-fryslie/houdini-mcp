@@ -157,7 +157,11 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     """Evaluate a bind request against the "no silent exposure" policy.
 
     Rules:
-    - Loopback binds (``127.0.0.1``/``::1``/``localhost``) are always allowed.
+    - A configured ``token`` is enforced on the server or the bind is refused,
+      whatever the host: a token the installed rpyc cannot enforce never
+      degrades to an unauthenticated listener.
+    - Loopback binds (``127.0.0.1``/``::1``/``localhost``) are otherwise always
+      allowed.
     - Any non-loopback bind (wildcard or a specific LAN IP) is refused unless
       the operator has explicitly opted in via ``trusted_network=True`` or has
       configured an authentication ``token``.
@@ -175,8 +179,7 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
             reason=(
                 f"refusing to bind {config.host!r}: a token is configured but the installed "
                 f"rpyc cannot enforce it (rpyc.utils.authenticators unavailable: {exc}). "
-                "Install an rpyc that provides it, or drop the token and use a tunnel with "
-                "HOUDINI_RPC_TRUSTED_NETWORK=1."
+                "Install an rpyc that provides it, or unset the token."
             ),
         )
 
@@ -411,10 +414,13 @@ class RemoteListener:
                     ),
                 }
 
-            self._server = server
+            # _server is the running discriminator that the unlocked status() and
+            # self_test() read, so it is assigned last. [LAW:no-ambient-temporal-coupling]
+            # exception: the structural fix (one running-state record) is houdini-laws-etg.qt8.
             self._config = cfg
             self._policy = policy
             self._bound_port = bound_port
+            self._server = server
 
             logger.info(
                 "Started hrpyc listener on %s:%s (exposure=%s, auth=%s)",

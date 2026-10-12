@@ -38,8 +38,10 @@ The **Houdini MCP** shelf provides:
 Houdini. To prevent accidentally exposing that to the network, the listener
 enforces this policy:
 
-- **Loopback binds** (`127.0.0.1`, `::1`, `localhost`) are always allowed and
-  are reachable only from the same machine.
+- **A configured token is enforced or nothing binds**, whatever the host (see
+  the hardening notes below).
+- **Loopback binds** (`127.0.0.1`, `::1`, `localhost`) are otherwise always
+  allowed and are reachable only from the same machine.
 - **Any non-loopback bind** (`0.0.0.0` or a specific LAN IP) is **refused**
   unless the operator explicitly opts in via **either**:
   - `HOUDINI_RPC_TRUSTED_NETWORK=1` (you attest the network is trusted), or
