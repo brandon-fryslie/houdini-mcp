@@ -325,19 +325,28 @@ class TestCapOnPagedPayloads:
         assert result["offset"] == 40
         assert result["cursor"] == result["next_offset"] == 40 + kept
 
-    def test_minimal_fallback_reports_the_kept_page_not_the_pre_cap_one(self):
+    def test_minimal_fallback_delivers_nothing_and_says_so(self):
         from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
 
-        page = Page(items=[{"blob": "x" * 500} for _ in range(20)], offset=0, total=20)
+        page = Page(items=[{"blob": "x" * 500} for _ in range(20)], offset=5, total=25)
         data = {"status": "success", "matches": page.items, **paging_fields(page)}
         assert data["has_more"] is False
 
         result = apply_response_cap(data, max_bytes=300)
         assert result["_truncated"] is True
         assert "matches" not in result
-        assert result["returned"] < 20
+        assert result["returned"] == result["count"] == 0
+        assert result["offset"] == 5
         assert result["has_more"] is True
-        assert result["cursor"] == result["returned"]
+        assert result["cursor"] == result["next_offset"] == 5
+
+    def test_joined_warning_has_no_period_before_the_separator(self):
+        from houdini_mcp.tools._common import join_warnings
+
+        result = _page(list(range(25)), limit=10)
+        joined = join_warnings(result["warning"], "Collection limited to 25 nodes")
+        assert ".;" not in joined
+        assert joined.endswith("for the next page; Collection limited to 25 nodes")
 
     def test_undeliverable_item_is_consumed_so_the_cursor_advances(self):
         from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
