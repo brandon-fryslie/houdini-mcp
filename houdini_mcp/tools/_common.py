@@ -41,7 +41,6 @@ __all__ = [
     "CONNECTION_ERRORS",
     "_handle_connection_error",
     "handle_connection_errors",  # Decorator for consistent error handling
-    # Code safety
     # Output utilities
     "_truncate_output",
     # Response size utilities

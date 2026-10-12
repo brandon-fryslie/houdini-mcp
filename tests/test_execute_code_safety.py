@@ -664,6 +664,9 @@ class TestReadOnlyIsAnAllowlist:
             "import fnmatch\nfnmatch.os.remove('/a')",
             "import typing\ntyping.sys.modules['os'].remove('/a')",
             "from random import _os",
+            # get_type_hints evaluates string annotations.
+            'import typing\ndef f(x: "1"): pass\nprint(typing.get_type_hints(f))',
+            "hou = 5\nprint(hou)",
             # expandString evaluates HScript backticks: the shell by another door.
             "print(hou.expandString('`system(\"x\")`'))",
             "hou.text.expandString('`run(\"opadd -n geo /obj/x\")`')",
@@ -744,6 +747,13 @@ class TestNormalPolicyModuleRails:
             "import smtplib; smtplib.SMTP('h')",
             "import pdb; pdb.set_trace()",
             "import tempfile; tempfile.mkstemp()",
+            # A rename of hou or of a path below it keeps its verdict.
+            "hf = hou.hipFile\nhf.clear()",
+            "h = hou\nh.exit()",
+            # open reached by any route but a readable call.
+            "o = open\no('/x', 'w').write('hi')",
+            "import functools\nw = functools.partial(open, mode='w')",
+            "list(map(open, ['/a']))",
         ],
     )
     def test_file_and_import_operations_are_dangerous(self, code):
@@ -794,6 +804,11 @@ class TestHeavyGeometryRail:
         from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
 
         assert _detect_heavy_geometry_code(parse_code(code))
+
+    def test_assigning_a_record_field_of_the_same_name_is_not_a_cook(self):
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+
+        assert _detect_heavy_geometry_code(parse_code("rec.points = 3")) == []
 
 
 class TestSyntaxGate:

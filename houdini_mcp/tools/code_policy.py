@@ -58,10 +58,11 @@ def _dotted_chain(node: ast.expr) -> list[str] | None:
 class _Names:
     """What the program's identifiers stand for, read once from the tree.
 
-    ``aliases`` maps an identifier to the dotted path it was imported as:
+    ``aliases`` maps an identifier to the dotted path it stands for:
     ``import os.path as p`` and ``from os import path as p`` both bind ``p`` to
-    ``("os", "path")``, and the one-step ``q = p`` binds ``q`` to the same path,
-    so a rename never changes a verdict [LAW:one-source-of-truth]. ``bound``
+    ``("os", "path")``, the pre-injected ``hou`` stands for itself, and the
+    one-step ``q = p.x`` binds ``q`` to ``("os", "path", "x")``, so a rename
+    never changes a verdict [LAW:one-source-of-truth]. ``bound``
     holds every other identifier the program binds itself - assignments, defs,
     args, handlers, patterns. A name in both is an import the program rebound.
     """
@@ -82,7 +83,7 @@ class _Names:
 
 
 def _names(tree: ast.Module) -> _Names:
-    aliases: dict[str, tuple[str, ...]] = {}
+    aliases: dict[str, tuple[str, ...]] = {"hou": ("hou",)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -94,15 +95,15 @@ def _names(tree: ast.Module) -> _Names:
 
     aliased_targets: set[int] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in aliases
-        ):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    aliases[target.id] = aliases[node.value.id]
-                    aliased_targets.add(id(target))
+        if not isinstance(node, ast.Assign):
+            continue
+        chain = _dotted_chain(node.value)
+        if chain is None or chain[0] not in aliases:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                aliases[target.id] = aliases[chain[0]] + tuple(chain[1:])
+                aliased_targets.add(id(target))
 
     bound: set[str] = set()
     for node in ast.walk(tree):
@@ -285,6 +286,13 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
     names = _names(tree)
     detected: list[str] = []
+    # ``open`` is judged at its call, where the mode is; any other reference to
+    # it (``o = open``, ``partial(open, ...)``) is a mode the gate cannot read.
+    open_callees = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
 
     def judge(chain: list[str]) -> None:
         # A name the program binds itself is its own variable, not the module
@@ -292,6 +300,9 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
         if names.is_local(chain[0]):
             return
         path, _ = names.resolve(chain)
+        dotted = ".".join(path)
+        if dotted in DANGEROUS_HOU_PATHS:
+            detected.append(DANGEROUS_HOU_PATHS[dotted])
         if why := _rail_refusal(path):
             detected.append(why)
 
@@ -306,15 +317,15 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
                     detected.append(why)
         elif isinstance(node, ast.Attribute):
             chain = _dotted_chain(node)
-            if chain is None:
-                continue
-            dotted = ".".join(chain)
-            if dotted in DANGEROUS_HOU_PATHS:
-                detected.append(DANGEROUS_HOU_PATHS[dotted])
-            judge(chain)
+            if chain is not None:
+                judge(chain)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            if node.id in DYNAMIC_EXECUTION_NAMES and not names.is_local(node.id):
+            if names.is_local(node.id):
+                continue
+            if node.id in DYNAMIC_EXECUTION_NAMES:
                 detected.append(f"{node.id} - dynamic code execution")
+            elif node.id == "open" and id(node) not in open_callees:
+                detected.append("open referenced without a call - file writing cannot be ruled out")
             else:
                 judge([node.id])
         elif (
@@ -353,7 +364,9 @@ def _detect_heavy_geometry_code(tree: ast.Module) -> list[str]:
     detected = [
         HEAVY_GEOMETRY_METHODS[node.attr]
         for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr in HEAVY_GEOMETRY_METHODS
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.ctx, ast.Load)
+        and node.attr in HEAVY_GEOMETRY_METHODS
     ]
     return list(dict.fromkeys(detected))
 
@@ -532,7 +545,8 @@ READ_ONLY_MODULES: dict[str, frozenset[str]] = {
         }
     ),
     "fnmatch": frozenset({"fnmatch", "fnmatchcase", "filter", "translate"}),
-    "typing": frozenset({"cast", "overload", "final", "get_args", "get_origin", "get_type_hints"}),
+    # get_type_hints is absent: it evals string annotations.
+    "typing": frozenset({"cast", "overload", "final", "get_args", "get_origin"}),
     "dataclasses": frozenset(
         {
             "dataclass",
@@ -1114,10 +1128,10 @@ def _detect_non_inspection_code(tree: ast.Module) -> list[str]:
     names = _names(tree)
     detected: list[str] = []
 
-    # An imported module name that the program also rebinds no longer names
-    # the module; refuse the ambiguity rather than guess.
+    # An aliased name (``hou``, an import, ``hf = hou.hipFile``) that the
+    # program also rebinds no longer names that thing; refuse the ambiguity.
     for name in sorted(set(names.aliases) & names.bound):
-        detected.append(f"{name} - imported name is rebound")
+        detected.append(f"{name} - aliased name is rebound")
 
     def judge_import(path: tuple[str, ...]) -> None:
         if path[0] not in READ_ONLY_MODULES:
@@ -1150,10 +1164,7 @@ def _detect_non_inspection_code(tree: ast.Module) -> list[str]:
             )
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             allowed = (
-                node.id == "hou"
-                or node.id in names.bound
-                or node.id in names.aliases
-                or node.id in READ_ONLY_BUILTINS
+                node.id in names.bound or node.id in names.aliases or node.id in READ_ONLY_BUILTINS
             )
             if not allowed or node.id.startswith("__"):
                 detected.append(f"{node.id} - name is not in the read-only allowlist")
