@@ -6,6 +6,7 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 from __future__ import annotations
 
 import socket
+import sys
 
 import pytest
 from houdini_mcp_plugin.listener import (
@@ -13,6 +14,7 @@ from houdini_mcp_plugin.listener import (
     RemoteListener,
     SecurityError,
 )
+from rpyc.utils.authenticators import AuthenticationError
 
 # ---------------------------------------------------------------------------
 # Bind failures
@@ -89,6 +91,58 @@ class TestSecurityEnforcement:
         result = listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2"))
         assert result["status"] == "success"
         assert result["security"]["authenticated"] is True
+
+    def test_configured_token_is_enforced_by_the_wired_server(
+        self, fake_hrpyc, fake_hou, free_port
+    ):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2"))
+        authenticate = fake_hrpyc.servers[0].authenticator
+
+        client, server_side = socket.socketpair()
+        with client, server_side:
+            client.sendall(b"hunter2")
+            assert authenticate(server_side) == (server_side, None)
+
+        client, server_side = socket.socketpair()
+        with client, server_side:
+            client.sendall(b"hunter3")
+            with pytest.raises(AuthenticationError):
+                authenticate(server_side)
+
+    def test_trusted_network_without_token_reports_unauthenticated(
+        self, fake_hrpyc, fake_hou, free_port
+    ):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+
+        assert fake_hrpyc.servers[0].authenticator is None
+        assert listener.status()["authenticated"] is False
+        assert listener.self_test()["authenticated"] is False
+
+    def test_token_that_cannot_be_enforced_refuses_start(
+        self, fake_hrpyc, fake_hou, free_port, monkeypatch, caplog
+    ):
+        # A None entry in sys.modules makes the import raise ImportError.
+        monkeypatch.setitem(sys.modules, "rpyc.utils.authenticators", None)
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        cfg = ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2")
+
+        with caplog.at_level("WARNING"):
+            result = listener.start(cfg)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "security"
+        assert result["security"]["authenticated"] is False
+        assert "rpyc.utils.authenticators" in result["message"]
+        assert "Refusing to start listener" in caplog.text
+        assert "rpyc.utils.authenticators" in caplog.text
+        assert listener.is_running() is False
+        assert fake_hrpyc.servers == []
+
+        with pytest.raises(SecurityError, match="rpyc.utils.authenticators"):
+            listener.start(cfg, raise_on_policy=True)
+        assert fake_hrpyc.servers == []
 
 
 # ---------------------------------------------------------------------------

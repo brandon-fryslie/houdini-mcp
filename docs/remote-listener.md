@@ -38,8 +38,10 @@ The **Houdini MCP** shelf provides:
 Houdini. To prevent accidentally exposing that to the network, the listener
 enforces this policy:
 
-- **Loopback binds** (`127.0.0.1`, `::1`, `localhost`) are always allowed and
-  are reachable only from the same machine.
+- **A configured token is enforced or nothing binds**, whatever the host (see
+  the hardening notes below).
+- **Loopback binds** (`127.0.0.1`, `::1`, `localhost`) are otherwise always
+  allowed and are reachable only from the same machine.
 - **Any non-loopback bind** (`0.0.0.0` or a specific LAN IP) is **refused**
   unless the operator explicitly opts in via **either**:
   - `HOUDINI_RPC_TRUSTED_NETWORK=1` (you attest the network is trusted), or
@@ -54,9 +56,12 @@ created** — there is no code path that silently binds `0.0.0.0` without auth.
   before the RPyC protocol. It is **not** TLS and provides **no encryption** —
   use it only on trusted networks or behind an encrypted tunnel
   (WireGuard, SSH, Cloudflare Tunnel, etc.).
-- If the installed `rpyc` build does not expose the authenticator primitives,
-  the token cannot be enforced at the socket layer; the bind still requires the
-  trusted-network opt-in, but you should prefer a tunnel in that case.
+- A configured token is always enforced: if the installed `rpyc` cannot provide
+  the authenticator primitives, the security policy refuses the bind (a
+  `security` error from `start()`, or `SecurityError` with `raise_on_policy`)
+  and nothing is bound, rather than running unauthenticated. The reported
+  `authenticated` value reflects the authenticator actually wired into the
+  server.
 - `SlaveService` is inherently powerful; treat any reachable listener as a
   full remote shell into Houdini.
 
