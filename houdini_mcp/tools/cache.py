@@ -163,9 +163,7 @@ class NodeTypeCache(BaseCache):
         self,
         category: str | None = None,
         name_filter: str | None = None,
-        max_results: int = 100,
-        offset: int = 0,
-    ) -> tuple[list[dict[str, str]], int, bool]:
+    ) -> list[dict[str, str]]:
         """
         Filter cached node types.
 
@@ -175,15 +173,13 @@ class NodeTypeCache(BaseCache):
         Args:
             category: Optional category filter (case-insensitive)
             name_filter: Optional substring filter for type names
-            max_results: Maximum results to return
-            offset: Number of results to skip
 
         Returns:
-            Tuple of (filtered_types, total_matched, has_more)
+            Every cached type matching both filters; the caller pages it.
         """
         with self._lock:
             if not self._valid:
-                return [], 0, False
+                return []
 
             # Start with category filter
             if category:
@@ -197,16 +193,7 @@ class NodeTypeCache(BaseCache):
                 filter_lower = name_filter.lower()
                 source = [t for t in source if filter_lower in t["name"].lower()]
 
-            total_matched = len(source)
-
-            # Apply pagination
-            start = offset
-            end = offset + max_results
-            result = source[start:end]
-
-            has_more = end < total_matched
-
-            return result, total_matched, has_more
+            return list(source)
 
     def get_categories(self, hou: Any) -> list[str]:
         """

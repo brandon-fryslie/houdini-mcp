@@ -106,14 +106,14 @@ Check the status of the Houdini MCP Server.
 import hou
 
 try:
-    from houdini_mcp_plugin import is_server_running, get_connection
+    from houdini_mcp_plugin import is_server_running
+    from houdini_mcp.connection import get_connection_info
     
     if is_server_running():
-        conn = get_connection()
-        info = conn.get_info()
+        info = get_connection_info()
         
         status_text = "MCP Server Status: RUNNING\n\n"
-        status_text += f"Mode: {info.get('mode', 'unknown')}\n"
+        status_text += f"Houdini: {info.get('target', 'unknown')}\n"
         status_text += f"Houdini Version: {info.get('houdini_version', 'unknown')}\n"
         status_text += f"Hip File: {info.get('hip_file', 'unknown')}\n"
     else:

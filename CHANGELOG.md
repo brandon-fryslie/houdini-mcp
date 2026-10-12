@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One paging contract for list tools**: `list_node_types`, `list_children` and
+  `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
+  through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
+  three, and every response carries the same keys (`count`, `total`, `returned`,
+  `has_more`, `offset`, plus `cursor`/`next_offset`/`warning` when a further page
+  exists). `list_children.count` now means items returned, like the other two
+  tools; `list_node_types` no longer emits `total_matched` (use `total`).
+
 ### Fixed
 
 - **Token handshake has one definition** (`houdini_mcp_handshake`, in the plugin tree and shipped with the server): the MCP
@@ -73,16 +83,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass `allow_heavy_geometry=True`.
 - **stdio transport**: The stdio server no longer passes `host`/`port` and
   suppresses the FastMCP startup banner so stdout stays JSON-RPC clean.
+- **uv owns the project**: `pyproject.toml` (dev tools under
+  `[dependency-groups]`) and `uv.lock` are the only dependency sources.
+  `requirements.txt` is gone; `httpx` and `starlette`, imported directly, are
+  now declared, and `python-dotenv`, never imported, is dropped. CI, the Docker image and pre-commit all install from the lock
+  (`uv sync --locked`), so every tool runs at one version everywhere.
+  Set up with `uv sync && uv run pytest`.
 
 ### Fixed
 
+- **Plugin stdio server serves the shared MCP server**: the Houdini plugin's
+  stdio mode no longer re-implements nine tools with its own (drifted) contract
+  and an unguarded `execute_code`. It now runs `houdini_mcp.server` over stdio,
+  bound in-process via `houdini_mcp.connection.use_in_process_houdini()`, so
+  every tool, safety rail, audit block and response shape is identical across
+  transports (`delete_node` returns `deleted_path` in stdio mode too). The
+  plugin's own `LocalHoudiniConnection` is gone; `check_connection` and the
+  shelf status report a `target` (`host:port` or `this interpreter`). The
+  stdio install is `hython -m pip install .`, which also declares `httpx`.
+  `houdini_mcp.server.serve()` runs the server without touching process
+  logging; `run_server()` remains the CLI entry that configures it.
 - **hrpyc remote stop**: The Houdini plugin now starts the listener via
   `hrpyc.ThreadedServer` and stops it through the server object's `close()`,
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to
   `127.0.0.1` and is configurable via `HOUDINI_RPC_BIND_HOST`.
 - **CI**: Added the missing `hypothesis` test dependency (used by the
-  `execute_code` safety-rail property/fuzz tests) to the `dev` extra,
-  `requirements.txt`, and the CI fallback install list.
+  `execute_code` safety-rail property/fuzz tests) to the `dev` dependency group.
 
 ## [1.0.0] - 2025-12-28
 

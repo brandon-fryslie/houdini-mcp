@@ -53,7 +53,7 @@ For Codex Desktop on Windows, see the dedicated setup notes in
 
 ### Option 1: Houdini Plugin (stdio mode)
 
-The Houdini plugin runs the MCP server directly inside Houdini, using stdio transport. This is the simplest setup with no network configuration required.
+The Houdini plugin runs the MCP server directly inside Houdini, using stdio transport. This is the simplest setup with no network configuration required. It serves the same server as the other modes - every tool, safety rail and response shape in `houdini_mcp` - connected to the Houdini it runs inside instead of over RPyC.
 
 **Installation:**
 
@@ -61,7 +61,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```bash
    # Windows
    copy houdini_plugin %USERPROFILE%\Documents\houdini20.5\packages\houdini_mcp
-   
+
    # Linux/Mac
    cp -r houdini_plugin ~/houdini20.5/packages/houdini_mcp
    ```
@@ -70,19 +70,22 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```bash
    # Windows
    copy houdini_plugin\houdini_mcp.json %USERPROFILE%\Documents\houdini20.5\packages\
-   
+
    # Linux/Mac
    cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
    ```
 
-3. Install FastMCP in Houdini's Python:
+3. Install the server into Houdini's Python. This installs `houdini_mcp` and
+   every dependency it declares; there is no separate list to keep in step.
+   It upgrades Houdini's bundled `rpyc` 4.x to 5.x, which the hrpyc remote
+   listener runs on without change:
    ```bash
-   # Windows (from Houdini's Python)
-   hython -m pip install fastmcp
+   # From the repo root, with Houdini's Python
+   hython -m pip install .
    
    # Or from Houdini's Python Shell
-   import subprocess
-   subprocess.run(["pip", "install", "fastmcp"])
+   import subprocess, sys
+   subprocess.run([sys.executable, "-m", "pip", "install", "/path/to/houdini-mcp"])
    ```
 
 4. Restart Houdini and find the "Houdini MCP" shelf
@@ -165,10 +168,10 @@ docker compose up -d
 # Clone and install
 git clone https://github.com/oculairmedia/houdini-mcp.git
 cd houdini-mcp
-pip install -r requirements.txt
+uv sync
 
 # Run
-HOUDINI_HOST=192.168.50.90 python -m houdini_mcp
+HOUDINI_HOST=192.168.50.90 uv run python -m houdini_mcp
 ```
 
 ## Configuration
@@ -498,14 +501,14 @@ Add as an MCP server in Letta's configuration to give agents Houdini control.
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -r requirements.txt pytest
+# Install runtime + dev dependencies from the lockfile
+uv sync
 
 # Run tests
-pytest tests/
+uv run pytest
 
 # Run server locally
-python -m houdini_mcp
+uv run python -m houdini_mcp
 ```
 
 ## Troubleshooting
