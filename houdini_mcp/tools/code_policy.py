@@ -246,7 +246,7 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
     "pdb": frozenset(),
 }
 
-# hou calls that destroy the session or the scene under any policy but privileged.
+# hou calls that destroy the session or the scene under any policy.
 DANGEROUS_HOU_PATHS: dict[str, str] = {
     "hou.exit": "hou.exit() - will close Houdini",
     "hou.hipFile.clear": "hou.hipFile.clear() - scene wipe",

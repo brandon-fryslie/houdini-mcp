@@ -11,6 +11,8 @@ from starlette.responses import JSONResponse
 from . import tools
 from .connection import describe_target, ensure_connected, get_connection_info, is_connected, ping
 from .tools._common import apply_response_cap
+from .tools.code import Policy
+from .tools.nodes import CookInfo, Detail
 
 logger = logging.getLogger("houdini_mcp.server")
 
@@ -72,7 +74,7 @@ def execute_code(
     timeout: int = 30,
     allow_dangerous: bool = False,
     allow_heavy_geometry: bool = False,
-    policy: str = "normal",
+    policy: Policy = "normal",
 ) -> dict[str, Any]:
     """
     Execute Python code in Houdini with scene change tracking and safety rails.
@@ -85,9 +87,9 @@ def execute_code(
     SAFETY FEATURES:
     - Policy profiles: "read-only" (inspection only: the code may name only
       recognized inspection APIs, pure stdlib and dicts for its own records;
-      anything else, including hou APIs added after this release, is refused),
-      "normal" (default; a guard rail against accidents, not a sandbox),
-      "privileged" (requires server config gate).
+      anything else, including hou APIs added after this release, is refused,
+      and bypass flags grant nothing) and "normal" (default; a guard rail
+      against accidents, not a sandbox).
     - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
       state changes (os and tempfile beyond their read side, shutil, pathlib,
       archive and database modules, open() for writing), shell and process
@@ -96,8 +98,9 @@ def execute_code(
       the parsed program, so text in comments and strings is not code.
     - Code that does not parse is refused before any rail runs.
     - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
-    - Config+request bypass: allow_dangerous / allow_heavy_geometry are only
-      honored when the server also sets HOUDINI_MCP_ALLOW_BYPASS=true.
+    - Config+request bypass: allow_dangerous unlocks dangerous patterns and
+      allow_heavy_geometry unlocks heavy geometry, each only when the server
+      also sets HOUDINI_MCP_ALLOW_BYPASS=true.
     - Output size caps: Prevents massive output from overwhelming the response
     - Execution timeout with rollback: on timeout the run is rolled back via a
       named Houdini undo group when available, else it fails closed.
@@ -111,11 +114,12 @@ def execute_code(
         max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB)
         max_diff_nodes: Maximum nodes in scene diff added_nodes list (default: 1000)
         timeout: Execution timeout in seconds (default: 30)
-        allow_dangerous: Request-side opt-in to bypass dangerous-pattern blocking.
-            Only honored when HOUDINI_MCP_ALLOW_BYPASS is enabled server-side.
-        allow_heavy_geometry: Request-side opt-in to allow direct SOP geometry access.
-            Only honored when HOUDINI_MCP_ALLOW_BYPASS is enabled. Prefer get_geo_summary().
-        policy: Safety profile - "read-only", "normal" (default), or "privileged".
+        allow_dangerous: Request-side opt-in to run dangerous patterns.
+            Only honored under policy "normal" when HOUDINI_MCP_ALLOW_BYPASS is enabled server-side.
+        allow_heavy_geometry: Request-side opt-in to direct SOP geometry access.
+            Only honored under policy "normal" when HOUDINI_MCP_ALLOW_BYPASS is enabled.
+            Prefer get_geo_summary().
+        policy: Safety profile - "read-only" or "normal" (default).
 
     Dangerous patterns detected (policy "normal"):
         - hou.exit() - closes Houdini; hou.hipFile.clear() - scene wipe
@@ -144,6 +148,7 @@ def execute_code(
         May include truncation flags (stdout_truncated, stderr_truncated, diff_truncated)
         if output exceeded size limits.
         If dangerous patterns detected and not allowed, returns error with detected patterns.
+        audit.granted reports the one permission decision the run was made under.
     """
     return apply_response_cap(
         tools.execute_code(
@@ -191,49 +196,42 @@ def set_parameter(
 @mcp.tool()
 def get_node_info(
     node_path: str,
-    include_params: bool = True,
-    include_input_details: bool = True,
-    include_errors: bool = False,
-    force_cook: bool = False,
-    compact: bool = False,
+    detail: Detail = "full",
+    cook_info: CookInfo = "none",
 ) -> dict[str, Any]:
     """
-    Get detailed information about a node.
+    Get information about a node at a chosen level of detail.
 
     Args:
         node_path: Full path to the node
-        include_params: Whether to include parameter values (default: True)
-        include_input_details: When True, expand input connections to show source node,
-                              output index, and connection index details (default: True)
-        include_errors: When True, include cook state and error/warning information (default: False)
-        force_cook: When True, force cook the node before checking errors (default: False)
-        compact: When True, return minimal info (path, type, counts only) for reduced payload (default: False)
+        detail: How much of the node to return (default: "full").
+            "compact": path, type and child/input/output counts, for a minimal payload.
+            "standard": identity, flags, children, inputs, outputs and input_connections
+                (source node and output index per connection).
+            "full": "standard" plus parameter values (at most 50).
+        cook_info: Whether to report cook state, errors and warnings (default: "none").
+            "inspect": report the node's current cook state.
+            "force_cook": cook the node first, then report.
 
     Returns:
-        Node information including type, children, connections, flags, and parameters.
-        When include_input_details=True, also includes detailed input_connections array
-        showing source nodes and output indices for each connection.
-        When include_errors=True, also includes cook_info with cook_state, errors, and warnings.
-        When compact=True, returns only path, type, and child/input/output counts.
+        Node information at the requested detail. When cook_info is not "none",
+        also includes cook_info with cook_state, errors, and warnings.
 
     Example:
-        # Get node info with cook state and errors
-        get_node_info("/obj/geo1/sphere1", include_errors=True)
+        # Check cook state and errors
+        get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 
         # Force cook and check for errors
-        get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
+        get_node_info("/obj/geo1/sphere1", cook_info="force_cook")
 
-        # Get minimal info for reduced payload
-        get_node_info("/obj/geo1/sphere1", compact=True)
+        # Minimal info for reduced payload
+        get_node_info("/obj/geo1/sphere1", detail="compact")
     """
     return tools.get_node_info(
         node_path=node_path,
-        include_params=include_params,
+        detail=detail,
+        cook_info=cook_info,
         max_params=50,
-        include_input_details=include_input_details,
-        include_errors=include_errors,
-        force_cook=force_cook,
-        compact=compact,
         host=HOUDINI_HOST,
         port=HOUDINI_PORT,
     )
@@ -333,24 +331,22 @@ def get_last_scene_diff() -> dict[str, Any]:
 @mcp.tool()
 def list_node_types(
     category: str | None = None,
-    max_results: int = 100,
     name_filter: str | None = None,
-    offset: int = 0,
-    limit: int | None = None,
-    cursor: int | None = None,
+    limit: int = 100,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     List available Houdini node types.
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
-        max_results: Maximum number of results to return (default: 100, max: 500)
         name_filter: Optional substring filter for node type names (case-insensitive)
-        offset: Number of results to skip for pagination (default: 0)
+        limit: Maximum number of results per page (default: 100, max: 500)
+        cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
         List of node types with their categories and descriptions.
-        Includes pagination info (has_more, next_offset) when applicable.
+        Includes pagination info (has_more, cursor) when applicable.
 
     Note:
         Large categories like "Sop" have thousands of node types.
@@ -359,14 +355,12 @@ def list_node_types(
     Examples:
         list_node_types(category="Object")  # List Object-level nodes
         list_node_types(category="Sop", name_filter="noise")  # Find noise SOPs
-        list_node_types(category="Sop", name_filter="vdb", max_results=50)  # VDB SOPs
-        list_node_types(category="Sop", offset=100)  # Get next page of SOPs
+        list_node_types(category="Sop", name_filter="vdb", limit=50)  # VDB SOPs
+        list_node_types(category="Sop", cursor=100)  # Get next page of SOPs
     """
     return tools.list_node_types(
         category=category,
-        max_results=max_results,
         name_filter=name_filter,
-        offset=offset,
         host=HOUDINI_HOST,
         port=HOUDINI_PORT,
         limit=limit,
@@ -382,7 +376,7 @@ def list_children(
     max_nodes: int = 1000,
     compact: bool = False,
     limit: int = 20,
-    cursor: int | None = None,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     List child nodes with paths, types, and current input connections.
@@ -429,10 +423,8 @@ def find_nodes(
     root_path: str = "/obj",
     pattern: str = "*",
     node_type: str | None = None,
-    max_results: int = 100,
-    offset: int = 0,
-    limit: int | None = None,
-    cursor: int | None = None,
+    limit: int = 100,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     Find nodes by name pattern or type using glob/substring matching.
@@ -445,25 +437,23 @@ def find_nodes(
         pattern: Glob pattern or substring to match node names (default: "*")
                 Examples: "noise*", "*grid*", "sphere"
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
-        max_results: Maximum number of results to return (default: 100, max: 500)
-        offset: Number of results to skip for pagination (default: 0)
+        limit: Maximum number of results per page (default: 100, max: 500)
+        cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
         Dict with matches array containing matching nodes with path, name, and type.
-        Includes pagination info (has_more, next_offset) when applicable.
+        Includes pagination info (has_more, cursor) when applicable.
 
     Examples:
         find_nodes("/obj", "noise*") - Find all nodes starting with "noise"
         find_nodes("/obj/geo1", "*", node_type="sphere") - Find all sphere nodes
         find_nodes("/obj", "grid") - Substring match for "grid"
-        find_nodes("/obj", "*", offset=100) - Get next page of results
+        find_nodes("/obj", "*", cursor=100) - Get next page of results
     """
     return tools.find_nodes(
         root_path=root_path,
         pattern=pattern,
         node_type=node_type,
-        max_results=max_results,
-        offset=offset,
         host=HOUDINI_HOST,
         port=HOUDINI_PORT,
         limit=limit,

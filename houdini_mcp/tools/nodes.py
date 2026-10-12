@@ -12,7 +12,7 @@ This module provides tools for managing Houdini nodes:
 import fnmatch
 import logging
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ._common import (
     _add_response_metadata,
@@ -27,6 +27,19 @@ from ._common import (
 from .cache import node_type_cache
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
+
+# [LAW:no-mode-explosion] get_node_info has two axes, each one value: how much
+# of the node to return, and whether to report (and force) its cook. Every
+# combination means something, so none has to be ignored.
+Detail = Literal["compact", "standard", "full"]
+DETAIL_LEVELS: tuple[str, ...] = get_args(Detail)
+CookInfo = Literal["none", "inspect", "force_cook"]
+COOK_INFO_MODES: tuple[str, ...] = get_args(CookInfo)
+
+
+def _require_choice(name: str, value: str, choices: tuple[str, ...]) -> None:
+    if value not in choices:
+        raise ValueError(f"{name} must be one of {', '.join(choices)}, got {value!r}")
 
 
 @handle_connection_errors("create_node")
@@ -67,58 +80,83 @@ def create_node(
 @handle_connection_errors("get_node_info")
 def get_node_info(
     node_path: str,
-    include_params: bool = True,
+    detail: Detail = "full",
+    cook_info: CookInfo = "none",
     max_params: int = 50,
-    include_input_details: bool = True,
-    include_errors: bool = False,
-    force_cook: bool = False,
-    compact: bool = False,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
     """
-    Get detailed information about a node.
+    Get information about a node at a chosen level of detail.
 
     Args:
         node_path: Path to the node
-        include_params: Whether to include parameter values
-        max_params: Maximum number of parameters to return
-        include_input_details: When True, expand input connections to show source node,
-                              output index, and connection index details
-        include_errors: When True, include cook state and error/warning information
-        force_cook: When True, force cook the node before checking errors (requires include_errors=True)
-        compact: When True, return minimal info (path, type, counts only)
+        detail: How much of the node to return.
+            "compact": path, type and child/input/output counts.
+            "standard": identity, flags, children, inputs, outputs and input_connections.
+            "full": "standard" plus parameter values (at most max_params).
+        cook_info: Whether to report cook state, errors and warnings.
+            "none": no cook_info block.
+            "inspect": report the node's current cook state.
+            "force_cook": cook the node first, then report.
+        max_params: Maximum number of parameters to return under detail="full"
 
     Returns:
-        Dict with node information. When include_errors=True, also includes cook_info
-        with cook_state, errors, warnings, and last_cook_time.
+        Dict with node information at the requested detail; a cook_info block
+        with cook_state, errors, warnings (and last_cook_time after a forced
+        cook) whenever cook_info is not "none".
     """
+    # [LAW:parse-dont-validate] MCP callers are checked by the schema; this is
+    # the one check for Python callers, so an unknown level fails loudly instead
+    # of quietly behaving like another level.
+    _require_choice("detail", detail, DETAIL_LEVELS)
+    _require_choice("cook_info", cook_info, COOK_INFO_MODES)
     hou = ensure_connected(host, port)
 
     node = hou.node(node_path)
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    # Compact mode: minimal response with just essential info
-    if compact:
-        info: dict[str, Any] = {
-            "status": "success",
-            "path": node.path(),
-            "type": node.type().name(),
-        }
-        # Only include non-empty children/inputs/outputs counts
-        children_count = len(node.children())
-        inputs_count = len([i for i in node.inputs() if i])
-        outputs_count = len(node.outputs())
-        if children_count:
-            info["children_count"] = children_count
-        if inputs_count:
-            info["inputs_count"] = inputs_count
-        if outputs_count:
-            info["outputs_count"] = outputs_count
-        return info
+    info = _compact_record(node) if detail == "compact" else _standard_record(node)
+    if detail == "full":
+        info["parameters"] = _parameters(hou, node, max_params)
+    # [LAW:dataflow-not-control-flow] cook_info is orthogonal to detail: it is
+    # appended to any record, so no level silently drops it.
+    if cook_info != "none":
+        info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
 
-    info = {
+    logger.debug(
+        "get_node_info path=%s detail=%s cook_info=%s keys=%s",
+        node_path,
+        detail,
+        cook_info,
+        sorted(info),
+    )
+    return info
+
+
+def _compact_record(node: Any) -> dict[str, Any]:
+    """Path, type and the non-zero child/input/output counts."""
+    info: dict[str, Any] = {
+        "status": "success",
+        "path": node.path(),
+        "type": node.type().name(),
+    }
+    children_count = len(node.children())
+    inputs_count = len([i for i in node.inputs() if i])
+    outputs_count = len(node.outputs())
+    if children_count:
+        info["children_count"] = children_count
+    if inputs_count:
+        info["inputs_count"] = inputs_count
+    if outputs_count:
+        info["outputs_count"] = outputs_count
+    return info
+
+
+def _standard_record(node: Any) -> dict[str, Any]:
+    """Identity, flags, children, inputs, outputs and per-input connection details."""
+    info: dict[str, Any] = {
         "status": "success",
         "path": node.path(),
         "name": node.name(),
@@ -131,139 +169,132 @@ def get_node_info(
         "is_rendered": node.isRenderFlagSet() if hasattr(node, "isRenderFlagSet") else None,
     }
 
-    # Add detailed input connection information if requested
-    if include_input_details:
-        input_connections: list[dict[str, Any]] = []
-        node_inputs = node.inputs()
+    input_connections: list[dict[str, Any]] = []
+    node_inputs = node.inputs()
 
-        # Cache inputConnectors call OUTSIDE the loop to avoid
-        # redundant RPC calls (was previously called per input)
+    # Cache inputConnectors call OUTSIDE the loop to avoid
+    # redundant RPC calls (was previously called per input)
+    try:
+        connectors = node.inputConnectors()
+    except Exception:
+        connectors = None
+
+    for idx, input_node in enumerate(node_inputs):
+        if input_node is not None:
+            # Use cached connectors
+            source_output_idx = 0
+            if connectors is not None and idx < len(connectors):
+                connector = connectors[idx]
+                source_output_idx = connector[1] if len(connector) > 1 else 0
+
+            input_connections.append(
+                {
+                    "input_index": idx,
+                    "source_node": input_node.path(),
+                    "source_output_index": source_output_idx,
+                }
+            )
+
+    info["input_connections"] = input_connections
+    return info
+
+
+def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
+    """Evaluated parameter values, at most ``max_params`` of them."""
+    params: dict[str, Any] = {}
+    for i, parm in enumerate(node.parms()):
+        if i >= max_params:
+            params["_truncated"] = True
+            break
         try:
-            connectors = node.inputConnectors()
+            params[parm.name()] = _json_safe_hou_value(hou, parm.eval())
         except Exception:
-            connectors = None
+            params[parm.name()] = "<unable to evaluate>"
+    return params
 
-        for idx, input_node in enumerate(node_inputs):
-            if input_node is not None:
-                # Use cached connectors
-                source_output_idx = 0
-                if connectors is not None and idx < len(connectors):
-                    connector = connectors[idx]
-                    source_output_idx = connector[1] if len(connector) > 1 else 0
 
-                input_connections.append(
+def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
+    """Cook state, errors and warnings; cooks the node first when ``force``."""
+    try:
+        if force:
+            node.cook(force=True)
+
+        # Determine cook state using available methods
+        # Houdini 20.5+ doesn't have cookState(), use needsToCook() instead
+        try:
+            if hasattr(node, "cookState"):
+                cook_state_obj = node.cookState()
+                cook_state_name = (
+                    cook_state_obj.name()
+                    if hasattr(cook_state_obj, "name")
+                    else str(cook_state_obj)
+                )
+                cook_state_map = {
+                    "Cooked": "cooked",
+                    "CookFailed": "error",
+                    "Dirty": "dirty",
+                    "Uncooked": "uncooked",
+                }
+                cook_state = cook_state_map.get(cook_state_name, cook_state_name.lower())
+            elif hasattr(node, "needsToCook"):
+                # Fallback for Houdini versions without cookState()
+                needs_cook = node.needsToCook()
+                cook_state = "dirty" if needs_cook else "cooked"
+            else:
+                cook_state = "unknown"
+        except Exception:
+            cook_state = "unknown"
+
+        # Get errors and warnings
+        errors_list: list[dict[str, str]] = []
+        warnings_list: list[dict[str, str]] = []
+
+        # Get errors
+        try:
+            node_errors = node.errors()
+            for error_msg in node_errors:
+                errors_list.append(
+                    {"severity": "error", "message": error_msg, "node_path": node.path()}
+                )
+        except Exception:
+            pass
+
+        # Get warnings
+        try:
+            node_warnings = node.warnings()
+            for warning_msg in node_warnings:
+                warnings_list.append(
                     {
-                        "input_index": idx,
-                        "source_node": input_node.path(),
-                        "source_output_index": source_output_idx,
+                        "severity": "warning",
+                        "message": warning_msg,
+                        "node_path": node.path(),
                     }
                 )
+        except Exception:
+            pass
 
-        info["input_connections"] = input_connections
+        cook_info: dict[str, Any] = {
+            "cook_state": cook_state,
+            "errors": errors_list,
+            "warnings": warnings_list,
+        }
 
-    if include_params:
-        params: dict[str, Any] = {}
-        for i, parm in enumerate(node.parms()):
-            if i >= max_params:
-                params["_truncated"] = True
-                break
-            try:
-                params[parm.name()] = _json_safe_hou_value(hou, parm.eval())
-            except Exception:
-                params[parm.name()] = "<unable to evaluate>"
-        info["parameters"] = params
+        # Houdini has no direct lastCookTime; after a forced cook, now is it.
+        if force:
+            import time
 
-    # Add cook info if requested
-    if include_errors:
-        try:
-            # Force cook if requested
-            if force_cook:
-                node.cook(force=True)
+            cook_info["last_cook_time"] = time.time()
 
-            # Determine cook state using available methods
-            # Houdini 20.5+ doesn't have cookState(), use needsToCook() instead
-            try:
-                if hasattr(node, "cookState"):
-                    cook_state_obj = node.cookState()
-                    cook_state_name = (
-                        cook_state_obj.name()
-                        if hasattr(cook_state_obj, "name")
-                        else str(cook_state_obj)
-                    )
-                    cook_state_map = {
-                        "Cooked": "cooked",
-                        "CookFailed": "error",
-                        "Dirty": "dirty",
-                        "Uncooked": "uncooked",
-                    }
-                    cook_state = cook_state_map.get(cook_state_name, cook_state_name.lower())
-                elif hasattr(node, "needsToCook"):
-                    # Fallback for Houdini versions without cookState()
-                    needs_cook = node.needsToCook()
-                    cook_state = "dirty" if needs_cook else "cooked"
-                else:
-                    cook_state = "unknown"
-            except Exception:
-                cook_state = "unknown"
+        return cook_info
 
-            # Get errors and warnings
-            errors_list: list[dict[str, str]] = []
-            warnings_list: list[dict[str, str]] = []
-
-            # Get errors
-            try:
-                node_errors = node.errors()
-                for error_msg in node_errors:
-                    errors_list.append(
-                        {"severity": "error", "message": error_msg, "node_path": node.path()}
-                    )
-            except Exception:
-                pass
-
-            # Get warnings
-            try:
-                node_warnings = node.warnings()
-                for warning_msg in node_warnings:
-                    warnings_list.append(
-                        {
-                            "severity": "warning",
-                            "message": warning_msg,
-                            "node_path": node.path(),
-                        }
-                    )
-            except Exception:
-                pass
-
-            # Build cook info dict
-            cook_info: dict[str, Any] = {
-                "cook_state": cook_state,
-                "errors": errors_list,
-                "warnings": warnings_list,
-            }
-
-            # Try to get last cook time (may not be available on all node types)
-            try:
-                # Houdini doesn't have a direct lastCookTime, but we can check if cooked
-                # For now, we'll skip this or use current time if just cooked
-                if force_cook:
-                    import time
-
-                    cook_info["last_cook_time"] = time.time()
-            except Exception:
-                pass
-
-            info["cook_info"] = cook_info
-
-        except Exception as e:
-            # If we can't get cook info, add error but don't fail the whole request
-            logger.warning(f"Error getting cook info: {e}")
-            info["cook_info"] = {
-                "cook_state": "unknown",
-                "errors": [{"severity": "error", "message": f"Failed to get cook info: {str(e)}"}],
-                "warnings": [],
-            }
-
-    return info
+    except Exception as e:
+        # If we can't get cook info, add error but don't fail the whole request
+        logger.warning(f"Error getting cook info: {e}")
+        return {
+            "cook_state": "unknown",
+            "errors": [{"severity": "error", "message": f"Failed to get cook info: {str(e)}"}],
+            "warnings": [],
+        }
 
 
 @handle_connection_errors("delete_node")
@@ -296,14 +327,12 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 @handle_connection_errors("list_node_types")
 def list_node_types(
     category: str | None = None,
-    max_results: int | None = None,
     name_filter: str | None = None,
-    offset: int | None = None,
     host: str = "localhost",
     port: int = 18811,
     *,
-    limit: int | None = None,
-    cursor: int | None = None,
+    limit: int = 100,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     List available node types, optionally filtered by category.
@@ -313,15 +342,9 @@ def list_node_types(
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
-        max_results: Maximum number of results to return (default: 100, max: 500)
-                    DEPRECATED: Use limit instead for consistency
         name_filter: Optional substring filter for node type names (case-insensitive)
-        offset: Number of results to skip for pagination (default: 0)
-               DEPRECATED: Use cursor instead for consistency
         limit: Maximum number of results per page (default: 100, max: 500)
-              Preferred alias for max_results
-        cursor: Pagination cursor/offset (default: 0)
-               Preferred alias for offset
+        cursor: Pagination cursor (default: 0)
 
     Returns:
         Dict with list of node types and pagination info.
@@ -329,16 +352,14 @@ def list_node_types(
     Note:
         Large categories like "Sop" have thousands of node types.
         Use name_filter to narrow results (e.g., name_filter="noise" for noise-related SOPs).
-        Use offset for pagination through large result sets.
+        Use cursor for pagination through large result sets.
 
     Performance:
         - First call: ~200-500ms (populates cache using batch fetch)
         - Subsequent calls: <1ms (filters from cache)
     """
     hou = ensure_connected(host, port)
-    request = parse_page_request(
-        limit=limit, cursor=cursor, max_results=max_results, offset=offset, default_limit=100
-    )
+    request = parse_page_request(limit=limit, cursor=cursor)
 
     # Populate cache if needed (first call fetches all types)
     # This is done automatically by get_all_types()
@@ -382,7 +403,7 @@ def list_children(
     port: int = 18811,
     *,
     limit: int = 20,
-    cursor: int | None = None,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     List child nodes with paths, types, and current input connections.
@@ -408,7 +429,7 @@ def list_children(
         Includes pagination metadata: total, returned, has_more, cursor.
     """
     hou = ensure_connected(host, port)
-    request = parse_page_request(limit=limit, cursor=cursor, default_limit=20)
+    request = parse_page_request(limit=limit, cursor=cursor)
 
     parent = hou.node(node_path)
     if parent is None:
@@ -559,13 +580,11 @@ def find_nodes(
     root_path: str = "/obj",
     pattern: str = "*",
     node_type: str | None = None,
-    max_results: int | None = None,
-    offset: int | None = None,
     host: str = "localhost",
     port: int = 18811,
     *,
-    limit: int | None = None,
-    cursor: int | None = None,
+    limit: int = 100,
+    cursor: int = 0,
 ) -> dict[str, Any]:
     """
     Find nodes by name pattern or type using glob/substring matching.
@@ -574,23 +593,17 @@ def find_nodes(
         root_path: Root path to start search from
         pattern: Glob pattern or substring to match against node names (* for wildcard)
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
-        max_results: Maximum number of results to return (default: 100, max: 500)
-                    DEPRECATED: Use limit instead for consistency
-        offset: Number of results to skip for pagination (default: 0)
-               DEPRECATED: Use cursor instead for consistency
         limit: Maximum number of results per page (default: 100, max: 500)
-              Preferred alias for max_results
-        cursor: Pagination cursor/offset (default: 0)
-               Preferred alias for offset
+        cursor: Pagination cursor (default: 0)
 
     Returns:
         Dict with matching nodes and their types.
-        Includes pagination info (has_more, next_offset) when applicable.
+        Includes pagination info (has_more, cursor) when applicable.
 
     Example:
-        find_nodes("/obj", "noise*", max_results=50)
+        find_nodes("/obj", "noise*", limit=50)
         find_nodes("/obj/geo1", "*", node_type="sphere")
-        find_nodes("/obj", "*", offset=100)  # Get next page
+        find_nodes("/obj", "*", cursor=100)  # Get next page
     """
     hou = ensure_connected(host, port)
 
@@ -598,9 +611,7 @@ def find_nodes(
     if root is None:
         return {"status": "error", "message": f"Root node not found: {root_path}"}
 
-    request = parse_page_request(
-        limit=limit, cursor=cursor, max_results=max_results, offset=offset, default_limit=100
-    )
+    request = parse_page_request(limit=limit, cursor=cursor)
 
     # [LAW:single-enforcer] Caller strings are compared as data here, never formatted
     # into a program; find_nodes has no code-execution path of its own.

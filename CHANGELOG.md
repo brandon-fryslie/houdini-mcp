@@ -42,16 +42,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiles, once per request. Code that does not parse is refused with
   `blocked_reason="syntax_error"`.
 
+- **Flags have a cap and an exit plan; the permission decision is one value**
+  (houdini-laws-etg.pic):
+  - `get_node_info` takes `detail` ("compact" | "standard" | "full", default
+    "full") and `cook_info` ("none" | "inspect" | "force_cook", default "none")
+    in place of `include_params`, `include_input_details`, `include_errors`,
+    `force_cook` and `compact`. Every combination means something: cook info is
+    reported at every detail level, and a forced cook always reports.
+  - `list_node_types` and `find_nodes` drop the deprecated `max_results` and
+    `offset` aliases; `limit` and `cursor` are the paging parameters, as on
+    `list_children`. List responses drop the `count` and `next_offset` aliases
+    of `returned` and `cursor`.
+  - `execute_code` resolves `policy`, `allow_dangerous`, `allow_heavy_geometry`
+    and `HOUDINI_MCP_ALLOW_BYPASS` once into one grant, reported as
+    `audit.granted`. `allow_dangerous` no longer unlocks heavy geometry, and
+    `read-only` now denies dangerous patterns even when a bypass is requested
+    and configured. The inert `privileged` policy is removed (it granted nothing
+    beyond `normal`); the valid policies are `read-only` and `normal`.
+    `get_geo_summary` runs its own bounded program under an internal grant
+    instead of a private keyword on `execute_code`.
+- **Plugin runtime state has one owner**: the module-level hrpyc API in
+  `houdini_mcp_plugin.remote` delegates to a single `RemoteListener` that is
+  bound once and never rebound, so `is_hrpyc_running` / `get_hrpyc_status` /
+  `self_test_hrpyc` answer from the listener itself instead of a nullable module
+  global. `remote.reset_listener` is gone; stop the listener with
+  `stop_hrpyc_server()`. The package docstring now describes the two modes that
+  exist (stdio and hrpyc remote) without tier or ticket references.
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
-  `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
-  through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
-  three, and every response carries the same keys (`count`, `total`, `returned`,
-  `has_more`, `offset`, plus `cursor`/`next_offset`/`warning` when a further page
-  exists). `list_children.count` now means items returned, like the other two
-  tools; `list_node_types` no longer emits `total_matched` (use `total`).
+  `find_nodes` parse `limit`/`cursor` through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
+  three, and every response carries the same keys (`total`, `returned`,
+  `has_more`, `offset`, plus `cursor`/`warning` when a further page exists);
+  `list_node_types` no longer emits `total_matched` (use `total`).
 
 ### Fixed
 
+- **Listener start no longer races its own serve thread**: `start()` listens
+  on the server socket before spawning the accept thread (rpyc's own readiness
+  step), so the listener is accepting connections when `start()` returns and
+  success no longer depends on thread scheduling. The two-second connect
+  poll, its `unreachable` error and the 50ms sleeps are gone; the self-test's
+  reachability probe is a single bounded connect. The reported port is
+  rpyc's own `server.port`, so `HOUDINI_RPC_BIND_PORT=0` reports the port the
+  kernel chose; a failure after the bind closes the server before it is
+  reported.
 - **Token handshake has one definition** (`houdini_mcp_handshake`, in the plugin tree and shipped with the server): the MCP
   server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
   with a token is reachable from the server (previously only the verify script
@@ -139,6 +172,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stdio install is `hython -m pip install .`, which also declares `httpx`.
   `houdini_mcp.server.serve()` runs the server without touching process
   logging; `run_server()` remains the CLI entry that configures it.
+- **Plugin stdio server lifecycle**: start and running state have one owner,
+  `houdini_mcp_plugin.server.StdioServer`. The serving thread is recorded before
+  it starts, so two quick "Start MCP" clicks no longer both pass the guard and
+  launch two readers on one stdin; a failed foreground serve no longer leaves
+  "already running" stuck. `stop_server()` and the **Stop MCP** shelf tool are
+  removed: a stdio server ends only when the client closes stdin, and the old
+  stop merely flipped a flag while the server kept serving, so the next Start
+  ran a second loop. `MCP Status` now reports whether a server is serving.
 - **hrpyc remote stop**: The Houdini plugin now starts the listener via
   `hrpyc.ThreadedServer` and stops it through the server object's `close()`,
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to

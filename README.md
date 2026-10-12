@@ -94,7 +94,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
 **Usage:**
 - Click "Start MCP" on the shelf to start the server
 - Configure your MCP client (Claude Desktop, Cursor, etc.) to use stdio transport
-- Click "Stop MCP" to stop the server
+- The server ends when the MCP client closes its stdin; "MCP Status" shows whether it is serving
 
 **MCP Client Configuration (stdio mode):**
 ```json
@@ -313,7 +313,7 @@ children = list_children("/obj/geo1")
 # Find grid and noise nodes from children
 
 # 2. Get current connections
-noise_info = get_node_info("/obj/geo1/noise1", include_input_details=True)
+noise_info = get_node_info("/obj/geo1/noise1")
 # See that noise is connected to grid
 
 # 3. Create new node
@@ -355,7 +355,7 @@ summary = get_geo_summary("/obj/geo1/OUT", max_sample_points=10, include_attribu
 # Check cook state
 if summary["cook_state"] != "cooked":
     # Handle errors
-    node_info = get_node_info("/obj/geo1/OUT", include_errors=True)
+    node_info = get_node_info("/obj/geo1/OUT", cook_info="inspect")
     errors = node_info["cook_info"]["errors"]
     # Fix errors...
 
@@ -374,7 +374,7 @@ bbox = summary["bounding_box"]
 
 ```python
 # 1. Check cook state first
-node_info = get_node_info(node_path, include_errors=True, force_cook=True)
+node_info = get_node_info(node_path, cook_info="force_cook")
 
 cook_state = node_info["cook_info"]["cook_state"]
 
@@ -423,8 +423,8 @@ if result["status"] == "error":
 ### Debugging with Error Introspection
 
 ```python
-# Use include_errors=True to diagnose issues
-node_info = get_node_info(node_path, include_errors=True, force_cook=True)
+# Use cook_info="force_cook" to diagnose issues
+node_info = get_node_info(node_path, cook_info="force_cook")
 
 cook_info = node_info["cook_info"]
 

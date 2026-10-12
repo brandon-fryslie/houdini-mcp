@@ -14,10 +14,13 @@ real Houdini or ``hrpyc`` is required.
 
 from __future__ import annotations
 
+import logging
+
 from houdini_mcp_plugin.listener import (
     DEFAULT_PORT,
     ListenerConfig,
     RemoteListener,
+    _serve,
     resolve_security_policy,
 )
 
@@ -151,3 +154,88 @@ class TestStartStop:
         result = listener.reload(ListenerConfig(host="127.0.0.1", port=free_port))
         assert result["status"] == "success"
         assert listener.is_running() is True
+
+
+# ---------------------------------------------------------------------------
+# Readiness
+# ---------------------------------------------------------------------------
+
+
+class TestStartAwaitsReadiness:
+    def test_start_returns_accepting_even_if_the_serve_thread_never_runs(
+        self, fake_hou, free_port, caplog
+    ):
+        """Readiness is the listen state, not the accept loop's scheduling.
+
+        The serve thread here stalls forever in its first accept,
+        standing in for a scheduler that never gets round to it. ``start()``
+        still reports success, and a client still connects: the kernel queues
+        the connection on the listening socket. This is deterministic, not a
+        bet on timing.
+        """
+        import socket
+        import threading
+
+        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+
+        never = threading.Event()
+
+        class StalledServer(FakeThreadedServer):
+            def accept(self) -> None:
+                never.wait()
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: StalledServer(*a, **kw)
+
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        try:
+            with caplog.at_level(logging.INFO, logger="houdini_mcp_plugin.listener"):
+                result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+            assert result["status"] == "success"
+            assert f"Started hrpyc listener on 127.0.0.1:{free_port}" in caplog.text
+
+            with socket.create_connection(("127.0.0.1", free_port), timeout=1):
+                pass
+        finally:
+            listener.stop()
+            never.set()
+
+    def test_serve_thread_is_a_no_op_for_a_server_closed_before_it_ran(self, free_port, caplog):
+        """stop() may land before the serve thread is scheduled.
+
+        rpyc's ``start()`` would re-run ``_listen()`` on the closed socket and
+        die with EBADF; the thread body serves only while active, so a server
+        closed first is finished before the loop begins.
+        """
+        from tests.plugin.conftest import FakeThreadedServer
+
+        class CountingServer(FakeThreadedServer):
+            accepts = 0
+
+            def accept(self) -> None:
+                self.accepts += 1
+                super().accept()
+
+        server = CountingServer(object(), hostname="127.0.0.1", port=free_port)
+        server._listen()
+        server.close()
+        with caplog.at_level(logging.INFO, logger="houdini_mcp_plugin.listener"):
+            _serve(server)
+        assert server.accepts == 0
+        assert f"hrpyc accept loop ended on port {free_port}" in caplog.text
+
+    def test_port_zero_reports_the_port_the_kernel_chose(self, fake_hou, fake_hrpyc):
+        """rpyc resolves a port-0 bind from the socket; start() reports that port."""
+        import socket
+
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        try:
+            result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
+            assert result["status"] == "success"
+            port = result["bound_port"]
+            assert port != 0
+            assert f"HOUDINI_PORT={port}" in result["message"]
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                pass
+        finally:
+            listener.stop()

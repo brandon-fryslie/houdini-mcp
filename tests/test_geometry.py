@@ -1,7 +1,7 @@
 """Tests for geometry summary tool (HDMCP-9).
 
 The get_geo_summary function now executes geometry analysis code on the Houdini side
-via execute_code() and parses JSON from stdout. These tests mock execute_code directly.
+via the trusted-grant execution door and parses JSON from stdout. These tests mock that door directly.
 """
 
 import json
@@ -16,8 +16,8 @@ class TestGetGeoSummary:
     @pytest.fixture
     def mock_execute_code(self):
         """Fixture to mock execute_code for geo_summary tests."""
-        # Patch where execute_code is defined (in code.py)
-        with patch("houdini_mcp.tools.code.execute_code") as mock:
+        # Patch the door geometry.py enters (defined in code.py)
+        with patch("houdini_mcp.tools.code._execute_with_grant") as mock:
             yield mock
 
     def _make_geo_response(self, **kwargs):

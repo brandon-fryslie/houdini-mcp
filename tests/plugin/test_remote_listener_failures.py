@@ -50,6 +50,40 @@ class TestBindFailure:
         finally:
             holder.close()
 
+    def test_listen_failure_releases_the_bound_socket(self, fake_hou, free_port):
+        """A failure after the bind closes the server: the port is free again.
+
+        rpyc binds in ``__init__`` and listens in ``_listen()``; a failure in
+        the second phase is reported like any bind error and leaves nothing
+        behind, so the next start on the same port succeeds.
+        """
+        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+
+        closed: list[FakeThreadedServer] = []
+
+        class ListenFails(FakeThreadedServer):
+            def _listen(self) -> None:
+                raise OSError(105, "No buffer space available")
+
+            def close(self) -> None:
+                closed.append(self)
+                super().close()
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: ListenFails(*a, **kw)
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        assert result["status"] == "error"
+        assert result["error_type"] == "bind"
+        assert listener.is_running() is False
+        assert len(closed) == 1
+
+        # Same port, a server whose listen works: nothing is holding it.
+        hrpyc.ThreadedServer = lambda *a, **kw: FakeThreadedServer(*a, **kw)
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port, reuse_addr=False))
+        assert result["status"] == "success"
+        listener.stop()
+
     def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port):
         listener = RemoteListener(hrpyc=None, hou=fake_hou)
         result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))

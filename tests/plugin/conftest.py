@@ -4,9 +4,9 @@ These tests never require a real Houdini or a real ``hrpyc`` module. Instead
 they inject light-weight fakes that emulate the small surface area the plugin
 depends on:
 
-- ``hrpyc.ThreadedServer(...)`` -> object with ``.start()`` / ``.close()`` and
-  a ``.logger`` attribute, which runs its ``authenticator`` on every accepted
-  socket exactly as rpyc's server does.
+- ``hrpyc.ThreadedServer(...)`` -> object with ``._listen()`` / ``.accept()`` /
+  ``.close()``, ``.active`` / ``.port`` and a ``.logger`` attribute, which runs
+  its ``authenticator`` on every accepted socket exactly as rpyc's server does.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
 
 The plugin package lives under ``houdini_plugin/python`` and is not installed,
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import socket
 import sys
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -33,12 +32,14 @@ if str(_PLUGIN_PATH) not in sys.path:
 class FakeThreadedServer:
     """Emulates ``hrpyc.ThreadedServer`` / ``rpyc.ThreadedServer``.
 
-    When started, it actually binds a real TCP socket so that the plugin's
-    reachability probe (``socket.create_connection``) succeeds. This keeps the
-    tests honest about the "listener is actually reachable" behaviour while
-    remaining fully hermetic (no Houdini, no rpyc protocol). Each accepted socket
-    goes through ``authenticator`` first, as in rpyc; ``authenticated`` and
-    ``rejected`` count the outcomes so a test can assert the handshake ran.
+    It binds a real TCP socket with rpyc's phases: ``__init__`` binds and
+    resolves ``port`` (so a port collision surfaces there), ``_listen()``
+    starts accepting and sets ``active``, and ``accept()`` admits one client.
+    This keeps the
+    tests honest about "the listener is reachable" while remaining fully
+    hermetic (no Houdini, no rpyc protocol). Each accepted socket goes through
+    ``authenticator`` first, as in rpyc; ``authenticated`` and ``rejected``
+    count the outcomes so a test can assert the handshake ran.
     """
 
     def __init__(
@@ -63,16 +64,12 @@ class FakeThreadedServer:
         self.protocol_config = protocol_config or {}
         self.logger = _FakeLogger()
 
-        self._fail_bind = fail_bind
-        self._sock: socket.socket | None = None
-        self._thread: threading.Thread | None = None
         self._closed = False
-        self.started = False
-        self.bound_port = port
+        self.active = False
         self.authenticated = 0
         self.rejected = 0
 
-        if self._fail_bind:
+        if fail_bind:
             raise OSError(98, "Address already in use")
 
         # Bind eagerly (like ThreadedServer does in __init__) so that a
@@ -82,27 +79,27 @@ class FakeThreadedServer:
         if reuse_addr:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((hostname, port))
+        # As rpyc: a port-0 bind is resolved from the socket right after bind().
+        self.port = self._sock.getsockname()[1]
+
+    def _listen(self) -> None:
+        if self.active:
+            return
         self._sock.listen(5)
-        # Support port 0 -> resolve the actual bound port.
-        self.bound_port = self._sock.getsockname()[1]
+        self._sock.settimeout(0.1)
+        self.active = True
 
-    def start(self) -> None:
-        self.started = True
-
-        def _serve() -> None:
-            while not self._closed:
-                try:
-                    self._sock.settimeout(0.1)
-                    conn, _ = self._sock.accept()
-                except (TimeoutError, OSError):
-                    if self._closed:
-                        return
-                    continue
-                with conn:
-                    self._admit(conn)
-
-        self._thread = threading.Thread(target=_serve, daemon=True)
-        self._thread.start()
+    def accept(self) -> None:
+        # As rpyc: a timeout is a tick; any other socket error means the
+        # listener was closed under us and surfaces as EOFError to the loop.
+        try:
+            conn, _ = self._sock.accept()
+        except TimeoutError:
+            return
+        except OSError as exc:
+            raise EOFError from exc
+        with conn:
+            self._admit(conn)
 
     def _admit(self, conn: socket.socket) -> None:
         # Mirrors rpyc.utils.server.Server._authenticate_and_serve_client: no
@@ -119,13 +116,11 @@ class FakeThreadedServer:
             self.authenticated += 1
 
     def close(self) -> None:
+        # The socket stays referenced: an in-flight accept() raises OSError on
+        # it, which accept() reports as EOFError, with no attribute to race on.
         self._closed = True
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
+        self.active = False
+        self._sock.close()
 
 
 class _FakeLogger:

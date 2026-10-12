@@ -126,7 +126,7 @@ pytest tests/integration/test_workflow_examples.py -v
 
 **Key Tools Used**:
 - `create_node` (6x)
-- `get_node_info` (4x with `include_errors=True`)
+- `get_node_info` (4x with `cook_info="inspect"`)
 - `get_parameter_schema` (1x)
 - `set_parameter` (3x)
 - `connect_nodes` (2x)
@@ -184,7 +184,7 @@ pytest tests/integration/test_workflow_examples.py -v
 
 **Verification Tools**:
 - `get_geo_summary` - Geometry verification
-- `get_node_info` (with `include_errors=True`) - Error checking
+- `get_node_info` (with `cook_info="inspect"`) - Error checking
 
 ## 📖 Common Patterns Demonstrated
 
@@ -203,7 +203,7 @@ summary = get_geo_summary(node2["node_path"])
 ```python
 # Discover
 children = list_children(geo_path)
-info = get_node_info(target_path, include_input_details=True)
+info = get_node_info(target_path)
 
 # Create
 new_node = create_node("mountain", geo_path)
@@ -228,7 +228,7 @@ if param["type"] == "vector":
 ### Pattern 4: Safe Geometry Access
 ```python
 # Check cook state
-info = get_node_info(node_path, include_errors=True, force_cook=True)
+info = get_node_info(node_path, cook_info="force_cook")
 cook_state = info["cook_info"]["cook_state"]
 
 # Only access if cooked
@@ -312,7 +312,7 @@ elif cook_state == "error":
 2. Always check cook state before accessing geometry
 3. Always use `list_children` and `get_node_info` to discover networks
 4. Always verify results with `get_geo_summary`
-5. Always handle errors with `include_errors=True`
+5. Always handle errors with `cook_info="inspect"`
 
 ### Common Pitfalls Avoided
 - ❌ Setting scalar value for vector parameter → ✅ Use schema to determine type

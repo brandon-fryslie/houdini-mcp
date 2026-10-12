@@ -60,7 +60,7 @@ def test_create_and_delete_node() -> None:
         assert created["status"] == "success"
         created_path = created["node_path"]
 
-        node_info = tools.get_node_info(created_path, include_params=False, host=host, port=port)
+        node_info = tools.get_node_info(created_path, detail="standard", host=host, port=port)
         assert node_info["status"] == "success"
         assert node_info["path"] == created_path
 
@@ -114,7 +114,7 @@ def test_get_node_info_serializes_ramp_parameter() -> None:
         assert attribnoise["status"] == "success"
         attribnoise_path = attribnoise["node_path"]
 
-        info = tools.get_node_info(attribnoise_path, include_params=True, host=host, port=port)
+        info = tools.get_node_info(attribnoise_path, host=host, port=port)
         assert info["status"] == "success"
 
         remapramp = info["parameters"].get("remapramp")

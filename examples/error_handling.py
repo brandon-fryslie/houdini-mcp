@@ -4,7 +4,7 @@ HDMCP-10 Example 4: Error Detection → Fix → Verify
 ===================================================
 
 Demonstrates robust error handling workflow:
-1. Detect errors using get_node_info with include_errors=True
+1. Detect errors using get_node_info with cook_info="inspect" or "force_cook"
 2. Analyze error messages to understand the problem
 3. Fix the error programmatically
 4. Verify the fix with cook state checking
@@ -39,9 +39,8 @@ def check_for_errors(node_path: str) -> dict[str, Any] | None:
     result = call_tool(
         "get_node_info",
         node_path=node_path,
-        include_params=False,
-        include_errors=True,
-        force_cook=True,
+        detail="standard",
+        cook_info="force_cook",
     )
 
     if result.get("status") == "error":
@@ -219,7 +218,7 @@ def main():
 
     print("\n[Best Practice] Always check cook state before accessing geometry:")
     print("""
-    1. Call get_node_info with include_errors=True
+    1. Call get_node_info with cook_info="inspect"
     2. Check cook_info['cook_state'] == 'cooked'
     3. If 'error', examine cook_info['errors'] for diagnostics
     4. If 'dirty' or 'uncooked', may need to force cook
@@ -259,7 +258,7 @@ def main():
     print(f"{'=' * 70}")
 
     print("\nKey error handling patterns demonstrated:")
-    print("  1. ✓ Use get_node_info(include_errors=True) to detect issues")
+    print("  1. ✓ Use get_node_info(cook_info='inspect') to detect issues")
     print("  2. ✓ Examine cook_info to understand error type")
     print("  3. ✓ Use get_parameter_schema to validate parameter types")
     print("  4. ✓ Check cook_state before accessing geometry")
@@ -267,7 +266,7 @@ def main():
 
     print("\nBest practices:")
     print("  • Always check return status from MCP tools")
-    print("  • Use include_errors=True when debugging")
+    print("  • Use cook_info='force_cook' when debugging")
     print("  • Validate parameter types with schema before setting")
     print("  • Test node connections for category compatibility")
     print("  • Check cook state before reading geometry")

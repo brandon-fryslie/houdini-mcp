@@ -39,7 +39,7 @@ class TestWiringIntegration:
         assert noise._inputs[0] == grid
 
         # Verify initial connection
-        info = get_node_info("/obj/geo1/noise1", False, 50, True, "localhost", 18811)
+        info = get_node_info("/obj/geo1/noise1", detail="standard", host="localhost", port=18811)
         assert len(info["input_connections"]) == 1
         assert info["input_connections"][0]["source_node"] == "/obj/geo1/grid1"
 
@@ -141,7 +141,7 @@ class TestWiringIntegration:
         assert noise in sphere._outputs
 
         # Verify via get_node_info
-        info = get_node_info("/obj/geo1/noise1", False, 50, True, "localhost", 18811)
+        info = get_node_info("/obj/geo1/noise1", detail="standard", host="localhost", port=18811)
         assert len(info["input_connections"]) == 1
         assert info["input_connections"][0]["source_node"] == "/obj/geo1/sphere1"
 
@@ -180,7 +180,7 @@ class TestWiringIntegration:
         assert result3["status"] == "success"
 
         # Verify connections
-        info = get_node_info("/obj/geo1/merge1", False, 50, True, "localhost", 18811)
+        info = get_node_info("/obj/geo1/merge1", detail="standard", host="localhost", port=18811)
         assert len(info["input_connections"]) == 3
 
         sources = [conn["source_node"] for conn in info["input_connections"]]

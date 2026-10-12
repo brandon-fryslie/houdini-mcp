@@ -44,7 +44,10 @@ list_children("/obj/geo1", recursive=True, max_depth=3)
       "outputs": []
     }
   ],
-  "count": 2
+  "total": 2,
+  "returned": 2,
+  "has_more": false,
+  "offset": 0
 }
 ```
 
@@ -89,7 +92,10 @@ find_nodes("/obj", "grid")
       "type": "noise"
     }
   ],
-  "count": 2
+  "total": 2,
+  "returned": 2,
+  "has_more": false,
+  "offset": 0
 }
 ```
 
@@ -97,7 +103,8 @@ find_nodes("/obj", "grid")
 - `root_path` (default: "/obj"): Root path to search from
 - `pattern` (default: "*"): Glob pattern (supports * and ?)
 - `node_type` (optional): Filter by node type
-- `max_results` (default: 100): Maximum results to return
+- `limit` (default: 100, max: 500): Results per page
+- `cursor` (default: 0): Offset of the next page
 
 ---
 
@@ -106,17 +113,17 @@ find_nodes("/obj", "grid")
 
 **Basic Usage:**
 ```python
-# Get full info with connection details (default)
+# Get full info: identity, connections and parameters (default)
 get_node_info("/obj/geo1/noise1")
 
-# Get info without connection details
-get_node_info("/obj/geo1/noise1", include_input_details=False)
+# Get a minimal record: path, type and counts
+get_node_info("/obj/geo1/noise1", detail="compact")
 
-# Get info without parameters
-get_node_info("/obj/geo1/noise1", include_params=False)
+# Get everything except parameter values
+get_node_info("/obj/geo1/noise1", detail="standard")
 ```
 
-**Example Output (with include_input_details=True):**
+**Example Output (detail="full"):**
 ```json
 {
   "status": "success",
@@ -143,8 +150,9 @@ get_node_info("/obj/geo1/noise1", include_params=False)
 }
 ```
 
-**New Parameter:**
-- `include_input_details` (default: True): Include detailed connection info
+**Parameters:**
+- `detail` (default: "full"): "compact" (path, type, counts), "standard" (adds identity, connections, flags), "full" (adds parameters)
+- `cook_info` (default: "none"): "inspect" reports cook state and errors; "force_cook" cooks first
 
 **Enhanced Return Fields:**
 - `input_connections`: Array of connection details with indices
@@ -209,7 +217,7 @@ execute_code(code)
 # Recursively explore all nodes in scene
 result = list_children("/obj", recursive=True, max_depth=5)
 
-print(f"Found {result['count']} nodes total")
+print(f"Found {result['total']} nodes total")
 
 # Build connection graph
 for node in result["children"]:
@@ -242,8 +250,8 @@ if result["status"] == "error":
 - Adds `"warning"` to result when limit reached
 
 ### find_nodes():
-- `max_results=100`: Prevents huge result sets
-- Adds `"warning"` to result when limit reached
+- `limit=100`: One page per call (max 500); `cursor` fetches the next page
+- Adds `"warning"` with the next cursor when more pages exist
 
 ### get_node_info():
 - `max_params=50`: Limits parameter count in output
@@ -256,8 +264,8 @@ if result["status"] == "error":
 1. **Start non-recursive:** Use `recursive=False` first to understand immediate structure
 2. **Use type filters:** Combine pattern + node_type for precise searches
 3. **Check status:** Always check `result["status"]` before using data
-4. **Adjust limits:** Increase max_nodes/max_results if you need more data
-5. **Connection details:** Use `include_input_details=True` when planning to modify connections
+4. **Adjust limits:** Increase max_nodes, or page with cursor, if you need more data
+5. **Connection details:** Read `input_connections` (detail "standard" or "full") when planning to modify connections
 
 ---
 
