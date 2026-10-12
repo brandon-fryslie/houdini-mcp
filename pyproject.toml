@@ -84,6 +84,10 @@ exclude = [
     "dist",
 ]
 
+[tool.ruff.per-file-target-version]
+# Runs inside Houdini's embedded interpreter, not under requires-python
+"houdini_plugin/**" = "py310"
+
 [tool.ruff.lint]
 select = [
     "E",      # pycodestyle errors
@@ -124,10 +128,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
-]
 markers = [
     "integration: requires a live Houdini hrpyc server",
 ]

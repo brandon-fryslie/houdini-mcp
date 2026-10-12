@@ -74,9 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now declared, and `python-dotenv`, never imported, is dropped. CI, the Docker image and pre-commit all install from the lock
   (`uv sync --locked`), so every tool runs at one version everywhere.
   Set up with `uv sync && uv run pytest`.
-- **BREAKING (floors)**: Python 3.11+ is required (3.10 dropped); `fastmcp>=4.1`
-  and `rpyc>=5.3.1,<6`. Houdini 20.5 and 21.0, the documented install targets,
-  both embed Python 3.11.
+- **BREAKING (floors)**: Python 3.11+ is required; 3.10, end-of-life since
+  2026-10, is dropped. `fastmcp>=4.1` and `rpyc>=5.3.1,<6`. The Houdini plugin
+  keeps its 3.10 floor (ruff `per-file-target-version`).
 
 ### Fixed
 

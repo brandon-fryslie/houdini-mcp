@@ -112,10 +112,10 @@ print(get_scene_info('localhost', 18811))
 def create_node(
     node_type: str,
     parent_path: str = "/obj",
-    name: Optional[str] = None,
+    name: str | None = None,
     host: str = "localhost",
     port: int = 18811,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a new node in the Houdini scene.
 

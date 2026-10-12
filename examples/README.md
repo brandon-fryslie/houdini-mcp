@@ -6,7 +6,7 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 
 1. Houdini running with hrpyc server (port 18811)
 2. Houdini MCP Server running (port 3055)
-3. Python 3.11+ with `requests` library
+3. Python 3.10+ with `requests` library
 
 ## Examples
 
