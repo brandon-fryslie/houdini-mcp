@@ -41,6 +41,7 @@ python build_from_scratch.py
 **Demonstrates**: Inserting a node into an existing network
 
 **Initial Network**: grid → noise
+
 **Final Network**: grid → mountain → noise
 
 **Key Concepts**:

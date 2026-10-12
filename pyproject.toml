@@ -7,13 +7,12 @@ name = "houdini-mcp"
 version = "1.0.0"
 description = "MCP server for SideFX Houdini integration via rpyc"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.11"
 keywords = ["houdini", "mcp", "model-context-protocol", "3d", "vfx", "procedural"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -55,7 +54,7 @@ dev = [
 ]
 
 [tool.uv]
-# The one declaration of the uv line this lock is written by. setup-uv@v6 reads it
+# The one declaration of the uv line this lock is written by. setup-uv reads it
 # (no version-file input needed) and uv refuses to run outside it, so the Docker
 # image tag below either matches this or fails the build.
 # Held on 0.12: 0.13.0 shipped 2026-10-09 and the uv this repo is developed with is 0.12.15.
