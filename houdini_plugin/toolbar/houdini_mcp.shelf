@@ -52,8 +52,9 @@ else:
         )
     else:
         hou.ui.displayMessage(
-            "MCP Server started successfully.\n\n"
-            "The server is now listening for MCP connections via stdio.",
+            "MCP Server started.\n\n"
+            "It serves this Houdini's stdin until the client closes it;\n"
+            "MCP Status shows whether it is still serving.",
             title="Houdini MCP"
         )
     ]]></script>

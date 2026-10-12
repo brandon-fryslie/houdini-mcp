@@ -66,7 +66,9 @@ class StdioServer:
         """
         with self._lock:
             if self._serving is not None:
-                raise AlreadyServing()
+                refused = AlreadyServing()
+                logger.warning(str(refused))
+                raise refused
             run = _prepare_stdio_server()
             where = "this thread" if block else "a background thread"
             logger.info(f"Starting MCP server (stdio transport) in {where}")
@@ -74,7 +76,10 @@ class StdioServer:
                 self._serving = threading.current_thread()
             else:
                 self._serving = threading.Thread(
-                    target=self._serve_in_background, args=(run,), daemon=True
+                    target=self._serve_in_background,
+                    args=(run,),
+                    name="houdini-mcp-stdio",
+                    daemon=True,
                 )
                 try:
                     self._serving.start()

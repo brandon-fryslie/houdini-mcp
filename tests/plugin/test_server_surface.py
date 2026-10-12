@@ -250,21 +250,23 @@ class TestPluginStartsTheSharedServer:
         assert plugin_server.is_server_running() is False
 
     def test_running_state_is_the_serving_thread(
-        self, plugin_server: Any, held_serve: dict[str, Any]
+        self, plugin_server: Any, held_serve: dict[str, Any], caplog: pytest.LogCaptureFixture
     ) -> None:
         assert plugin_server.is_server_running() is False
 
-        plugin_server.start_server(use_thread=True)
-        assert plugin_server.is_server_running() is True
+        with caplog.at_level("INFO", logger="houdini_mcp_plugin.server"):
+            plugin_server.start_server(use_thread=True)
+            assert plugin_server.is_server_running() is True
 
-        held_serve["stdin"].set()
-        _wait_until_stopped(plugin_server)
+            held_serve["stdin"].set()
+            _wait_until_stopped(plugin_server)
         assert plugin_server.is_server_running() is False
+        assert "MCP server stopped: client closed stdin" in caplog.text
         assert held_serve["runs"] == 1
         assert held_serve["running_during_serve"] is True
 
     def test_second_start_is_refused_before_the_first_thread_runs(
-        self, plugin_server: Any, held_serve: dict[str, Any]
+        self, plugin_server: Any, held_serve: dict[str, Any], caplog: pytest.LogCaptureFixture
     ) -> None:
         """Two quick Start clicks: the guard holds from the moment start is accepted."""
         started: list[threading.Thread] = []
@@ -272,8 +274,12 @@ class TestPluginStartsTheSharedServer:
         with pytest.MonkeyPatch.context() as unscheduled:
             unscheduled.setattr(threading.Thread, "start", lambda thread: started.append(thread))
             plugin_server.start_server(use_thread=True)
-            with pytest.raises(plugin_server.AlreadyServing):
+            with (
+                caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
+                pytest.raises(plugin_server.AlreadyServing),
+            ):
                 plugin_server.start_server(use_thread=True)
+        assert "already serving" in caplog.text
         assert held_serve["runs"] == 0
         assert plugin_server.is_server_running() is True
 
