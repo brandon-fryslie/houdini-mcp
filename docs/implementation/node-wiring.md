@@ -121,15 +121,14 @@ set_node_flags("/obj/geo1/mountain1", display=False)  # Turn off display
 **Purpose:** Reorder inputs on merge nodes
 
 **Features:**
-- ✅ Stores existing connections with output indices
-- ✅ Disconnects all inputs
-- ✅ Reconnects in new order
-- ✅ Handles gaps (None inputs) correctly
-- ✅ Validates indices are in range
+- ✅ Reads every wire with its source item and output (`houdini_mcp/tools/connections.py`) before touching any
+- ✅ `new_order` must be a permutation of the input indices 0..last wired input; anything else is rejected
+- ✅ Sets each input to its new wire in input order, then clears inputs left unwired; no wire is unplugged before its replacement is known
+- ✅ Handles gaps (None inputs) and subnet indirect inputs
 
 **Example:**
 ```python
-# Swap first two inputs: [1, 0, 2, 3]
+# Swap first two of four inputs: [1, 0, 2, 3]
 reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])
 
 # Reverse three inputs: [2, 1, 0]
@@ -179,8 +178,8 @@ reorder_inputs("/obj/geo1/merge1", [2, 1, 0])
 - ✅ Swap first two inputs
 - ✅ Reverse three inputs
 - ✅ Node not found error
-- ✅ Invalid order length
-- ✅ Invalid indices
+- ✅ Order longer than the inputs rejected
+- ✅ Index out of range rejected
 - ✅ Gaps in connections
 
 ### Integration Tests (6 total)

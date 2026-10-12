@@ -25,6 +25,10 @@ class InputConnection:
     output_index: int
 
 
+class InputConnectionsUnreadable(RuntimeError):
+    """Houdini could not report a node's input connections; the message names the node."""
+
+
 def input_connections(node: Any) -> list[InputConnection]:
     """The node's connected inputs, in input order, from Houdini's connection records.
 
@@ -33,11 +37,34 @@ def input_connections(node: Any) -> list[InputConnection]:
     looking through an indirect input to whatever is wired into the parent subnet
     (which may be nothing, and then ``inputNode()`` is None).
 
-    [LAW:no-silent-failure] A failed read raises to the tool's error boundary. There
-    is no fallback output index: a guessed index rewires the user's network wrong
-    while reporting success.
+    [LAW:no-silent-failure] A failed read raises, naming the node, to the tool's
+    error boundary. There is no fallback output index: a guessed index rewires the
+    user's network wrong while reporting success.
     """
-    return [
-        InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())
-        for conn in node.inputConnections()
-    ]
+    try:
+        records = node.inputConnections()
+    except Exception as e:
+        raise InputConnectionsUnreadable(
+            f"Could not read input connections of {node.path()}: {e}"
+        ) from e
+    return sorted(
+        (
+            InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())
+            for conn in records
+        ),
+        key=lambda conn: conn.input_index,
+    )
+
+
+def input_span(connections: list[InputConnection]) -> range:
+    """The input indices 0..last wired input: the positions a reorder permutes and the
+    length of a node's ``inputs`` list, with a gap for every unwired index inside it."""
+    return range(1 + max((conn.input_index for conn in connections), default=-1))
+
+
+def input_paths(connections: list[InputConnection]) -> list[str | None]:
+    """Source path per input over the span, None at an unwired input."""
+    paths: list[str | None] = [None] * len(input_span(connections))
+    for conn in connections:
+        paths[conn.input_index] = conn.source.path()
+    return paths

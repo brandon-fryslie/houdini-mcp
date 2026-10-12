@@ -25,7 +25,7 @@ from ._common import (
     parse_page_request,
 )
 from .cache import node_type_cache
-from .connections import input_connections
+from .connections import input_connections, input_paths
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -144,7 +144,7 @@ def _compact_record(node: Any) -> dict[str, Any]:
         "type": node.type().name(),
     }
     children_count = len(node.children())
-    inputs_count = len([i for i in node.inputs() if i])
+    inputs_count = len(input_connections(node))
     outputs_count = len(node.outputs())
     if children_count:
         info["children_count"] = children_count
@@ -157,6 +157,9 @@ def _compact_record(node: Any) -> dict[str, Any]:
 
 def _standard_record(node: Any) -> dict[str, Any]:
     """Identity, flags, children, inputs, outputs and per-input connection details."""
+    # [LAW:one-source-of-truth] "inputs" and "input_connections" describe the same
+    # wires, so both come from one read of the connection records.
+    connections = input_connections(node)
     info: dict[str, Any] = {
         "status": "success",
         "path": node.path(),
@@ -164,7 +167,7 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "type": node.type().name(),
         "type_description": node.type().description(),
         "children": [child.name() for child in node.children()],
-        "inputs": [inp.path() if inp else None for inp in node.inputs()],
+        "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
         "is_displayed": node.isDisplayFlagSet() if hasattr(node, "isDisplayFlagSet") else None,
         "is_rendered": node.isRenderFlagSet() if hasattr(node, "isRenderFlagSet") else None,
@@ -176,7 +179,7 @@ def _standard_record(node: Any) -> dict[str, Any]:
             "source_node": conn.source.path(),
             "source_output_index": conn.output_index,
         }
-        for conn in input_connections(node)
+        for conn in connections
     ]
     return info
 

@@ -409,48 +409,6 @@ print(json.dumps(result))
 
         return {}
 
-    # =========================================================================
-    # Connections/Wiring
-    # =========================================================================
-
-    def get_output_connections(self, node_path: str) -> list[dict[str, Any]]:
-        """
-        Get all output connections for a node.
-
-        Args:
-            node_path: Path to the node
-
-        Returns:
-            List of connection dicts with output_index, dest_path, input_index
-        """
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = []
-if node:
-    for conn in node.outputConnections():
-        result.append({{
-            "output_index": conn.outputIndex(),
-            "dest_path": conn.outputNode().path(),
-            "input_index": conn.inputIndex()
-        }})
-print(json.dumps(result))
-"""
-        try:
-            import json
-
-            output = self._exec_python(code)
-            if output:
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Get output connections failed: {e}")
-
-        return []
-
-    # =========================================================================
-    # Geometry Info
-    # =========================================================================
-
     def get_geo_counts(self, node_path: str) -> dict[str, int]:
         """
         Get geometry point/prim/vertex counts in a single call.

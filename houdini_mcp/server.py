@@ -855,18 +855,20 @@ def reorder_inputs(node_path: str, new_order: list[int]) -> dict[str, Any]:
     """
     Reorder inputs on a node (useful for merge nodes).
 
-    Stores existing connections, disconnects all, then reconnects in new order.
-    new_order specifies the new position for each input: [1, 0, 2] swaps first two inputs.
+    new_order is a permutation of the input indices 0..last wired input: position i
+    names the old input that moves to input i. Anything else (a repeated index, a
+    shorter or longer list) is rejected before any wire is touched. Each wire keeps
+    the source output it came from.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/merge1")
-        new_order: List specifying new input order (e.g., [1, 0, 2] to swap first two)
+        new_order: Permutation of the input indices (e.g., [1, 0, 2] on a 3-input node)
 
     Returns:
         Dict with reordering result including reconnection details.
 
     Examples:
-        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two inputs
+        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two of four inputs
         reorder_inputs("/obj/geo1/merge1", [2, 1, 0])  # Reverse three inputs
     """
     return tools.reorder_inputs(node_path, new_order, HOUDINI_HOST, HOUDINI_PORT)

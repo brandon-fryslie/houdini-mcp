@@ -7,6 +7,8 @@ and assert the 1 survives inspection and rewiring, and that an unreadable wire i
 an error rather than a 0.
 """
 
+import logging
+
 import pytest
 
 from tests.conftest import MockHouNode, MockSubnetIndirectInput
@@ -83,16 +85,16 @@ class TestReorderPreservesSourceOutput:
         ]
         assert result["reconnections"] == [
             {
-                "new_input_index": 1,
-                "old_input_index": 0,
-                "source_node": "/obj/geo1/grid1",
-                "source_output_index": 0,
-            },
-            {
                 "new_input_index": 0,
                 "old_input_index": 1,
                 "source_node": "/obj/geo1/split1",
                 "source_output_index": 1,
+            },
+            {
+                "new_input_index": 1,
+                "old_input_index": 0,
+                "source_node": "/obj/geo1/grid1",
+                "source_output_index": 0,
             },
             {
                 "new_input_index": 2,
@@ -126,6 +128,7 @@ class TestUnreadableWireIsAnError:
 
         assert result["status"] == "error"
         assert "connection records unavailable" in result["message"]
+        assert "/obj/geo1/merge1" in result["message"]
 
     def test_list_children_reports_the_failure(self, merge):
         from houdini_mcp.tools import list_children
@@ -134,6 +137,7 @@ class TestUnreadableWireIsAnError:
 
         assert result["status"] == "error"
         assert "connection records unavailable" in result["message"]
+        assert "/obj/geo1/merge1" in result["message"]
 
     def test_reorder_inputs_fails_before_touching_the_network(self, merge):
         from houdini_mcp.tools import reorder_inputs
@@ -191,6 +195,41 @@ class TestSubnetIndirectInputs:
             {"index": 1, "source_node": "/obj/subnet1/box1", "output_index": 0},
         ]
 
+    def test_get_node_info_inputs_list_and_count_agree_with_the_wires(self, merge):
+        from houdini_mcp.tools import get_node_info
+
+        standard = get_node_info(
+            "/obj/subnet1/merge1", detail="standard", host="localhost", port=18811
+        )
+        compact = get_node_info(
+            "/obj/subnet1/merge1", detail="compact", host="localhost", port=18811
+        )
+
+        assert standard["inputs"] == ["/obj/subnet1/1", "/obj/subnet1/box1"]
+        assert compact["inputs_count"] == 2
+
+    def test_disconnect_node_input_reports_the_indirect_input_it_cut(self, merge):
+        from houdini_mcp.tools import disconnect_node_input
+
+        result = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        assert result["was_connected"] is True
+        assert result["previous_source"] == "/obj/subnet1/1"
+        assert _wires(merge) == [(1, "/obj/subnet1/box1", 0)]
+
+    def test_connect_nodes_names_the_indirect_input_it_replaces(self, merge, caplog):
+        from houdini_mcp.tools import connect_nodes
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.wiring"):
+            result = connect_nodes(
+                "/obj/subnet1/box1", "/obj/subnet1/merge1", 0, 0, host="localhost", port=18811
+            )
+
+        assert result["status"] == "success"
+        assert "from /obj/subnet1/1 to /obj/subnet1/merge1[0]" in caplog.text
+        assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/box1", 0)]
+
     def test_reorder_inputs_moves_the_indirect_input(self, merge):
         from houdini_mcp.tools import reorder_inputs
 
@@ -219,3 +258,33 @@ class TestNewOrderIsAPermutation:
         assert result["status"] == "error"
         assert "permutation of [0, 1, 2]" in result["message"]
         assert _wires(merge) == before
+
+
+class TestReorderNeverUnplugsAWireWithoutItsReplacement:
+    """Inputs are overwritten in input order and only the inputs left unwired are
+    cleared, so a write that fails part-way leaves every wire attached somewhere, and
+    the order is right for nodes whose inputs compact when one is cleared."""
+
+    def test_only_the_vacated_input_is_cleared_and_the_event_names_the_work(
+        self, mock_connection, caplog
+    ):
+        from houdini_mcp.tools import reorder_inputs
+
+        grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
+        sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
+        merge = MockHouNode(path="/obj/geo1/merge1", name="merge1", node_type="merge")
+        for node in (grid, sphere, merge):
+            mock_connection.add_node(node)
+        merge.setInput(0, grid, 0)
+        merge.setInput(2, sphere, 1)
+        calls: list[tuple] = []
+        real_set_input = merge.setInput
+        merge.setInput = lambda *args: (calls.append(args), real_set_input(*args))[1]
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.wiring"):
+            result = reorder_inputs("/obj/geo1/merge1", [1, 0, 2], host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        assert calls == [(1, grid, 0), (2, sphere, 1), (0, None)]
+        assert _wires(merge) == [(1, "/obj/geo1/grid1", 0), (2, "/obj/geo1/sphere1", 1)]
+        assert "Reordered inputs on /obj/geo1/merge1: [1, 0, 2], 2 wires" in caplog.text
