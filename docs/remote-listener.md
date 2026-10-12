@@ -54,9 +54,11 @@ created** — there is no code path that silently binds `0.0.0.0` without auth.
   before the RPyC protocol. It is **not** TLS and provides **no encryption** —
   use it only on trusted networks or behind an encrypted tunnel
   (WireGuard, SSH, Cloudflare Tunnel, etc.).
-- If the installed `rpyc` build does not expose the authenticator primitives,
-  the token cannot be enforced at the socket layer; the bind still requires the
-  trusted-network opt-in, but you should prefer a tunnel in that case.
+- A configured token is always enforced: if the installed `rpyc` cannot provide
+  the authenticator primitives, `start()` returns a `dependency` error and
+  nothing is bound, rather than running unauthenticated. The reported
+  `authenticated` value reflects the authenticator actually wired into the
+  server.
 - `SlaveService` is inherently powerful; treat any reachable listener as a
   full remote shell into Houdini.
 

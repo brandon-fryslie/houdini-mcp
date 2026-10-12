@@ -27,6 +27,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -116,14 +117,26 @@ class ListenerConfig:
         return cls(host=host, port=port, trusted_network=trusted, token=token)
 
 
+# An rpyc authenticator: takes the accepted socket, returns ``(sock, credentials)``
+# or raises ``AuthenticationError``.
+Authenticator = Callable[[Any], tuple[Any, Any]]
+
+
 @dataclass
 class SecurityPolicy:
     """Result of evaluating a :class:`ListenerConfig` against the policy."""
 
     allowed: bool
     loopback_only: bool
-    authenticated: bool
+    # The authenticator the server is built with - None means no authentication.
+    authenticator: Authenticator | None
     reason: str = ""
+
+    @property
+    def authenticated(self) -> bool:
+        # [LAW:one-source-of-truth] reported auth is derived from the authenticator
+        # that gets wired into the server, never from the configured token alone.
+        return self.authenticator is not None
 
     @property
     def exposure(self) -> str:
@@ -149,33 +162,33 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
       configured an authentication ``token``.
     """
     loopback = is_loopback_host(config.host)
-    authenticated = bool(config.token)
+    authenticator = _make_token_authenticator(config.token) if config.token else None
 
     if loopback:
         return SecurityPolicy(
             allowed=True,
             loopback_only=True,
-            authenticated=authenticated,
+            authenticator=authenticator,
             reason="loopback bind is local-only",
         )
 
-    if config.trusted_network or authenticated:
+    if config.trusted_network or authenticator is not None:
         reason = (
-            "authenticated remote bind (token configured)"
-            if authenticated
+            "authenticated remote bind (token enforced)"
+            if authenticator is not None
             else "trusted-network opt-in acknowledged"
         )
         return SecurityPolicy(
             allowed=True,
             loopback_only=False,
-            authenticated=authenticated,
+            authenticator=authenticator,
             reason=reason,
         )
 
     return SecurityPolicy(
         allowed=False,
         loopback_only=False,
-        authenticated=False,
+        authenticator=None,
         reason=(
             f"refusing to bind non-loopback host {config.host!r} without an explicit "
             "trusted-network opt-in (HOUDINI_RPC_TRUSTED_NETWORK=1) or an "
@@ -303,7 +316,23 @@ class RemoteListener:
                 }
 
             cfg = config if config is not None else ListenerConfig.from_env()
-            policy = resolve_security_policy(cfg)
+            try:
+                policy = resolve_security_policy(cfg)
+            except ImportError as exc:
+                # [LAW:no-silent-failure] a token that cannot be enforced stops the
+                # start here, before anything binds; same dependency contract as hrpyc.
+                logger.error("Refusing to start listener: token cannot be enforced: %s", exc)
+                return {
+                    "status": "error",
+                    "error_type": "dependency",
+                    "running": False,
+                    "host": cfg.host,
+                    "port": cfg.port,
+                    "message": (
+                        "HOUDINI_RPC_TOKEN is set but the installed rpyc cannot enforce it "
+                        f"(rpyc.utils.authenticators unavailable: {exc}). Not starting."
+                    ),
+                }
 
             if not policy.allowed:
                 logger.warning("Refusing to start listener: %s", policy.reason)
@@ -411,11 +440,8 @@ class RemoteListener:
             "reuse_addr": cfg.reuse_addr,
             "auto_register": False,
         }
-        # If a token is configured and hrpyc supports an authenticator, use it.
-        if cfg.token:
-            authenticator = _make_token_authenticator(cfg.token)
-            if authenticator is not None:
-                kwargs["authenticator"] = authenticator
+        if policy.authenticator is not None:
+            kwargs["authenticator"] = policy.authenticator
 
         service = getattr(hrpyc, "SlaveService", None)
         if service is not None:
@@ -492,12 +518,12 @@ class RemoteListener:
 
     def status(self) -> dict[str, Any]:
         """Return current listener status (no reachability probe)."""
-        if self._server is None or self._config is None:
+        if self._server is None or self._config is None or self._policy is None:
             return {
                 "running": False,
                 "message": "hrpyc listener is not running.",
             }
-        policy = self._policy or resolve_security_policy(self._config)
+        policy = self._policy
         return {
             "running": True,
             "host": self._config.host,
@@ -525,7 +551,7 @@ class RemoteListener:
         """
         from . import __version__ as plugin_version
 
-        if self._server is None or self._config is None:
+        if self._server is None or self._config is None or self._policy is None:
             return {
                 "running": False,
                 "reachable": False,
@@ -535,7 +561,7 @@ class RemoteListener:
             }
 
         cfg = self._config
-        policy = self._policy or resolve_security_policy(cfg)
+        policy = self._policy
         bound_port = self._bound_port or cfg.port
         server_alive = self._server_alive(self._server)
         # If the server object reports dead, don't let a lingering accept()
@@ -603,17 +629,15 @@ class RemoteListener:
         }
 
 
-def _make_token_authenticator(token: str) -> Any:
+def _make_token_authenticator(token: str) -> Authenticator:
     """Build an rpyc authenticator that enforces a shared-secret handshake.
 
-    Returns ``None`` if rpyc's authentication primitives are unavailable, in
-    which case the caller falls back to trusted-network semantics (the bind is
-    still gated by :func:`resolve_security_policy`).
+    [LAW:no-silent-failure] A configured token is enforced or nothing starts: if
+    rpyc's authentication primitives cannot be imported, the ImportError
+    propagates to :meth:`RemoteListener.start`, which reports it as a dependency
+    error instead of degrading to an unauthenticated listener.
     """
-    try:
-        from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
-    except Exception:  # noqa: BLE001 - rpyc layout varies across versions
-        return None
+    from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
 
     expected = token.encode("utf-8")
     length = len(expected)
