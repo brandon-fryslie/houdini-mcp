@@ -54,8 +54,8 @@ class TestGetSceneInfo:
         """Test get_scene_info handles connection errors."""
         from houdini_mcp.tools import get_scene_info
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = get_scene_info("localhost", 18811)
 
         assert result["status"] == "error"

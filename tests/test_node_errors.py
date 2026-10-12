@@ -382,8 +382,8 @@ class TestFindErrorNodes:
         """Test find_error_nodes handles connection errors."""
         from houdini_mcp.tools import find_error_nodes
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = find_error_nodes(host="localhost", port=18811)
 
         assert result["status"] == "error"

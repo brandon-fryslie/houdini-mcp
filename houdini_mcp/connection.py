@@ -2,19 +2,20 @@
 
 Note: We use rpyc.classic directly instead of hrpyc because:
 1. hrpyc is bundled with Houdini and not available on PyPI
-2. rpyc.classic.connect() provides the same functionality
+2. a classic connection (opened by houdini_mcp.handshake) provides the same functionality
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
 import concurrent.futures
 import logging
+import os
 import random
 import time
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
 
-import rpyc
+from houdini_mcp import handshake
 
 logger = logging.getLogger("houdini_mcp.connection")
 
@@ -35,6 +36,9 @@ DEFAULT_MAX_DELAY = 30.0  # maximum delay cap
 DEFAULT_TIMEOUT = 10.0  # seconds
 DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - reduced from 60
 DEFAULT_OPERATION_TIMEOUT = 45.0  # max time for any single tool operation
+# The listener's shared secret, if the operator configured one (HOUDINI_RPC_TOKEN
+# on both sides). Presented on every connect; see houdini_mcp.handshake.
+RPC_TOKEN: str | None = os.getenv("HOUDINI_RPC_TOKEN") or None
 
 # Retryable exceptions for connection and RPC operations
 RETRYABLE_EXCEPTIONS = (
@@ -135,6 +139,7 @@ def _do_connect(
     host: str,
     port: int,
     sync_timeout: float,
+    token: str | None,
 ) -> tuple[Any, Any]:
     """
     Internal function to establish a single connection attempt.
@@ -145,9 +150,9 @@ def _do_connect(
 
     logger.info(f"Connecting to Houdini at {host}:{port}")
 
-    # Use rpyc.classic.connect for simple SlaveService connection
-    # Note: rpyc.classic.connect() does not accept config parameter
-    _connection = rpyc.classic.connect(host, port)
+    # [LAW:one-source-of-truth] the token handshake is houdini_mcp.handshake's;
+    # this is the MCP server deriving its client side from it.
+    _connection = handshake.connect(host, port, token=token)
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -175,6 +180,7 @@ def connect(
     retry_delay: float = DEFAULT_RETRY_DELAY,
     sync_timeout: float = DEFAULT_SYNC_TIMEOUT,
     jitter: bool = True,
+    token: str | None = RPC_TOKEN,
 ) -> tuple[Any, Any]:
     """
     Connect to Houdini RPC server using rpyc with retry logic.
@@ -189,6 +195,7 @@ def connect(
         retry_delay: Initial delay between retries in seconds (default: 1.0)
         sync_timeout: Timeout for synchronous RPC calls in seconds (default: 30)
         jitter: If True, add random jitter to delays (default: True)
+        token: Shared secret the listener enforces (default: HOUDINI_RPC_TOKEN)
 
     Returns:
         Tuple of (connection, hou module)
@@ -201,7 +208,7 @@ def connect(
 
     for attempt in range(max_retries):
         try:
-            return _do_connect(host, port, sync_timeout)
+            return _do_connect(host, port, sync_timeout, token)
 
         except RETRYABLE_EXCEPTIONS as e:
             last_error = e
@@ -386,9 +393,8 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
         True if Houdini RPC server is reachable, False otherwise.
     """
     try:
-        # Note: rpyc.classic.connect() does not accept config parameter
         # timeout is not enforced at connection level for classic connections
-        conn = rpyc.classic.connect(host, port)
+        conn = handshake.connect(host, port, token=RPC_TOKEN)
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

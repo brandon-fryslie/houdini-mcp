@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Token handshake has one definition** (`houdini_mcp.handshake`): the MCP
+  server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
+  with a token is reachable from the server (previously only the verify script
+  could connect to it). The listener's authenticator and the verify script's
+  client side derive from the same module instead of hand-mirrored copies.
+
 ### Added
 
 - **Remote hrpyc listener activation** (`houdini_mcp_plugin.listener`): the

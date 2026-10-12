@@ -27,9 +27,11 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from houdini_mcp.handshake import Authenticator
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 
@@ -117,11 +119,6 @@ class ListenerConfig:
         return cls(host=host, port=port, trusted_network=trusted, token=token)
 
 
-# An rpyc authenticator: takes the accepted socket, returns ``(sock, credentials)``
-# or raises ``AuthenticationError``.
-Authenticator = Callable[[Any], tuple[Any, Any]]
-
-
 @dataclass
 class SecurityPolicy:
     """Result of evaluating a :class:`ListenerConfig` against the policy."""
@@ -168,7 +165,7 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     """
     loopback = is_loopback_host(config.host)
     try:
-        authenticator = _make_token_authenticator(config.token) if config.token else None
+        authenticator = _token_authenticator(config.token) if config.token else None
     except ImportError as exc:
         # [LAW:no-silent-failure] a configured token is enforced or nothing binds;
         # the refusal is a policy outcome, handled by the same path as every other.
@@ -177,9 +174,10 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
             loopback_only=loopback,
             authenticator=None,
             reason=(
-                f"refusing to bind {config.host!r}: a token is configured but the installed "
-                f"rpyc cannot enforce it (rpyc.utils.authenticators unavailable: {exc}). "
-                "Install an rpyc that provides it, or unset the token."
+                f"refusing to bind {config.host!r}: a token is configured but this Houdini "
+                f"cannot enforce it ({exc}). Make houdini_mcp importable (it defines the "
+                "handshake) with an rpyc that provides rpyc.utils.authenticators, or unset "
+                "the token."
             ),
         )
 
@@ -635,31 +633,15 @@ class RemoteListener:
         }
 
 
-def _make_token_authenticator(token: str) -> Authenticator:
-    """Build an rpyc authenticator that enforces a shared-secret handshake.
+def _token_authenticator(token: str) -> Authenticator:
+    """The listener's side of the shared handshake.
 
-    [LAW:no-silent-failure] A configured token is enforced or nothing starts: if
-    rpyc's authentication primitives cannot be imported, the ImportError
-    propagates to :func:`resolve_security_policy`, which refuses the bind instead
-    of degrading to an unauthenticated listener.
+    [LAW:one-source-of-truth] derived from ``houdini_mcp.handshake``, the one
+    definition the MCP server's client side also derives from. Imported here, not
+    at module load, so a Houdini without ``houdini_mcp`` still runs an untokened
+    listener; with a token configured the ImportError propagates to
+    :func:`resolve_security_policy`, which refuses the bind.
     """
-    from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
+    from houdini_mcp.handshake import token_authenticator  # noqa: PLC0415
 
-    expected = token.encode("utf-8")
-    length = len(expected)
-
-    def authenticate(sock: Any) -> tuple[Any, Any]:
-        # Read exactly len(token) bytes; compare in constant-ish time.
-        import hmac  # noqa: PLC0415
-
-        received = b""
-        while len(received) < length:
-            chunk = sock.recv(length - len(received))
-            if not chunk:
-                break
-            received += chunk
-        if not hmac.compare_digest(received, expected):
-            raise AuthenticationError("invalid hrpyc token")
-        return sock, None
-
-    return authenticate
+    return token_authenticator(token)

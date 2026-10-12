@@ -21,7 +21,7 @@ Environment:
     RUN_LIVE_REMOTE_CHECK   must equal "1" to run (safety gate)
     HOUDINI_HOST            listener host (default 127.0.0.1)
     HOUDINI_PORT            listener port (default 18811)
-    HOUDINI_RPC_TOKEN       optional shared secret (sent before handshake)
+    HOUDINI_RPC_TOKEN       optional shared secret (presented before the rpyc stream)
 
 Exit codes:
     0  listener reachable and responsive
@@ -34,6 +34,10 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from pathlib import Path
+
+# Runs as a file, not a module: make the repo's houdini_mcp package importable.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _enabled() -> bool:
@@ -59,21 +63,19 @@ def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
 def _rpyc_check(host: str, port: int) -> bool:
     """Connect via rpyc.classic and read the Houdini version (read-only)."""
     try:
-        import rpyc  # noqa: PLC0415
-    except ImportError:
-        print("[verify] rpyc not installed in this environment; skipping RPC check.")
+        from houdini_mcp import handshake  # noqa: PLC0415
+    except ImportError as exc:
+        print(
+            f"[verify] rpyc/houdini_mcp not importable in this environment ({exc}); "
+            "skipping RPC check."
+        )
         return False
 
-    token = os.getenv("HOUDINI_RPC_TOKEN")
+    # [LAW:one-source-of-truth] the client side of the token handshake is the
+    # shared module's, not a copy kept here.
+    token = os.getenv("HOUDINI_RPC_TOKEN") or None
     try:
-        if token:
-            # Send the shared secret first, matching the listener authenticator.
-            sock = socket.create_connection((host, port), timeout=5.0)
-            sock.sendall(token.encode("utf-8"))
-            conn = rpyc.classic.connect_stream(rpyc.SocketStream(sock))
-        else:
-            conn = rpyc.classic.connect(host, port)
-
+        conn = handshake.connect(host, port, token=token)
         hou = conn.modules.hou
         version = hou.applicationVersionString()
         hip = hou.hipFile.path()

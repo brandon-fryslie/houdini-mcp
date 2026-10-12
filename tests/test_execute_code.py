@@ -320,8 +320,8 @@ class TestExecuteCode:
         """Test handling of connection errors."""
         from houdini_mcp.tools import execute_code
 
-        with patch("houdini_mcp.connection.rpyc") as mock_rpyc:
-            mock_rpyc.classic.connect.side_effect = ConnectionError("Connection refused")
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             result = execute_code("print('test')", host="localhost", port=18811)
 
         assert result["status"] == "error"

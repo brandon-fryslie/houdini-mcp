@@ -11,6 +11,7 @@ services:
     environment:
       - HOUDINI_HOST=${HOUDINI_HOST:-192.168.50.90}
       - HOUDINI_PORT=${HOUDINI_PORT:-18811}
+      - HOUDINI_RPC_TOKEN=${HOUDINI_RPC_TOKEN:-}
       - MCP_PORT=${MCP_PORT:-3055}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
