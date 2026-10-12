@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     beyond `normal`); the valid policies are `read-only` and `normal`.
     `get_geo_summary` runs its own bounded program under an internal grant
     instead of a private keyword on `execute_code`.
+- **Plugin runtime state has one owner**: the module-level hrpyc API in
+  `houdini_mcp_plugin.remote` delegates to a single `RemoteListener` that is
+  bound once and never rebound, so `is_hrpyc_running` / `get_hrpyc_status` /
+  `self_test_hrpyc` answer from the listener itself instead of a nullable module
+  global. `remote.reset_listener` is gone; stop the listener with
+  `stop_hrpyc_server()`. The package docstring now describes the two modes that
+  exist (stdio and hrpyc remote) without tier or ticket references.
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
   `find_nodes` parse `limit`/`cursor` through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
   three, and every response carries the same keys (`total`, `returned`,

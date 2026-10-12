@@ -188,7 +188,6 @@ class TestPluginStartsTheSharedServer:
         from houdini_mcp_plugin import server as plugin_server
 
         monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
-        monkeypatch.setattr(plugin_server, "_stdio", plugin_server.StdioServer())
         return plugin_server
 
     @pytest.fixture

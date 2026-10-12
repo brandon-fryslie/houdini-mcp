@@ -1,21 +1,17 @@
-"""Houdini MCP Plugin - In-process MCP server for Houdini.
+"""Houdini MCP Plugin - the MCP server's two ways into a running Houdini.
 
-Provides two modes of operation:
+1. **stdio mode**: the MCP server runs in-process inside Houdini.
+   - ``start_server()`` serves this process's stdin; the server ends when the
+     MCP client closes it (there is no stop).
+   - No network configuration required.
 
-1. **stdio mode** (free tier): MCP server runs in-process inside Houdini
-   - Use start_server(); the server ends when the MCP client closes stdin
-   - Communicates via stdio transport
-   - No network configuration required
+2. **remote mode**: an hrpyc listener that an external MCP server (for
+   example the Docker gateway) connects to over RPyC.
+   - ``start_hrpyc_server()`` / ``stop_hrpyc_server()``; status and a
+     self-test are alongside.
 
-2. **remote mode** (for Docker MCP server): hrpyc listener for remote connections
-   - Use start_hrpyc_server() / stop_hrpyc_server()
-   - External MCP servers connect via RPyC
-   - Enables advanced server-side processing
-
-The reusable outbound WebSocket (WSS) connection state-machine core lives in
-:mod:`houdini_mcp_plugin.ws_client`. It is sans-I/O and does not yet integrate
-with Houdini callbacks/plugin lifecycle (that is a follow-up: houdini-mcp-9sx /
-houdini-mcp-vzp.9). The hrpyc modes above are intentionally left untouched.
+:mod:`houdini_mcp_plugin.ws_client` is a sans-I/O outbound WebSocket
+state-machine core; nothing in this package drives it yet.
 """
 
 __version__ = "0.2.0"
