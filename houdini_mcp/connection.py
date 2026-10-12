@@ -7,6 +7,7 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 """
 
 import concurrent.futures
+import importlib
 import logging
 import random
 import time
@@ -58,6 +59,63 @@ class HoudiniOperationError(Exception):
     """Raised when a Houdini operation fails."""
 
     pass
+
+
+class _InterpreterModules:
+    """``conn.modules`` for a connection that *is* this interpreter."""
+
+    def __getattr__(self, name: str) -> Any:
+        return importlib.import_module(name)
+
+
+class InProcessConnection:
+    """The connection surface the tools use, satisfied by the interpreter they run in.
+
+    [LAW:one-type-per-behavior] rpyc's classic connection and this class are two
+    instances of one contract: ``modules``, ``execute``/``namespace``, ``closed``,
+    ``close``. Tools cannot tell them apart, so the whole tool surface - rails,
+    audit, transactions, response shapes - is shared by construction.
+    """
+
+    def __init__(self) -> None:
+        self.modules = _InterpreterModules()
+        self.namespace: dict[str, Any] = {}
+        self.closed = False
+
+    def execute(self, code: str) -> None:
+        exec(code, self.namespace)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _open_rpyc(host: str, port: int) -> Any:
+    logger.info(f"Connecting to Houdini at {host}:{port}")
+    # Use rpyc.classic.connect for simple SlaveService connection
+    # Note: rpyc.classic.connect() does not accept config parameter
+    return rpyc.classic.connect(host, port)
+
+
+def _open_in_process(host: str, port: int) -> InProcessConnection:
+    logger.info("Connected to Houdini in-process")
+    return InProcessConnection()
+
+
+# [LAW:dataflow-not-control-flow] where Houdini lives is a value, not a branch:
+# every connect and ping goes through whichever opener is installed.
+_open: Callable[[str, int], Any] = _open_rpyc
+
+
+def use_in_process_houdini() -> None:
+    """Make every connection resolve to the Houdini this interpreter runs inside.
+
+    For the Houdini plugin's stdio server. Any live rpyc connection is dropped so
+    the next ``ensure_connected`` opens in-process; reconnects after a timeout or
+    error stay in-process too - there is no fallback to rpyc.
+    """
+    global _open
+    _open = _open_in_process
+    disconnect()
 
 
 def retry_with_backoff(
@@ -143,11 +201,7 @@ def _do_connect(
     """
     global _connection, _hou
 
-    logger.info(f"Connecting to Houdini at {host}:{port}")
-
-    # Use rpyc.classic.connect for simple SlaveService connection
-    # Note: rpyc.classic.connect() does not accept config parameter
-    _connection = rpyc.classic.connect(host, port)
+    _connection = _open(host, port)
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -386,9 +440,8 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
         True if Houdini RPC server is reachable, False otherwise.
     """
     try:
-        # Note: rpyc.classic.connect() does not accept config parameter
         # timeout is not enforced at connection level for classic connections
-        conn = rpyc.classic.connect(host, port)
+        conn = _open(host, port)
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

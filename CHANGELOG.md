@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Plugin stdio server serves the shared MCP server**: the Houdini plugin's
+  stdio mode no longer re-implements nine tools with its own (drifted) contract
+  and an unguarded `execute_code`. It now runs `houdini_mcp.server` over stdio,
+  bound in-process via `houdini_mcp.connection.use_in_process_houdini()`, so
+  every tool, safety rail, audit block and response shape is identical across
+  transports (`delete_node` returns `deleted_path` in stdio mode too).
 - **hrpyc remote stop**: The Houdini plugin now starts the listener via
   `hrpyc.ThreadedServer` and stops it through the server object's `close()`,
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to

@@ -53,7 +53,7 @@ For Codex Desktop on Windows, see the dedicated setup notes in
 
 ### Option 1: Houdini Plugin (stdio mode)
 
-The Houdini plugin runs the MCP server directly inside Houdini, using stdio transport. This is the simplest setup with no network configuration required.
+The Houdini plugin runs the MCP server directly inside Houdini, using stdio transport. This is the simplest setup with no network configuration required. It serves the same server as the other modes - every tool, safety rail and response shape in `houdini_mcp` - connected to the Houdini it runs inside instead of over RPyC.
 
 **Installation:**
 
@@ -75,14 +75,15 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
    ```
 
-3. Install FastMCP in Houdini's Python:
+3. Install the server's dependencies in Houdini's Python (the package JSON puts
+   `houdini_mcp` itself on the path):
    ```bash
    # Windows (from Houdini's Python)
-   hython -m pip install fastmcp
+   hython -m pip install fastmcp "rpyc>=5,<6" python-dotenv requests beautifulsoup4 httpx
    
    # Or from Houdini's Python Shell
    import subprocess
-   subprocess.run(["pip", "install", "fastmcp"])
+   subprocess.run(["pip", "install", "fastmcp", "rpyc>=5,<6", "python-dotenv", "requests", "beautifulsoup4", "httpx"])
    ```
 
 4. Restart Houdini and find the "Houdini MCP" shelf
