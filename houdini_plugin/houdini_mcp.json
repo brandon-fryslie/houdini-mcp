@@ -5,7 +5,7 @@
         },
         {
             "PYTHONPATH": {
-                "value": ["$HOUDINI_MCP_ROOT/python", "$HOUDINI_MCP_ROOT/.."],
+                "value": "$HOUDINI_MCP_ROOT/python",
                 "method": "prepend"
             }
         }

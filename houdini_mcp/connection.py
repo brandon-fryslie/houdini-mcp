@@ -13,7 +13,7 @@ import random
 import time
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import rpyc
 
@@ -62,10 +62,21 @@ class HoudiniOperationError(Exception):
 
 
 class _InterpreterModules:
-    """``conn.modules`` for a connection that *is* this interpreter."""
+    """``conn.modules`` for a connection that *is* this interpreter.
+
+    rpyc's module namespace answers both ``modules.hou`` and
+    ``modules["PySide2.QtWidgets"]``; so does this one.
+    """
+
+    def __getitem__(self, name: str) -> Any:
+        return importlib.import_module(name)
 
     def __getattr__(self, name: str) -> Any:
-        return importlib.import_module(name)
+        try:
+            return self[name]
+        except ImportError as e:
+            # attribute protocol: ``hasattr`` and friends expect AttributeError
+            raise AttributeError(name) from e
 
 
 class InProcessConnection:
@@ -101,9 +112,24 @@ def _open_in_process(host: str, port: int) -> InProcessConnection:
     return InProcessConnection()
 
 
+class HoudiniTarget(NamedTuple):
+    """Where Houdini lives: how to open a connection to it, and how to name it.
+
+    [LAW:one-source-of-truth] the opener and the words diagnostics use for the
+    target travel together, so an error can never describe a host:port that the
+    connection never used.
+    """
+
+    open: Callable[[str, int], Any]
+    describe: Callable[[str, int], str]
+
+
+REMOTE_HOUDINI = HoudiniTarget(_open_rpyc, lambda host, port: f"{host}:{port}")
+IN_PROCESS_HOUDINI = HoudiniTarget(_open_in_process, lambda _host, _port: "this interpreter")
+
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value, not a branch:
-# every connect and ping goes through whichever opener is installed.
-_open: Callable[[str, int], Any] = _open_rpyc
+# every connect, ping and diagnostic reads whichever target is installed.
+_target: HoudiniTarget = REMOTE_HOUDINI
 
 
 def use_in_process_houdini() -> None:
@@ -113,8 +139,8 @@ def use_in_process_houdini() -> None:
     the next ``ensure_connected`` opens in-process; reconnects after a timeout or
     error stay in-process too - there is no fallback to rpyc.
     """
-    global _open
-    _open = _open_in_process
+    global _target
+    _target = IN_PROCESS_HOUDINI
     disconnect()
 
 
@@ -201,7 +227,7 @@ def _do_connect(
     """
     global _connection, _hou
 
-    _connection = _open(host, port)
+    _connection = _target.open(host, port)
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -276,11 +302,11 @@ def connect(
         except Exception as e:
             # Non-retryable exception - fail immediately
             raise HoudiniConnectionError(
-                f"Non-retryable error connecting to Houdini at {host}:{port}: {e}"
+                f"Non-retryable error connecting to Houdini at {_target.describe(host, port)}: {e}"
             ) from e
 
     raise HoudiniConnectionError(
-        f"Failed to connect to Houdini at {host}:{port} after {max_retries} attempts. "
+        f"Failed to connect to Houdini at {_target.describe(host, port)} after {max_retries} attempts. "
         f"Make sure Houdini is running with RPC server enabled "
         f"(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell). "
         f"Last error: {last_error}"
@@ -403,6 +429,7 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     info: dict[str, Any] = {
         "host": host,
         "port": port,
+        "target": _target.describe(host, port),
         "connected": False,
         "houdini_version": None,
         "houdini_build": None,
@@ -441,7 +468,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     """
     try:
         # timeout is not enforced at connection level for classic connections
-        conn = _open(host, port)
+        conn = _target.open(host, port)
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

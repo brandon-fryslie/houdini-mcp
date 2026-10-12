@@ -66,7 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an unguarded `execute_code`. It now runs `houdini_mcp.server` over stdio,
   bound in-process via `houdini_mcp.connection.use_in_process_houdini()`, so
   every tool, safety rail, audit block and response shape is identical across
-  transports (`delete_node` returns `deleted_path` in stdio mode too).
+  transports (`delete_node` returns `deleted_path` in stdio mode too). The
+  plugin's own `LocalHoudiniConnection` is gone; `check_connection` and the
+  shelf status report a `target` (`host:port` or `this interpreter`). The
+  stdio install is `hython -m pip install .`, which also declares `httpx`.
+  `houdini_mcp.server.serve()` runs the server without touching process
+  logging; `run_server()` remains the CLI entry that configures it.
 - **hrpyc remote stop**: The Houdini plugin now starts the listener via
   `hrpyc.ThreadedServer` and stops it through the server object's `close()`,
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to

@@ -7,6 +7,7 @@ remote Houdini fails the test.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from collections.abc import Generator
 from typing import Any
@@ -16,8 +17,11 @@ from fastmcp import Client
 
 import houdini_mcp.connection as conn_module
 from houdini_mcp.connection import (
+    IN_PROCESS_HOUDINI,
+    REMOTE_HOUDINI,
     InProcessConnection,
     ensure_connected,
+    get_connection_info,
     ping,
     use_in_process_houdini,
 )
@@ -34,7 +38,7 @@ def in_process_houdini(
 
     monkeypatch.setitem(sys.modules, "hou", mock_hou)
     monkeypatch.setattr(conn_module.rpyc.classic, "connect", _no_rpyc)
-    monkeypatch.setattr(conn_module, "_open", conn_module._open_rpyc)
+    monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
     use_in_process_houdini()
     yield mock_hou
 
@@ -59,9 +63,17 @@ class TestInProcessConnection:
     def test_ping_reaches_houdini_without_a_network(self, in_process_houdini: Any) -> None:
         assert ping("some-remote-host", 1) is True
 
+    def test_connection_info_names_this_interpreter_not_a_socket(
+        self, in_process_houdini: Any
+    ) -> None:
+        ensure_connected("some-remote-host", 1)
+        assert get_connection_info("some-remote-host", 1)["target"] == "this interpreter"
+
     def test_connection_exposes_interpreter_modules_and_exec(self) -> None:
         conn = InProcessConnection()
         assert conn.modules.os is sys.modules["os"]
+        assert conn.modules["os.path"] is sys.modules["os.path"]
+        assert hasattr(conn.modules, "no_such_module_for_this_test") is False
         conn.execute("answer = 6 * 7")
         assert conn.namespace["answer"] == 42
         assert conn.closed is False
@@ -117,25 +129,62 @@ class TestStdioServerSurface:
             "check_connection",
         } <= names
 
-
-class TestPluginStartsTheSharedServer:
-    def test_start_server_binds_in_process_and_serves_stdio(
+    async def test_pane_tools_get_qt_from_this_interpreter(
         self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
     ) -> None:
+        from houdini_mcp.tools.pane_screenshot import _get_qt_modules
+
+        fakes = {name: object() for name in ("QtWidgets", "QtCore", "QtGui")}
+        for name, module in fakes.items():
+            monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
+        ensure_connected("localhost", 18811)
+
+        assert _get_qt_modules() == (fakes["QtWidgets"], fakes["QtCore"], fakes["QtGui"])
+
+
+class TestPluginStartsTheSharedServer:
+    @pytest.fixture
+    def plugin_server(self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any) -> Any:
         from houdini_mcp_plugin import server as plugin_server
 
+        monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
+        monkeypatch.setattr(plugin_server, "_server_running", False)
+        return plugin_server
+
+    def test_start_server_binds_in_process_and_serves_stdio(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
+    ) -> None:
         import houdini_mcp.server as shared_server
 
-        monkeypatch.setattr(conn_module, "_open", conn_module._open_rpyc)
         runs: list[dict[str, Any]] = []
 
-        def fake_run_server(**kwargs: Any) -> None:
-            runs.append({"opener": conn_module._open, **kwargs})
+        def fake_serve(**kwargs: Any) -> None:
+            runs.append({"target": conn_module._target, **kwargs})
 
-        monkeypatch.setattr(shared_server, "run_server", fake_run_server)
-        monkeypatch.setattr(plugin_server, "_server_running", False)
+        monkeypatch.setattr(shared_server, "serve", fake_serve)
 
         assert plugin_server.start_server(use_thread=False) is True
 
-        assert runs == [{"opener": conn_module._open_in_process, "transport": "stdio"}]
+        assert runs == [{"target": IN_PROCESS_HOUDINI, "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
+
+    def test_failed_foreground_serve_is_not_left_running(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
+    ) -> None:
+        import houdini_mcp.server as shared_server
+
+        def failing_serve(**_kwargs: Any) -> None:
+            raise OSError("stdin closed")
+
+        monkeypatch.setattr(shared_server, "serve", failing_serve)
+
+        assert plugin_server.start_server(use_thread=False) is False
+        assert plugin_server.is_server_running() is False
+
+    def test_importing_the_shared_server_leaves_root_logging_alone(self) -> None:
+        probe = (
+            "import logging, houdini_mcp.server; root = logging.getLogger(); "
+            "assert root.handlers == [] and root.level == logging.WARNING, "
+            "(root.handlers, root.level)"
+        )
+        subprocess.run([sys.executable, "-c", probe], check=True)

@@ -75,15 +75,15 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
    ```
 
-3. Install the server's dependencies in Houdini's Python (the package JSON puts
-   `houdini_mcp` itself on the path):
+3. Install the server into Houdini's Python. This installs `houdini_mcp` and
+   every dependency it declares; there is no separate list to keep in step:
    ```bash
-   # Windows (from Houdini's Python)
-   hython -m pip install fastmcp "rpyc>=5,<6" python-dotenv requests beautifulsoup4 httpx
+   # From the repo root, with Houdini's Python
+   hython -m pip install .
    
    # Or from Houdini's Python Shell
    import subprocess
-   subprocess.run(["pip", "install", "fastmcp", "rpyc>=5,<6", "python-dotenv", "requests", "beautifulsoup4", "httpx"])
+   subprocess.run(["pip", "install", "/path/to/houdini-mcp"])
    ```
 
 4. Restart Houdini and find the "Houdini MCP" shelf

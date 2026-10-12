@@ -23,10 +23,10 @@ _server_running = False
 def _prepare_stdio_server() -> Callable[[], None]:
     """Bind the shared server to this interpreter's Houdini; return what runs it."""
     from houdini_mcp.connection import use_in_process_houdini
-    from houdini_mcp.server import run_server
+    from houdini_mcp.server import serve
 
     use_in_process_houdini()
-    return lambda: run_server(transport="stdio")
+    return lambda: serve(transport="stdio")
 
 
 def start_server(use_thread: bool = True) -> bool:
@@ -66,8 +66,10 @@ def start_server(use_thread: bool = True) -> bool:
         else:
             _server_running = True
             logger.info("Starting MCP server (stdio transport) in main thread")
-            serve()
-            _server_running = False
+            try:
+                serve()
+            finally:
+                _server_running = False
 
         return True
     except Exception as e:
