@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Input connections report the real source output; reorder_inputs preserves
+  it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
+  `reorder_inputs` read the source output index from Houdini's
+  `inputConnections()` records. The old `inputConnectors()[idx][1]` read never
+  matched HOM's shape, so every index fell back to 0: inspection reported the
+  wrong topology and `reorder_inputs` rewired every input from output 0. A
+  connection record that cannot be read is now an error, and `reorder_inputs`
+  reads every wire before disconnecting any, so a failed read leaves the
+  network untouched. `list_children` no longer swallows errors raised while
+  building a child's record; only a parent refusing to list its children is
+  tolerated.
+
 ### Changed
 
 - **Flags have a cap and an exit plan; the permission decision is one value**

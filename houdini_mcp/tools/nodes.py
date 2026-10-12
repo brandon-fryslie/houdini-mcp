@@ -25,6 +25,7 @@ from ._common import (
     parse_page_request,
 )
 from .cache import node_type_cache
+from .connections import input_connections
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -169,33 +170,14 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "is_rendered": node.isRenderFlagSet() if hasattr(node, "isRenderFlagSet") else None,
     }
 
-    input_connections: list[dict[str, Any]] = []
-    node_inputs = node.inputs()
-
-    # Cache inputConnectors call OUTSIDE the loop to avoid
-    # redundant RPC calls (was previously called per input)
-    try:
-        connectors = node.inputConnectors()
-    except Exception:
-        connectors = None
-
-    for idx, input_node in enumerate(node_inputs):
-        if input_node is not None:
-            # Use cached connectors
-            source_output_idx = 0
-            if connectors is not None and idx < len(connectors):
-                connector = connectors[idx]
-                source_output_idx = connector[1] if len(connector) > 1 else 0
-
-            input_connections.append(
-                {
-                    "input_index": idx,
-                    "source_node": input_node.path(),
-                    "source_output_index": source_output_idx,
-                }
-            )
-
-    info["input_connections"] = input_connections
+    info["input_connections"] = [
+        {
+            "input_index": conn.input_index,
+            "source_node": conn.source.path(),
+            "source_output_index": conn.output_index,
+        }
+        for conn in input_connections(node)
+    ]
     return info
 
 
@@ -458,74 +440,56 @@ def list_children(
             logger.warning(f"Max nodes {max_nodes} limit reached")
             return
 
+        # A locked HDA refuses to list its children; that is the one failure this
+        # walk tolerates. Anything a child's own record raises reaches the tool's
+        # error boundary, so a wire whose output cannot be read is reported, not
+        # dropped with its siblings. [LAW:no-silent-failure]
         try:
-            for child in node.children():
-                if nodes_collected >= max_nodes:
-                    break
-
-                # Compact mode: only path, name, type
-                if compact:
-                    child_info: dict[str, Any] = {
-                        "path": child.path(),
-                        "name": child.name(),
-                        "type": child.type().name(),
-                        # Three-character bitset: display/render/bypassed. `-`
-                        # means the node class does not expose that flag API.
-                        "flags": "".join(
-                            compact_flag(child, method)
-                            for method in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
-                        ),
-                    }
-                else:
-                    # Full mode: include input/output connection details
-                    # Build input connection details
-                    input_connections: list[dict[str, Any]] = []
-                    child_inputs = child.inputs()
-
-                    # Cache inputConnectors call OUTSIDE the loop to avoid
-                    # redundant RPC calls (was previously called per input)
-                    try:
-                        connectors = child.inputConnectors()
-                    except Exception:
-                        connectors = None
-
-                    for idx, input_node in enumerate(child_inputs):
-                        if input_node is not None:
-                            # Use cached connectors
-                            output_idx = 0
-                            if connectors is not None and idx < len(connectors):
-                                connector = connectors[idx]
-                                output_idx = connector[1] if len(connector) > 1 else 0
-
-                            input_connections.append(
-                                {
-                                    "index": idx,
-                                    "source_node": input_node.path(),
-                                    "output_index": output_idx,
-                                }
-                            )
-
-                    # Build output list
-                    output_paths = [out.path() for out in child.outputs()]
-
-                    child_info = {
-                        "path": child.path(),
-                        "name": child.name(),
-                        "type": child.type().name(),
-                        "inputs": input_connections,
-                        "outputs": output_paths,
-                    }
-
-                children_list.append(child_info)
-                nodes_collected += 1
-
-                # Recurse if requested
-                if recursive:
-                    collect_children(child, depth + 1)
-
+            children = node.children()
         except Exception as e:
-            # Handle locked HDAs or other access issues
             logger.warning(f"Could not access children of {node.path()}: {e}")
+            return
+
+        for child in children:
+            if nodes_collected >= max_nodes:
+                break
+
+            # Compact mode: only path, name, type
+            if compact:
+                child_info: dict[str, Any] = {
+                    "path": child.path(),
+                    "name": child.name(),
+                    "type": child.type().name(),
+                    # Three-character bitset: display/render/bypassed. `-`
+                    # means the node class does not expose that flag API.
+                    "flags": "".join(
+                        compact_flag(child, method)
+                        for method in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
+                    ),
+                }
+            else:
+                # Full mode: input wires with their source output, and output nodes
+                child_info = {
+                    "path": child.path(),
+                    "name": child.name(),
+                    "type": child.type().name(),
+                    "inputs": [
+                        {
+                            "index": conn.input_index,
+                            "source_node": conn.source.path(),
+                            "output_index": conn.output_index,
+                        }
+                        for conn in input_connections(child)
+                    ],
+                    "outputs": [out.path() for out in child.outputs()],
+                }
+
+            children_list.append(child_info)
+            nodes_collected += 1
+
+            # Recurse if requested
+            if recursive:
+                collect_children(child, depth + 1)
 
     collect_children(parent)
 

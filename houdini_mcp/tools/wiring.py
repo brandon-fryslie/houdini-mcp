@@ -11,6 +11,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
+from .connections import input_connections
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
@@ -263,64 +264,45 @@ def reorder_inputs(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    # Get current inputs
-    current_inputs = node.inputs()
-    if current_inputs is None:
-        current_inputs = []
+    input_count = len(node.inputs())
 
     # Validate new_order
-    if len(new_order) > len(current_inputs):
+    if len(new_order) > input_count:
         return {
             "status": "error",
-            "message": f"new_order length ({len(new_order)}) exceeds number of inputs ({len(current_inputs)})",
+            "message": f"new_order length ({len(new_order)}) exceeds number of inputs ({input_count})",
         }
 
     # Validate indices
-    if not all(0 <= idx < len(current_inputs) for idx in new_order):
+    if not all(0 <= idx < input_count for idx in new_order):
         return {
             "status": "error",
-            "message": f"Invalid indices in new_order. Must be in range [0, {len(current_inputs) - 1}]",
+            "message": f"Invalid indices in new_order. Must be in range [0, {input_count - 1}]",
         }
 
-    # Store connection information (input_node, output_index)
-    stored_connections: list[tuple[Any, int] | None] = []
-    for idx, input_node in enumerate(current_inputs):
-        if input_node is not None:
-            # Try to get output index from inputConnectors
-            try:
-                connectors = node.inputConnectors()
-                if idx < len(connectors):
-                    output_idx = connectors[idx][1] if len(connectors[idx]) > 1 else 0
-                else:
-                    output_idx = 0
-            except Exception:
-                output_idx = 0
-            stored_connections.append((input_node, int(output_idx)))
-        else:
-            stored_connections.append(None)
+    # Read every wire, with the source output it comes from, before touching any.
+    # [LAW:no-silent-failure] a wire whose output cannot be read fails the whole
+    # reorder here, before the network has been changed.
+    connections = input_connections(node)
+    new_position = {old_idx: new_idx for new_idx, old_idx in enumerate(new_order)}
 
-    # Disconnect all inputs
-    for i in range(len(current_inputs)):
+    for i in range(input_count):
         node.setInput(i, None)
 
-    # Reconnect in new order
+    # Rewire each wire to its new input, from the same source output it came from.
+    # A wire whose old input is absent from new_order is not reconnected.
     reconnection_info: list[dict[str, Any]] = []
-    for new_idx, old_idx in enumerate(new_order):
-        if old_idx >= len(stored_connections):
+    for conn in connections:
+        if conn.input_index not in new_position:
             continue
-
-        stored_connection = stored_connections[old_idx]
-        if stored_connection is None:
-            continue
-
-        src_node, output_idx = stored_connection
-        node.setInput(new_idx, src_node, output_idx)
+        new_idx = new_position[conn.input_index]
+        node.setInput(new_idx, conn.source, conn.output_index)
         reconnection_info.append(
             {
                 "new_input_index": new_idx,
-                "old_input_index": old_idx,
-                "source_node": src_node.path(),
-                "source_output_index": output_idx,
+                "old_input_index": conn.input_index,
+                "source_node": conn.source.path(),
+                "source_output_index": conn.output_index,
             }
         )
 
