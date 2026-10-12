@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **uv owns the project**: `pyproject.toml` (dev tools under
   `[dependency-groups]`) and `uv.lock` are the only dependency sources.
   `requirements.txt` is gone; `httpx` and `starlette`, imported directly, are
-  now declared. CI, the Docker image and pre-commit all install from the lock
+  now declared, and `python-dotenv`, never imported, is dropped. CI, the Docker image and pre-commit all install from the lock
   (`uv sync --locked`), so every tool runs at one version everywhere.
   Set up with `uv sync && uv run pytest`.
 

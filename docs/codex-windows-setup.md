@@ -25,13 +25,14 @@ Codex Desktop
 
 ## Python Dependencies
 
-Install the server dependencies into the normal Python used by Codex:
+Install the project into the normal Python used by Codex; `pyproject.toml` declares
+its dependencies, so there is no package list to keep in step with it:
 
 ```powershell
-python -m pip install --user fastmcp rpyc==5.3.1
+python -m pip install --user C:\Users\<user>\Documents\Codex\tools\houdini-mcp
 ```
 
-`rpyc` must stay on the 5.x line because Houdini's bundled `hrpyc` is not compatible with RPyC 6.x.
+The project pins `rpyc` to the 5.x line because Houdini's bundled `hrpyc` is not compatible with RPyC 6.x.
 
 ## Houdini Setup
 
