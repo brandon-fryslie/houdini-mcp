@@ -191,8 +191,14 @@ class TestPluginStartsTheSharedServer:
         return plugin_server
 
     @pytest.fixture
-    def held_serve(self, monkeypatch: pytest.MonkeyPatch) -> Generator[dict[str, Any], None, None]:
-        """A fake transport that serves until the test closes its 'stdin'."""
+    def held_serve(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
+    ) -> Generator[dict[str, Any], None, None]:
+        """A fake transport that serves until the test closes its 'stdin'.
+
+        Teardown closes stdin and waits for the one process-wide server to clear,
+        so no test can hand the next one a server that is still serving.
+        """
         import houdini_mcp.server as shared_server
 
         stdin_closed = threading.Event()
@@ -214,7 +220,18 @@ class TestPluginStartsTheSharedServer:
         monkeypatch.setattr(shared_server, "serve", fake_serve)
         yield state
         stdin_closed.set()
+        _wait_until_stopped(plugin_server)
         assert state["stdin_closed_in_time"] is not False, "test never closed stdin"
+
+    @pytest.fixture
+    def unscheduled_threads(self) -> Generator[list[threading.Thread], None, None]:
+        """``Thread.start`` parks the thread instead; every parked thread runs at teardown."""
+        parked: list[threading.Thread] = []
+        with pytest.MonkeyPatch.context() as no_scheduler:
+            no_scheduler.setattr(threading.Thread, "start", lambda thread: parked.append(thread))
+            yield parked
+        for thread in parked:
+            thread.start()
 
     def test_start_server_binds_in_process_and_serves_stdio(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
@@ -265,35 +282,24 @@ class TestPluginStartsTheSharedServer:
         assert held_serve["running_during_serve"] is True
 
     def test_second_start_is_refused_before_the_first_thread_runs(
-        self, plugin_server: Any, held_serve: dict[str, Any], caplog: pytest.LogCaptureFixture
+        self,
+        plugin_server: Any,
+        held_serve: dict[str, Any],
+        unscheduled_threads: list[threading.Thread],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Two quick Start clicks: the guard holds from the moment start is accepted."""
-        started: list[threading.Thread] = []
+        plugin_server.start_server(use_thread=True)
+        with (
+            caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
+            pytest.raises(plugin_server.AlreadyServing),
+        ):
+            plugin_server.start_server(use_thread=True)
 
-        try:
-            with pytest.MonkeyPatch.context() as unscheduled:
-                unscheduled.setattr(
-                    threading.Thread, "start", lambda thread: started.append(thread)
-                )
-                plugin_server.start_server(use_thread=True)
-                with (
-                    caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
-                    pytest.raises(plugin_server.AlreadyServing),
-                ):
-                    plugin_server.start_server(use_thread=True)
-            assert "already serving" in caplog.text
-            assert held_serve["runs"] == 0
-            assert plugin_server.is_server_running() is True
-        finally:
-            # [LAW:no-ambient-temporal-coupling] the one process-wide server clears
-            # only when its thread runs; a failed assertion must not leave it parked
-            for thread in started:
-                thread.start()
-            held_serve["stdin"].set()
-
-        [_] = started
-        _wait_until_stopped(plugin_server)
-        assert held_serve["runs"] == 1
+        assert "already serving" in caplog.text
+        assert held_serve["runs"] == 0
+        assert plugin_server.is_server_running() is True
+        assert len(unscheduled_threads) == 1
 
     def test_background_serve_failure_is_logged_and_clears_state(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, caplog: pytest.LogCaptureFixture

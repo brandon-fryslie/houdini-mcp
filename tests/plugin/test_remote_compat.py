@@ -1,8 +1,7 @@
-"""Backwards-compatibility tests for the existing module-level remote API.
+"""The module-level remote API: one operation per function on the process's listener.
 
-The manual/direct hrpyc mode and the historic ``start_hrpyc_server`` /
-``stop_hrpyc_server`` / ``is_hrpyc_running`` / ``get_hrpyc_status`` functions
-must keep working (houdini-mcp-00p acceptance #5).
+The manual/direct hrpyc workflow (``import hrpyc; hrpyc.start_server(...)``)
+is separate and untouched by these tests.
 """
 
 from __future__ import annotations
@@ -15,17 +14,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _stopped_after():
-    """The one process-wide listener is left stopped, through its public API."""
-    yield
-    remote.stop_hrpyc_server()
+def houdini_process(monkeypatch, fake_hrpyc, fake_hou):
+    """The fakes stand in as the ``hrpyc`` / ``hou`` modules the listener imports.
 
-
-@pytest.fixture
-def houdini_modules(monkeypatch, fake_hrpyc, fake_hou):
-    """Install the fakes where the listener imports them: as the modules themselves."""
+    The one process-wide listener is left stopped afterwards, through its public
+    API, while the fakes are still installed.
+    """
     monkeypatch.setitem(sys.modules, "hrpyc", fake_hrpyc)
     monkeypatch.setitem(sys.modules, "hou", fake_hou)
+    yield
+    remote.stop_hrpyc_server()
 
 
 def _free_port() -> int:
@@ -36,8 +34,8 @@ def _free_port() -> int:
     return port
 
 
-class TestLegacyModuleApi:
-    def test_start_and_stop_roundtrip(self, houdini_modules):
+class TestModuleApi:
+    def test_start_and_stop_roundtrip(self):
         port = _free_port()
 
         status = remote.start_hrpyc_server(port=port)
@@ -53,7 +51,7 @@ class TestLegacyModuleApi:
         assert stopped["status"] == "success"
         assert remote.is_hrpyc_running() is False
 
-    def test_start_is_idempotent_legacy(self, houdini_modules):
+    def test_start_is_idempotent(self):
         port = _free_port()
 
         remote.start_hrpyc_server(port=port)
@@ -64,7 +62,7 @@ class TestLegacyModuleApi:
         status = remote.get_hrpyc_status()
         assert status["running"] is False
 
-    def test_default_bind_is_loopback(self, monkeypatch, houdini_modules):
+    def test_default_bind_is_loopback(self, monkeypatch):
         monkeypatch.delenv("HOUDINI_RPC_BIND_HOST", raising=False)
         port = _free_port()
 
@@ -72,7 +70,7 @@ class TestLegacyModuleApi:
         assert status["status"] == "success"
         assert status["host"] == "127.0.0.1"
 
-    def test_env_bind_host_wildcard_refused_without_optin(self, monkeypatch, houdini_modules):
+    def test_env_bind_host_wildcard_refused_without_optin(self, monkeypatch):
         monkeypatch.setenv("HOUDINI_RPC_BIND_HOST", "0.0.0.0")
         monkeypatch.delenv("HOUDINI_RPC_TRUSTED_NETWORK", raising=False)
         monkeypatch.delenv("HOUDINI_RPC_TOKEN", raising=False)
@@ -82,7 +80,7 @@ class TestLegacyModuleApi:
         assert status["status"] == "error"
         assert remote.is_hrpyc_running() is False
 
-    def test_self_test_exposed_at_module_level(self, houdini_modules):
+    def test_self_test_exposed_at_module_level(self):
         port = _free_port()
         remote.start_hrpyc_server(port=port)
 
