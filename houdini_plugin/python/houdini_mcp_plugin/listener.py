@@ -120,6 +120,7 @@ class HrpycModule(Protocol):
         service: type,
         *,
         hostname: str,
+        ipv6: bool,
         port: int,
         reuse_addr: bool,
         auto_register: bool,
@@ -483,10 +484,13 @@ class RemoteListener:
         the bound socket is this unit's to release, and nothing else holds it yet.
         """
         # [LAW:dataflow-not-control-flow] one construction; the policy's
-        # authenticator (None for an unauthenticated bind) is a value it carries.
+        # authenticator (None for an unauthenticated bind) is a value it carries,
+        # and so is the address family: rpyc opens an AF_INET socket unless told
+        # ``ipv6``, and a colon is what makes a literal an IPv6 address.
         server = hrpyc.ThreadedServer(
             hrpyc.SlaveService,
             hostname=cfg.host,
+            ipv6=":" in cfg.host,
             port=cfg.port,
             reuse_addr=cfg.reuse_addr,
             auto_register=False,
@@ -507,7 +511,12 @@ class RemoteListener:
                 target=_serve, args=(server,), name="houdini-hrpyc", daemon=True
             ).start()
         except BaseException:
-            server.close()
+            # The launch failure is the error reported; a close() failure on top
+            # of it is logged, not substituted for it.
+            try:
+                server.close()
+            except OSError as exc:
+                logger.warning("hrpyc server did not close after a failed launch: %s", exc)
             raise
         return server, port
 
@@ -523,11 +532,20 @@ class RemoteListener:
 
             host = self._config.host if self._config else DEFAULT_HOST
             port = self._bound_port
-            # [LAW:no-silent-failure] a close() that raises surfaces to the caller;
-            # the listener still lets go of the server, so the next start() is not
-            # answered already_running by a server that is no longer anyone's.
+            # [LAW:no-silent-failure] a close() that fails is reported the way
+            # start() reports its failures, as the result; the listener still
+            # lets go of the server, so the next start() is not answered
+            # already_running by a server that is no longer anyone's.
             try:
                 self._server.close()
+            except OSError as exc:
+                logger.warning("hrpyc listener (%s:%s) did not close cleanly: %s", host, port, exc)
+                return {
+                    "status": "error",
+                    "error_type": "close",
+                    "running": False,
+                    "message": f"hrpyc listener released; its server did not close cleanly: {exc}",
+                }
             finally:
                 self._server = None
                 self._config = None
@@ -593,7 +611,7 @@ class RemoteListener:
             cfg = self._config
             policy = self._policy
             bound_port = self._bound_port
-        if server is None or cfg is None or policy is None:
+        if server is None or cfg is None or policy is None or bound_port is None:
             return {
                 "running": False,
                 "reachable": False,
@@ -602,7 +620,6 @@ class RemoteListener:
                 "guidance": ["Start the listener before running a self-test."],
             }
 
-        bound_port = bound_port or cfg.port
         # A server that reports closed is stale whatever a lingering accept()
         # window would tell the probe.
         reachable = server.active and _probe_reachable(cfg.host, bound_port, timeout=1.0)

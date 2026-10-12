@@ -39,6 +39,7 @@ class TestContract:
         server = hrpyc.ThreadedServer(
             hrpyc.SlaveService,
             hostname="127.0.0.1",
+            ipv6=False,
             port=0,
             reuse_addr=True,
             auto_register=False,
@@ -56,17 +57,19 @@ class TestContract:
 
 
 class TestListenerAgainstRealRpyc:
-    def test_port_zero_binds_reports_and_serves_a_classic_client(self, fake_hou):
-        """Port 0 is resolved by rpyc; the reported port is the one a client reaches."""
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+    def test_port_zero_binds_reports_and_serves_a_classic_client(self, fake_hou, host):
+        """Port 0 is resolved by rpyc; the reported port is the one a client
+        reaches, over the address family the host literal names."""
         listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
         try:
-            result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
+            result = listener.start(ListenerConfig(host=host, port=0))
             assert result["status"] == "success", result
             port = result["bound_port"]
             assert port != 0
             assert listener.self_test()["reachable"] is True
 
-            conn = rpyc.classic.connect("127.0.0.1", port)
+            conn = rpyc.classic.connect(host, port, ipv6=":" in host)
             try:
                 assert conn.modules.math.sqrt(16.0) == 4.0
             finally:

@@ -50,6 +50,7 @@ class FakeThreadedServer:
         service: type,
         *,
         hostname: str = "127.0.0.1",
+        ipv6: bool = False,
         port: int = 18811,
         reuse_addr: bool = True,
         auto_register: bool = False,
@@ -77,7 +78,8 @@ class FakeThreadedServer:
 
         # Bind eagerly (like ThreadedServer does in __init__) so that a
         # port-in-use collision surfaces before start().
-        family = socket.AF_INET6 if ":" in hostname else socket.AF_INET
+        # As rpyc: the address family is the caller's ``ipv6``, not the hostname's shape.
+        family = socket.AF_INET6 if ipv6 else socket.AF_INET
         self._sock = socket.socket(family, socket.SOCK_STREAM)
         if reuse_addr:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

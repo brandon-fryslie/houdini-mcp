@@ -86,14 +86,20 @@ class TestBindFailure:
 
     def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou, free_port):
         """rpyc's close() closes the listening socket and every client socket
-        unguarded; the error reaches stop()'s caller, and the listener no longer
-        holds the server, so start() is not answered already_running."""
+        unguarded; the error is stop()'s result, and the listener no longer holds
+        the server, so start() is not answered already_running."""
         from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
 
         class CloseFails(FakeThreadedServer):
+            # Fails the first close, as a client socket reset would; a later
+            # close() (the accept loop's own, on exit) is the no-op rpyc's is.
+            failed = False
+
             def close(self) -> None:
                 super().close()
-                raise OSError(104, "Connection reset by peer")
+                if not self.failed:
+                    self.failed = True
+                    raise OSError(104, "Connection reset by peer")
 
         hrpyc = FakeHrpycModule()
         hrpyc.ThreadedServer = lambda *a, **kw: CloseFails(*a, **kw)
@@ -101,8 +107,9 @@ class TestBindFailure:
         assert (
             listener.start(ListenerConfig(host="127.0.0.1", port=free_port))["status"] == "success"
         )
-        with pytest.raises(OSError):
-            listener.stop()
+        result = listener.stop()
+        assert result["status"] == "error"
+        assert result["error_type"] == "close"
         assert listener.is_running() is False
         assert listener.stop()["status"] == "not_running"
 
