@@ -70,7 +70,7 @@ jobs:
         run: uv sync --locked
 
       - name: Run mypy
-        run: uv run mypy houdini_mcp/
+        run: uv run mypy houdini_mcp/ houdini_plugin/python/houdini_mcp_plugin houdini_plugin/python/houdini_mcp_handshake
         continue-on-error: true  # Don't fail CI on type errors initially
 
   security:

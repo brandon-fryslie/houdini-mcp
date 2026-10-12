@@ -4,9 +4,11 @@ These tests never require a real Houdini or a real ``hrpyc`` module. Instead
 they inject light-weight fakes that emulate the small surface area the plugin
 depends on:
 
-- ``hrpyc.ThreadedServer(...)`` -> object with ``._listen()`` / ``.accept()`` /
-  ``.close()``, ``.active`` / ``.port`` and a ``.logger`` attribute, which runs
-  its ``authenticator`` on every accepted socket exactly as rpyc's server does.
+- ``hrpyc`` module -> :class:`houdini_mcp_plugin.listener.HrpycModule`, whose
+  ``ThreadedServer`` builds a :class:`houdini_mcp_plugin.listener.HrpycServer`
+  that runs its ``authenticator`` on every accepted socket exactly as rpyc's
+  server does. ``tests/plugin/test_hrpyc_contract.py`` holds the fake and the
+  real rpyc to the same contract.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
 
 The plugin package lives under ``houdini_plugin/python`` and is not installed,
@@ -15,6 +17,7 @@ so we add it to ``sys.path`` here.
 
 from __future__ import annotations
 
+import logging
 import socket
 import sys
 from pathlib import Path
@@ -44,27 +47,27 @@ class FakeThreadedServer:
 
     def __init__(
         self,
-        service: Any = None,
+        service: type,
         *,
         hostname: str = "127.0.0.1",
         port: int = 18811,
         reuse_addr: bool = True,
         auto_register: bool = False,
         authenticator: Any = None,
-        protocol_config: dict | None = None,
+        logger: logging.Logger | None = None,
         fail_bind: bool = False,
-        **kwargs: Any,
     ) -> None:
+        # The keyword set is the real constructor's as the listener calls it
+        # (rpyc.utils.server.Server.__init__); an argument rpyc would reject is
+        # rejected here too. ``fail_bind`` is this fake's own test seam.
         self.service = service
         self.hostname = hostname
         self.requested_port = port
         self.reuse_addr = reuse_addr
         self.auto_register = auto_register
         self.authenticator = authenticator
-        self.protocol_config = protocol_config or {}
-        self.logger = _FakeLogger()
+        self.logger = logger if logger is not None else logging.getLogger("FakeThreadedServer")
 
-        self._closed = False
         self.active = False
         self.authenticated = 0
         self.rejected = 0
@@ -118,21 +121,15 @@ class FakeThreadedServer:
     def close(self) -> None:
         # The socket stays referenced: an in-flight accept() raises OSError on
         # it, which accept() reports as EOFError, with no attribute to race on.
-        self._closed = True
         self.active = False
         self._sock.close()
-
-
-class _FakeLogger:
-    def __init__(self) -> None:
-        self.quiet = False
 
 
 class FakeHrpycModule:
     """Emulates the ``hrpyc`` module surface the plugin depends on."""
 
     def __init__(self, fail_bind: bool = False) -> None:
-        self.SlaveService = object  # sentinel service class
+        self.SlaveService: type = object  # sentinel service class
         self._fail_bind = fail_bind
         self.servers: list[FakeThreadedServer] = []
 

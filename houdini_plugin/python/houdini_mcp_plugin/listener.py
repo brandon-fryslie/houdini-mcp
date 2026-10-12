@@ -18,6 +18,7 @@ Design goals (bead houdini-mcp-00p):
 
 The module is fully unit-testable: the ``hrpyc`` module and the ``hou`` module
 are injected, so tests use light-weight fakes and never need a real Houdini.
+:class:`HrpycModule` and :class:`HrpycServer` declare what is injected.
 """
 
 from __future__ import annotations
@@ -27,15 +28,21 @@ import os
 import socket
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
+# rpyc logs each accepted and finished connection at INFO through the logger the
+# server is built with; routing that under this module's logger puts it under
+# the plugin's logging configuration instead of rpyc's own "SlaveService/<port>".
+_rpyc_logger = logging.getLogger("houdini_mcp_plugin.listener.rpyc")
 
 __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
+    "HrpycModule",
+    "HrpycServer",
     "ListenerConfig",
     "SecurityPolicy",
     "SecurityError",
@@ -73,6 +80,52 @@ def is_wildcard_host(host: str) -> bool:
 
 class SecurityError(RuntimeError):
     """Raised when a requested bind would violate the security policy."""
+
+
+# [LAW:types-are-the-program] the listener codes against this contract and nothing
+# else of the server: a member not declared here is not the listener's to read.
+# Houdini's hrpyc.py re-exports rpyc's ``ThreadedServer`` unchanged, so this is
+# rpyc's ``Server`` surface, held to the members the listener drives. Each one
+# was checked against the rpyc Houdini bundles (4.1.0 in Houdini 22) as well as
+# the rpyc the tests run; ``tests/plugin/test_hrpyc_contract.py`` holds the real
+# module to it.
+@runtime_checkable
+class HrpycServer(Protocol):
+    """A bound rpyc server: constructed bound, made to listen, drained, closed.
+
+    ``_listen()`` makes the bound socket accept connections, resolves ``port``
+    for a port-0 bind, and sets ``active``; ``close()`` clears ``active`` and
+    releases the socket. ``accept()`` admits one client, or raises ``EOFError``
+    when the listener was closed under it.
+    """
+
+    active: bool
+    port: int
+
+    def _listen(self) -> None: ...
+
+    def accept(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class HrpycModule(Protocol):
+    """What the listener takes from Houdini's ``hrpyc``: rpyc's two re-exports."""
+
+    SlaveService: type
+
+    def ThreadedServer(
+        self,
+        service: type,
+        *,
+        hostname: str,
+        port: int,
+        reuse_addr: bool,
+        auto_register: bool,
+        authenticator: Authenticator | None,
+        logger: logging.Logger,
+    ) -> HrpycServer: ...
 
 
 @dataclass
@@ -241,7 +294,7 @@ def _probe_reachable(host: str, port: int, timeout: float) -> bool:
         return False
 
 
-def _serve(server: Any) -> None:
+def _serve(server: HrpycServer) -> None:
     """Drain the accept queue of a listening server until it is closed.
 
     This is rpyc's ``start()`` loop without its leading ``_listen()``: the
@@ -287,10 +340,10 @@ class RemoteListener:
     In Houdini they default to the real modules (resolved lazily on use).
     """
 
-    def __init__(self, hrpyc: Any = None, hou: Any = None) -> None:
+    def __init__(self, hrpyc: HrpycModule | None = None, hou: Any = None) -> None:
         self._hrpyc = hrpyc
         self._hou = hou
-        self._server: Any | None = None
+        self._server: HrpycServer | None = None
         self._config: ListenerConfig | None = None
         self._policy: SecurityPolicy | None = None
         self._bound_port: int | None = None
@@ -298,12 +351,13 @@ class RemoteListener:
 
     # -- dependency resolution ------------------------------------------------
 
-    def _resolve_hrpyc(self) -> Any:
+    def _resolve_hrpyc(self) -> HrpycModule:
         if self._hrpyc is not None:
             return self._hrpyc
         import hrpyc  # noqa: PLC0415 - lazy import; only present inside Houdini
 
-        return hrpyc
+        module: HrpycModule = hrpyc
+        return module
 
     def _resolve_hou(self) -> Any:
         if self._hou is not None:
@@ -373,14 +427,6 @@ class RemoteListener:
                         f"must provide hrpyc. ({exc})"
                     ),
                 }
-            if hrpyc is None:
-                return {
-                    "status": "error",
-                    "error_type": "dependency",
-                    "running": False,
-                    "message": "hrpyc module not available (None injected).",
-                }
-
             try:
                 server, bound_port = self._launch_server(hrpyc, cfg, policy)
             except OSError as exc:
@@ -427,8 +473,8 @@ class RemoteListener:
             return result
 
     def _launch_server(
-        self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy
-    ) -> tuple[Any, int]:
+        self, hrpyc: HrpycModule, cfg: ListenerConfig, policy: SecurityPolicy
+    ) -> tuple[HrpycServer, int]:
         """Construct the ThreadedServer, start listening, and spawn its accept loop.
 
         Returns the server and the port it accepts on. The server is accepting
@@ -437,25 +483,17 @@ class RemoteListener:
         yet. A failure after construction closes the server before propagating:
         the bound socket is this unit's to release, and nothing else holds it yet.
         """
-        kwargs: dict[str, Any] = {
-            "hostname": cfg.host,
-            "port": cfg.port,
-            "reuse_addr": cfg.reuse_addr,
-            "auto_register": False,
-        }
-        if policy.authenticator is not None:
-            kwargs["authenticator"] = policy.authenticator
-
-        service = getattr(hrpyc, "SlaveService", None)
-        if service is not None:
-            server = hrpyc.ThreadedServer(service, **kwargs)
-        else:  # pragma: no cover - defensive; real hrpyc always has SlaveService
-            server = hrpyc.ThreadedServer(**kwargs)
-
-        # Quiet the noisy per-connection logger if present.
-        server_logger = getattr(server, "logger", None)
-        if server_logger is not None and hasattr(server_logger, "quiet"):
-            server_logger.quiet = True
+        # [LAW:dataflow-not-control-flow] one construction; the policy's
+        # authenticator (None for an unauthenticated bind) is a value it carries.
+        server = hrpyc.ThreadedServer(
+            hrpyc.SlaveService,
+            hostname=cfg.host,
+            port=cfg.port,
+            reuse_addr=cfg.reuse_addr,
+            auto_register=False,
+            authenticator=policy.authenticator,
+            logger=_rpyc_logger,
+        )
 
         # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
         # own ``active`` state, established here synchronously rather than raced
@@ -470,35 +508,9 @@ class RemoteListener:
                 target=_serve, args=(server,), name="houdini-hrpyc", daemon=True
             ).start()
         except BaseException:
-            self._close_server(server)
+            server.close()
             raise
         return server, port
-
-    @staticmethod
-    def _server_alive(server: Any) -> bool:
-        """Best-effort liveness check of the underlying ThreadedServer object.
-
-        Real ``rpyc``/``hrpyc`` servers expose ``active`` (bool) and/or
-        ``closed`` attributes; our fakes expose ``_closed``. A server that has
-        been closed out from under us is considered dead (stale).
-        """
-        closed = getattr(server, "_closed", None)
-        if closed is True:
-            return False
-        closed_attr = getattr(server, "closed", None)
-        if closed_attr is True:
-            return False
-        active = getattr(server, "active", None)
-        return active is not False
-
-    @staticmethod
-    def _close_server(server: Any) -> None:
-        close = getattr(server, "close", None)
-        if close is not None:
-            try:
-                close()
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Error closing hrpyc server: %s", exc)
 
     def stop(self) -> dict[str, Any]:
         """Stop the listener. Idempotent and tolerant of an already-dead server."""
@@ -510,7 +522,7 @@ class RemoteListener:
                     "message": "hrpyc listener is not running.",
                 }
 
-            self._close_server(self._server)
+            self._server.close()
             host = self._config.host if self._config else DEFAULT_HOST
             port = self._bound_port
             self._server = None
@@ -582,15 +594,11 @@ class RemoteListener:
         cfg = self._config
         policy = self._policy
         bound_port = self._bound_port or cfg.port
-        server_alive = self._server_alive(self._server)
-        # If the server object reports dead, don't let a lingering accept()
-        # window fool the probe: treat as unreachable/stale immediately.
-        if not server_alive:
-            reachable = False
-        else:
-            reachable = _probe_reachable(cfg.host, bound_port, timeout=1.0)
+        # A server that reports closed is stale whatever a lingering accept()
+        # window would tell the probe.
+        reachable = self._server.active and _probe_reachable(cfg.host, bound_port, timeout=1.0)
         # Stale = we still hold a server reference, but it is no longer serving.
-        stale = (not server_alive) or (not reachable)
+        stale = not reachable
 
         warnings: list[str] = []
         if policy.loopback_only:
