@@ -270,21 +270,28 @@ class TestPluginStartsTheSharedServer:
         """Two quick Start clicks: the guard holds from the moment start is accepted."""
         started: list[threading.Thread] = []
 
-        with pytest.MonkeyPatch.context() as unscheduled:
-            unscheduled.setattr(threading.Thread, "start", lambda thread: started.append(thread))
-            plugin_server.start_server(use_thread=True)
-            with (
-                caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
-                pytest.raises(plugin_server.AlreadyServing),
-            ):
+        try:
+            with pytest.MonkeyPatch.context() as unscheduled:
+                unscheduled.setattr(
+                    threading.Thread, "start", lambda thread: started.append(thread)
+                )
                 plugin_server.start_server(use_thread=True)
-        assert "already serving" in caplog.text
-        assert held_serve["runs"] == 0
-        assert plugin_server.is_server_running() is True
+                with (
+                    caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
+                    pytest.raises(plugin_server.AlreadyServing),
+                ):
+                    plugin_server.start_server(use_thread=True)
+            assert "already serving" in caplog.text
+            assert held_serve["runs"] == 0
+            assert plugin_server.is_server_running() is True
+        finally:
+            # [LAW:no-ambient-temporal-coupling] the one process-wide server clears
+            # only when its thread runs; a failed assertion must not leave it parked
+            for thread in started:
+                thread.start()
+            held_serve["stdin"].set()
 
-        [thread] = started
-        thread.start()
-        held_serve["stdin"].set()
+        [_] = started
         _wait_until_stopped(plugin_server)
         assert held_serve["runs"] == 1
 

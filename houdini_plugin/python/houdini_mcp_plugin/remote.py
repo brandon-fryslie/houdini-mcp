@@ -1,9 +1,8 @@
 """Remote mode for the Houdini MCP Plugin (module-level facade).
 
-This module preserves the historic module-level API
-(``start_hrpyc_server`` / ``stop_hrpyc_server`` / ``is_hrpyc_running`` /
-``get_hrpyc_status``) while delegating to the testable
-:class:`houdini_mcp_plugin.listener.RemoteListener`.
+Each module-level function here is one operation on the process's single
+:class:`houdini_mcp_plugin.listener.RemoteListener`; the functions exist so
+shelf tools and shell users have a stable, import-only entry point.
 
 The manual/direct hrpyc workflow (running ``import hrpyc;
 hrpyc.start_server(port=...)`` in Houdini's Python shell) remains fully

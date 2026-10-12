@@ -7,8 +7,8 @@
 
 2. **remote mode**: an hrpyc listener that an external MCP server (for
    example the Docker gateway) connects to over RPyC.
-   - ``start_hrpyc_server()`` / ``stop_hrpyc_server()``; status and a
-     self-test are alongside.
+   - ``start_hrpyc_server()`` / ``stop_hrpyc_server()``, with status,
+     self-test and reload beside them (see :mod:`houdini_mcp_plugin.remote`).
 
 :mod:`houdini_mcp_plugin.ws_client` is a sans-I/O outbound WebSocket
 state-machine core; nothing in this package drives it yet.
