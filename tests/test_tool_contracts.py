@@ -37,13 +37,13 @@ class TestExecuteCodeContract:
 
     def test_detect_import_hou_function_exists(self):
         """Verify _detect_import_hou helper exists."""
-        from houdini_mcp.tools._common import _detect_import_hou
+        from houdini_mcp.tools.code_policy import _detect_import_hou
 
         assert callable(_detect_import_hou)
 
     def test_detect_import_hou_catches_basic_import(self):
         """Test _detect_import_hou catches 'import hou'."""
-        from houdini_mcp.tools._common import _detect_import_hou
+        from houdini_mcp.tools.code_policy import _detect_import_hou
 
         assert _detect_import_hou("import hou")
         assert _detect_import_hou("import hou\n")
@@ -52,14 +52,14 @@ class TestExecuteCodeContract:
 
     def test_detect_import_hou_catches_from_import(self):
         """Test _detect_import_hou catches 'from hou import'."""
-        from houdini_mcp.tools._common import _detect_import_hou
+        from houdini_mcp.tools.code_policy import _detect_import_hou
 
         assert _detect_import_hou("from hou import node")
         assert _detect_import_hou("from hou import node, parm")
 
     def test_detect_import_hou_ignores_safe_code(self):
         """Test _detect_import_hou doesn't flag safe code."""
-        from houdini_mcp.tools._common import _detect_import_hou
+        from houdini_mcp.tools.code_policy import _detect_import_hou
 
         assert not _detect_import_hou("hou.node('/obj')")
         assert not _detect_import_hou("# This uses hou")

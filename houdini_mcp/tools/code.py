@@ -7,11 +7,14 @@ and scene diff tracking.
 Safety model (bead houdini-mcp-9e2)
 -----------------------------------
 * Policy profiles gate what a request is *allowed* to attempt:
-    - ``read-only``  : inspection only; any scene mutation / dangerous op is
-                       blocked before execution. Bypass flags are ignored.
-    - ``normal``     : default; dangerous + heavy-geometry patterns are blocked
-                       unless the caller opts in *and* the server is configured
-                       to permit bypass.
+    - ``read-only``  : inspection only. The program may name only what the
+                       inspection allowlist in ``code_policy`` recognizes; a
+                       mutator the allowlist has never heard of is refused the
+                       same way as one it has. Bypass flags are ignored.
+    - ``normal``     : default; recognized dangerous operations and
+                       heavy-geometry calls are blocked unless the caller opts
+                       in *and* the server is configured to permit bypass. A
+                       guard rail against accidents, not a sandbox.
     - ``privileged`` : intended for trusted automation; only usable when the
                        server-side bypass configuration gate is enabled.
 * Bypass requires BOTH a request flag (``allow_dangerous`` /
@@ -35,15 +38,18 @@ from io import StringIO
 from typing import Any
 
 from ._common import (
-    _detect_dangerous_code,
-    _detect_heavy_geometry_code,
-    _detect_import_hou,
-    _detect_mutation_code,
     _get_scene_diff,
     _serialize_scene_state,
     _truncate_output,
     ensure_connected,
     handle_connection_errors,
+)
+from .code_policy import (
+    _detect_dangerous_code,
+    _detect_heavy_geometry_code,
+    _detect_import_hou,
+    _detect_non_inspection_code,
+    parse_code,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -251,6 +257,31 @@ def execute_code(
             ),
         }
 
+    # --- Syntax gate: a program the gates cannot read is a program that does not run
+    try:
+        parse_code(code)
+    except SyntaxError as exc:
+        # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
+        logger.warning(
+            "execute_code blocked: code does not parse (line %s): %s", exc.lineno, exc.msg
+        )
+        return {
+            "status": "error",
+            "message": f"Code does not parse: {exc.msg} (line {exc.lineno})",
+            "traceback": "".join(traceback.format_exception_only(exc)),
+            "policy": policy,
+            "audit": _build_audit(
+                code=code,
+                policy=policy,
+                allow_dangerous=allow_dangerous,
+                allow_heavy_geometry=allow_heavy_geometry,
+                bypass_config_enabled=bypass_config,
+                dangerous_patterns=[],
+                heavy_geometry_patterns=[],
+                blocked_reason="syntax_error",
+            ),
+        }
+
     # Detect the common mistake of importing hou when it is pre-injected via RPyC.
     # (Preserved from bead houdini-mcp-vzp.1 / PR #9.)
     if _detect_import_hou(code):
@@ -281,22 +312,24 @@ def execute_code(
     dangerous_patterns = _detect_dangerous_code(code)
     heavy_geometry_patterns = _detect_heavy_geometry_code(code)
 
-    # --- read-only profile: block any mutation before execution --------------
+    # --- read-only profile: only recognized inspection runs ------------------
     if policy == "read-only":
-        mutation_patterns = _detect_mutation_code(code)
+        mutation_patterns = _detect_non_inspection_code(code)
         if mutation_patterns:
             logger.warning("execute_code blocked under read-only policy: %s", mutation_patterns)
             return {
                 "status": "error",
                 "message": (
-                    "Scene mutation blocked under read-only policy. "
-                    "Use policy='normal' (default) for changes."
+                    "Blocked under read-only policy: the code names something outside "
+                    "the inspection allowlist. Use policy='normal' (default) for changes."
                 ),
                 "policy": policy,
                 "mutation_patterns": mutation_patterns,
                 "hint": (
-                    "read-only permits inspection only. Re-run with policy='normal' "
-                    "to allow scene changes."
+                    "read-only admits only recognized inspection (navigation, parameter "
+                    "reads, flags, wiring, geometry reads, pure stdlib); keep your own "
+                    "records in dicts, not attributes. Re-run with policy='normal' to "
+                    "allow anything else."
                 ),
                 "audit": _build_audit(
                     code=code,

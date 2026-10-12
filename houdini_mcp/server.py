@@ -83,10 +83,17 @@ def execute_code(
     Use this for complex operations that aren't covered by other tools.
 
     SAFETY FEATURES:
-    - Policy profiles: "read-only" (inspection only), "normal" (default),
+    - Policy profiles: "read-only" (inspection only: the code may name only
+      recognized inspection APIs, pure stdlib and dicts for its own records;
+      anything else, including hou APIs added after this release, is refused),
+      "normal" (default; a guard rail against accidents, not a sandbox),
       "privileged" (requires server config gate).
-    - Dangerous operation detection: hou.exit(), os.remove(), subprocess,
-      eval/exec, network egress (socket/urllib/requests), etc.
+    - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
+      state changes (os beyond its read side, shutil, pathlib, open() for
+      writing), shell and process access, dynamic import/execution, network
+      egress (socket/urllib/requests/http/ftplib). Judged on the parsed
+      program, so text in comments and strings is not code.
+    - Code that does not parse is refused before any rail runs.
     - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
     - Config+request bypass: allow_dangerous / allow_heavy_geometry are only
       honored when the server also sets HOUDINI_MCP_ALLOW_BYPASS=true.
@@ -109,15 +116,13 @@ def execute_code(
             Only honored when HOUDINI_MCP_ALLOW_BYPASS is enabled. Prefer get_geo_summary().
         policy: Safety profile - "read-only", "normal" (default), or "privileged".
 
-    Dangerous patterns detected:
-        - hou.exit() - closes Houdini
-        - os.remove(), os.unlink() - file deletion
-        - shutil.rmtree() - directory deletion
-        - subprocess, os.system() - shell execution
-        - eval(), exec(), __import__() - dynamic execution
-        - socket, urllib, requests, http - network egress
-        - open() with write modes - file writing
-        - hou.hipFile.clear() - scene wipe
+    Dangerous patterns detected (policy "normal"):
+        - hou.exit() - closes Houdini; hou.hipFile.clear() - scene wipe
+        - os members outside its read side (remove, rename, makedirs, system, ...)
+        - shutil, pathlib, importlib, subprocess, pty, ctypes, pickle - whole modules
+        - eval(), exec(), compile(), __import__() - dynamic execution
+        - socket, urllib, requests, http, ftplib - network egress
+        - open() with a writing mode, or a mode that is not a literal
 
     Example:
         execute_code('''

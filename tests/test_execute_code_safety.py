@@ -10,6 +10,7 @@ Covers, per acceptance criteria:
 6. Red-path harness proving blocked code never reaches the interpreter.
 """
 
+import keyword
 from unittest.mock import patch
 
 import pytest
@@ -106,15 +107,22 @@ class TestEvasionProperties:
         assert _detect_dangerous_code(code)
 
     @settings(max_examples=75, deadline=None)
-    @given(indent=st.text(alphabet=" \t", max_size=8))
-    def test_subprocess_detected_regardless_of_indent(self, indent):
+    @given(
+        pre=st.text(alphabet=" \t", max_size=4),
+        mid=st.text(alphabet=" \t", max_size=4),
+    )
+    def test_subprocess_survives_inner_whitespace(self, pre, mid):
         from houdini_mcp.tools import _detect_dangerous_code
 
-        code = f"{indent}subprocess.run(['x'])"
+        code = f"subprocess{pre}.{mid}run(['x'])"
         assert _detect_dangerous_code(code)
 
     @settings(max_examples=75, deadline=None)
-    @given(name=st.text(alphabet="abcdefghijklmnopqrstuvwxyz_", min_size=1, max_size=12))
+    @given(
+        name=st.text(alphabet="abcdefghijklmnopqrstuvwxyz_", min_size=1, max_size=12).filter(
+            lambda n: not keyword.iskeyword(n)
+        )
+    )
     def test_safe_identifiers_not_flagged(self, name):
         from houdini_mcp.tools import _detect_dangerous_code
 
@@ -348,13 +356,15 @@ class TestAuditFields:
     def test_audit_records_executed_bypass(self, mock_connection, allow_bypass_config):
         from houdini_mcp.tools import execute_code
 
+        # Names a restricted member without calling it: detected, and harmless to run.
         result = execute_code(
-            "print('mentions hou.exit()')",
+            "import os; print(os.remove)",
             allow_dangerous=True,
             host="localhost",
             port=18811,
         )
         audit = result["audit"]
+        assert result["status"] == "success"
         assert audit["allow_dangerous_requested"] is True
         assert audit["bypass_config_enabled"] is True
         assert audit["dangerous_patterns"]
@@ -586,3 +596,186 @@ class TestBlockedCodeNeverExecutes:
             )
         assert result["status"] == "error"
         assert sentinel["ran"] is False
+
+
+# ---------------------------------------------------------------------------
+# houdini-laws-etg.ntz: read-only admits only recognized inspection
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnlyIsAnAllowlist:
+    """A mutator the policy has never heard of is refused the same way as one it has."""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            # The audit's list of mutators the old denylist admitted.
+            "hou.node('/obj/geo1').changeNodeType('null')",
+            "hou.node('/obj/geo1').parm('tx').setExpression('$F')",
+            "hou.node('/obj/geo1').parm('tx').setKeyframe(hou.Keyframe())",
+            "hou.node('/obj/geo1').parm('tx').deleteAllKeyframes()",
+            "hou.node('/obj/geo1').insertInput(0, hou.node('/obj/geo2'))",
+            "hou.node('/obj/geo1').setUserData('k', 'v')",
+            "hou.node('/obj/geo1').setComment('x')",
+            # A method that does not exist yet is refused too.
+            "hou.node('/obj/geo1').someFutureMutator()",
+            # Attribute assignment and deletion mutate.
+            "hou.session.flag = 1",
+            "del hou.session.flag",
+            # Context managers run code the gate cannot see.
+            "with hou.undos.group('x'):\n    pass",
+            # hou.hscript is a command language; fail closed.
+            "hou.hscript('opadd geo /obj')",
+        ],
+    )
+    def test_unrecognized_scene_operations_are_refused(self, mock_connection, code):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(code, policy="read-only", host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "read_only_mutation"
+        assert result["mutation_patterns"]
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            # Reaching a method through a bound name does not change what it is.
+            "n = hou.node('/obj/geo1')\nf = n.destroy\nf()",
+            # Attribute lookup by string is not inspection.
+            "getattr(hou.node('/obj'), 'destroy')()",
+            # Dunder access is never inspection.
+            "hou.node('/obj').__class__",
+            # Rebinding an allowlisted module name is ambiguous; refused.
+            "import json\njson = hou.node('/obj')\njson.destroy()",
+            # Imports outside the pure-stdlib allowlist.
+            "import os\nprint(os.getcwd())",
+            "from pathlib import Path",
+            # match/case keyword patterns read attributes by name.
+            "match hou.node('/obj'):\n    case object(destroy=f):\n        f()",
+            # A program's own attribute names cannot be told from hou's; records are dicts.
+            "class V:\n    def __init__(self, n):\n        self.n = n\nprint(V(1).n)",
+            # Builtins that open files, evaluate text, or read the namespace.
+            "open('/tmp/x')",
+            "eval('1')",
+            "globals()",
+        ],
+    )
+    def test_indirect_access_is_refused(self, mock_connection, code):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(code, policy="read-only", host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "read_only_mutation"
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "print(hou.node('/obj').path())",
+            "for n in hou.node('/obj').children():\n    print(n.name(), n.type().name())",
+            "print(hou.node('/obj/geo1').parm('tx').eval())",
+            "print([c.path() for c in hou.node('/obj').allSubChildren() if c.isBypassed()])",
+            "import json\nprint(json.dumps({'v': hou.applicationVersionString()}))",
+            "import re\nprint(re.compile('geo').match('geo1').group(0))",
+            "def walk(n):\n    return [walk(c) for c in n.children()]\nprint(walk(hou.node('/obj')))",
+            "rows = [{'path': c.path(), 'type': c.type().name()} for c in hou.node('/obj').children()]",
+            "print(hou.node('/obj/geo1').inputConnections())",
+            "print(hou.hipFile.name(), hou.frame(), hou.fps())",
+            "print(hou.Vector3(1, 2, 3).length())",
+            "d = {}\nd['k'] = hou.node('/obj').name()\nprint(sorted(d.items()))",
+        ],
+    )
+    def test_inspection_programs_are_admitted(self, mock_connection, code):
+        from houdini_mcp.tools import _detect_non_inspection_code
+
+        assert _detect_non_inspection_code(code) == []
+
+    def test_read_only_names_the_refused_symbol(self, mock_connection):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "hou.node('/obj/geo1').changeNodeType('null')",
+            policy="read-only",
+            host="localhost",
+            port=18811,
+        )
+        assert any("changeNodeType" in p for p in result["mutation_patterns"])
+
+
+class TestNormalPolicyModuleRails:
+    """The audit's list of file and import operations the old scan admitted."""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "import os; os.rename('/a', '/b')",
+            "import os; os.makedirs('/a')",
+            "from pathlib import Path; Path('/a').unlink()",
+            "import pathlib; pathlib.Path('/a').write_text('x')",
+            "import shutil; shutil.copy('/a', '/b')",
+            "import shutil; shutil.copytree('/a', '/b')",
+            "import importlib; importlib.import_module('os')",
+            "from importlib import import_module",
+            "import os as o; o.remove('/a')",
+            "import os\no = os\no.remove('/a')",
+            "from os import path, remove",
+            "import urllib.request",
+            "f = open('/a', 'wb')",
+            "f = open('/a', mode='a')",
+            "m = 'w'\nf = open('/a', m)",
+            "import io; io.open('/a', 'w')",
+        ],
+    )
+    def test_file_and_import_operations_are_dangerous(self, code):
+        from houdini_mcp.tools import _detect_dangerous_code
+
+        assert _detect_dangerous_code(code), f"expected detection for: {code!r}"
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "import os; print(os.path.join('a', 'b'), os.getcwd(), os.environ.get('HIP'))",
+            "import os.path; print(os.path.exists('/a'))",
+            "from os.path import join; print(join('a', 'b'))",
+            "import sys; print(sys.version, sys.platform)",
+            "import io; buf = io.StringIO()",
+            "f = open('/a')",
+            "f = open('/a', 'r')",
+            "import math, json, re, collections",
+            "hou.node('/obj').createNode('geo').parm('tx').set(1)",
+            "x = 'hou.exit()'  # a string, not a call",
+        ],
+    )
+    def test_read_side_of_railed_modules_is_admitted(self, code):
+        from houdini_mcp.tools import _detect_dangerous_code
+
+        assert _detect_dangerous_code(code) == []
+
+
+class TestSyntaxGate:
+    def test_unparseable_code_is_refused_before_any_rail(self, mock_connection, caplog):
+        from houdini_mcp.tools import code as code_mod
+
+        sentinel = {"ran": False}
+
+        def _tripwire(*_a, **_k):
+            sentinel["ran"] = True
+            raise AssertionError("exec must not run for unparseable code")
+
+        with (
+            patch.object(code_mod, "exec", _tripwire, create=True),
+            caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
+        ):
+            result = code_mod.execute_code("def broken(", host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "syntax_error"
+        assert "line 1" in result["message"]
+        assert "SyntaxError" in result["traceback"]
+        assert sentinel["ran"] is False
+        assert any("does not parse" in r.getMessage() for r in caplog.records)
+
+    def test_unparseable_code_is_refused_under_read_only_too(self, mock_connection):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code("  print(1)", policy="read-only", host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "syntax_error"

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`execute_code` read-only is an allowlist**: under `policy="read-only"` the
+  program may name only recognized inspection APIs (navigation, parameter
+  reads, flags, wiring, geometry reads), a fixed set of pure stdlib modules and
+  builtins, and dicts for its own records. Anything else is refused before
+  execution, including mutators the old denylist admitted (`changeNodeType`,
+  `setExpression`, `setKeyframe`, `deleteAllKeyframes`, `insertInput`,
+  `setUserData`, `setComment`), attribute assignment, `with` blocks, attribute
+  lookup by string, and any hou API added after this release. The refused
+  symbol is named in `mutation_patterns`.
+- **`execute_code` dangerous-operation scan reads the parsed program**: the
+  `normal` policy now refuses whole modules (`shutil`, `pathlib`, `importlib`,
+  `subprocess`, `pickle`, ...) and admits only the read side of `os`, `sys`,
+  `io` and `codecs`, closing `os.rename`, `pathlib.Path.unlink`/`write_text`,
+  `shutil.copy*` and `importlib.import_module`. An `open()` whose mode is not a
+  string literal is treated as writing. Text inside comments and string
+  literals is no longer flagged: the gate reads the same AST `exec` compiles.
+  Code that does not parse is refused with `blocked_reason="syntax_error"`.
+
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
   `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
   through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all

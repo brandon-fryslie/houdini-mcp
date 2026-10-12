@@ -17,9 +17,6 @@ from ._common import (
     RESPONSE_SIZE_LARGE_THRESHOLD,
     RESPONSE_SIZE_WARNING_THRESHOLD,
     _add_response_metadata,
-    _detect_dangerous_code,
-    _detect_heavy_geometry_code,
-    _detect_mutation_code,
     _estimate_response_size,
     _get_scene_diff,
     _handle_connection_error,
@@ -31,6 +28,11 @@ from ._common import (
 )
 from .cache import get_cache_stats, invalidate_all_caches, node_type_cache
 from .code import execute_code, get_last_scene_diff
+from .code_policy import (
+    _detect_dangerous_code,
+    _detect_heavy_geometry_code,
+    _detect_non_inspection_code,
+)
 from .errors import find_error_nodes
 from .geometry import get_geo_summary
 from .help import get_houdini_help
@@ -131,7 +133,7 @@ __all__ = [
     # Code execution
     "execute_code",
     "_detect_heavy_geometry_code",
-    "_detect_mutation_code",
+    "_detect_non_inspection_code",
     # Help/documentation
     "get_houdini_help",
     # Cache management
