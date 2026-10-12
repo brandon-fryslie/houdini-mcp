@@ -374,7 +374,7 @@ bbox = summary["bounding_box"]
 
 ```python
 # 1. Check cook state first
-node_info = get_node_info(node_path,cook_info="force_cook")
+node_info = get_node_info(node_path, cook_info="force_cook")
 
 cook_state = node_info["cook_info"]["cook_state"]
 
@@ -424,7 +424,7 @@ if result["status"] == "error":
 
 ```python
 # Use cook_info="force_cook" to diagnose issues
-node_info = get_node_info(node_path,cook_info="force_cook")
+node_info = get_node_info(node_path, cook_info="force_cook")
 
 cook_info = node_info["cook_info"]
 

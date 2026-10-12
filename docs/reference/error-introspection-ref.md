@@ -26,7 +26,7 @@ print(info["cook_info"]["warnings"])  # List of warning dicts
 ### Force Cook First
 ```python
 # Cook node before checking errors
-info = get_node_info("/obj/geo1/sphere1",cook_info="force_cook")
+info = get_node_info("/obj/geo1/sphere1", cook_info="force_cook")
 # Returns: fresh cook info with last_cook_time
 ```
 
@@ -112,13 +112,13 @@ for warn in info["cook_info"]["warnings"]:
 ### Force Fresh Cook
 ```python
 # Cook and immediately check for errors
-info = get_node_info(node_path,cook_info="force_cook")
+info = get_node_info(node_path, cook_info="force_cook")
 ```
 
 ### Combined with Parameters
 ```python
 # Get params AND cook info
-info = get_node_info(node_path,cook_info="inspect")
+info = get_node_info(node_path, cook_info="inspect")
 # Returns both parameters and cook_info
 ```
 

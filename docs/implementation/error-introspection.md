@@ -191,7 +191,7 @@ print(info["cook_info"]["cook_state"])  # "cooked"
 
 ### Force Cook and Check
 ```python
-info = get_node_info("/obj/geo1/sphere1",cook_info="force_cook")
+info = get_node_info("/obj/geo1/sphere1", cook_info="force_cook")
 if info["cook_info"]["cook_state"] == "error":
     for err in info["cook_info"]["errors"]:
         print(f"Error: {err['message']}")
@@ -199,7 +199,7 @@ if info["cook_info"]["cook_state"] == "error":
 
 ### Combined with Parameters
 ```python
-info = get_node_info("/obj/geo1/sphere1",cook_info="inspect")
+info = get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 # Returns both parameters and cook_info
 ```
 
