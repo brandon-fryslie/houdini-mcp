@@ -55,8 +55,9 @@ created** — there is no code path that silently binds `0.0.0.0` without auth.
   use it only on trusted networks or behind an encrypted tunnel
   (WireGuard, SSH, Cloudflare Tunnel, etc.).
 - A configured token is always enforced: if the installed `rpyc` cannot provide
-  the authenticator primitives, `start()` returns a `dependency` error and
-  nothing is bound, rather than running unauthenticated. The reported
+  the authenticator primitives, the security policy refuses the bind (a
+  `security` error from `start()`, or `SecurityError` with `raise_on_policy`)
+  and nothing is bound, rather than running unauthenticated. The reported
   `authenticated` value reflects the authenticator actually wired into the
   server.
 - `SlaveService` is inherently powerful; treat any reachable listener as a

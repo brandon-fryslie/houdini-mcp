@@ -28,7 +28,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
@@ -129,7 +129,8 @@ class SecurityPolicy:
     allowed: bool
     loopback_only: bool
     # The authenticator the server is built with - None means no authentication.
-    authenticator: Authenticator | None
+    # Hidden from repr: a closure's address says nothing about the policy.
+    authenticator: Authenticator | None = field(repr=False)
     reason: str = ""
 
     @property
@@ -162,7 +163,22 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
       configured an authentication ``token``.
     """
     loopback = is_loopback_host(config.host)
-    authenticator = _make_token_authenticator(config.token) if config.token else None
+    try:
+        authenticator = _make_token_authenticator(config.token) if config.token else None
+    except ImportError as exc:
+        # [LAW:no-silent-failure] a configured token is enforced or nothing binds;
+        # the refusal is a policy outcome, handled by the same path as every other.
+        return SecurityPolicy(
+            allowed=False,
+            loopback_only=loopback,
+            authenticator=None,
+            reason=(
+                f"refusing to bind {config.host!r}: a token is configured but the installed "
+                f"rpyc cannot enforce it (rpyc.utils.authenticators unavailable: {exc}). "
+                "Install an rpyc that provides it, or drop the token and use a tunnel with "
+                "HOUDINI_RPC_TRUSTED_NETWORK=1."
+            ),
+        )
 
     if loopback:
         return SecurityPolicy(
@@ -316,23 +332,7 @@ class RemoteListener:
                 }
 
             cfg = config if config is not None else ListenerConfig.from_env()
-            try:
-                policy = resolve_security_policy(cfg)
-            except ImportError as exc:
-                # [LAW:no-silent-failure] a token that cannot be enforced stops the
-                # start here, before anything binds; same dependency contract as hrpyc.
-                logger.error("Refusing to start listener: token cannot be enforced: %s", exc)
-                return {
-                    "status": "error",
-                    "error_type": "dependency",
-                    "running": False,
-                    "host": cfg.host,
-                    "port": cfg.port,
-                    "message": (
-                        "HOUDINI_RPC_TOKEN is set but the installed rpyc cannot enforce it "
-                        f"(rpyc.utils.authenticators unavailable: {exc}). Not starting."
-                    ),
-                }
+            policy = resolve_security_policy(cfg)
 
             if not policy.allowed:
                 logger.warning("Refusing to start listener: %s", policy.reason)
@@ -634,8 +634,8 @@ def _make_token_authenticator(token: str) -> Authenticator:
 
     [LAW:no-silent-failure] A configured token is enforced or nothing starts: if
     rpyc's authentication primitives cannot be imported, the ImportError
-    propagates to :meth:`RemoteListener.start`, which reports it as a dependency
-    error instead of degrading to an unauthenticated listener.
+    propagates to :func:`resolve_security_policy`, which refuses the bind instead
+    of degrading to an unauthenticated listener.
     """
     from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
 
