@@ -7,12 +7,13 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 """
 
 import concurrent.futures
+import importlib
 import logging
 import random
 import time
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import rpyc
 
@@ -58,6 +59,107 @@ class HoudiniOperationError(Exception):
     """Raised when a Houdini operation fails."""
 
     pass
+
+
+class _InterpreterModules:
+    """``conn.modules`` for a connection that *is* this interpreter.
+
+    rpyc's module namespace answers both ``modules.hou`` and
+    ``modules["PySide2.QtWidgets"]``; so does this one.
+    """
+
+    def __getitem__(self, name: str) -> Any:
+        return importlib.import_module(name)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except ImportError as e:
+            # attribute protocol: ``hasattr`` and friends expect AttributeError;
+            # the import's own words stay, since they are the diagnosis
+            raise AttributeError(str(e)) from e
+
+
+class InProcessConnection:
+    """The connection surface the tools use, satisfied by the interpreter they run in.
+
+    [LAW:one-type-per-behavior] rpyc's classic connection and this class are two
+    instances of one contract: ``modules``, ``execute``/``namespace``, ``closed``,
+    ``close``. Tools cannot tell them apart, so the whole tool surface - rails,
+    audit, transactions, response shapes - is shared by construction.
+    """
+
+    def __init__(self) -> None:
+        self.modules = _InterpreterModules()
+        self.namespace: dict[str, Any] = {}
+        self.closed = False
+
+    def execute(self, code: str) -> None:
+        exec(code, self.namespace)
+
+    def close(self) -> None:
+        self.closed = True
+        self.namespace.clear()
+
+
+def _open_rpyc(host: str, port: int) -> Any:
+    logger.info(f"Connecting to Houdini at {host}:{port}")
+    # Use rpyc.classic.connect for simple SlaveService connection
+    # Note: rpyc.classic.connect() does not accept config parameter
+    return rpyc.classic.connect(host, port)
+
+
+def _open_in_process(host: str, port: int) -> InProcessConnection:
+    logger.info("Connected to Houdini in-process")
+    return InProcessConnection()
+
+
+class HoudiniTarget(NamedTuple):
+    """Where Houdini lives: how to open a connection to it, and how to name it.
+
+    [LAW:one-source-of-truth] the opener, the words diagnostics use for the
+    target, and the remedy for failing to reach it travel together, so an error
+    can never describe a host:port - or prescribe a listener - that the
+    connection never used.
+    """
+
+    open: Callable[[str, int], Any]
+    describe: Callable[[str, int], str]
+    remedy: str
+
+
+REMOTE_HOUDINI = HoudiniTarget(
+    _open_rpyc,
+    lambda host, port: f"{host}:{port}",
+    "Make sure Houdini is running with RPC server enabled "
+    "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell).",
+)
+IN_PROCESS_HOUDINI = HoudiniTarget(
+    _open_in_process,
+    lambda _host, _port: "this interpreter",
+    "This interpreter must be Houdini's own (hython or a Houdini session) with 'hou' importable.",
+)
+
+# [LAW:dataflow-not-control-flow] where Houdini lives is a value, not a branch:
+# every connect, ping and diagnostic reads whichever target is installed.
+_target: HoudiniTarget = REMOTE_HOUDINI
+
+
+def describe_target(host: str, port: int) -> str:
+    """Name the Houdini a connection to ``host:port`` would actually reach."""
+    return _target.describe(host, port)
+
+
+def use_in_process_houdini() -> None:
+    """Make every connection resolve to the Houdini this interpreter runs inside.
+
+    For the Houdini plugin's stdio server. Any live rpyc connection is dropped so
+    the next ``ensure_connected`` opens in-process; reconnects after a timeout or
+    error stay in-process too - there is no fallback to rpyc.
+    """
+    global _target
+    _target = IN_PROCESS_HOUDINI
+    disconnect()
 
 
 def retry_with_backoff(
@@ -143,11 +245,7 @@ def _do_connect(
     """
     global _connection, _hou
 
-    logger.info(f"Connecting to Houdini at {host}:{port}")
-
-    # Use rpyc.classic.connect for simple SlaveService connection
-    # Note: rpyc.classic.connect() does not accept config parameter
-    _connection = rpyc.classic.connect(host, port)
+    _connection = _target.open(host, port)
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -222,13 +320,12 @@ def connect(
         except Exception as e:
             # Non-retryable exception - fail immediately
             raise HoudiniConnectionError(
-                f"Non-retryable error connecting to Houdini at {host}:{port}: {e}"
+                f"Non-retryable error connecting to Houdini at {_target.describe(host, port)}: {e}"
             ) from e
 
     raise HoudiniConnectionError(
-        f"Failed to connect to Houdini at {host}:{port} after {max_retries} attempts. "
-        f"Make sure Houdini is running with RPC server enabled "
-        f"(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell). "
+        f"Failed to connect to Houdini at {_target.describe(host, port)} after {max_retries} attempts. "
+        f"{_target.remedy} "
         f"Last error: {last_error}"
     )
 
@@ -349,6 +446,7 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     info: dict[str, Any] = {
         "host": host,
         "port": port,
+        "target": _target.describe(host, port),
         "connected": False,
         "houdini_version": None,
         "houdini_build": None,
@@ -386,9 +484,8 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
         True if Houdini RPC server is reachable, False otherwise.
     """
     try:
-        # Note: rpyc.classic.connect() does not accept config parameter
         # timeout is not enforced at connection level for classic connections
-        conn = rpyc.classic.connect(host, port)
+        conn = _target.open(host, port)
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

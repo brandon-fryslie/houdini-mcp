@@ -47,6 +47,7 @@ from typing import Any
 from ._common import (
     HoudiniConnectionError,
     ensure_connected,
+    get_connection,
     handle_connection_errors,
 )
 
@@ -88,22 +89,20 @@ VALID_PANE_TYPES: list[str] = [
 ]
 
 
-def _get_qt_modules(hou: Any) -> tuple[Any, Any, Any]:
-    """
-    Get PySide2 Qt modules from the RPyC connection.
-
-    Args:
-        hou: The hou module netref
+def _get_qt_modules() -> tuple[Any, Any, Any]:
+    """Get Qt modules from the live Houdini connection.
 
     Returns:
         Tuple of (QtWidgets, QtCore, QtGui) module references
 
     Raises:
-        HoudiniConnectionError: If cannot get RPyC connection
+        HoudiniConnectionError: If no Houdini connection is open
     """
-    conn = object.__getattribute__(hou, "____conn__")
+    # [LAW:single-enforcer] the connection module owns the connection; it is the
+    # same object whether Houdini is remote (rpyc) or this interpreter.
+    conn = get_connection()
     if conn is None:
-        raise HoudiniConnectionError("Cannot get RPyC connection from hou module")
+        raise HoudiniConnectionError("No Houdini connection is open")
 
     QtWidgets = conn.modules["PySide2.QtWidgets"]
     QtCore = conn.modules["PySide2.QtCore"]
@@ -333,7 +332,7 @@ def capture_pane_screenshot(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules(hou)
+        QtWidgets, QtCore, _ = _get_qt_modules()
     except Exception as e:
         return {
             "status": "error",
@@ -530,7 +529,7 @@ def render_node_network(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules(hou)
+        QtWidgets, QtCore, _ = _get_qt_modules()
     except Exception as e:
         return {
             "status": "error",
@@ -620,7 +619,7 @@ def capture_multiple_panes(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules(hou)
+        QtWidgets, QtCore, _ = _get_qt_modules()
     except Exception as e:
         return {
             "status": "error",

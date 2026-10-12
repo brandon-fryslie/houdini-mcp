@@ -20,7 +20,6 @@ houdini-mcp-vzp.9). The hrpyc modes above are intentionally left untouched.
 
 __version__ = "0.2.0"
 
-from .connection import LocalHoudiniConnection, get_connection
 from .listener import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -59,9 +58,6 @@ __all__ = [
     "QueueFullError",
     "StaleSessionError",
     "redact",
-    # Connection
-    "LocalHoudiniConnection",
-    "get_connection",
     # stdio mode (MCP server in Houdini)
     "start_server",
     "stop_server",
