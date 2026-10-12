@@ -18,12 +18,14 @@ from typing import Any, Generic, TypeVar
 from ..connection import (
     DEFAULT_OPERATION_TIMEOUT,
     HoudiniConnectionError,
+    TransportFailure,
     disconnect,
     ensure_connected,
     get_connection,
     is_connected,
     quick_health_check,
     safe_execute,
+    transport_failure,
 )
 
 T = TypeVar("T")
@@ -40,9 +42,9 @@ __all__ = [
     "quick_health_check",
     "DEFAULT_OPERATION_TIMEOUT",
     # Error handling
-    "CONNECTION_ERRORS",
     "_handle_connection_error",
     "handle_connection_errors",  # Decorator for consistent error handling
+    "tool_error_response",
     # Code safety
     "DANGEROUS_PATTERNS",
     "HEAVY_GEOMETRY_PATTERNS",
@@ -105,10 +107,8 @@ def handle_connection_errors(operation_name: str) -> Callable:
     """
     Decorator that wraps tool functions with consistent error handling.
 
-    Handles the three-tier error pattern:
-    1. HoudiniConnectionError - Returns simple error response
-    2. CONNECTION_ERRORS - Calls _handle_connection_error for graceful recovery
-    3. Generic Exception - Logs and returns error with traceback
+    Every exception the tool raises becomes the response ``tool_error_response``
+    builds for it; connection loss is the only failure that tears the connection down.
 
     Args:
         operation_name: Name of the operation (used in error messages)
@@ -129,49 +129,48 @@ def handle_connection_errors(operation_name: str) -> Callable:
         def wrapper(*args, **kwargs) -> dict[str, Any]:
             try:
                 return func(*args, **kwargs)
-            except HoudiniConnectionError as e:
-                return {"status": "error", "message": str(e)}
-            except CONNECTION_ERRORS as e:
-                return _handle_connection_error(e, operation_name)
             except Exception as e:
-                logger.error(f"Error during {operation_name}: {e}")
-                return {
-                    "status": "error",
-                    "message": str(e),
-                    "traceback": traceback.format_exc(),
-                }
+                return tool_error_response(e, operation_name)
 
         return wrapper
 
     return decorator
 
 
-# RPyC and connection-related exceptions that indicate broken/timed-out connections
-# These should return graceful error responses, not crash the MCP server
-CONNECTION_ERRORS = (
-    EOFError,  # Connection closed unexpectedly
-    BrokenPipeError,  # Pipe broken
-    ConnectionResetError,  # Connection reset by peer
-    ConnectionRefusedError,  # Connection refused
-    ConnectionAbortedError,  # Connection aborted
-    TimeoutError,  # Operation timed out
-    OSError,  # Various OS-level connection errors
-)
+def tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
+    """Turn the exception a tool raised into its error response.
 
-
-def _handle_connection_error(e: Exception, operation: str) -> dict[str, Any]:
+    [LAW:single-enforcer] The one definition of how a tool failure reads to the
+    caller. Connection loss is whatever ``transport_failure`` says it is; that is
+    the only failure that tears the connection down. Everything else - a missing
+    file, a denied path, a Houdini operation error - reaches the caller as its own
+    kind with the connection left standing.
     """
-    Handle connection-related errors gracefully.
+    if isinstance(e, HoudiniConnectionError):
+        return {"status": "error", "message": str(e)}
+    failure = transport_failure(e)
+    if failure is not None:
+        return _handle_connection_error(failure, operation)
+    logger.error(f"Error during {operation}: {type(e).__name__}: {e}")
+    return {
+        "status": "error",
+        "message": str(e),
+        "traceback": traceback.format_exc(),
+    }
 
-    Cleans up the broken connection and returns a proper error response.
+
+def _handle_connection_error(failure: TransportFailure, operation: str) -> dict[str, Any]:
+    """
+    Report a lost connection to Houdini and tear it down so the next call reconnects.
 
     Args:
-        e: The exception that occurred
+        failure: Proof from ``transport_failure`` that the link itself failed
         operation: Name of the operation that failed
 
     Returns:
         Error response dict
     """
+    e = failure.exc
     error_type = type(e).__name__
     error_msg = str(e)
 

@@ -7,6 +7,7 @@ import pytest
 from houdini_mcp.connection import (
     HoudiniConnectionError,
     HoudiniOperationError,
+    TransportFailure,
     connect,
     disconnect,
     ensure_connected,
@@ -15,7 +16,10 @@ from houdini_mcp.connection import (
     get_hou,
     is_connected,
     ping,
+    safe_execute,
+    transport_failure,
 )
+from tests.conftest import raised_inside_houdini
 
 
 class TestConnect:
@@ -56,6 +60,18 @@ class TestConnect:
 
         assert call_count[0] == 2  # Failed once, succeeded on retry
         assert hou is not None
+
+    def test_connect_does_not_retry_a_non_transport_error(self, reset_connection_state):
+        """A failure that is not the link itself fails at once, with its cause attached."""
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = PermissionError("socket denied")
+
+            with pytest.raises(HoudiniConnectionError) as exc_info:
+                connect("localhost", 18811, max_retries=3, retry_delay=0.01)
+
+        assert mock_rpyc.connect.call_count == 1
+        assert "Non-retryable" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, PermissionError)
 
     def test_connect_all_retries_fail(self, reset_connection_state):
         """Test connection failure after all retries exhausted."""
@@ -409,3 +425,118 @@ class TestHoudiniOperationError:
         """Test exception inherits from Exception."""
         error = HoudiniOperationError("Test")
         assert isinstance(error, Exception)
+
+
+class TestTransportFailure:
+    """Only a failure of the link itself is connection loss."""
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            EOFError("stream has been closed"),
+            ConnectionResetError("reset by peer"),
+            BrokenPipeError("broken pipe"),
+            ConnectionRefusedError("refused"),
+            ConnectionAbortedError("aborted"),
+            TimeoutError("sync request timed out"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_link_failures_are_transport_failures(self, exc):
+        failure = transport_failure(exc)
+        assert isinstance(failure, TransportFailure)
+        assert failure.exc is exc
+
+    def test_rpyc_sync_timeout_is_a_transport_failure(self):
+        from rpyc.core.async_ import AsyncResultTimeout
+
+        assert transport_failure(AsyncResultTimeout("result expired")) is not None
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            FileNotFoundError("/renders/missing/frame.exr"),
+            PermissionError("/renders/locked"),
+            IsADirectoryError("/renders"),
+            OSError("Network is unreachable"),
+            HoudiniOperationError("connection to input 0 was reset"),
+            ValueError("timeout must be positive"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_file_permission_and_operation_errors_are_not(self, exc):
+        assert transport_failure(exc) is None
+
+    @pytest.mark.parametrize(
+        "exc",
+        [TimeoutError("cook timed out"), ConnectionResetError("render farm reset")],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_an_exception_houdini_raised_is_not_a_link_failure(self, exc):
+        remote = raised_inside_houdini(exc)
+        assert isinstance(remote, type(exc))  # same class on arrival...
+        assert transport_failure(remote) is None  # ...but the link is intact
+
+
+class TestSafeExecute:
+    """safe_execute tears the connection down only for the failures that broke it."""
+
+    def test_file_error_reaches_caller_as_its_own_kind(self, mock_connection):
+        def save():
+            raise FileNotFoundError("/renders/missing/frame.exr")
+
+        result = safe_execute(save, operation_name="save")
+
+        assert result.success is False
+        assert result.connection_lost is False
+        assert result.timed_out is False
+        assert result.error_type == "FileNotFoundError"
+        assert get_connection() is not None
+
+    def test_error_text_that_mentions_the_connection_is_not_connection_loss(self, mock_connection):
+        def wire():
+            raise HoudiniOperationError("connection refused: input 0 is already wired")
+
+        result = safe_execute(wire, operation_name="wire")
+
+        assert result.connection_lost is False
+        assert result.error_type == "HoudiniOperationError"
+        assert get_connection() is not None
+
+    def test_timeout_raised_inside_houdini_is_not_our_deadline(self, mock_connection):
+        def cook():
+            raise raised_inside_houdini(TimeoutError("cook timed out"))
+
+        result = safe_execute(cook, timeout=5.0, operation_name="cook")
+
+        assert result.timed_out is False
+        assert result.connection_lost is False
+        assert result.error_type == "TimeoutError"
+        assert get_connection() is not None
+
+    def test_link_failure_is_connection_loss_and_tears_down(self, mock_connection):
+        def read():
+            raise EOFError("stream has been closed")
+
+        result = safe_execute(read, operation_name="read")
+
+        assert result.connection_lost is True
+        assert result.error_type == "connection_error"
+        assert get_connection() is None
+
+    def test_our_deadline_is_a_timeout(self, mock_connection):
+        import threading
+
+        release = threading.Event()
+
+        def hang():
+            release.wait(5.0)
+
+        try:
+            result = safe_execute(hang, timeout=0.05, operation_name="hang")
+        finally:
+            release.set()
+
+        assert result.timed_out is True
+        assert result.connection_lost is False
+        assert result.error_type == "timeout"

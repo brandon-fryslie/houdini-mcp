@@ -7,16 +7,14 @@ and capturing images for AI analysis.
 import base64
 import logging
 import math
-import traceback
 from typing import Any
 
 from ._common import (
-    CONNECTION_ERRORS,
     HoudiniConnectionError,
-    _handle_connection_error,
     ensure_connected,
     get_connection,
     handle_connection_errors,
+    tool_error_response,
     validate_resolution,
 )
 
@@ -324,13 +322,8 @@ def render_viewport(
                 except Exception:
                     pass
 
-    except HoudiniConnectionError as e:
-        return {"status": "error", "message": str(e)}
-    except CONNECTION_ERRORS as e:
-        return _handle_connection_error(e, "rendering_viewport")
     except Exception as e:
-        logger.error(f"Error rendering viewport: {e}")
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+        return tool_error_response(e, "render_viewport")
 
 
 def render_quad_view(
@@ -651,13 +644,8 @@ def render_quad_view(
 
         return result
 
-    except HoudiniConnectionError as e:
-        return {"status": "error", "message": str(e)}
-    except CONNECTION_ERRORS as e:
-        return _handle_connection_error(e, "render_quad_view")
     except Exception as e:
-        logger.error(f"Error in render_quad_view: {e}")
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+        return tool_error_response(e, "render_quad_view")
 
 
 # =============================================================================

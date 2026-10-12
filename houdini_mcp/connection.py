@@ -12,6 +12,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any, NamedTuple, TypeVar
 
@@ -37,16 +38,37 @@ DEFAULT_TIMEOUT = 10.0  # seconds
 DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - reduced from 60
 DEFAULT_OPERATION_TIMEOUT = 45.0  # max time for any single tool operation
 
-# Retryable exceptions for connection and RPC operations
-RETRYABLE_EXCEPTIONS = (
-    ConnectionError,
-    ConnectionRefusedError,
-    ConnectionResetError,
-    TimeoutError,
-    EOFError,
-    BrokenPipeError,
-    OSError,
-)
+# [LAW:types-are-the-program] Exactly what rpyc's channel raises when the link to
+# Houdini fails: the peer closed it (EOFError), refused/reset/aborted it or broke the
+# pipe (ConnectionError and its subclasses), or a sync request never answered
+# (TimeoutError; rpyc's AsyncResultTimeout subclasses it). Not OSError: that admits
+# FileNotFoundError and PermissionError, which are the tool's errors, not the link's.
+_TRANSPORT_EXCEPTIONS = (EOFError, ConnectionError, TimeoutError)
+
+
+@dataclass(frozen=True)
+class TransportFailure:
+    """Proof that an exception came from the link to Houdini, not from code Houdini ran.
+
+    Only ``transport_failure`` produces one. Holding it is what entitles a caller to
+    tear the connection down and report connection loss.
+    """
+
+    exc: EOFError | ConnectionError | TimeoutError
+
+
+def transport_failure(exc: BaseException) -> TransportFailure | None:
+    """Decide, once, whether an exception means the link to Houdini failed.
+
+    [LAW:parse-dont-validate] [LAW:single-enforcer] The one place connection loss is
+    classified. rpyc re-raises exceptions from Houdini's side as local instances of
+    the same class and tags each with ``_remote_tb``; a TimeoutError carrying that
+    tag was raised by code inside Houdini over an intact link, so it is not a
+    transport failure whatever its type.
+    """
+    if isinstance(exc, _TRANSPORT_EXCEPTIONS) and not hasattr(exc, "_remote_tb"):
+        return TransportFailure(exc)
+    return None
 
 
 class HoudiniConnectionError(Exception):
@@ -170,7 +192,7 @@ def retry_with_backoff(
     max_delay: float = DEFAULT_MAX_DELAY,
     exponential_base: float = 2.0,
     jitter: bool = True,
-    retryable_exceptions: tuple[type[Exception], ...] = RETRYABLE_EXCEPTIONS,
+    retryable_exceptions: tuple[type[Exception], ...] = _TRANSPORT_EXCEPTIONS,
 ) -> Callable[[F], F]:
     """
     Decorator that retries a function with exponential backoff and optional jitter.
@@ -303,7 +325,12 @@ def connect(
         try:
             return _do_connect(host, port, sync_timeout)
 
-        except RETRYABLE_EXCEPTIONS as e:
+        except Exception as e:
+            if transport_failure(e) is None:
+                raise HoudiniConnectionError(
+                    f"Non-retryable error connecting to Houdini at "
+                    f"{_target.describe(host, port)}: {e}"
+                ) from e
             last_error = e
             logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
 
@@ -318,12 +345,6 @@ def connect(
                 logger.info(f"Retrying in {delay:.2f} seconds...")
                 time.sleep(delay)
                 current_delay *= 2  # Exponential backoff
-
-        except Exception as e:
-            # Non-retryable exception - fail immediately
-            raise HoudiniConnectionError(
-                f"Non-retryable error connecting to Houdini at {_target.describe(host, port)}: {e}"
-            ) from e
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {_target.describe(host, port)} after {max_retries} attempts. "
@@ -583,16 +604,13 @@ def safe_execute(
     Returns:
         SafeExecutionResult with success/failure info
     """
-    global _connection, _hou
-
     executor = _get_executor()
 
-    try:
-        future = executor.submit(func, *args, **kwargs)
-        result = future.result(timeout=timeout)
-        return SafeExecutionResult(success=True, result=result)
-
-    except concurrent.futures.TimeoutError:
+    future = executor.submit(func, *args, **kwargs)
+    # [LAW:types-are-the-program] Our own deadline is a fact about the future, not an
+    # exception type: since 3.11 concurrent.futures.TimeoutError *is* TimeoutError, so
+    # catching it would also claim a TimeoutError the tool itself raised.
+    if future not in concurrent.futures.wait([future], timeout=timeout).done:
         logger.error(f"Operation '{operation_name}' timed out after {timeout}s")
         # Cancel the future if possible (though RPyC calls may not be cancellable)
         future.cancel()
@@ -605,34 +623,20 @@ def safe_execute(
             timed_out=True,
         )
 
-    except (EOFError, BrokenPipeError, ConnectionResetError, ConnectionRefusedError, OSError) as e:
-        logger.error(f"Connection error during '{operation_name}': {type(e).__name__}: {e}")
+    try:
+        return SafeExecutionResult(success=True, result=future.result())
+    except Exception as e:
+        failure = transport_failure(e)
+        if failure is None:
+            logger.error(f"Error during '{operation_name}': {type(e).__name__}: {e}")
+            return SafeExecutionResult(success=False, error=str(e), error_type=type(e).__name__)
+        logger.error(f"Connection lost during '{operation_name}': {type(e).__name__}: {e}")
         _safe_disconnect()
         return SafeExecutionResult(
             success=False,
             error=str(e),
             error_type="connection_error",
             connection_lost=True,
-        )
-
-    except Exception as e:
-        logger.error(f"Error during '{operation_name}': {type(e).__name__}: {e}")
-        # Check if this looks like a connection error
-        error_str = str(e).lower()
-        if any(
-            x in error_str for x in ["connection", "eof", "broken", "reset", "refused", "timeout"]
-        ):
-            _safe_disconnect()
-            return SafeExecutionResult(
-                success=False,
-                error=str(e),
-                error_type="connection_error",
-                connection_lost=True,
-            )
-        return SafeExecutionResult(
-            success=False,
-            error=str(e),
-            error_type=type(e).__name__,
         )
 
 

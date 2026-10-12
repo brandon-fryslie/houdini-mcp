@@ -51,37 +51,39 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]
     return {"status": "success", ...}
 ```
 
-**Error Tiers:**
+**Error Tiers** (one definition, `tool_error_response()`, used by the decorator and by
+the render tools that need their own `try` block):
 
-| Tier | Exception Type | Handling |
-|------|---------------|----------|
+| Tier | Exception | Handling |
+|------|-----------|----------|
 | 1 | `HoudiniConnectionError` | Simple error response with message |
-| 2 | `CONNECTION_ERRORS` tuple | Graceful recovery via `_handle_connection_error()` |
-| 3 | Generic `Exception` | Log + error response with traceback |
+| 2 | A `TransportFailure` (see below) | Disconnect, then `_handle_connection_error()` |
+| 3 | Anything else | Log + error response with traceback; the connection stays up |
 
-### 2. `CONNECTION_ERRORS` Tuple
+### 2. `transport_failure()` - the one place connection loss is decided
 
-**Location:** `houdini_mcp/tools/_common.py:129-137`
+**Location:** `houdini_mcp/connection.py`
 
-Exceptions that indicate broken/timed-out connections:
+Only a failure of the link itself is connection loss. `transport_failure(exc)` returns a
+`TransportFailure` proof, or `None`, and it is the only way to get one:
 
-```python
-CONNECTION_ERRORS = (
-    EOFError,  # Connection closed unexpectedly
-    BrokenPipeError,  # Pipe broken
-    ConnectionResetError,  # Connection reset by peer
-    ConnectionRefusedError,  # Connection refused
-    ConnectionAbortedError,  # Connection aborted
-    TimeoutError,  # Operation timed out
-    OSError,  # Various OS-level connection errors
-)
-```
+- The type must be one rpyc's channel raises: `EOFError` (peer closed),
+  `ConnectionError` and its subclasses (refused, reset, aborted, broken pipe), or
+  `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout` is one).
+  `OSError` is deliberately not admitted: it is also the base of `FileNotFoundError`
+  and `PermissionError`, which are the tool's errors, not the link's.
+- The exception must not have been raised inside Houdini. rpyc rebuilds a remote
+  exception locally as the same class and tags it with `_remote_tb`; a `TimeoutError`
+  carrying that tag came over an intact link and is reported as its own kind.
+
+A bad save or render path, a denied file, or a Houdini operation error therefore never
+tears the session down and never reports `connection_error` / `recoverable: True`.
 
 ### 3. `_handle_connection_error()` Function
 
-**Location:** `houdini_mcp/tools/_common.py:140-194`
+**Location:** `houdini_mcp/tools/_common.py`
 
-Handles connection errors gracefully:
+Takes a `TransportFailure` (so it cannot be called for anything else) and:
 
 1. Cleans up the broken connection (calls `disconnect()`)
 2. Logs the error
@@ -105,8 +107,8 @@ Handles connection errors gracefully:
 |-----------|--------------|
 | `TimeoutError` | Houdini may be busy with heavy computation |
 | `EOFError` | Houdini may have crashed or RPC server stopped |
-| `BrokenPipeError` | Connection was lost |
-| Other | Generic connection error |
+| `BrokenPipeError`, `ConnectionResetError` | Connection was lost |
+| Other `ConnectionError` | Generic connection error |
 
 ### 4. Connection Layer Error Handling
 
@@ -121,7 +123,7 @@ Handles connection errors gracefully:
     max_delay=30.0,
     exponential_base=2.0,
     jitter=True,  # Prevents thundering herd
-    retryable_exceptions=RETRYABLE_EXCEPTIONS,
+    retryable_exceptions=_TRANSPORT_EXCEPTIONS,  # the same set transport_failure() admits
 )
 def connect_to_houdini(): ...
 ```
@@ -146,7 +148,10 @@ def ensure_connected(host: str, port: int) -> Any:
 
 #### `safe_execute()` Function
 
-Wraps RPC operations with timeout protection:
+Wraps RPC operations with timeout protection. Its own deadline is detected by waiting
+on the future, not by catching `TimeoutError`, so a `TimeoutError` the operation itself
+raised is reported as that and not as a timeout; connection loss is whatever
+`transport_failure()` says it is:
 
 ```python
 result = safe_execute(

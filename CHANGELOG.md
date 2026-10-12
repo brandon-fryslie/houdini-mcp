@@ -43,6 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Only transport failures are classified as connection loss**
+  (houdini-laws-etg.8b3): a `FileNotFoundError`, `PermissionError` or other
+  `OSError` raised by a tool (a bad save or render path, a denied file) no longer
+  disconnects from Houdini or reports `connection_error` / `recoverable: True`;
+  it reaches the caller as its own kind with the connection left standing.
+  Connection loss is decided in one place, `connection.transport_failure()`,
+  which admits only what rpyc's channel raises (`EOFError`, `ConnectionError`,
+  `TimeoutError`) and only when Houdini's own code did not raise it. `safe_execute`
+  drops its substring sniff for "connection"/"timeout" in error text and no longer
+  mistakes a `TimeoutError` raised by the operation for its own deadline.
+  `CONNECTION_ERRORS` is removed from `houdini_mcp.tools`.
+
 - **Listener start no longer races its own serve thread**: `start()` listens
   on the server socket before spawning the accept thread (rpyc's own readiness
   step), so the listener is accepting connections when `start()` returns and

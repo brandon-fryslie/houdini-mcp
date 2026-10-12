@@ -13,7 +13,6 @@ Usage:
 # Import from extracted modules
 # Import shared utilities from _common (needed by some tests)
 from ._common import (
-    CONNECTION_ERRORS,
     RESPONSE_SIZE_LARGE_THRESHOLD,
     RESPONSE_SIZE_WARNING_THRESHOLD,
     _add_response_metadata,
@@ -153,7 +152,6 @@ __all__ = [
     "render_node_network",
     "VALID_PANE_TYPES",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
-    "CONNECTION_ERRORS",
     "RESPONSE_SIZE_LARGE_THRESHOLD",
     "RESPONSE_SIZE_WARNING_THRESHOLD",
     "_add_response_metadata",

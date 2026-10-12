@@ -3120,12 +3120,20 @@ class TestResponseSizeMetadata:
 class TestConnectionErrorHandling:
     """Tests for graceful connection error handling."""
 
+    @staticmethod
+    def _run(exc: BaseException, operation: str) -> tuple[dict, MagicMock]:
+        from houdini_mcp.tools._common import handle_connection_errors
+
+        @handle_connection_errors(operation)
+        def tool():
+            raise exc
+
+        with patch("houdini_mcp.tools._common.disconnect") as disconnect:
+            return tool(), disconnect
+
     def test_handle_connection_error_timeout(self):
         """Test that TimeoutError produces a helpful error response."""
-        from houdini_mcp.tools import _handle_connection_error
-
-        error = TimeoutError("Connection timed out")
-        result = _handle_connection_error(error, "render_viewport")
+        result, disconnect = self._run(TimeoutError("Connection timed out"), "render_viewport")
 
         assert result["status"] == "error"
         assert result["error_type"] == "connection_error"
@@ -3133,44 +3141,62 @@ class TestConnectionErrorHandling:
         assert "timed out" in result["message"]
         assert "render_viewport" in result["message"]
         assert result["recoverable"] is True
+        disconnect.assert_called_once()
 
     def test_handle_connection_error_eof(self):
         """Test that EOFError produces a helpful error response."""
-        from houdini_mcp.tools import _handle_connection_error
-
-        error = EOFError("Connection closed")
-        result = _handle_connection_error(error, "get_scene_info")
+        result, disconnect = self._run(EOFError("Connection closed"), "get_scene_info")
 
         assert result["status"] == "error"
         assert result["error_type"] == "connection_error"
         assert result["exception"] == "EOFError"
         assert "closed unexpectedly" in result["message"]
         assert result["recoverable"] is True
+        disconnect.assert_called_once()
 
     def test_handle_connection_error_broken_pipe(self):
         """Test that BrokenPipeError produces a helpful error response."""
-        from houdini_mcp.tools import _handle_connection_error
-
-        error = BrokenPipeError("Broken pipe")
-        result = _handle_connection_error(error, "create_node")
+        result, disconnect = self._run(BrokenPipeError("Broken pipe"), "create_node")
 
         assert result["status"] == "error"
         assert result["error_type"] == "connection_error"
         assert result["exception"] == "BrokenPipeError"
         assert "lost" in result["message"]
         assert result["recoverable"] is True
+        disconnect.assert_called_once()
 
-    def test_handle_connection_error_generic_os_error(self):
-        """Test that generic OSError produces a helpful error response."""
-        from houdini_mcp.tools import _handle_connection_error
-
-        error = OSError("Network unreachable")
-        result = _handle_connection_error(error, "set_parameter")
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            FileNotFoundError("/renders/missing/frame.exr"),
+            PermissionError("/renders/locked/frame.exr"),
+            OSError("Network is unreachable"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_file_and_os_errors_leave_the_connection_standing(self, exc):
+        """A bad path is the tool's error, not the link's: no disconnect, no retry invitation."""
+        result, disconnect = self._run(exc, "set_parameter")
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
-        assert result["exception"] == "OSError"
-        assert result["recoverable"] is True
+        assert result.get("error_type") != "connection_error"
+        assert "recoverable" not in result
+        assert str(exc) in result["message"]
+        assert type(exc).__name__ in result["traceback"]
+        disconnect.assert_not_called()
+
+    def test_timeout_raised_inside_houdini_leaves_the_connection_standing(self):
+        """A TimeoutError Houdini's own code raised arrived over an intact link."""
+        from tests.conftest import raised_inside_houdini
+
+        result, disconnect = self._run(
+            raised_inside_houdini(TimeoutError("cook timed out")), "cook"
+        )
+
+        assert result["status"] == "error"
+        assert result.get("error_type") != "connection_error"
+        assert "cook timed out" in result["message"]
+        disconnect.assert_not_called()
 
     @patch("houdini_mcp.tools.scene.ensure_connected")
     def test_get_scene_info_handles_timeout(self, mock_ensure):
@@ -3325,7 +3351,7 @@ class TestHandleConnectionErrorsDecorator:
         assert "Connection failed" in result["message"]
 
     def test_decorator_handles_connection_errors(self):
-        """Test decorator handles CONNECTION_ERRORS (e.g., TimeoutError)."""
+        """Test decorator reports a transport failure (e.g., TimeoutError) as connection loss."""
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("test_operation")
