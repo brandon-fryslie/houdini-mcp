@@ -188,6 +188,7 @@ class TestPluginStartsTheSharedServer:
         from houdini_mcp_plugin import server as plugin_server
 
         monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
+        # a stdio server has no stop, so each test gets its own instance of the owner
         monkeypatch.setattr(plugin_server, "_stdio", plugin_server.StdioServer())
         return plugin_server
 
@@ -269,10 +270,10 @@ class TestPluginStartsTheSharedServer:
         self, plugin_server: Any, held_serve: dict[str, Any], caplog: pytest.LogCaptureFixture
     ) -> None:
         """Two quick Start clicks: the guard holds from the moment start is accepted."""
-        started: list[threading.Thread] = []
+        parked: list[threading.Thread] = []
 
         with pytest.MonkeyPatch.context() as unscheduled:
-            unscheduled.setattr(threading.Thread, "start", lambda thread: started.append(thread))
+            unscheduled.setattr(threading.Thread, "start", lambda thread: parked.append(thread))
             plugin_server.start_server(use_thread=True)
             with (
                 caplog.at_level("WARNING", logger="houdini_mcp_plugin.server"),
@@ -282,9 +283,9 @@ class TestPluginStartsTheSharedServer:
         assert "already serving" in caplog.text
         assert held_serve["runs"] == 0
         assert plugin_server.is_server_running() is True
+        assert len(parked) == 1
 
-        [thread] = started
-        thread.start()
+        parked[0].start()
         held_serve["stdin"].set()
         _wait_until_stopped(plugin_server)
         assert held_serve["runs"] == 1
