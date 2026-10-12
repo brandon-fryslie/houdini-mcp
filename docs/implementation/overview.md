@@ -130,7 +130,7 @@ One derivation, `houdini_mcp/tools/connections.py`, reads Houdini's own
 connection records:
 ```python
 for conn in node.inputConnections():  # one hou.NodeConnection per connected input
-    conn.inputIndex(), conn.inputNode(), conn.outputIndex()
+    conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex()
 ```
 Every tool that reports or rewires an input uses it, so the source output index
 is the one Houdini holds, never a default.

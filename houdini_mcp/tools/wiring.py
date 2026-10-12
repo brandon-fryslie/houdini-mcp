@@ -266,26 +266,26 @@ def reorder_inputs(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    # new_order is a permutation of the input indices: every wire gets exactly one
-    # new position, so none is dropped and none is doubled. [LAW:parse-dont-validate]
-    input_count = len(node.inputs())
-    if sorted(new_order) != list(range(input_count)):
-        return {
-            "status": "error",
-            "message": (
-                f"new_order must be a permutation of the input indices 0..{input_count - 1}"
-                f" ({input_count} inputs); got {new_order}"
-            ),
-        }
-
     # Read every wire, with the source output it comes from, before touching any.
     # [LAW:no-silent-failure] a wire whose output cannot be read fails the whole
     # reorder here, before the network has been changed.
+    # [LAW:one-source-of-truth] the wire records are the only read: the input span
+    # comes from them too, not from inputs(), which looks through a subnet's indirect
+    # input to the parent network and so does not count the same wires.
     connections = input_connections(node)
+    input_span = list(range(1 + max((conn.input_index for conn in connections), default=-1)))
+
+    # new_order is a permutation of the input span: every wire gets exactly one new
+    # position, so none is dropped and none is doubled. [LAW:parse-dont-validate]
+    if sorted(new_order) != input_span:
+        return {
+            "status": "error",
+            "message": f"new_order must be a permutation of {input_span}; got {new_order}",
+        }
     new_position = {old_idx: new_idx for new_idx, old_idx in enumerate(new_order)}
 
-    for i in range(input_count):
-        node.setInput(i, None)
+    for conn in connections:
+        node.setInput(conn.input_index, None)
 
     # Rewire each wire to its new input, from the same source output it came from.
     reconnection_info: list[dict[str, Any]] = []

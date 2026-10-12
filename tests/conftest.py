@@ -165,7 +165,9 @@ class MockHouNode:
         return self._children
 
     def inputs(self) -> list[Any]:
-        return self._inputs
+        """HOM looks through a subnet indirect input to the node wired into the
+        parent subnet; nothing is wired there in this double, so it is None here."""
+        return [None if isinstance(i, MockSubnetIndirectInput) else i for i in self._inputs]
 
     def outputs(self) -> list[Any]:
         return self._outputs

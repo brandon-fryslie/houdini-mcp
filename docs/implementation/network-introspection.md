@@ -139,7 +139,7 @@ All tools properly exposed via FastMCP with comprehensive docstrings.
 ## Edge Cases Handled
 
 ### Locked HDAs:
-Both `list_children()` and `find_nodes()` use try/except blocks around node iteration to gracefully handle locked HDAs that don't allow child access. Warnings are logged but execution continues.
+`list_children()` tolerates one failure: a parent (a locked HDA) refusing to list its children, which is logged and skipped. An error raised while building a child's record is not caught; it reaches the tool's error boundary and fails the call, so a wire that cannot be read is reported rather than dropped with its siblings.
 
 ### Deep Hierarchies:
 - `list_children()` respects `max_depth` parameter (default: 10)
@@ -212,7 +212,7 @@ With connection information including source_node, input_index, and source_outpu
 ```python
 # houdini_mcp/tools/connections.py: one hou.NodeConnection per connected input
 for conn in node.inputConnections():
-    conn.inputIndex(), conn.inputNode(), conn.outputIndex()
+    conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex()
 ```
 
 ### Pattern Matching Strategy:

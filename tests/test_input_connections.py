@@ -217,5 +217,5 @@ class TestNewOrderIsAPermutation:
         result = reorder_inputs("/obj/geo1/merge1", new_order, host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert "permutation of the input indices 0..2" in result["message"]
+        assert "permutation of [0, 1, 2]" in result["message"]
         assert _wires(merge) == before
