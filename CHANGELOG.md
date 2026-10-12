@@ -29,8 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `get_geo_summary` runs its own bounded program under an internal grant
     instead of a private keyword on `execute_code`.
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
-  `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
-  through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
+  `find_nodes` parse `limit`/`cursor` through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
   three, and every response carries the same keys (`total`, `returned`,
   `has_more`, `offset`, plus `cursor`/`warning` when a further page exists);
   `list_node_types` no longer emits `total_matched` (use `total`).

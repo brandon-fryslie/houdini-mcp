@@ -44,7 +44,10 @@ list_children("/obj/geo1", recursive=True, max_depth=3)
       "outputs": []
     }
   ],
-  "count": 2
+  "total": 2,
+  "returned": 2,
+  "has_more": false,
+  "offset": 0
 }
 ```
 
@@ -89,7 +92,10 @@ find_nodes("/obj", "grid")
       "type": "noise"
     }
   ],
-  "count": 2
+  "total": 2,
+  "returned": 2,
+  "has_more": false,
+  "offset": 0
 }
 ```
 
@@ -211,7 +217,7 @@ execute_code(code)
 # Recursively explore all nodes in scene
 result = list_children("/obj", recursive=True, max_depth=5)
 
-print(f"Found {result['count']} nodes total")
+print(f"Found {result['total']} nodes total")
 
 # Build connection graph
 for node in result["children"]:

@@ -147,7 +147,7 @@ class TestAugmentExistingScene:
         # Verify initial connection using list_children
         children = list_children(geo_path)
         assert children["status"] == "success"
-        assert children["count"] == 2
+        assert children["returned"] == 2
 
         # Find noise node in children
         noise_child = next(c for c in children["children"] if c["name"] == "noise1")

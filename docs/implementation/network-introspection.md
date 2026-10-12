@@ -33,7 +33,10 @@
             "outputs": [],
         },
     ],
-    "count": 2,
+    "total": 2,
+    "returned": 2,
+    "has_more": False,
+    "offset": 0,
 }
 ```
 

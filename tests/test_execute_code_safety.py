@@ -275,7 +275,8 @@ class TestPolicyProfiles:
             port=18811,
         )
         assert result["audit"]["blocked_reason"] == "bypass_config_disabled"
-        assert result["hint"].startswith("Enable HOUDINI_MCP_ALLOW_BYPASS")
+        assert result["hint"].startswith("Use get_geo_summary()")
+        assert ". Enable HOUDINI_MCP_ALLOW_BYPASS" in result["hint"]
 
 
 # ---------------------------------------------------------------------------
@@ -491,15 +492,31 @@ class TestAuditFields:
 
         mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
         grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.code"):
             result = _execute_with_grant(
                 "hou.node('/obj/geo1').geometry()", grant, host="localhost", port=18811
             )
         assert result["status"] == "success"
         assert result["audit"]["source"] == "trusted"
         assert result["audit"]["bypass_config_enabled"] is False
-        [record] = [r.message for r in caplog.records if "approved bypass" in r.message]
-        assert "source=trusted" in record
+        [record] = [r for r in caplog.records if "approved bypass" in r.message]
+        assert "source=trusted" in record.message
+        assert record.levelno == logging.DEBUG
+
+    def test_refusal_before_the_gates_still_reports_the_scan(self, mock_connection, caplog):
+        """import_hou stops the code, but the audit and trail still say what the scan found."""
+        import logging
+
+        from houdini_mcp.tools import execute_code
+
+        with caplog.at_level(logging.WARNING):
+            result = execute_code("import hou\nhou.exit()", host="localhost", port=18811)
+        assert result["audit"]["blocked_reason"] == "import_hou"
+        assert result["audit"]["dangerous_patterns"]
+        [record] = [
+            r.message for r in caplog.records if r.message.startswith("execute_code blocked:")
+        ]
+        assert "hou.exit()" in record
 
 
 # ---------------------------------------------------------------------------

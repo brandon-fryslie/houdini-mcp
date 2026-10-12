@@ -181,7 +181,13 @@ class DetectedPatterns:
         )
 
 
-_NO_PATTERNS = DetectedPatterns(mutation=[], dangerous=[], heavy_geometry=[])
+# [LAW:dataflow-not-control-flow] The approved-bypass trail is always written;
+# its level is the grant's source: a request-side bypass is the event the
+# WARNING exists for, a server-authored program is routine.
+_BYPASS_AUDIT_LEVEL: dict[GrantSource, int] = {
+    "request": logging.WARNING,
+    "trusted": logging.DEBUG,
+}
 
 
 @dataclass(frozen=True)
@@ -216,7 +222,7 @@ _BYPASS_GATES: tuple[_BypassGate, ...] = (
         flag="allow_heavy_geometry",
         pattern_reason="heavy_geometry",
         found="Heavy geometry access detected in code",
-        alternative="Use get_geo_summary() for bounded geometry inspection, or ",
+        alternative="Use get_geo_summary() for bounded geometry inspection. ",
         patterns=lambda detected: detected.heavy_geometry,
         requested=lambda grant: grant.heavy_geometry_requested,
         granted=lambda grant: grant.heavy_geometry,
@@ -243,7 +249,8 @@ def _bypass_refusal(gate: _BypassGate, grant: ExecutionGrant) -> tuple[str, str,
             "bypass_config_disabled",
             f"Bypass requested ({gate.flag}=True) but server config "
             "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
-            "Enable HOUDINI_MCP_ALLOW_BYPASS on the server; the request flag alone grants nothing.",
+            f"{gate.alternative}Enable HOUDINI_MCP_ALLOW_BYPASS on the server; "
+            "the request flag alone grants nothing.",
         )
     return (
         gate.pattern_reason,
@@ -397,7 +404,7 @@ def execute_code(
         return _blocked(
             code=code,
             grant=grant,
-            detected=_NO_PATTERNS,
+            detected=DetectedPatterns.scan(code),
             reason="unknown_policy",
             message=f"Unknown policy {policy!r}. Valid policies: {', '.join(VALID_POLICIES)}.",
             hint=f"Pass policy as one of: {', '.join(VALID_POLICIES)}.",
@@ -445,6 +452,11 @@ def _execute_with_grant(
         grant.heavy_geometry_requested,
     )
 
+    # [LAW:dataflow-not-control-flow] The scan always runs in full, before any
+    # refusal: the grant decides what each finding means, and every audit and
+    # log line reports all of it, whatever stopped the code.
+    detected = DetectedPatterns.scan(code)
+
     # --- Empty code ----------------------------------------------------------
     if not code or not code.strip():
         return {
@@ -453,7 +465,7 @@ def _execute_with_grant(
             "stderr": "",
             "message": "Empty code - nothing to execute",
             "policy": grant.policy,
-            "audit": _build_audit(code=code or "", grant=grant, detected=_NO_PATTERNS),
+            "audit": _build_audit(code=code or "", grant=grant, detected=detected),
         }
 
     # Detect the common mistake of importing hou when it is pre-injected via RPyC.
@@ -462,7 +474,7 @@ def _execute_with_grant(
         return _blocked(
             code=code,
             grant=grant,
-            detected=_NO_PATTERNS,
+            detected=detected,
             reason="import_hou",
             message="Code attempts to import hou module, but hou is already available",
             hint=(
@@ -474,10 +486,6 @@ def _execute_with_grant(
                 "import hou", "# import hou  # Not needed - hou is pre-injected"
             ).replace("from hou import ", "# from hou import "),
         )
-
-    # [LAW:dataflow-not-control-flow] The scan always runs in full; the grant
-    # decides what each finding means, and the audit reports all of it.
-    detected = DetectedPatterns.scan(code)
 
     if detected.mutation and not grant.mutation:
         return _blocked(
@@ -515,7 +523,8 @@ def _execute_with_grant(
     # Emit the durable bypass audit BEFORE execution so a later exception
     # cannot skip the server-side trail. Source code and secrets are excluded.
     if detected.dangerous or detected.heavy_geometry:
-        logger.warning(
+        logger.log(
+            _BYPASS_AUDIT_LEVEL[grant.source],
             "execute_code approved bypass policy=%s source=%s dangerous=%s heavy=%s code_sha256=%s",
             grant.policy,
             grant.source,
