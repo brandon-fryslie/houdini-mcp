@@ -45,7 +45,7 @@ from .ws_client import (
 )
 
 __all__ = [
-    # Outbound WSS state-machine core (houdini-mcp-xu4)
+    # Outbound WSS state-machine core
     "WSClientCore",
     "WSConfig",
     "ConnectionState",
