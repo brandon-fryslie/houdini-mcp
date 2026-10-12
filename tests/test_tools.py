@@ -1,6 +1,7 @@
 """Tests for the Houdini MCP tools."""
 
 import asyncio
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1734,6 +1735,35 @@ class TestFindNodes:
         assert result["status"] == "error"
         assert "locked asset" in result["message"]
         assert "matches" not in result
+
+    def test_find_nodes_emits_search_outcome(self, mock_connection, caplog):
+        """Each search logs its inputs and the totals it computed."""
+        from houdini_mcp.tools import find_nodes
+
+        mock_connection.node("/obj")._children = [
+            MockHouNode(path=f"/obj/grid{i}", name=f"grid{i}", node_type="grid") for i in range(3)
+        ]
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
+            find_nodes("/obj", "grid*", None, 2, host="localhost", port=18811)
+
+        assert (
+            "find_nodes root=/obj pattern=grid* node_type=None offset=0 "
+            "total=3 returned=2 has_more=True"
+        ) in caplog.text
+
+    def test_find_nodes_type_filter_skips_type_lookup_for_name_misses(self, mock_connection):
+        """A node whose name does not match never has its type fetched."""
+        from houdini_mcp.tools import find_nodes
+
+        miss = MockHouNode(path="/obj/cam1", name="cam1", node_type="cam")
+        miss.type = lambda: (_ for _ in ()).throw(AssertionError("type() fetched for a name miss"))
+        hit = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
+        mock_connection.node("/obj")._children = [miss, hit]
+
+        result = find_nodes("/obj", "grid*", "grid", host="localhost", port=18811)
+
+        assert [m["name"] for m in result["matches"]] == ["grid1"]
 
 
 class TestFindErrorNodes:

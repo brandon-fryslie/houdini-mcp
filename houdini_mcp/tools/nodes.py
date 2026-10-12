@@ -593,9 +593,11 @@ def _search_descendants(
         name_match = fnmatch.fnmatch(name_lower, pattern_lower) or (
             not has_wildcards and pattern_lower in name_lower
         )
+        if not name_match:
+            continue
+        # The type lookup is a second round trip per node; only name hits pay it.
         child_type = child.type().name()
-        type_match = type_lower is None or child_type.lower() == type_lower
-        if not (name_match and type_match):
+        if type_lower is not None and child_type.lower() != type_lower:
             continue
         total_matched += 1
         if total_matched > offset and len(matches) < fetch_limit:
@@ -662,8 +664,8 @@ def find_nodes(
     max_results = max(1, min(int(max_results), 500))
     offset = max(0, int(offset))
 
-    # [LAW:single-enforcer] Caller strings are only compared here, never formatted into
-    # a program: the one code-execution path is execute_code's gate in code.py.
+    # [LAW:single-enforcer] Caller strings are compared as data here, never formatted
+    # into a program; find_nodes has no code-execution path of its own.
     # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
     # as an error instead of switching to a different result set.
     matches, total_matched = _search_descendants(
@@ -674,6 +676,16 @@ def find_nodes(
     has_more = len(matches) > max_results
     if has_more:
         matches = matches[:max_results]
+    logger.debug(
+        "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
+        root_path,
+        pattern,
+        node_type,
+        offset,
+        total_matched,
+        len(matches),
+        has_more,
+    )
 
     result: dict[str, Any] = {
         "status": "success",
