@@ -2,20 +2,19 @@
 
 Note: We use rpyc.classic directly instead of hrpyc because:
 1. hrpyc is bundled with Houdini and not available on PyPI
-2. a classic connection (opened by houdini_mcp.handshake) provides the same functionality
+2. a classic connection (opened by houdini_mcp_handshake) provides the same functionality
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
 import concurrent.futures
 import logging
-import os
 import random
 import time
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
 
-from houdini_mcp import handshake
+import houdini_mcp_handshake as handshake
 
 logger = logging.getLogger("houdini_mcp.connection")
 
@@ -132,16 +131,6 @@ def retry_with_backoff(
     return decorator
 
 
-def rpc_token() -> str | None:
-    """The listener's shared secret, if the operator configured one.
-
-    [LAW:one-source-of-truth] the one reader of HOUDINI_RPC_TOKEN, read when a
-    connection is opened so every connect and ping presents the same value and
-    an environment set after import is honored.
-    """
-    return os.getenv("HOUDINI_RPC_TOKEN") or None
-
-
 def _do_connect(
     host: str,
     port: int,
@@ -156,9 +145,9 @@ def _do_connect(
 
     logger.info(f"Connecting to Houdini at {host}:{port}")
 
-    # [LAW:one-source-of-truth] the token handshake is houdini_mcp.handshake's;
-    # this is the MCP server deriving its client side from it.
-    _connection = handshake.connect(host, port, token=rpc_token())
+    # [LAW:one-source-of-truth] the token handshake, and the reading of its
+    # token, are houdini_mcp_handshake's; this is the MCP server's client side.
+    _connection = handshake.connect(host, port, token=handshake.token_from_env())
 
     # Set sync_request_timeout on the connection after establishing it
     # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
@@ -400,7 +389,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     """
     try:
         # timeout is not enforced at connection level for classic connections
-        conn = handshake.connect(host, port, token=rpc_token())
+        conn = handshake.connect(host, port, token=handshake.token_from_env())
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()

@@ -36,8 +36,8 @@ import socket
 import sys
 from pathlib import Path
 
-# Runs as a file, not a module: make the repo's houdini_mcp package importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Runs as a file, not a module: make the plugin tree's handshake package importable.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "houdini_plugin" / "python"))
 
 
 def _enabled() -> bool:
@@ -63,19 +63,18 @@ def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
 def _rpyc_check(host: str, port: int) -> bool:
     """Connect via rpyc.classic and read the Houdini version (read-only)."""
     try:
-        from houdini_mcp import handshake  # noqa: PLC0415
-        from houdini_mcp.connection import rpc_token  # noqa: PLC0415
+        import houdini_mcp_handshake as handshake  # noqa: PLC0415
     except ImportError as exc:
         print(
-            f"[verify] rpyc/houdini_mcp not importable in this environment ({exc}); "
+            f"[verify] rpyc/houdini_mcp_handshake not importable in this environment ({exc}); "
             "skipping RPC check."
         )
         return False
 
     # [LAW:one-source-of-truth] the client side of the token handshake, and the
-    # reading of HOUDINI_RPC_TOKEN, are the server package's, not copies kept here.
+    # reading of HOUDINI_RPC_TOKEN, are the handshake package's, not copies kept here.
     try:
-        conn = handshake.connect(host, port, token=rpc_token())
+        conn = handshake.connect(host, port, token=handshake.token_from_env())
         hou = conn.modules.hou
         version = hou.applicationVersionString()
         hip = hou.hipFile.path()

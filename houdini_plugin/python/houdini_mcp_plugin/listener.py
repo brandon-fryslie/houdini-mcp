@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from houdini_mcp.handshake import Authenticator
+    from houdini_mcp_handshake import Authenticator
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 
@@ -114,7 +114,7 @@ class ListenerConfig:
             port = int(port_str) if port_str else DEFAULT_PORT
         except ValueError:
             port = DEFAULT_PORT
-        token = os.getenv("HOUDINI_RPC_TOKEN") or None
+        token = _token_from_env()
         trusted = _env_flag("HOUDINI_RPC_TRUSTED_NETWORK")
         return cls(host=host, port=port, trusted_network=trusted, token=token)
 
@@ -175,9 +175,9 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
             authenticator=None,
             reason=(
                 f"refusing to bind {config.host!r}: a token is configured but this Houdini "
-                f"cannot enforce it ({exc}). Install the houdini-mcp package into Houdini's "
-                "Python (hython -m pip install <repo>) so houdini_mcp.handshake is importable "
-                "with an rpyc that provides rpyc.utils.authenticators, or unset the token."
+                f"cannot enforce it ({exc}). houdini_mcp_handshake ships beside this plugin "
+                "and needs an rpyc that provides rpyc.utils.authenticators; fix that, or "
+                "unset the token."
             ),
         )
 
@@ -636,12 +636,20 @@ class RemoteListener:
 def _token_authenticator(token: str) -> Authenticator:
     """The listener's side of the shared handshake.
 
-    [LAW:one-source-of-truth] derived from ``houdini_mcp.handshake``, the one
+    [LAW:one-source-of-truth] derived from ``houdini_mcp_handshake``, the one
     definition the MCP server's client side also derives from. Imported here, not
-    at module load, so a Houdini without ``houdini_mcp`` still runs an untokened
-    listener; with a token configured the ImportError propagates to
-    :func:`resolve_security_policy`, which refuses the bind.
+    at module load, so a Houdini whose rpyc lacks the authenticator primitives
+    still runs an untokened listener; with a token configured the ImportError
+    propagates to :func:`resolve_security_policy`, which refuses the bind.
     """
-    from houdini_mcp.handshake import token_authenticator  # noqa: PLC0415
+    from houdini_mcp_handshake import token_authenticator  # noqa: PLC0415
 
     return token_authenticator(token)
+
+
+def _token_from_env() -> str | None:
+    """The handshake's reader of HOUDINI_RPC_TOKEN, imported lazily for the same
+    reason as :func:`_token_authenticator`."""
+    from houdini_mcp_handshake import token_from_env  # noqa: PLC0415
+
+    return token_from_env()

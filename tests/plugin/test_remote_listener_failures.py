@@ -8,6 +8,7 @@ from __future__ import annotations
 import socket
 import sys
 
+import houdini_mcp_handshake as handshake
 import pytest
 from houdini_mcp_plugin.listener import (
     ListenerConfig,
@@ -15,8 +16,6 @@ from houdini_mcp_plugin.listener import (
     SecurityError,
 )
 from rpyc.utils.authenticators import AuthenticationError
-
-from houdini_mcp import handshake
 
 # ---------------------------------------------------------------------------
 # Bind failures

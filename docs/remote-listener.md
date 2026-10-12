@@ -56,18 +56,22 @@ created** — there is no code path that silently binds `0.0.0.0` without auth.
   before the RPyC protocol. It is **not** TLS and provides **no encryption** —
   use it only on trusted networks or behind an encrypted tunnel
   (WireGuard, SSH, Cloudflare Tunnel, etc.).
-- The handshake has one definition, `houdini_mcp.handshake`: the listener
+- The handshake has one definition, `houdini_mcp_handshake`: the listener
   enforces its server side and the MCP server (`HOUDINI_RPC_TOKEN` in the
   server's environment) and `scripts/verify_remote_listener.py` present its
   client side. Set the same `HOUDINI_RPC_TOKEN` on both machines. The token is
   sent length-prefixed and the listener acknowledges a correct one with one
-  byte, so a client presenting a token learns at connect time whether it was
-  rejected or whether the listener is not enforcing a token at all. A client
+  byte, so a client presenting a wrong token is told so at connect time and
+  does not retry, while a listener that never answers (it enforces no token,
+  or Houdini is too busy) is a timeout, retried like any other. A client
   presenting no token to a tokened listener sees a connection failure that
-  names the token as a cause. The listener imports the handshake only when a token is
-  configured, so a tokened bind needs the `houdini-mcp` package installed into
-  Houdini's Python (`hython -m pip install <repo>`, the same install the stdio
-  mode uses); otherwise the bind is refused with a message saying so.
+  names the token as a cause. The package lives in the plugin tree
+  (`houdini_plugin/python/houdini_mcp_handshake`), so the package JSON puts it
+  on Houdini's path, and the server distribution ships the same source. The
+  listener imports it only when a token is configured; if Houdini's `rpyc`
+  lacks the authenticator primitives, the bind is refused with a message
+  saying so. The listener logs every accepted and rejected handshake under
+  the `houdini_mcp_handshake` logger.
 - A configured token is always enforced: if the installed `rpyc` cannot provide
   the authenticator primitives, the security policy refuses the bind (a
   `security` error from `start()`, or `SecurityError` with `raise_on_policy`)
