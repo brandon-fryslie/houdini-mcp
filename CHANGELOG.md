@@ -106,6 +106,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stdio install is `hython -m pip install .`, which also declares `httpx`.
   `houdini_mcp.server.serve()` runs the server without touching process
   logging; `run_server()` remains the CLI entry that configures it.
+- **Plugin stdio server lifecycle**: start and running state have one owner,
+  `houdini_mcp_plugin.server.StdioServer`. The serving thread is recorded before
+  it starts, so two quick "Start MCP" clicks no longer both pass the guard and
+  launch two readers on one stdin; a failed foreground serve no longer leaves
+  "already running" stuck. `stop_server()` and the **Stop MCP** shelf tool are
+  removed: a stdio server ends only when the client closes stdin, and the old
+  stop merely flipped a flag while the server kept serving, so the next Start
+  ran a second loop. `MCP Status` now reports whether a server is serving.
 - **hrpyc remote stop**: The Houdini plugin now starts the listener via
   `hrpyc.ThreadedServer` and stops it through the server object's `close()`,
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to

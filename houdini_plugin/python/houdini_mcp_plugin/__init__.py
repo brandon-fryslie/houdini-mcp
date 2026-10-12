@@ -3,7 +3,7 @@
 Provides two modes of operation:
 
 1. **stdio mode** (free tier): MCP server runs in-process inside Houdini
-   - Use start_server() / stop_server()
+   - Use start_server(); the server ends when the MCP client closes stdin
    - Communicates via stdio transport
    - No network configuration required
 
@@ -36,7 +36,7 @@ from .remote import (
     start_hrpyc_server,
     stop_hrpyc_server,
 )
-from .server import is_server_running, start_server, stop_server
+from .server import AlreadyServing, is_server_running, start_server
 from .ws_client import (
     Action,
     ActionType,
@@ -60,8 +60,8 @@ __all__ = [
     "redact",
     # stdio mode (MCP server in Houdini)
     "start_server",
-    "stop_server",
     "is_server_running",
+    "AlreadyServing",
     # remote mode (hrpyc for external MCP server)
     "start_hrpyc_server",
     "stop_hrpyc_server",
