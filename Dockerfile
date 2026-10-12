@@ -1,4 +1,6 @@
-FROM python:3.11-slim
+# .python-version decides the interpreter: uv uses this one when it matches and
+# installs the declared one when it does not.
+FROM python:3.13-slim
 # Must satisfy [tool.uv].required-version in pyproject.toml - uv checks it and fails otherwise.
 COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /bin/uv
 # The cache is a build mount on another filesystem, so hardlinks cannot work; compile
@@ -9,7 +11,7 @@ WORKDIR /app
 
 # Dependencies first, from the lock alone, so a source edit does not rebuild this layer.
 # The uv download cache lives in a build mount, not in the image.
-COPY pyproject.toml uv.lock ./
+COPY .python-version pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 

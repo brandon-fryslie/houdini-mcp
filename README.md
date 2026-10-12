@@ -40,6 +40,7 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
    - In Houdini: `Windows > Python Shell`, then run:
      ```python
      import hrpyc
+
      hrpyc.start_server(port=18811)
      ```
    - Or add to your `123.py` startup script for automatic startup
@@ -125,6 +126,7 @@ If you have the Houdini MCP plugin installed:
 Or manually in Houdini's Python Shell (unchanged, still supported):
 ```python
 import hrpyc
+
 hrpyc.start_server(port=18811)
 ```
 
@@ -346,11 +348,7 @@ Always verify geometry after operations:
 
 ```python
 # Get comprehensive geometry summary
-summary = get_geo_summary(
-    "/obj/geo1/OUT",
-    max_sample_points=10,
-    include_attributes=True
-)
+summary = get_geo_summary("/obj/geo1/OUT", max_sample_points=10, include_attributes=True)
 
 # Check cook state
 if summary["cook_state"] != "cooked":
@@ -374,11 +372,7 @@ bbox = summary["bounding_box"]
 
 ```python
 # 1. Check cook state first
-node_info = get_node_info(
-    node_path,
-    include_errors=True,
-    force_cook=True
-)
+node_info = get_node_info(node_path, include_errors=True, force_cook=True)
 
 cook_state = node_info["cook_info"]["cook_state"]
 
@@ -428,11 +422,7 @@ if result["status"] == "error":
 
 ```python
 # Use include_errors=True to diagnose issues
-node_info = get_node_info(
-    node_path,
-    include_errors=True,
-    force_cook=True
-)
+node_info = get_node_info(node_path, include_errors=True, force_cook=True)
 
 cook_info = node_info["cook_info"]
 

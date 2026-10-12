@@ -5,7 +5,7 @@
 Successfully implemented 3 new network introspection tools for the Houdini MCP Server:
 
 1. **list_children()** - List child nodes with connection details
-2. **find_nodes()** - Search for nodes by pattern/type  
+2. **find_nodes()** - Search for nodes by pattern/type
 3. **get_node_info() extension** - Added detailed input connection info
 
 ## Files Changed
@@ -106,7 +106,7 @@ except Exception as e:
 ### ✅ Update tool list in server.py with @mcp.tool() decorators
 All three tools properly exposed via FastMCP:
 - `list_children()` - Lines 229-253
-- `find_nodes()` - Lines 256-279  
+- `find_nodes()` - Lines 256-279
 - `get_node_info()` (updated) - Lines 119-135
 
 ### ✅ Do NOT push to git
@@ -136,9 +136,10 @@ connectors = node.inputConnectors()
 Combines fnmatch (glob) with substring matching:
 ```python
 import fnmatch
+
 name_match = fnmatch.fnmatch(child.name().lower(), pattern.lower())
 # Plus substring when no wildcards
-if '*' not in pattern:
+if "*" not in pattern:
     name_match = pattern.lower() in child.name().lower()
 ```
 

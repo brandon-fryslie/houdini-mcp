@@ -4,7 +4,7 @@
 repos:
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -30,7 +30,7 @@ repos:
         name: ruff-format
         entry: uv run --locked ruff format
         language: system
-        types_or: [python, pyi]
+        types_or: [python, pyi, markdown]
       - id: mypy
         name: mypy
         entry: uv run --locked mypy

@@ -55,10 +55,7 @@ connect_nodes("/obj/geo1/grid1", "/obj/geo1/merge1", dst_input_index=1)  # To se
 **Validation:**
 ```python
 # Returns error for incompatible types:
-{
-  "status": "error",
-  "message": "Incompatible node types: Sop → Dop. Cannot connect..."
-}
+{"status": "error", "message": "Incompatible node types: Sop → Dop. Cannot connect..."}
 ```
 
 ---
@@ -82,10 +79,10 @@ disconnect_node_input("/obj/geo1/merge1", input_index=1)  # Disconnect second in
 **Response:**
 ```python
 {
-  "status": "success",
-  "was_connected": True,
-  "previous_source": "/obj/geo1/grid1",
-  "message": "Disconnected input 0 on /obj/geo1/noise1..."
+    "status": "success",
+    "was_connected": True,
+    "previous_source": "/obj/geo1/grid1",
+    "message": "Disconnected input 0 on /obj/geo1/noise1...",
 }
 ```
 
@@ -111,9 +108,9 @@ set_node_flags("/obj/geo1/mountain1", display=False)  # Turn off display
 **Response:**
 ```python
 {
-  "status": "success",
-  "flags_set": {"display": True, "render": True},
-  "message": "Set flags on /obj/geo1/sphere1: display=True, render=True"
+    "status": "success",
+    "flags_set": {"display": True, "render": True},
+    "message": "Set flags on /obj/geo1/sphere1: display=True, render=True",
 }
 ```
 

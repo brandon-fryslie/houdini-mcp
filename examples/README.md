@@ -6,7 +6,7 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 
 1. Houdini running with hrpyc server (port 18811)
 2. Houdini MCP Server running (port 3055)
-3. Python 3.8+ with `requests` library
+3. Python 3.11+ (the project floor) with `requests` library
 
 ## Examples
 
@@ -40,7 +40,8 @@ python build_from_scratch.py
 
 **Demonstrates**: Inserting a node into an existing network
 
-**Initial Network**: grid → noise  
+**Initial Network**: grid → noise
+
 **Final Network**: grid → mountain → noise
 
 **Key Concepts**:

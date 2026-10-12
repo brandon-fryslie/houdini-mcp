@@ -28,35 +28,32 @@ def get_geo_summary(
 ### Return Structure:
 ```python
 {
-  "status": "success",
-  "node_path": "/obj/geo1/sphere1",
-  "cook_state": "cooked",  # or "dirty", "uncooked", "error"
-  "point_count": 482,
-  "primitive_count": 480,
-  "vertex_count": 1920,
-  "bounding_box": {
-    "min": [-1.0, -1.0, -1.0],
-    "max": [1.0, 1.0, 1.0],
-    "size": [2.0, 2.0, 2.0],
-    "center": [0.0, 0.0, 0.0]
-  },
-  "attributes": {
-    "point": [
-      {"name": "P", "type": "float", "size": 3},
-      {"name": "N", "type": "float", "size": 3}
+    "status": "success",
+    "node_path": "/obj/geo1/sphere1",
+    "cook_state": "cooked",  # or "dirty", "uncooked", "error"
+    "point_count": 482,
+    "primitive_count": 480,
+    "vertex_count": 1920,
+    "bounding_box": {
+        "min": [-1.0, -1.0, -1.0],
+        "max": [1.0, 1.0, 1.0],
+        "size": [2.0, 2.0, 2.0],
+        "center": [0.0, 0.0, 0.0],
+    },
+    "attributes": {
+        "point": [
+            {"name": "P", "type": "float", "size": 3},
+            {"name": "N", "type": "float", "size": 3},
+        ],
+        "primitive": [...],
+        "vertex": [...],
+        "detail": [...],
+    },
+    "groups": {"point": ["top", "bottom"], "primitive": ["front", "back"]},
+    "sample_points": [
+        {"index": 0, "P": [0.0, 1.0, 0.0], "N": [0.0, 1.0, 0.0]},
+        {"index": 1, "P": [0.5, 0.866, 0.0], "N": [0.5, 0.866, 0.0]},
     ],
-    "primitive": [...],
-    "vertex": [...],
-    "detail": [...]
-  },
-  "groups": {
-    "point": ["top", "bottom"],
-    "primitive": ["front", "back"]
-  },
-  "sample_points": [
-    {"index": 0, "P": [0.0, 1.0, 0.0], "N": [0.0, 1.0, 0.0]},
-    {"index": 1, "P": [0.5, 0.866, 0.0], "N": [0.5, 0.866, 0.0]}
-  ]
 }
 ```
 
@@ -202,10 +199,7 @@ assert result["bounding_box"]["center"] == [0.0, 0.0, 0.0]
 ### Quick counts check (skip extras):
 ```python
 result = get_geo_summary(
-    "/obj/geo1/grid1", 
-    max_sample_points=0,
-    include_attributes=False,
-    include_groups=False
+    "/obj/geo1/grid1", max_sample_points=0, include_attributes=False, include_groups=False
 )
 # Just get counts
 print(f"Points: {result['point_count']}, Prims: {result['primitive_count']}")

@@ -67,13 +67,13 @@ Exceptions that indicate broken/timed-out connections:
 
 ```python
 CONNECTION_ERRORS = (
-    EOFError,              # Connection closed unexpectedly
-    BrokenPipeError,       # Pipe broken
+    EOFError,  # Connection closed unexpectedly
+    BrokenPipeError,  # Pipe broken
     ConnectionResetError,  # Connection reset by peer
-    ConnectionRefusedError,# Connection refused
-    ConnectionAbortedError,# Connection aborted
-    TimeoutError,          # Operation timed out
-    OSError,               # Various OS-level connection errors
+    ConnectionRefusedError,  # Connection refused
+    ConnectionAbortedError,  # Connection aborted
+    TimeoutError,  # Operation timed out
+    OSError,  # Various OS-level connection errors
 )
 ```
 
@@ -121,10 +121,9 @@ Handles connection errors gracefully:
     max_delay=30.0,
     exponential_base=2.0,
     jitter=True,  # Prevents thundering herd
-    retryable_exceptions=RETRYABLE_EXCEPTIONS
+    retryable_exceptions=RETRYABLE_EXCEPTIONS,
 )
-def connect_to_houdini():
-    ...
+def connect_to_houdini(): ...
 ```
 
 **Key Parameters:**
@@ -203,11 +202,11 @@ Validates render resolution dimensions:
 def render_viewport(resolution: Optional[List[int]] = None, ...):
     if resolution is None:
         resolution = [512, 512]
-    
+
     # Returns error dict if invalid, None if valid
     if error := validate_resolution(resolution):
         return error
-    
+
     # Continue with valid resolution...
 ```
 
@@ -223,11 +222,11 @@ def list_children(
     port: int = 18811,
 ) -> Dict[str, Any]:
     hou = ensure_connected(host, port)
-    
+
     node = hou.node(node_path)
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
-    
+
     children = [child.name() for child in node.children()]
     return {"status": "success", "children": children}
 ```
@@ -241,14 +240,14 @@ def render_viewport(
     ...
 ) -> Dict[str, Any]:
     hou = ensure_connected(host, port)
-    
+
     if resolution is None:
         resolution = [512, 512]
-    
+
     # Validate early, return error if invalid
     if error := validate_resolution(resolution):
         return error
-    
+
     # ... proceed with rendering
 ```
 
@@ -268,9 +267,9 @@ def execute_code(
             "status": "error",
             "message": f"Dangerous code pattern detected: {dangerous}",
         }
-    
+
     hou = ensure_connected(host, port)
-    
+
     try:
         exec(code, {"hou": hou})
         return {"status": "success"}
@@ -302,12 +301,12 @@ def mock_connection(monkeypatch):
 ```python
 def test_handles_connection_timeout(self, mock_connection):
     from houdini_mcp.tools import get_scene_info
-    
+
     # Simulate timeout
     mock_connection.node.side_effect = TimeoutError("Connection timed out")
-    
+
     result = get_scene_info()
-    
+
     assert result["status"] == "error"
     assert result["error_type"] == "connection_error"
     assert result["recoverable"] is True
@@ -318,9 +317,9 @@ def test_handles_connection_timeout(self, mock_connection):
 ```python
 def test_validates_resolution(self, mock_connection):
     from houdini_mcp.tools import render_viewport
-    
+
     result = render_viewport(resolution=[10, 10])  # Too small
-    
+
     assert result["status"] == "error"
     assert "at least 64x64" in result["message"]
 ```

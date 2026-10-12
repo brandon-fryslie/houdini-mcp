@@ -26,10 +26,7 @@ assert result["cook_state"] == "cooked"
 ```python
 # Just get the counts
 result = get_geo_summary(
-    "/obj/geo1/grid1",
-    max_sample_points=0,
-    include_attributes=False,
-    include_groups=False
+    "/obj/geo1/grid1", max_sample_points=0, include_attributes=False, include_groups=False
 )
 print(f"Points: {result['point_count']}, Prims: {result['primitive_count']}")
 ```

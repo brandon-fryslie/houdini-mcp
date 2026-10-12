@@ -15,27 +15,25 @@
 **Return Format:**
 ```python
 {
-  "status": "success",
-  "node_path": "/obj/geo1",
-  "children": [
-    {
-      "path": "/obj/geo1/grid1",
-      "name": "grid1",
-      "type": "grid",
-      "inputs": [],
-      "outputs": ["/obj/geo1/noise1"]
-    },
-    {
-      "path": "/obj/geo1/noise1",
-      "name": "noise1",
-      "type": "noise",
-      "inputs": [
-        {"index": 0, "source_node": "/obj/geo1/grid1", "output_index": 0}
-      ],
-      "outputs": []
-    }
-  ],
-  "count": 2
+    "status": "success",
+    "node_path": "/obj/geo1",
+    "children": [
+        {
+            "path": "/obj/geo1/grid1",
+            "name": "grid1",
+            "type": "grid",
+            "inputs": [],
+            "outputs": ["/obj/geo1/noise1"],
+        },
+        {
+            "path": "/obj/geo1/noise1",
+            "name": "noise1",
+            "type": "noise",
+            "inputs": [{"index": 0, "source_node": "/obj/geo1/grid1", "output_index": 0}],
+            "outputs": [],
+        },
+    ],
+    "count": 2,
 }
 ```
 
@@ -221,10 +219,11 @@ inputs = node.inputs()  # Returns list of connected nodes or None
 ```python
 # Uses fnmatch for glob patterns
 import fnmatch
+
 fnmatch.fnmatch(child.name().lower(), pattern.lower())
 
 # Plus substring matching when no wildcards
-if '*' not in pattern and '?' not in pattern:
+if "*" not in pattern and "?" not in pattern:
     name_match = pattern.lower() in child.name().lower()
 ```
 
@@ -283,4 +282,3 @@ def collect_children(node, depth=0):
 3. Add connection visualization/graph output format
 4. Performance profiling with very large scenes (10k+ nodes)
 5. Add support for regex patterns in find_nodes()
-

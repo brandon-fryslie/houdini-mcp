@@ -8,12 +8,12 @@ import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 
-class TransactionPolicy(str, Enum):
+class TransactionPolicy(StrEnum):
     UNDOABLE = "undoable"
     CHECKPOINT_REQUIRED = "checkpoint_required"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"

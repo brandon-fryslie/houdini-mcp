@@ -29,7 +29,7 @@ December 18, 2024
     ],
     "warnings": [
         {
-            "severity": "warning", 
+            "severity": "warning",
             "message": "Warning message text",
             "node_path": "/obj/geo1/node"
         }
@@ -80,16 +80,20 @@ self._last_cook_time: Optional[float] = None
 ```python
 def cookState() -> MagicMock:
     """Return cook state enum."""
-    
+
+
 def errors() -> List[str]:
     """Return list of error messages."""
-    
+
+
 def warnings() -> List[str]:
     """Return list of warning messages."""
-    
+
+
 def cook(force: bool = False) -> None:
     """Simulate cooking the node."""
-    
+
+
 def isCook() -> bool:
     """Check if node is currently cooking."""
 ```
@@ -99,7 +103,7 @@ def isCook() -> bool:
 **New Mock Enum**:
 ```python
 self.cookState.Cooked
-self.cookState.CookFailed  
+self.cookState.CookFailed
 self.cookState.Dirty
 self.cookState.Uncooked
 ```
@@ -157,10 +161,10 @@ self.cookState.Uncooked
 ### Cook State Mapping
 ```python
 cook_state_map = {
-    "Cooked": "cooked",        # Successful cook
-    "CookFailed": "error",     # Cook failed with errors
-    "Dirty": "dirty",          # Needs recook
-    "Uncooked": "uncooked"     # Never cooked
+    "Cooked": "cooked",  # Successful cook
+    "CookFailed": "error",  # Cook failed with errors
+    "Dirty": "dirty",  # Needs recook
+    "Uncooked": "uncooked",  # Never cooked
 }
 ```
 
@@ -190,11 +194,7 @@ print(info["cook_info"]["cook_state"])  # "cooked"
 
 ### Force Cook and Check
 ```python
-info = get_node_info(
-    "/obj/geo1/sphere1",
-    include_errors=True,
-    force_cook=True
-)
+info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
 if info["cook_info"]["cook_state"] == "error":
     for err in info["cook_info"]["errors"]:
         print(f"Error: {err['message']}")
@@ -202,11 +202,7 @@ if info["cook_info"]["cook_state"] == "error":
 
 ### Combined with Parameters
 ```python
-info = get_node_info(
-    "/obj/geo1/sphere1",
-    include_params=True,
-    include_errors=True
-)
+info = get_node_info("/obj/geo1/sphere1", include_params=True, include_errors=True)
 # Returns both parameters and cook_info
 ```
 
@@ -226,10 +222,10 @@ info = get_node_info(
 ```
 tests/test_node_errors.py:
   ✓ 15/15 tests passed
-  
+
 tests/test_tools.py:
   ✓ 83/83 tests passed (including existing get_node_info tests)
-  
+
 Total: 98/98 tests passed (100%)
 ```
 
