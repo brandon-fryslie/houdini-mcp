@@ -1,16 +1,20 @@
 """The token handshake, defined once.
 
 [LAW:one-source-of-truth] A client that holds the shared secret writes it to the
-socket before the rpyc protocol starts; the listener reads exactly that many bytes,
-compares, and answers with one acknowledgement byte. Everything that takes part -
-the plugin's listener, the MCP server's connection, the live verify script -
-derives its side from this module, so a change to the handshake is one edit and
-the two sides cannot drift apart.
+socket, length-prefixed, before the rpyc protocol starts; the listener reads that
+one framed token, compares, and answers with one acknowledgement byte. Everything
+that takes part - the plugin's listener, the MCP server's connection, the live
+verify script - derives its side from this module, so a change to the handshake
+is one edit and the two sides cannot drift apart.
 
-The acknowledgement is what gives the client a typed outcome: a listener that
-rejects the token closes the socket (``HandshakeError``, rejected), and a
-listener that is not enforcing a token never answers (``HandshakeError``, not
-acknowledged) instead of parsing the token as an rpyc frame and hanging.
+The framing and the acknowledgement are what give both sides a typed outcome.
+The listener reads a complete token and decides at once, whatever its length,
+so the client never races a timer: a closed socket means rejected, no answer
+means the listener is not enforcing a token. A client with no token sends
+nothing, which keeps it compatible with a plain ``hrpyc.start_server()``; the
+price is that against a tokened listener it is indistinguishable from a client
+whose rpyc stream the listener closed, so that case surfaces as a connection
+failure that names the token as a possible cause.
 
 Houdini-side callers import this lazily: a Houdini that cannot import it cannot
 enforce a token, and the listener's security policy refuses to bind rather than
@@ -20,6 +24,7 @@ degrade (see ``houdini_mcp_plugin.listener.resolve_security_policy``).
 from __future__ import annotations
 
 import hmac
+import struct
 from collections.abc import Callable
 from typing import Any
 
@@ -32,6 +37,9 @@ Authenticator = Callable[[Any], tuple[Any, Any]]
 
 # The listener's answer to a correct token.
 ACK = b"\x06"
+
+# One byte of length, then the token: at most 255 bytes of secret.
+_FRAME = struct.Struct("!B")
 
 # Bound on either side waiting for the other's handshake bytes. A peer that
 # connects and never completes the exchange is a rejection, not a held thread.
@@ -52,7 +60,10 @@ def exchange(token: str | None) -> tuple[bytes, bytes]:
     [LAW:dataflow-not-control-flow] no token is the empty exchange, so every
     client takes one path: write the first, read the second.
     """
-    return (b"", b"") if token is None else (token.encode("utf-8"), ACK)
+    if token is None:
+        return b"", b""
+    secret = token.encode("utf-8")
+    return _FRAME.pack(len(secret)) + secret, ACK
 
 
 def _recv_exactly(sock: Any, length: int) -> bytes:
@@ -77,41 +88,48 @@ def _recv_exactly(sock: Any, length: int) -> bytes:
         sock.settimeout(previous)
 
 
+def _recv_framed(sock: Any) -> bytes:
+    """Read one length-prefixed token as the client framed it, prefix included."""
+    header = _recv_exactly(sock, _FRAME.size)
+    (length,) = _FRAME.unpack(header)
+    return header + _recv_exactly(sock, length)
+
+
 def connect(host: str, port: int, token: str | None) -> Any:
     """Open a classic (SlaveService) rpyc connection, presenting ``token`` first.
 
     Equivalent to ``rpyc.classic.connect(host, port)`` with the exchange done on
     the socket before the protocol handshake. Raises ``HandshakeError`` when the
-    listener rejects the token or does not acknowledge it.
+    listener closes the connection on the token or does not acknowledge it.
     """
     sent, expected = exchange(token)
     stream = SocketStream.connect(host, port)
     try:
-        stream.write(sent)
-        _recv_exactly(stream.sock, len(expected))
-    except EOFError as exc:
-        stream.close()
-        raise HandshakeError(
-            f"listener at {host}:{port} rejected the token "
-            "(HOUDINI_RPC_TOKEN differs between the MCP server and the listener)"
-        ) from exc
-    except TimeoutError as exc:
-        stream.close()
-        raise HandshakeError(
-            f"listener at {host}:{port} did not acknowledge the token within "
-            f"{HANDSHAKE_TIMEOUT}s (is it running with HOUDINI_RPC_TOKEN set?)"
-        ) from exc
+        try:
+            stream.write(sent)
+            _recv_exactly(stream.sock, len(expected))
+        except EOFError as exc:
+            raise HandshakeError(
+                f"listener at {host}:{port} closed the connection on the token "
+                "(HOUDINI_RPC_TOKEN differs between the MCP server and the listener)"
+            ) from exc
+        except TimeoutError as exc:
+            raise HandshakeError(
+                f"listener at {host}:{port} did not acknowledge the token within "
+                f"{HANDSHAKE_TIMEOUT}s (is it running with HOUDINI_RPC_TOKEN set?)"
+            ) from exc
+        return rpyc.classic.connect_stream(stream)
     except BaseException:
         stream.close()
         raise
-    return rpyc.classic.connect_stream(stream)
 
 
 def token_authenticator(token: str) -> Authenticator:
-    """The listener's side: read ``len(token)`` bytes from the accepted socket,
-    compare in constant time, and acknowledge. Raises ``ImportError`` when the
-    installed rpyc has no ``AuthenticationError`` to raise, so a caller can
-    refuse to bind instead of serving unauthenticated.
+    """The listener's side: read the client's framed token, compare in constant
+    time, and acknowledge. A client that stalls, leaves, or presents anything
+    else fails authentication. Raises ``ImportError`` when the installed rpyc
+    has no ``AuthenticationError`` to raise, so a caller can refuse to bind
+    instead of serving unauthenticated.
     """
     from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
 
@@ -119,12 +137,14 @@ def token_authenticator(token: str) -> Authenticator:
 
     def authenticate(sock: Any) -> tuple[Any, Any]:
         try:
-            received = _recv_exactly(sock, len(expected))
-        except (EOFError, TimeoutError) as exc:
-            raise AuthenticationError(f"no hrpyc token presented: {exc}") from exc
-        if not hmac.compare_digest(received, expected):
-            raise AuthenticationError("invalid hrpyc token")
-        sock.sendall(ack)
+            received = _recv_framed(sock)
+            if not hmac.compare_digest(received, expected):
+                raise AuthenticationError("invalid hrpyc token")
+            sock.sendall(ack)
+        except (EOFError, OSError) as exc:
+            # TimeoutError is an OSError: a stalled client and a departed one
+            # are both an incomplete handshake.
+            raise AuthenticationError(f"hrpyc token handshake incomplete: {exc}") from exc
         return sock, None
 
     return authenticate

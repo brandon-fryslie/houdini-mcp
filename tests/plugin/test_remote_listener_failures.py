@@ -16,6 +16,8 @@ from houdini_mcp_plugin.listener import (
 )
 from rpyc.utils.authenticators import AuthenticationError
 
+from houdini_mcp import handshake
+
 # ---------------------------------------------------------------------------
 # Bind failures
 # ---------------------------------------------------------------------------
@@ -101,12 +103,13 @@ class TestSecurityEnforcement:
 
         client, server_side = socket.socketpair()
         with client, server_side:
-            client.sendall(b"hunter2")
+            # [LAW:one-source-of-truth] the wire bytes come from the handshake, not a copy here.
+            client.sendall(handshake.exchange("hunter2")[0])
             assert authenticate(server_side) == (server_side, None)
 
         client, server_side = socket.socketpair()
         with client, server_side:
-            client.sendall(b"hunter3")
+            client.sendall(handshake.exchange("hunter3")[0])
             with pytest.raises(AuthenticationError):
                 authenticate(server_side)
 

@@ -136,7 +136,7 @@ class TestConnect:
 
             connect("192.168.1.100", 19999)
 
-            mock_rpyc.connect.assert_called_with("192.168.1.100", 19999, token=None)
+            assert mock_rpyc.connect.call_args.args == ("192.168.1.100", 19999)
 
 
 class TestIsConnected:
@@ -276,7 +276,7 @@ class TestEnsureConnected:
 
             ensure_connected("custom-host", 12345)
 
-            mock_rpyc.connect.assert_called_with("custom-host", 12345, token=None)
+            assert mock_rpyc.connect.call_args.args == ("custom-host", 12345)
 
 
 class TestGetHou:

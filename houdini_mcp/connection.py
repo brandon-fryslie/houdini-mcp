@@ -239,7 +239,9 @@ def connect(
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {host}:{port} after {max_retries} attempts. "
         f"Make sure Houdini is running with RPC server enabled "
-        f"(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell). "
+        f"(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
+        f"if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
+        f"(a listener that rejects this client's stream looks like one that is not running). "
         f"Last error: {last_error}"
     )
 

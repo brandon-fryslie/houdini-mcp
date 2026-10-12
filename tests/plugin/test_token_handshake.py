@@ -70,7 +70,7 @@ class TestSharedHandshake:
             rpyc.classic.connect("127.0.0.1", tokened_server).modules.os.getpid()
 
     def test_wrong_token_is_rejected(self, tokened_server):
-        with pytest.raises(handshake.HandshakeError, match="rejected the token"):
+        with pytest.raises(handshake.HandshakeError, match="closed the connection"):
             handshake.connect("127.0.0.1", tokened_server, token="hunter3")
 
     def test_token_against_untokened_listener_is_not_acknowledged(
@@ -86,9 +86,16 @@ class TestSharedHandshake:
         finally:
             conn.close()
 
+    @pytest.mark.parametrize("mistyped", ["hunter", "hunter23", "x"])
+    def test_prefix_and_extended_tokens_are_rejected_at_once(self, tokened_server, mistyped):
+        # Framing means the listener reads the whole token the client sent and
+        # decides immediately; no timer on either side is involved.
+        with pytest.raises(handshake.HandshakeError, match="closed the connection"):
+            handshake.connect("127.0.0.1", tokened_server, token=mistyped)
+
     def test_no_token_is_the_empty_exchange(self):
         assert handshake.exchange(None) == (b"", b"")
-        assert handshake.exchange(TOKEN) == (b"hunter2", handshake.ACK)
+        assert handshake.exchange(TOKEN) == (b"\x07hunter2", handshake.ACK)
 
 
 class TestListenerDerivesFromSharedHandshake:
@@ -106,6 +113,23 @@ class TestListenerDerivesFromSharedHandshake:
             assert authenticate(server_side) == (server_side, None)
             assert client.recv(len(expected)) == expected
             assert server_side.gettimeout() is None  # restored for rpyc
+
+    def test_client_leaving_before_the_ack_fails_authentication(
+        self, fake_hrpyc, fake_hou, free_port
+    ):
+        from rpyc.utils.authenticators import AuthenticationError
+
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token=TOKEN))
+        authenticate = fake_hrpyc.servers[0].authenticator
+        sent, _ = handshake.exchange(TOKEN)
+
+        client, server_side = socket.socketpair()
+        with server_side:
+            client.sendall(sent)
+            client.close()
+            with pytest.raises(AuthenticationError, match="incomplete"):
+                authenticate(server_side)
 
     def test_fake_server_runs_the_authenticator_on_accept(self, fake_hrpyc, fake_hou, free_port):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
@@ -127,7 +151,7 @@ class TestListenerDerivesFromSharedHandshake:
         before = server.rejected
 
         with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
-            sock.sendall(b"hu")  # fewer bytes than the token, and never closes
+            sock.sendall(b"\x07hu")  # announces 7 bytes, sends 2, and never closes
             assert sock.recv(1) == b""  # the server gave up and closed
         assert server.rejected == before + 1
 
@@ -148,6 +172,13 @@ class TestMcpServerPresentsToken:
         monkeypatch.setenv("HOUDINI_RPC_TOKEN", TOKEN)
         connection.connect("houdini-box", 18811)
         assert seen == [("houdini-box", 18811, TOKEN)]
+
+    def test_no_token_against_tokened_listener_names_the_token(
+        self, reset_connection_state, tokened_server, monkeypatch
+    ):
+        monkeypatch.delenv("HOUDINI_RPC_TOKEN", raising=False)
+        with pytest.raises(connection.HoudiniConnectionError, match="HOUDINI_RPC_TOKEN"):
+            connection.connect("127.0.0.1", tokened_server, max_retries=1)
 
     def test_rejection_is_not_retried(self, reset_connection_state, monkeypatch):
         attempts: list[str | None] = []

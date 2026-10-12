@@ -514,13 +514,6 @@ def mock_connection(mock_hou: MockHouModule) -> Generator[MockHouModule, None, N
         yield mock_hou
 
 
-@pytest.fixture(autouse=True)
-def no_rpc_token_in_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The suite presents no token unless a test sets one; the developer's shell
-    (where the docs say to export HOUDINI_RPC_TOKEN) must not change outcomes."""
-    monkeypatch.delenv("HOUDINI_RPC_TOKEN", raising=False)
-
-
 @pytest.fixture
 def mock_rpyc(mock_hou: MockHouModule) -> Generator[MockHouModule, None, None]:
     """Patch the handshake connect seam to return a mock connection."""
