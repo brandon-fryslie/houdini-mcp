@@ -285,6 +285,26 @@ class TestPluginStartsTheSharedServer:
         assert plugin_server.is_server_running() is False
         assert "stdin closed" in caplog.text
 
+    def test_failed_thread_start_leaves_nothing_serving(
+        self, plugin_server: Any, held_serve: dict[str, Any]
+    ) -> None:
+        """A thread that never ran cannot clear itself; the failed start does."""
+
+        def cannot_start(self: threading.Thread) -> None:
+            raise RuntimeError("can't start new thread")
+
+        with pytest.MonkeyPatch.context() as no_threads:
+            no_threads.setattr(threading.Thread, "start", cannot_start)
+            with pytest.raises(RuntimeError, match="can't start new thread"):
+                plugin_server.start_server(use_thread=True)
+        assert plugin_server.is_server_running() is False
+
+        assert plugin_server.start_server(use_thread=True) is True
+        assert plugin_server.is_server_running() is True
+        held_serve["stdin"].set()
+        _wait_until_stopped(plugin_server)
+        assert held_serve["runs"] == 1
+
     def test_plugin_has_no_stop(self) -> None:
         """A stdio server ends when the client closes stdin; nothing else can end it."""
         import houdini_mcp_plugin

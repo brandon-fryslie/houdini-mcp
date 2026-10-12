@@ -70,18 +70,21 @@ class StdioServer:
             if self._serving is not None:
                 raise AlreadyServing()
             run = _prepare_stdio_server()
-            thread = (
-                threading.current_thread()
-                if block
-                else threading.Thread(target=self._serve, args=(run,), daemon=True)
-            )
-            self._serving = thread
-        where = "this thread" if block else "a background thread"
-        logger.info(f"Starting MCP server (stdio transport) in {where}")
-        if block:
-            return self._serve(run)
-        thread.start()
-        return True
+            where = "this thread" if block else "a background thread"
+            logger.info(f"Starting MCP server (stdio transport) in {where}")
+            if block:
+                self._serving = threading.current_thread()
+            else:
+                self._serving = threading.Thread(target=self._serve, args=(run,), daemon=True)
+                try:
+                    self._serving.start()
+                except BaseException:
+                    # [LAW:no-ambient-temporal-coupling] only a thread that ran clears
+                    # itself; one that never started is cleared by the start that failed
+                    self._serving = None
+                    raise
+                return True
+        return self._serve(run)
 
     def _serve(self, run: Callable[[], None]) -> bool:
         """Run the transport to its end; the outcome is logged before state clears."""

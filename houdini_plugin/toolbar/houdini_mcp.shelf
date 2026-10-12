@@ -26,14 +26,21 @@ import hou
 
 try:
     from houdini_mcp_plugin import start_server, is_server_running
-    
-    if is_server_running():
-        hou.ui.displayMessage(
-            "MCP Server is already running.",
-            title="Houdini MCP"
-        )
-    else:
-        if start_server(use_thread=True):
+except ImportError as e:
+    hou.ui.displayMessage(
+        f"Failed to import houdini_mcp_plugin:\n{e}\n\n"
+        "Make sure the plugin is properly installed.",
+        title="Houdini MCP",
+        severity=hou.severityType.Error
+    )
+else:
+    try:
+        if is_server_running():
+            hou.ui.displayMessage(
+                "MCP Server is already running.",
+                title="Houdini MCP"
+            )
+        elif start_server(use_thread=True):
             hou.ui.displayMessage(
                 "MCP Server started successfully.\n\n"
                 "The server is now listening for MCP connections via stdio.",
@@ -46,19 +53,14 @@ try:
                 title="Houdini MCP",
                 severity=hou.severityType.Error
             )
-except ImportError as e:
-    hou.ui.displayMessage(
-        f"Failed to import houdini_mcp_plugin:\n{e}\n\n"
-        "Make sure the plugin is properly installed.",
-        title="Houdini MCP",
-        severity=hou.severityType.Error
-    )
-except Exception as e:
-    hou.ui.displayMessage(
-        f"Error starting MCP Server:\n{e}",
-        title="Houdini MCP",
-        severity=hou.severityType.Error
-    )
+    except Exception as e:
+        # start_server raises when binding to this Houdini fails (for example
+        # houdini_mcp is not installed into Houdini's Python); e names the cause.
+        hou.ui.displayMessage(
+            f"Error starting MCP Server:\n{e}",
+            title="Houdini MCP",
+            severity=hou.severityType.Error
+        )
     ]]></script>
   </tool>
 
