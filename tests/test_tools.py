@@ -765,7 +765,9 @@ class TestGetNodeInfo:
         )
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", True, 50, True, host="localhost", port=18811)
+        result = get_node_info(
+            "/obj/geo1", detail="full", max_params=50, host="localhost", port=18811
+        )
 
         assert result["status"] == "success"
         assert result["path"] == "/obj/geo1"
@@ -780,7 +782,9 @@ class TestGetNodeInfo:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", False, 50, True, host="localhost", port=18811)
+        result = get_node_info(
+            "/obj/geo1", detail="standard", max_params=50, host="localhost", port=18811
+        )
 
         assert result["status"] == "success"
         assert "parameters" not in result
@@ -789,7 +793,9 @@ class TestGetNodeInfo:
         """Test getting info for non-existent node."""
         from houdini_mcp.tools import get_node_info
 
-        result = get_node_info("/obj/nonexistent", True, 50, True, host="localhost", port=18811)
+        result = get_node_info(
+            "/obj/nonexistent", detail="full", max_params=50, host="localhost", port=18811
+        )
 
         assert result["status"] == "error"
         assert "Node not found" in result["message"]
@@ -802,7 +808,9 @@ class TestGetNodeInfo:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child1])
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", False, 50, True, host="localhost", port=18811)
+        result = get_node_info(
+            "/obj/geo1", detail="standard", max_params=50, host="localhost", port=18811
+        )
 
         assert result["status"] == "success"
         assert "sphere1" in result["children"]
@@ -815,7 +823,9 @@ class TestGetNodeInfo:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params=many_params)
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", True, 10, True, host="localhost", port=18811)
+        result = get_node_info(
+            "/obj/geo1", detail="full", max_params=10, host="localhost", port=18811
+        )
 
         assert result["status"] == "success"
         # Should have truncation indicator
@@ -835,7 +845,7 @@ class TestGetNodeInfo:
         )
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", compact=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", detail="compact", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["path"] == "/obj/geo1"
@@ -1094,8 +1104,8 @@ class TestListNodeTypes:
         assert result["status"] == "success"
         assert result["count"] == 0
 
-    def test_list_node_types_max_results_default(self, mock_connection):
-        """Test that default max_results limits output to 100."""
+    def test_list_node_types_limit_default(self, mock_connection):
+        """Test that default limit limits output to 100."""
         from houdini_mcp.tools import list_node_types
 
         result = list_node_types(None, host="localhost", port=18811)
@@ -1105,33 +1115,33 @@ class TestListNodeTypes:
         assert result["count"] <= 100
         assert len(result["node_types"]) <= 100
 
-    def test_list_node_types_max_results_custom(self, mock_connection):
-        """Test custom max_results parameter."""
+    def test_list_node_types_limit_custom(self, mock_connection):
+        """Test custom limit parameter."""
         from houdini_mcp.tools import list_node_types
 
-        result = list_node_types(None, max_results=50, host="localhost", port=18811)
+        result = list_node_types(None, limit=50, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] <= 50
         assert len(result["node_types"]) <= 50
 
-    def test_list_node_types_max_results_capped_at_500(self, mock_connection):
-        """Test that max_results is capped at 500."""
+    def test_list_node_types_limit_capped_at_500(self, mock_connection):
+        """Test that limit is capped at 500."""
         from houdini_mcp.tools import list_node_types
 
         # Request more than 500, should be capped
-        result = list_node_types(None, max_results=1000, host="localhost", port=18811)
+        result = list_node_types(None, limit=1000, host="localhost", port=18811)
 
         assert result["status"] == "success"
         # Should be capped at 500
         assert result["count"] <= 500
         assert len(result["node_types"]) <= 500
 
-    def test_list_node_types_max_results_minimum(self, mock_connection):
-        """An invalid max_results (< 1) pages one item, like every other list tool."""
+    def test_list_node_types_limit_minimum(self, mock_connection):
+        """An invalid limit (< 1) pages one item, like every other list tool."""
         from houdini_mcp.tools import list_node_types
 
-        result = list_node_types(None, max_results=0, host="localhost", port=18811)
+        result = list_node_types(None, limit=0, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 1
@@ -1200,8 +1210,8 @@ class TestListNodeTypes:
         """Test that warning is included when results are limited."""
         from houdini_mcp.tools import list_node_types
 
-        # Request with small max_results to trigger limit
-        result = list_node_types(None, max_results=5, host="localhost", port=18811)
+        # Request with small limit to trigger limit
+        result = list_node_types(None, limit=5, host="localhost", port=18811)
 
         assert result["status"] == "success"
         if result["count"] >= 5:
@@ -1211,12 +1221,12 @@ class TestListNodeTypes:
             assert result["total"] > 5
 
     def test_list_node_types_early_termination(self, mock_connection):
-        """Test that iteration stops early when max_results reached."""
+        """Test that iteration stops early when limit reached."""
         from houdini_mcp.tools import list_node_types
 
         # This test ensures early termination doesn't crash
         # by requesting a small number of results
-        result = list_node_types(None, max_results=10, host="localhost", port=18811)
+        result = list_node_types(None, limit=10, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] <= 10
@@ -1539,7 +1549,7 @@ class TestFindNodes:
         grid1 = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
         obj_node._children = [noise1, noise2, grid1]
 
-        result = find_nodes("/obj", "noise*", None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 2
@@ -1559,7 +1569,7 @@ class TestFindNodes:
         other = MockHouNode(path="/obj/other", name="other", node_type="null")
         obj_node._children = [my_noise, other]
 
-        result = find_nodes("/obj", "noise", None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj", "noise", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 1
@@ -1575,7 +1585,7 @@ class TestFindNodes:
         box1 = MockHouNode(path="/obj/box1", name="box1", node_type="box")
         obj_node._children = [sphere1, sphere2, box1]
 
-        result = find_nodes("/obj", "*", "sphere", 100, host="localhost", port=18811)
+        result = find_nodes("/obj", "*", "sphere", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 2
@@ -1597,14 +1607,14 @@ class TestFindNodes:
         obj_node = mock_connection.node("/obj")
         obj_node._children = [geo1]
 
-        result = find_nodes("/obj", "noise*", None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 1
         assert result["matches"][0]["path"] == "/obj/geo1/subnet1/noise1"
 
-    def test_find_nodes_max_results(self, mock_connection):
-        """Test max_results limit."""
+    def test_find_nodes_limit(self, mock_connection):
+        """Test limit limit."""
         from houdini_mcp.tools import find_nodes
 
         obj_node = mock_connection.node("/obj")
@@ -1613,7 +1623,7 @@ class TestFindNodes:
         ]
         obj_node._children = many_nodes
 
-        result = find_nodes("/obj", "*", None, 10, host="localhost", port=18811)
+        result = find_nodes("/obj", "*", None, limit=10, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 10
@@ -1623,7 +1633,7 @@ class TestFindNodes:
         """Test error when root not found."""
         from houdini_mcp.tools import find_nodes
 
-        result = find_nodes("/obj/nonexistent", "*", None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj/nonexistent", "*", None, host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "Root node not found" in result["message"]
@@ -1636,14 +1646,14 @@ class TestFindNodes:
         grid = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
         obj_node._children = [grid]
 
-        result = find_nodes("/obj", "noise*", None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["count"] == 0
         assert result["matches"] == []
 
-    def test_find_nodes_pagination_offset(self, mock_connection):
-        """Test find_nodes with offset for pagination."""
+    def test_find_nodes_pagination_cursor(self, mock_connection):
+        """Test find_nodes with cursor for pagination."""
         from houdini_mcp.tools import find_nodes
 
         obj_node = mock_connection.node("/obj")
@@ -1653,14 +1663,14 @@ class TestFindNodes:
         obj_node._children = many_nodes
 
         # Get first page
-        result1 = find_nodes("/obj", "*", None, 10, offset=0, host="localhost", port=18811)
+        result1 = find_nodes("/obj", "*", None, limit=10, cursor=0, host="localhost", port=18811)
         assert result1["status"] == "success"
         assert result1["count"] == 10
-        # When max_results is hit, we have a warning about more results
+        # When limit is hit, we have a warning about more results
         assert "warning" in result1
 
         # Get second page
-        result2 = find_nodes("/obj", "*", None, 10, offset=10, host="localhost", port=18811)
+        result2 = find_nodes("/obj", "*", None, limit=10, cursor=10, host="localhost", port=18811)
         assert result2["status"] == "success"
         assert result2["count"] == 10
         assert result2.get("offset") == 10
@@ -1682,7 +1692,7 @@ class TestFindNodes:
         obj_node._children = [MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")]
         payload = '\\"; hou.pwned = True #'
 
-        result = find_nodes("/obj", payload, None, 100, host="localhost", port=18811)
+        result = find_nodes("/obj", payload, None, host="localhost", port=18811)
 
         assert not hasattr(mock_connection, "pwned")
         assert result["status"] == "success"
@@ -1700,7 +1710,7 @@ class TestFindNodes:
             children=[MockHouNode(path=f"{root_path}/grid1", name="grid1", node_type="grid")],
         )
 
-        result = find_nodes(root_path, "*", None, 100, host="localhost", port=18811)
+        result = find_nodes(root_path, "*", None, host="localhost", port=18811)
 
         assert not hasattr(mock_connection, "pwned")
         assert result["status"] == "success"
@@ -1744,7 +1754,7 @@ class TestFindNodes:
         ]
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
-            find_nodes("/obj", "grid*", None, 2, host="localhost", port=18811)
+            find_nodes("/obj", "grid*", None, limit=2, host="localhost", port=18811)
 
         assert (
             "find_nodes root=/obj pattern=grid* node_type=None offset=0 "
@@ -1858,9 +1868,7 @@ class TestGetNodeInfoExtended:
 
         result = get_node_info(
             "/obj/geo1/noise1",
-            include_params=False,
-            max_params=50,
-            include_input_details=True,
+            detail="standard",
             host="localhost",
             port=18811,
         )
@@ -1874,26 +1882,6 @@ class TestGetNodeInfoExtended:
         assert conn["input_index"] == 0
         assert conn["source_node"] == "/obj/geo1/grid1"
         assert conn["source_output_index"] == 0
-
-    def test_get_node_info_without_input_details(self, mock_connection):
-        """Test get_node_info without input details."""
-        from houdini_mcp.tools import get_node_info
-
-        grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        mock_connection.add_node(grid)
-
-        result = get_node_info(
-            "/obj/geo1/grid1",
-            include_params=False,
-            max_params=50,
-            include_input_details=False,
-            host="localhost",
-            port=18811,
-        )
-
-        assert result["status"] == "success"
-        assert "input_connections" not in result
-        assert "inputs" in result  # Basic inputs still included
 
     def test_get_node_info_multiple_inputs(self, mock_connection):
         """Test node with multiple input connections."""
@@ -1914,9 +1902,7 @@ class TestGetNodeInfoExtended:
 
         result = get_node_info(
             "/obj/geo1/merge1",
-            include_params=False,
-            max_params=50,
-            include_input_details=True,
+            detail="standard",
             host="localhost",
             port=18811,
         )
@@ -1939,9 +1925,7 @@ class TestGetNodeInfoExtended:
 
         result = get_node_info(
             "/obj/geo1/grid1",
-            include_params=False,
-            max_params=50,
-            include_input_details=True,
+            detail="standard",
             host="localhost",
             port=18811,
         )

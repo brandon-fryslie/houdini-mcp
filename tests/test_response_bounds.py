@@ -7,15 +7,15 @@ detail/compact modes, and hard size caps with multibyte-safe JSON truncation.
 import json
 
 
-def _page(items, limit, cursor=None):
+def _page(items, limit, cursor=0):
     from houdini_mcp.tools._common import paginate, paging_fields, parse_page_request
 
-    page = paginate(items, parse_page_request(limit=limit, cursor=cursor, default_limit=20))
+    page = paginate(items, parse_page_request(limit=limit, cursor=cursor))
     return {"items": page.items, **paging_fields(page)}
 
 
 class TestResponsePagination:
-    """Test pagination with limit/cursor/offset controls."""
+    """Test pagination with limit/cursor controls."""
 
     def test_invalid_inputs_are_clamped_without_repeating_cursor(self):
         result = _page(list(range(5)), limit=0, cursor=-100)
@@ -29,18 +29,6 @@ class TestResponsePagination:
         result = _page(list(range(PAGE_LIMIT_MAX + 50)), limit=PAGE_LIMIT_MAX + 10)
         assert result["returned"] == PAGE_LIMIT_MAX
         assert result["cursor"] == PAGE_LIMIT_MAX
-
-    def test_limit_wins_over_max_results_and_cursor_over_offset(self):
-        from houdini_mcp.tools._common import parse_page_request
-
-        request = parse_page_request(limit=7, cursor=3, max_results=50, offset=40, default_limit=20)
-        assert (request.offset, request.limit) == (3, 7)
-        legacy = parse_page_request(
-            limit=None, cursor=None, max_results=50, offset=40, default_limit=20
-        )
-        assert (legacy.offset, legacy.limit) == (40, 50)
-        unset = parse_page_request(limit=None, cursor=None, default_limit=20)
-        assert (unset.offset, unset.limit) == (0, 20)
 
     def test_paginate_empty_list(self):
         """Paginating an empty list returns empty result with no cursor."""
@@ -131,7 +119,7 @@ class TestResponsePagination:
                 seen.append(i)
                 yield i
 
-        page = paginate(source(), parse_page_request(limit=5, cursor=10, default_limit=20))
+        page = paginate(source(), parse_page_request(limit=5, cursor=10))
         assert page.items == [10, 11, 12, 13, 14]
         assert page.total == 30
         assert seen == list(range(30))
@@ -255,10 +243,9 @@ class TestPagingEnforcer:
         from houdini_mcp.tools._common import parse_page_request
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools"):
-            parse_page_request(limit=0, cursor=-7, default_limit=20)
+            parse_page_request(limit=0, cursor=-7)
         assert any(
-            "limit=0 cursor=-7 max_results=None offset=None -> offset=0 limit=1" in r.getMessage()
-            for r in caplog.records
+            "limit=0 cursor=-7 -> offset=0 limit=1" in r.getMessage() for r in caplog.records
         )
 
     def test_served_page_is_logged(self, caplog):
@@ -379,11 +366,11 @@ class TestLegacyPaginationCompatibility:
     def test_direct_positional_host_port_calls_still_work(self, mock_connection):
         from houdini_mcp.tools.nodes import find_nodes, list_children, list_node_types
 
-        assert list_node_types(None, 10, None, 0, "localhost", 18811)["status"] == "success"
+        assert list_node_types(None, None, "localhost", 18811)["status"] == "success"
         assert (
             list_children("/obj", False, 10, 1000, True, "localhost", 18811)["status"] == "success"
         )
-        assert find_nodes("/obj", "*", None, 10, 0, "localhost", 18811)["status"] == "success"
+        assert find_nodes("/obj", "*", None, "localhost", 18811)["status"] == "success"
 
     def test_next_offset_alias_is_preserved(self, mock_connection):
         from houdini_mcp.tools.nodes import list_node_types
@@ -799,7 +786,7 @@ class TestProductionPathResponseCap:
         # otherwise this test would not be exercising truncation at all.
         assert len(oversized_json.encode("utf-8")) > DEFAULT_RESPONSE_CAP_BYTES
 
-        with patch("houdini_mcp.tools.code.execute_code") as mock_execute_code:
+        with patch("houdini_mcp.tools.code._execute_with_grant") as mock_execute_code:
             mock_execute_code.return_value = {
                 "status": "success",
                 "stdout": oversized_json,

@@ -76,7 +76,7 @@ Created comprehensive examples and documentation demonstrating how to use the Ho
 4. Safe geometry access pattern
 
 **Key Features**:
-- Error detection with `include_errors=True`
+- Error detection with `cook_info="inspect"`
 - Cook state checking
 - Parameter type validation
 - Connection category validation
@@ -168,7 +168,7 @@ Recipes for typical operations:
 Best practices with code examples:
 
 1. **Check Cook State Before Reading Geometry**
-   - Use `include_errors=True`
+   - Use `cook_info="inspect"`
    - Handle different cook states
    - Error examination and fixing
 
@@ -439,7 +439,7 @@ test_workflow_examples.py::TestErrorHandling::test_safe_geometry_access_pattern 
 - Always check cook state before accessing geometry
 - Use `list_children` and `get_node_info` to discover networks
 - Verify results with `get_geo_summary`
-- Handle errors with `include_errors=True`
+- Handle errors with `cook_info="inspect"`
 
 ## Success Metrics
 

@@ -15,7 +15,7 @@ info = get_node_info("/obj/geo1/sphere1")
 ### With Error Checking
 ```python
 # Include cook state and errors
-info = get_node_info("/obj/geo1/sphere1", include_errors=True)
+info = get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 
 # Access cook info
 print(info["cook_info"]["cook_state"])  # "cooked", "error", "dirty", "uncooked"
@@ -26,13 +26,13 @@ print(info["cook_info"]["warnings"])  # List of warning dicts
 ### Force Cook First
 ```python
 # Cook node before checking errors
-info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
+info = get_node_info("/obj/geo1/sphere1",cook_info="force_cook")
 # Returns: fresh cook info with last_cook_time
 ```
 
 ## Return Format
 
-### Without `include_errors` (default)
+### With `cook_info="none"` (default)
 ```json
 {
   "status": "success",
@@ -45,7 +45,7 @@ info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
 }
 ```
 
-### With `include_errors=True`
+### With `cook_info="inspect"`
 ```json
 {
   "status": "success",
@@ -71,7 +71,7 @@ info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
 }
 ```
 
-### With `force_cook=True`
+### With `cook_info="force_cook"`
 ```json
 {
   "cook_info": {
@@ -96,7 +96,7 @@ info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
 
 ### Check for Errors
 ```python
-info = get_node_info(node_path, include_errors=True)
+info = get_node_info(node_path, cook_info="inspect")
 if info["cook_info"]["cook_state"] == "error":
     for err in info["cook_info"]["errors"]:
         print(f"Error: {err['message']}")
@@ -104,7 +104,7 @@ if info["cook_info"]["cook_state"] == "error":
 
 ### Check for Warnings
 ```python
-info = get_node_info(node_path, include_errors=True)
+info = get_node_info(node_path, cook_info="inspect")
 for warn in info["cook_info"]["warnings"]:
     print(f"Warning: {warn['message']}")
 ```
@@ -112,13 +112,13 @@ for warn in info["cook_info"]["warnings"]:
 ### Force Fresh Cook
 ```python
 # Cook and immediately check for errors
-info = get_node_info(node_path, include_errors=True, force_cook=True)
+info = get_node_info(node_path,cook_info="force_cook")
 ```
 
 ### Combined with Parameters
 ```python
 # Get params AND cook info
-info = get_node_info(node_path, include_params=True, include_errors=True)
+info = get_node_info(node_path,cook_info="inspect")
 # Returns both parameters and cook_info
 ```
 
@@ -127,16 +127,15 @@ info = get_node_info(node_path, include_params=True, include_errors=True)
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `node_path` | str | Required | Full path to node |
-| `include_params` | bool | True | Include parameter values |
-| `include_input_details` | bool | True | Include input connections |
-| `include_errors` | bool | False | Include cook state/errors |
-| `force_cook` | bool | False | Cook before checking errors |
+| `detail` | "compact" / "standard" / "full" | "full" | How much of the node to return |
+| `cook_info` | bool | False | Include cook state/errors |
+| `cook_info="force_cook"` | bool | False | Cook before checking errors |
 
 ## Edge Cases
 
 - **Empty errors/warnings**: Returns `[]` not `null`
 - **Node not found**: Returns `{"status": "error", ...}`
-- **force_cook without include_errors**: Silently ignored
+- **Any `detail` level**: `cook_info` is reported at every level, including "compact"
 - **Unknown cook state**: Falls back to lowercase string
 - **Special characters**: Preserved in error messages
 

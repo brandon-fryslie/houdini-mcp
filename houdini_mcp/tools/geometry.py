@@ -67,8 +67,8 @@ def get_geo_summary(
         - Massive geometry (>1M points): Caps sampling with warning
         - No bounding box: Returns None for bbox fields
     """
-    # Import execute_code here to avoid circular imports
-    from .code import execute_code
+    # Imported here to avoid circular imports
+    from .code import ExecutionGrant, _bypass_config_enabled, _execute_with_grant
 
     # Validate max_sample_points
     if max_sample_points < 0:
@@ -222,18 +222,19 @@ else:
 print(json.dumps(result))
 """
 
-    # Use execute_code to run the analysis on Houdini side
-    exec_result = execute_code(
-        code=geo_analysis_code,
+    # The program above is server-authored and bounded by this tool's own
+    # sample/count limits, so it runs under the trusted heavy-geometry grant
+    # that the MCP surface cannot request.
+    exec_result = _execute_with_grant(
+        geo_analysis_code,
+        ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=_bypass_config_enabled()),
         capture_diff=False,
         max_stdout_size=500000,  # Allow larger output for geo data
+        max_stderr_size=100000,
+        max_diff_nodes=1000,
         timeout=30,
-        allow_heavy_geometry=True,
         host=host,
         port=port,
-        # Private capability: this generated program is bounded by this tool's
-        # own sample/count limits. It is intentionally absent from the MCP API.
-        _trusted_internal_heavy_geometry=True,
     )
 
     if exec_result.get("status") == "error":

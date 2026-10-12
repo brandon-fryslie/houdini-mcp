@@ -49,13 +49,13 @@
 - Substring matching when no wildcards present
 - Optional node_type filter
 - Recursive search through hierarchy
-- Configurable max_results (default: 100)
+- Configurable limit (default: 100, max: 500) with cursor paging
 
 **Parameters:**
 - `root_path`: Start search from this node (default: "/obj")
 - `pattern`: Glob pattern or substring (default: "*")
 - `node_type`: Optional type filter (e.g., "sphere", "noise")
-- `max_results`: Safety limit for results
+- `limit`: Page size; `cursor`: next-page offset
 
 **Tests:** 7 tests in `TestFindNodes` class - all passing
 
@@ -65,10 +65,10 @@
 **Location:** `houdini_mcp/tools.py:316-404`
 
 **New Parameter:**
-- `include_input_details`: bool = True
+- `detail`: "compact" | "standard" | "full" (default "full")
 
 **Enhanced Return:**
-When `include_input_details=True`, adds:
+When `detail="standard"` or `detail="full"`, adds:
 ```python
 "input_connections": [
   {
@@ -93,7 +93,7 @@ When `include_input_details=True`, adds:
 Added three new @mcp.tool() decorators:
 1. `list_children()` - Lines 229-253
 2. `find_nodes()` - Lines 256-279
-3. Updated `get_node_info()` - Lines 119-135 (added include_input_details parameter)
+3. Updated `get_node_info()` - Lines 119-135 (added input_connections)
 
 All tools properly exposed via FastMCP with comprehensive docstrings.
 
@@ -140,7 +140,7 @@ Both `list_children()` and `find_nodes()` use try/except blocks around node iter
 
 ### Deep Hierarchies:
 - `list_children()` respects `max_depth` parameter (default: 10)
-- `find_nodes()` recursively searches but stops at `max_results`
+- `find_nodes()` recursively searches but returns one page of `limit` results
 
 ### Input Connection Details:
 - Uses `node.inputConnectors()` to get accurate output indices
@@ -148,7 +148,7 @@ Both `list_children()` and `find_nodes()` use try/except blocks around node iter
 - Handles None inputs correctly
 
 ### Memory Safety:
-- Both new tools have configurable max limits (max_nodes, max_results)
+- Both new tools have configurable max limits (max_nodes, limit)
 - Warnings added to results when limits reached
 
 ---
@@ -184,7 +184,7 @@ Agent can now see connection details like:
 
 This is returned in both:
 1. `list_children("/obj/geo1")` - shows all children with connections
-2. `get_node_info("/obj/geo1/noise", include_input_details=True)` - shows detailed connections for specific node
+2. `get_node_info("/obj/geo1/noise")` - shows detailed connections for specific node
 
 ### ✅ Agent Can Insert Nodes Without Breaking Chains:
 With connection information including source_node, input_index, and source_output_index, an agent can:
@@ -244,7 +244,7 @@ def collect_children(node, depth=0):
 ## Performance Considerations
 
 1. **Memory Usage:**
-   - max_nodes and max_results limits prevent unbounded memory growth
+   - max_nodes and limit bounds prevent unbounded memory growth
    - Recursive depth limited to prevent stack overflow
 
 2. **Network Calls:**

@@ -178,7 +178,7 @@ class TestAugmentExistingScene:
         connect_nodes(mountain_path, noise_path)
 
         # Verify new connections with get_node_info
-        noise_info = get_node_info(noise_path, include_input_details=True)
+        noise_info = get_node_info(noise_path)
         assert noise_info["status"] == "success"
         assert len(noise_info["input_connections"]) == 1
         assert noise_info["input_connections"][0]["source_node"] == mountain_path
@@ -233,7 +233,7 @@ class TestParameterWorkflow:
         assert set_result["status"] == "success"
 
         # Verify parameter was set
-        node_info = get_node_info(sphere_path, include_params=True)
+        node_info = get_node_info(sphere_path)
         assert node_info["status"] == "success"
 
         # Check individual components
@@ -292,7 +292,7 @@ class TestErrorHandling:
         noise_path = noise["node_path"]
 
         # Check cook state
-        noise_info = get_node_info(noise_path, include_errors=True, force_cook=True)
+        noise_info = get_node_info(noise_path, cook_info="force_cook")
         assert noise_info["status"] == "success"
         assert "cook_info" in noise_info
 
@@ -370,7 +370,7 @@ class TestErrorHandling:
         box_path = box["node_path"]
 
         # Step 1: Check cook state first
-        node_info = get_node_info(box_path, include_errors=True, force_cook=True)
+        node_info = get_node_info(box_path, cook_info="force_cook")
         assert node_info["status"] == "success"
         assert "cook_info" in node_info
 

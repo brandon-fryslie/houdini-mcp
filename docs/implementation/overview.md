@@ -14,7 +14,7 @@ Successfully implemented 3 new network introspection tools for the Houdini MCP S
 **Changes:**
 - ✅ Added `list_children()` function (lines 642-774, 133 lines)
 - ✅ Added `find_nodes()` function (lines 777-871, 95 lines)
-- ✅ Extended `get_node_info()` with `include_input_details` parameter (lines 316-404)
+- ✅ Extended `get_node_info()` with `input_connections` (lines 316-404)
 
 **Total additions:** ~260 lines of production code
 
@@ -95,7 +95,7 @@ except Exception as e:
 
 ### ✅ Respect max_depth and max_nodes limits
 - `list_children()`: max_depth=10, max_nodes=1000 (configurable)
-- `find_nodes()`: max_results=100 (configurable)
+- `find_nodes()`: limit=100 per page (configurable, max 500)
 - Both add warning to result when limit reached
 
 ### ✅ Write unit tests with mocked rpyc connection
@@ -116,7 +116,7 @@ Implementation complete locally. No git push performed.
 
 1. **Locked HDAs**: Gracefully handled with try/except, execution continues
 2. **Deep hierarchies**: Limited with max_depth parameter
-3. **Large node counts**: Limited with max_nodes/max_results parameters
+3. **Large node counts**: Limited with max_nodes/limit parameters
 4. **Missing inputConnectors()**: Fallback to output_index=0
 5. **None inputs**: Properly filtered/handled
 6. **Multiple inputs**: All connections tracked in array
@@ -156,7 +156,7 @@ def collect_children(node, depth=0):
 
 ## Performance Characteristics
 
-- **Memory**: Bounded by max_nodes/max_results limits
+- **Memory**: Bounded by max_nodes/limit limits
 - **Network**: Single rpyc connection reused, no additional overhead
 - **Recursion**: Stack depth limited by max_depth parameter
 - **Early termination**: Stops at first limit reached

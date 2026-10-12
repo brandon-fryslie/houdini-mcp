@@ -103,7 +103,7 @@ python parameter_workflow.py
 4. Safe geometry access pattern
 
 **Key Concepts**:
-- Using `get_node_info(include_errors=True)` for error detection
+- Using `get_node_info(cook_info="inspect")` for error detection
 - Checking cook state before accessing geometry
 - Validating parameter types with schema
 - Handling connection validation errors
@@ -147,7 +147,7 @@ summary = get_geo_summary(node2["node_path"])
 ```python
 # Discover
 children = list_children("/obj/geo1")
-noise_info = get_node_info("/obj/geo1/noise1", include_input_details=True)
+noise_info = get_node_info("/obj/geo1/noise1")
 
 # Create
 mountain = create_node("mountain", "/obj/geo1")
@@ -174,7 +174,7 @@ elif param["type"] == "menu":
 ### Pattern 4: Safe Geometry Access
 ```python
 # Check cook state first
-node_info = get_node_info(node_path, include_errors=True, force_cook=True)
+node_info = get_node_info(node_path, cook_info="force_cook")
 cook_state = node_info["cook_info"]["cook_state"]
 
 # Only access if cooked
@@ -212,7 +212,7 @@ pytest tests/integration/test_workflow_examples.py -v
    - Discover parameter schema (`get_parameter_schema`)
    - Set parameters intelligently (`set_parameter`)
    - Verify results (`get_geo_summary`)
-   - Check for errors (`get_node_info` with `include_errors=True`)
+   - Check for errors (`get_node_info` with `cook_info="inspect"`)
 
 ## Modifying Examples
 

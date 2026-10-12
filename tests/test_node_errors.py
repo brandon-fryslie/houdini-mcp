@@ -6,7 +6,7 @@ from tests.conftest import MockHouNode
 
 
 class TestGetNodeInfoWithErrors:
-    """Tests for get_node_info with include_errors parameter."""
+    """Tests for get_node_info with the cook_info axis."""
 
     def test_get_node_info_with_errors_cooked(self, mock_connection):
         """Test getting node info with errors for a successfully cooked node."""
@@ -17,7 +17,7 @@ class TestGetNodeInfoWithErrors:
         mock_connection.add_node(geo1)
 
         # Node is cooked by default with no errors
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -35,7 +35,7 @@ class TestGetNodeInfoWithErrors:
         geo1._errors = ["Invalid parameter value", "Missing input connection"]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -55,7 +55,7 @@ class TestGetNodeInfoWithErrors:
         geo1._warnings = ["Deprecated parameter used", "Performance warning: large dataset"]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -76,7 +76,7 @@ class TestGetNodeInfoWithErrors:
         geo1._warnings = ["Minor warning"]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -93,7 +93,7 @@ class TestGetNodeInfoWithErrors:
         geo1._cook_state = "Dirty"
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -108,7 +108,7 @@ class TestGetNodeInfoWithErrors:
         geo1._cook_state = "Uncooked"
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -125,9 +125,7 @@ class TestGetNodeInfoWithErrors:
         mock_connection.add_node(geo1)
 
         # Force cook should update cook state and clear errors (in mock)
-        result = get_node_info(
-            "/obj/geo1", include_errors=True, force_cook=True, host="localhost", port=18811
-        )
+        result = get_node_info("/obj/geo1", cook_info="force_cook", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -135,7 +133,7 @@ class TestGetNodeInfoWithErrors:
         assert "last_cook_time" in result["cook_info"]
 
     def test_get_node_info_backward_compatible(self, mock_connection):
-        """Test that include_errors=False (default) doesn't include cook_info."""
+        """Test that cook_info="none" (default) doesn't include cook_info."""
         from houdini_mcp.tools import get_node_info
 
         # Create a test node
@@ -150,7 +148,7 @@ class TestGetNodeInfoWithErrors:
         assert "cook_info" not in result
 
         # Explicitly False
-        result = get_node_info("/obj/geo1", include_errors=False, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" not in result
@@ -160,7 +158,7 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         result = get_node_info(
-            "/obj/nonexistent", include_errors=True, host="localhost", port=18811
+            "/obj/nonexistent", cook_info="inspect", host="localhost", port=18811
         )
 
         assert result["status"] == "error"
@@ -181,7 +179,7 @@ class TestGetNodeInfoWithErrors:
         ]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert len(result["cook_info"]["errors"]) == 4
@@ -189,7 +187,7 @@ class TestGetNodeInfoWithErrors:
         assert all(e["node_path"] == "/obj/geo1" for e in result["cook_info"]["errors"])
 
     def test_get_node_info_combined_with_params(self, mock_connection):
-        """Test that include_errors works together with include_params."""
+        """Test that cook_info is reported alongside the full record."""
         from houdini_mcp.tools import get_node_info
 
         # Create a test node with params and errors
@@ -199,9 +197,7 @@ class TestGetNodeInfoWithErrors:
         geo1._warnings = ["Test warning"]
         mock_connection.add_node(geo1)
 
-        result = get_node_info(
-            "/obj/geo1", include_params=True, include_errors=True, host="localhost", port=18811
-        )
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "parameters" in result
@@ -217,7 +213,7 @@ class TestGetNodeInfoWithErrors:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["cook_info"]["errors"] == []
@@ -414,18 +410,34 @@ class TestFindErrorNodes:
 class TestEdgeCases:
     """Test edge cases for error introspection."""
 
-    def test_force_cook_without_include_errors(self, mock_connection):
-        """Test that force_cook without include_errors doesn't crash."""
+    def test_cook_info_is_reported_at_every_detail_level(self, mock_connection):
+        """A forced cook is never silently dropped, whatever detail is asked for."""
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        # force_cook without include_errors should just be ignored
-        result = get_node_info("/obj/geo1", force_cook=True, host="localhost", port=18811)
+        for detail in ("compact", "standard", "full"):
+            result = get_node_info(
+                "/obj/geo1", detail=detail, cook_info="force_cook", host="localhost", port=18811
+            )
+            assert result["status"] == "success"
+            assert "last_cook_time" in result["cook_info"]
+        assert "name" not in get_node_info(
+            "/obj/geo1", detail="compact", cook_info="force_cook", host="localhost", port=18811
+        )
 
-        assert result["status"] == "success"
-        assert "cook_info" not in result
+    def test_unknown_detail_or_cook_info_fails_loudly(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
+
+        bad_detail = get_node_info("/obj/geo1", detail="tiny", host="localhost", port=18811)
+        assert bad_detail["status"] == "error"
+        assert "detail must be one of" in bad_detail["message"]
+        bad_cook = get_node_info("/obj/geo1", cook_info="yes", host="localhost", port=18811)
+        assert bad_cook["status"] == "error"
+        assert "cook_info must be one of" in bad_cook["message"]
 
     def test_cook_state_enum_edge_cases(self, mock_connection):
         """Test handling of unusual cook state values."""
@@ -436,7 +448,7 @@ class TestEdgeCases:
         geo1._cook_state = "UnknownState"
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "cook_info" in result
@@ -456,7 +468,7 @@ class TestEdgeCases:
         ]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", include_errors=True, host="localhost", port=18811)
+        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert len(result["cook_info"]["errors"]) == 4

@@ -4,7 +4,7 @@ Covers, per acceptance criteria:
 1. Dangerous / heavy-geometry gating with actionable hints (+ network patterns).
 2. Timeout/output/diff caps tested at boundaries; timed-out work cannot leave
    untracked mutations (undo/rollback or fail-closed).
-3. Explicit, audited policy profiles: read-only / normal / privileged.
+3. Explicit, audited policy profiles: read-only / normal; one resolved grant per run.
 4. Bypass flags require configuration + request opt-in and are logged/audited.
 5. Fuzz/property tests over evasion variants.
 6. Red-path harness proving blocked code never reaches the interpreter.
@@ -123,7 +123,7 @@ class TestEvasionProperties:
 
 
 # ---------------------------------------------------------------------------
-# AC3: policy profiles (read-only / normal / privileged)
+# AC3: policy profiles (read-only / normal)
 # ---------------------------------------------------------------------------
 
 
@@ -212,37 +212,56 @@ class TestPolicyProfiles:
         assert result["status"] == "success"
         assert result["policy"] == "normal"
 
-    def test_privileged_requires_config_gate(self, mock_connection, deny_bypass_config):
-        """privileged profile without config gate must fail closed."""
+    @pytest.mark.parametrize("policy", ["superuser", "privileged"])
+    def test_unknown_policy_rejected(self, mock_connection, allow_bypass_config, policy):
+        """Only read-only and normal exist; anything else fails closed, config or not."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(
-            "print('x')",
-            policy="privileged",
-            host="localhost",
-            port=18811,
-        )
-        assert result["status"] == "error"
-        assert "config" in result["message"].lower()
-
-    def test_privileged_allowed_with_config(self, mock_connection, allow_bypass_config):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "print('privileged run')",
-            policy="privileged",
-            host="localhost",
-            port=18811,
-        )
-        assert result["status"] == "success"
-        assert result["policy"] == "privileged"
-
-    def test_unknown_policy_rejected(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code("print('x')", policy="superuser", host="localhost", port=18811)
+        result = execute_code("print('x')", policy=policy, host="localhost", port=18811)
         assert result["status"] == "error"
         assert "policy" in result["message"].lower()
+        assert result["audit"]["blocked_reason"] == "unknown_policy"
+        assert result["audit"]["granted"] == {
+            "mutation": False,
+            "dangerous": False,
+            "heavy_geometry": False,
+        }
+
+    def test_read_only_denies_dangerous_even_with_flag_and_config(
+        self, mock_connection, allow_bypass_config
+    ):
+        """read-only grants nothing to the bypass flags, even when the server would."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "import socket; socket.socket()",
+            policy="read-only",
+            allow_dangerous=True,
+            host="localhost",
+            port=18811,
+        )
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] != "bypass_config_disabled"
+        assert result["audit"]["granted"] == {
+            "mutation": False,
+            "dangerous": False,
+            "heavy_geometry": False,
+        }
+
+    def test_read_only_denial_never_blames_the_config_gate(
+        self, mock_connection, deny_bypass_config
+    ):
+        """Under read-only, enabling the config would not help, so the reason must not say so."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "hou.node('/obj/geo1').geometry()",
+            policy="read-only",
+            allow_heavy_geometry=True,
+            host="localhost",
+            port=18811,
+        )
+        assert result["audit"]["blocked_reason"] == "heavy_geometry"
 
 
 # ---------------------------------------------------------------------------
@@ -312,19 +331,52 @@ class TestTrustedInternalGeometryCapability:
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "bypass_config_disabled"
 
-    def test_private_capability_allows_only_internal_bounded_program(
-        self, mock_connection, deny_bypass_config
+    def test_allow_dangerous_does_not_unlock_heavy_geometry(
+        self, mock_connection, allow_bypass_config
     ):
-        from houdini_mcp.tools.code import execute_code
+        """Each flag unlocks exactly its own capability."""
+        from houdini_mcp.tools import execute_code
 
         result = execute_code(
+            "hou.node('/obj/geo1').geometry()",
+            allow_dangerous=True,
+            host="localhost",
+            port=18811,
+        )
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "heavy_geometry"
+        assert result["audit"]["granted"] == {
+            "mutation": True,
+            "dangerous": True,
+            "heavy_geometry": False,
+        }
+
+    def test_trusted_grant_runs_the_internal_bounded_program(
+        self, mock_connection, deny_bypass_config
+    ):
+        """The server-authored geometry program enters by the grant door, not a public flag."""
+        import inspect
+
+        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant, execute_code
+
+        assert "_trusted_internal_heavy_geometry" not in inspect.signature(execute_code).parameters
+        grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
+        assert grant.dangerous is False
+
+        result = _execute_with_grant(
             "print(hou.node('/obj').geometry())",
-            allow_heavy_geometry=True,
-            _trusted_internal_heavy_geometry=True,
+            grant,
+            capture_diff=False,
+            max_stdout_size=1000,
+            max_stderr_size=1000,
+            max_diff_nodes=10,
+            timeout=5,
             host="localhost",
             port=18811,
         )
         assert result["status"] == "success"
+        assert result["audit"]["granted"]["heavy_geometry"] is True
+        assert result["audit"]["bypass_config_enabled"] is False
 
 
 class TestAuditFields:
@@ -344,6 +396,8 @@ class TestAuditFields:
         assert audit["timed_out"] is False
         assert "code_sha256" in audit
         assert "code_length" in audit
+        # The permission decision is one value, and the audit reports it.
+        assert audit["granted"] == {"mutation": True, "dangerous": False, "heavy_geometry": False}
 
     def test_audit_records_executed_bypass(self, mock_connection, allow_bypass_config):
         from houdini_mcp.tools import execute_code

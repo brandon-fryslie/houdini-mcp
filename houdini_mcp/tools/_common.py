@@ -404,9 +404,8 @@ def _detect_import_hou(code: str) -> bool:
     return any(re.search(pattern, code, re.MULTILINE) for pattern in import_patterns)
 
 
-# Scene-mutation patterns. These are perfectly legal under the ``normal`` and
-# ``privileged`` policies, but forbidden under ``read-only`` where the caller has
-# declared they only intend to inspect the scene.
+# Scene-mutation patterns. Legal under the ``normal`` policy, forbidden under
+# ``read-only`` where the caller has declared they only intend to inspect.
 MUTATION_PATTERNS: list[tuple[str, str]] = [
     (r"\.\s*createNode\s*\(", "createNode() - creates a node"),
     (r"\.\s*createOutputNode\s*\(", "createOutputNode() - creates a node"),
@@ -622,7 +621,7 @@ def _add_response_metadata(
     if size_bytes > RESPONSE_SIZE_LARGE_THRESHOLD:
         result["_response_size_warning"] = (
             f"Large response ({size_bytes // 1024}KB). "
-            "Consider using compact=True, reducing max_results, or adding filters."
+            "Consider a compact detail level, a smaller limit, or adding filters."
         )
     elif size_bytes > RESPONSE_SIZE_WARNING_THRESHOLD:
         result["_response_size_note"] = f"Response size: {size_bytes // 1024}KB"
@@ -1071,35 +1070,18 @@ class PageRequest:
             )
 
 
-def parse_page_request(
-    *,
-    limit: int | None,
-    cursor: int | None,
-    max_results: int | None = None,
-    offset: int | None = None,
-    default_limit: int,
-) -> PageRequest:
-    """Resolve the limit/cursor arguments (and their max_results/offset aliases) into a PageRequest.
-
-    limit wins over max_results and cursor over offset; unset means the tool's
-    default page and the first page.
-    """
+def parse_page_request(*, limit: int, cursor: int) -> PageRequest:
+    """Clamp a tool's raw limit/cursor arguments into a PageRequest."""
     # [LAW:parse-dont-validate] [LAW:single-enforcer] The one checkpoint for page
     # bounds: everything downstream takes a PageRequest, so nothing re-clamps.
-    requested = limit if limit is not None else max_results
-    start = cursor if cursor is not None else offset
     request = PageRequest(
-        offset=max(0, int(start if start is not None else 0)),
-        limit=min(
-            PAGE_LIMIT_MAX, max(1, int(requested if requested is not None else default_limit))
-        ),
+        offset=max(0, int(cursor)),
+        limit=min(PAGE_LIMIT_MAX, max(1, int(limit))),
     )
     logger.debug(
-        "page request limit=%r cursor=%r max_results=%r offset=%r -> offset=%d limit=%d",
+        "page request limit=%r cursor=%r -> offset=%d limit=%d",
         limit,
         cursor,
-        max_results,
-        offset,
         request.offset,
         request.limit,
     )

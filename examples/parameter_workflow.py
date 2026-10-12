@@ -163,9 +163,7 @@ def main():
     print("[Step 4] Verifying parameters with get_node_info...")
     print(f"{'=' * 70}")
 
-    node_info = call_tool(
-        "get_node_info", node_path=sphere_path, include_params=True, max_params=50
-    )
+    node_info = call_tool("get_node_info", node_path=sphere_path, detail="full")
 
     print("\nVerifying parameter values:")
     params_to_check = {
