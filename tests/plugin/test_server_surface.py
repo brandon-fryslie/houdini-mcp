@@ -69,6 +69,19 @@ class TestInProcessConnection:
         ensure_connected("some-remote-host", 1)
         assert get_connection_info("some-remote-host", 1)["target"] == "this interpreter"
 
+    def test_failure_to_import_hou_names_this_interpreter_and_the_reason(
+        self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
+    ) -> None:
+        monkeypatch.delitem(sys.modules, "hou")
+        monkeypatch.setattr(sys, "path", [])  # nothing left to import hou from
+        with pytest.raises(conn_module.HoudiniConnectionError) as exc:
+            conn_module.connect("some-remote-host", 1, max_retries=1)
+        message = str(exc.value)
+        assert "this interpreter" in message
+        assert "No module named 'hou'" in message
+        assert "some-remote-host" not in message
+        assert "hrpyc" not in message
+
     def test_connection_exposes_interpreter_modules_and_exec(self) -> None:
         conn = InProcessConnection()
         assert conn.modules.os is sys.modules["os"]
@@ -79,6 +92,7 @@ class TestInProcessConnection:
         assert conn.closed is False
         conn.close()
         assert conn.closed is True
+        assert conn.namespace == {}
 
 
 class TestStdioServerSurface:
@@ -128,6 +142,22 @@ class TestStdioServerSurface:
             "save_scene",
             "check_connection",
         } <= names
+
+    async def test_check_connection_failure_reports_the_target(
+        self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
+    ) -> None:
+        import houdini_mcp.server as shared_server
+
+        def refuse(*_a: Any, **_k: Any) -> None:
+            raise conn_module.HoudiniConnectionError("no hou here")
+
+        monkeypatch.setattr(shared_server, "ensure_connected", refuse)
+        async with Client(shared_server.mcp) as client:
+            payload = (await client.call_tool("check_connection", {})).structured_content
+
+        assert payload["status"] == "disconnected"
+        assert payload["target"] == "this interpreter"
+        assert payload["error"] == "no hou here"
 
     async def test_pane_tools_get_qt_from_this_interpreter(
         self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any

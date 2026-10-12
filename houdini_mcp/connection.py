@@ -75,8 +75,9 @@ class _InterpreterModules:
         try:
             return self[name]
         except ImportError as e:
-            # attribute protocol: ``hasattr`` and friends expect AttributeError
-            raise AttributeError(name) from e
+            # attribute protocol: ``hasattr`` and friends expect AttributeError;
+            # the import's own words stay, since they are the diagnosis
+            raise AttributeError(str(e)) from e
 
 
 class InProcessConnection:
@@ -98,6 +99,7 @@ class InProcessConnection:
 
     def close(self) -> None:
         self.closed = True
+        self.namespace.clear()
 
 
 def _open_rpyc(host: str, port: int) -> Any:
@@ -115,21 +117,37 @@ def _open_in_process(host: str, port: int) -> InProcessConnection:
 class HoudiniTarget(NamedTuple):
     """Where Houdini lives: how to open a connection to it, and how to name it.
 
-    [LAW:one-source-of-truth] the opener and the words diagnostics use for the
-    target travel together, so an error can never describe a host:port that the
+    [LAW:one-source-of-truth] the opener, the words diagnostics use for the
+    target, and the remedy for failing to reach it travel together, so an error
+    can never describe a host:port - or prescribe a listener - that the
     connection never used.
     """
 
     open: Callable[[str, int], Any]
     describe: Callable[[str, int], str]
+    remedy: str
 
 
-REMOTE_HOUDINI = HoudiniTarget(_open_rpyc, lambda host, port: f"{host}:{port}")
-IN_PROCESS_HOUDINI = HoudiniTarget(_open_in_process, lambda _host, _port: "this interpreter")
+REMOTE_HOUDINI = HoudiniTarget(
+    _open_rpyc,
+    lambda host, port: f"{host}:{port}",
+    "Make sure Houdini is running with RPC server enabled "
+    "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell).",
+)
+IN_PROCESS_HOUDINI = HoudiniTarget(
+    _open_in_process,
+    lambda _host, _port: "this interpreter",
+    "This interpreter must be Houdini's own (hython or a Houdini session) with 'hou' importable.",
+)
 
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value, not a branch:
 # every connect, ping and diagnostic reads whichever target is installed.
 _target: HoudiniTarget = REMOTE_HOUDINI
+
+
+def describe_target(host: str, port: int) -> str:
+    """Name the Houdini a connection to ``host:port`` would actually reach."""
+    return _target.describe(host, port)
 
 
 def use_in_process_houdini() -> None:
@@ -307,8 +325,7 @@ def connect(
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {_target.describe(host, port)} after {max_retries} attempts. "
-        f"Make sure Houdini is running with RPC server enabled "
-        f"(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell). "
+        f"{_target.remedy} "
         f"Last error: {last_error}"
     )
 

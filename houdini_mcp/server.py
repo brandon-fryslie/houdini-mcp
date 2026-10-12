@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import tools
-from .connection import ensure_connected, get_connection_info, is_connected, ping
+from .connection import describe_target, ensure_connected, get_connection_info, is_connected, ping
 from .tools._common import apply_response_cap
 
 logger = logging.getLogger("houdini_mcp.server")
@@ -760,12 +760,10 @@ def check_connection() -> dict[str, Any]:
         return info
 
     except Exception as e:
-        return {
-            "status": "disconnected",
-            "host": HOUDINI_HOST,
-            "port": HOUDINI_PORT,
-            "error": str(e),
-        }
+        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
+        info["status"] = "disconnected"
+        info["error"] = str(e)
+        return info
 
 
 @mcp.tool()
@@ -1453,8 +1451,7 @@ def serve(transport: str = "http", port: int = 3055) -> None:
     Entry point for hosts that already own logging - the Houdini plugin runs
     this inside Houdini's interpreter.
     """
-    logger.info(f"Starting Houdini MCP Server on {transport}://0.0.0.0:{port}")
-    logger.info(f"Houdini connection target: {HOUDINI_HOST}:{HOUDINI_PORT}")
+    logger.info(f"Houdini connection target: {describe_target(HOUDINI_HOST, HOUDINI_PORT)}")
 
     # Cast transport to literal type for FastMCP
     transport_literal: Literal["stdio", "http", "sse", "streamable-http"] = "http"
@@ -1462,8 +1459,10 @@ def serve(transport: str = "http", port: int = 3055) -> None:
         transport_literal = transport  # type: ignore
 
     if transport_literal == "stdio":
+        logger.info("Starting Houdini MCP Server on stdio")
         mcp.run(transport=transport_literal, show_banner=False)
     else:
+        logger.info(f"Starting Houdini MCP Server on {transport_literal}://0.0.0.0:{port}")
         mcp.run(transport=transport_literal, host="0.0.0.0", port=port)
 
 

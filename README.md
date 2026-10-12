@@ -76,14 +76,16 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```
 
 3. Install the server into Houdini's Python. This installs `houdini_mcp` and
-   every dependency it declares; there is no separate list to keep in step:
+   every dependency it declares; there is no separate list to keep in step.
+   It upgrades Houdini's bundled `rpyc` 4.x to 5.x, which the hrpyc remote
+   listener runs on without change:
    ```bash
    # From the repo root, with Houdini's Python
    hython -m pip install .
    
    # Or from Houdini's Python Shell
-   import subprocess
-   subprocess.run(["pip", "install", "/path/to/houdini-mcp"])
+   import subprocess, sys
+   subprocess.run([sys.executable, "-m", "pip", "install", "/path/to/houdini-mcp"])
    ```
 
 4. Restart Houdini and find the "Houdini MCP" shelf
