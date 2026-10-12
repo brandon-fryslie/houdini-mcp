@@ -1,6 +1,7 @@
 """Tests for the Houdini MCP tools."""
 
 import asyncio
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1669,6 +1670,100 @@ class TestFindNodes:
         names1 = {m["name"] for m in result1["matches"]}
         names2 = {m["name"] for m in result2["matches"]}
         assert len(names1 & names2) == 0  # No overlap
+
+    def test_find_nodes_pattern_cannot_inject_code(self, mock_connection):
+        """A pattern shaped like Python source is matched as text, never executed.
+
+        The payload closes the string a source template would wrap it in, runs a
+        statement that leaves a mark on the hou double, and comments out the rest.
+        """
+        from houdini_mcp.tools import find_nodes
+
+        obj_node = mock_connection.node("/obj")
+        obj_node._children = [MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")]
+        payload = '\\"; hou.pwned = True #'
+
+        result = find_nodes("/obj", payload, None, 100, host="localhost", port=18811)
+
+        assert not hasattr(mock_connection, "pwned")
+        assert result["status"] == "success"
+        assert result["matches"] == []
+        assert result["total"] == 0
+
+    def test_find_nodes_root_path_cannot_inject_code(self, mock_connection):
+        """A root path shaped like Python source names a node; it is never executed."""
+        from houdini_mcp.tools import find_nodes
+
+        root_path = '/obj"); hou.pwned = True #'
+        mock_connection._nodes[root_path] = MockHouNode(
+            path=root_path,
+            name="weird",
+            children=[MockHouNode(path=f"{root_path}/grid1", name="grid1", node_type="grid")],
+        )
+
+        result = find_nodes(root_path, "*", None, 100, host="localhost", port=18811)
+
+        assert not hasattr(mock_connection, "pwned")
+        assert result["status"] == "success"
+        assert [m["name"] for m in result["matches"]] == ["grid1"]
+
+    def test_find_nodes_matches_quote_and_backslash_literally(self, mock_connection):
+        """Names containing quotes or a trailing backslash are found by the same text."""
+        from houdini_mcp.tools import find_nodes
+
+        quoted = MockHouNode(path='/obj/a"b', name='a"b', node_type="null")
+        slashed = MockHouNode(path="/obj/c\\", name="c\\", node_type="null")
+        mock_connection.node("/obj")._children = [quoted, slashed]
+
+        assert find_nodes("/obj", '"', host="localhost", port=18811)["matches"][0]["name"] == 'a"b'
+        assert find_nodes("/obj", "\\", host="localhost", port=18811)["matches"][0]["name"] == "c\\"
+
+    def test_find_nodes_traversal_failure_is_an_error(self, mock_connection):
+        """A failed descendant walk is reported, not replaced by another result set."""
+        from houdini_mcp.tools import find_nodes
+
+        obj_node = mock_connection.node("/obj")
+        obj_node._children = [MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")]
+
+        def locked() -> list[MockHouNode]:
+            raise RuntimeError("Permission denied: locked asset")
+
+        obj_node.allSubChildren = locked
+
+        result = find_nodes("/obj", "*", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert "locked asset" in result["message"]
+        assert "matches" not in result
+
+    def test_find_nodes_emits_search_outcome(self, mock_connection, caplog):
+        """Each search logs its inputs and the totals it computed."""
+        from houdini_mcp.tools import find_nodes
+
+        mock_connection.node("/obj")._children = [
+            MockHouNode(path=f"/obj/grid{i}", name=f"grid{i}", node_type="grid") for i in range(3)
+        ]
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
+            find_nodes("/obj", "grid*", None, 2, host="localhost", port=18811)
+
+        assert (
+            "find_nodes root=/obj pattern=grid* node_type=None offset=0 "
+            "total=3 returned=2 has_more=True"
+        ) in caplog.text
+
+    def test_find_nodes_type_filter_skips_type_lookup_for_name_misses(self, mock_connection):
+        """A node whose name does not match never has its type fetched."""
+        from houdini_mcp.tools import find_nodes
+
+        miss = MockHouNode(path="/obj/cam1", name="cam1", node_type="cam")
+        miss.type = lambda: (_ for _ in ()).throw(AssertionError("type() fetched for a name miss"))
+        hit = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
+        mock_connection.node("/obj")._children = [miss, hit]
+
+        result = find_nodes("/obj", "grid*", "grid", host="localhost", port=18811)
+
+        assert [m["name"] for m in result["matches"]] == ["grid1"]
 
 
 class TestFindErrorNodes:

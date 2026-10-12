@@ -9,7 +9,9 @@ This module provides tools for managing Houdini nodes:
 - find_nodes: Find nodes by pattern or type
 """
 
+import fnmatch
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from ._common import (
@@ -569,6 +571,33 @@ def list_children(
     return _add_response_metadata(result)
 
 
+def _matching_descendants(
+    root: Any, pattern: str, node_type: str | None
+) -> Iterator[tuple[Any, str, str]]:
+    """Yield ``(node, name, type)`` for every descendant of ``root`` that matches.
+
+    A pattern without ``*``/``?`` also matches as a substring. Paging is the
+    caller's job; this only decides membership.
+    """
+    pattern_lower = pattern.lower()
+    has_wildcards = "*" in pattern or "?" in pattern
+    type_lower = node_type.lower() if node_type is not None else None
+
+    for child in root.allSubChildren():
+        name = child.name()
+        name_lower = name.lower()
+        name_match = fnmatch.fnmatch(name_lower, pattern_lower) or (
+            not has_wildcards and pattern_lower in name_lower
+        )
+        if not name_match:
+            continue
+        # The type lookup is a second round trip per node; only name hits pay it.
+        child_type = child.type().name()
+        if type_lower is not None and child_type.lower() != type_lower:
+            continue
+        yield child, name, child_type
+
+
 @handle_connection_errors("find_nodes")
 def find_nodes(
     root_path: str = "/obj",
@@ -628,122 +657,29 @@ def find_nodes(
     max_results = max(1, min(int(max_results), 500))
     offset = max(0, int(offset))
 
-    # Execute search on Houdini side to minimize RPC overhead
-    # Uses allSubChildren() which is much faster than recursive children() calls
-    search_code = """
-import fnmatch
-
-root = hou.node("{root_path}")
-pattern = "{pattern}"
-node_type_filter = {node_type_repr}
-max_results = {max_results}
-offset = {offset}
-# Fetch one extra match to determine has_more without scanning/materializing
-# the rest of a potentially huge network.
-fetch_limit = max_results + 1
-
-matches = []
-total_matched = 0
-has_wildcards = "*" in pattern or "?" in pattern
-
-if root is not None:
-    # allSubChildren() returns all descendants in a single call
-    for child in root.allSubChildren():
-        child_name = child.name()
-        child_name_lower = child_name.lower()
-        pattern_lower = pattern.lower()
-
-        # Check name pattern match
-        if has_wildcards:
-            name_match = fnmatch.fnmatch(child_name_lower, pattern_lower)
-        else:
-            # Exact match or substring match
-            name_match = fnmatch.fnmatch(child_name_lower, pattern_lower) or pattern_lower in child_name_lower
-
-        # Check type filter
-        type_match = True
-        child_type = child.type().name()
-        if node_type_filter is not None:
-            type_match = child_type.lower() == node_type_filter.lower()
-
-        if name_match and type_match:
-            total_matched += 1
-
-            # Skip items before offset
-            if total_matched <= offset:
-                continue
-
-            # Keep counting exact totals, but materialize only one lookahead
-            # page to avoid path/type RPC work for every remaining match.
-            if len(matches) < fetch_limit:
-                matches.append({{
-                    "path": child.path(),
-                    "name": child_name,
-                    "type": child_type,
-                }})
-
-_result = {{"matches": matches, "total_matched": total_matched}}
-""".format(
-        root_path=root_path,
-        pattern=pattern.replace('"', '\\"'),
-        node_type_repr=repr(node_type),
-        max_results=max_results,
-        offset=offset,
+    # [LAW:single-enforcer] Caller strings are compared as data here, never formatted
+    # into a program; find_nodes has no code-execution path of its own.
+    # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
+    # as an error instead of switching to a different result set.
+    page = range(offset, offset + max_results)
+    matches: list[dict[str, str]] = []
+    total_matched = 0
+    for child, name, child_type in _matching_descendants(root, pattern, node_type):
+        # path() is one more round trip; only the returned page pays it.
+        if total_matched in page:
+            matches.append({"path": child.path(), "name": name, "type": child_type})
+        total_matched += 1
+    has_more = total_matched > page.stop
+    logger.debug(
+        "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
+        root_path,
+        pattern,
+        node_type,
+        offset,
+        total_matched,
+        len(matches),
+        has_more,
     )
-
-    try:
-        exec_globals: dict[str, Any] = {
-            "hou": hou,
-            "_result": {"matches": [], "total_matched": 0},
-        }
-        exec(search_code, exec_globals)
-        search_result = exec_globals.get("_result", {"matches": [], "total_matched": 0})
-        matches = search_result["matches"]
-        total_matched = search_result["total_matched"]
-    except Exception as e:
-        logger.warning(f"Fast search failed, falling back to slow path: {e}")
-        # Fallback to original slow implementation
-        import fnmatch as fnmatch_module
-
-        matches = []
-        total_matched = 0
-
-        def search_recursive(node: Any) -> None:
-            nonlocal total_matched
-
-            try:
-                for child in node.children():
-                    name_match = fnmatch_module.fnmatch(child.name().lower(), pattern.lower())
-                    if "*" not in pattern and "?" not in pattern:
-                        name_match = name_match or pattern.lower() in child.name().lower()
-
-                    type_match = True
-                    if node_type is not None:
-                        type_match = child.type().name().lower() == node_type.lower()
-
-                    if name_match and type_match:
-                        total_matched += 1
-                        if total_matched <= offset:
-                            search_recursive(child)
-                            continue
-                        if len(matches) < max_results + 1:
-                            matches.append(
-                                {
-                                    "path": child.path(),
-                                    "name": child.name(),
-                                    "type": child.type().name(),
-                                }
-                            )
-                    search_recursive(child)
-            except Exception as ex:
-                logger.debug(f"Could not search in {node.path()}: {ex}")
-
-        search_recursive(root)
-
-    # The extra lookahead item is never returned; it only proves another page.
-    has_more = len(matches) > max_results
-    if has_more:
-        matches = matches[:max_results]
 
     result: dict[str, Any] = {
         "status": "success",
