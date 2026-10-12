@@ -222,7 +222,8 @@ class TestToolSchemaExportability:
             annotation_str = str(annotation)
             # Just verify it's a reasonable type hint
             assert any(
-                t in annotation_str for t in ["str", "int", "bool", "float", "list", "dict", "None"]
+                t in annotation_str
+                for t in ["str", "int", "bool", "float", "list", "dict", "None", "Literal"]
             ), f"Parameter {param_name} has non-serializable type: {annotation}"
 
     def test_render_viewport_parameters_json_serializable(self):
@@ -238,7 +239,8 @@ class TestToolSchemaExportability:
 
             annotation_str = str(annotation)
             assert any(
-                t in annotation_str for t in ["str", "int", "bool", "float", "list", "dict", "None"]
+                t in annotation_str
+                for t in ["str", "int", "bool", "float", "list", "dict", "None", "Literal"]
             ), f"Parameter {param_name} has non-serializable type: {annotation}"
 
 

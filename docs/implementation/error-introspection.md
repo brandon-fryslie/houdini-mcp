@@ -13,10 +13,9 @@ December 18, 2024
 **Modified Function**: `get_node_info()` (lines 316-509)
 
 **New Parameters**:
-- `include_errors: bool = False` - When True, includes cook state and error information
-- `force_cook: bool = False` - When True, forces node to cook before checking errors
+- `cook_info: "none" | "inspect" | "force_cook" = "none"` - whether to report cook state and errors; "force_cook" cooks the node first
 
-**New Return Field** (when `include_errors=True`):
+**New Return Field** (when `cook_info` is not "none"):
 ```python
 "cook_info": {
     "cook_state": "cooked" | "error" | "dirty" | "uncooked",
@@ -34,7 +33,7 @@ December 18, 2024
             "node_path": "/obj/geo1/node"
         }
     ],
-    "last_cook_time": 1234567890.123  # Only when force_cook=True
+    "last_cook_time": 1234567890.123  # Only after cook_info="force_cook"
 }
 ```
 
@@ -42,7 +41,7 @@ December 18, 2024
 - Maps Houdini cook states to lowercase: `Cooked → cooked`, `CookFailed → error`, `Dirty → dirty`, `Uncooked → uncooked`
 - Gracefully handles nodes that don't support error/warning methods
 - Non-blocking: if cook info can't be retrieved, adds error to cook_info rather than failing entire request
-- Backward compatible: default `include_errors=False` means existing calls work unchanged
+- Default `cook_info="none"` adds nothing to the record
 
 ### 2. Server Exposure (`houdini_mcp/server.py`)
 
@@ -52,15 +51,13 @@ December 18, 2024
 ```python
 def get_node_info(
     node_path: str,
-    include_params: bool = True,
-    include_input_details: bool = True,
-    include_errors: bool = False,
-    force_cook: bool = False
+    detail: Literal["compact", "standard", "full"] = "full",
+    cook_info: Literal["none", "inspect", "force_cook"] = "none"
 ) -> Dict[str, Any]
 ```
 
 **Enhanced Documentation**:
-- Added parameter descriptions for `include_errors` and `force_cook`
+- Added parameter descriptions for `detail` and `cook_info`
 - Added usage examples for error checking
 - Clarified return structure with cook_info
 
@@ -127,13 +124,13 @@ self.cookState.Uncooked
 **Advanced Features**:
 - ✓ Force cook functionality
 - ✓ Last cook time tracking
-- ✓ Backward compatibility (include_errors=False)
+- ✓ Default cook_info="none" adds no cook_info block
 - ✓ Node not found error handling
 - ✓ Multiple errors on single node
 - ✓ Combined with parameter introspection
 
 **Edge Cases**:
-- ✓ Force cook without include_errors
+- ✓ cook_info reported at every detail level
 - ✓ Unknown cook state handling
 - ✓ Special characters in error messages
 - ✓ Empty error/warning arrays
@@ -188,13 +185,13 @@ node.cook(force=True)
 info = get_node_info("/obj/geo1/sphere1")
 
 # With error checking
-info = get_node_info("/obj/geo1/sphere1", include_errors=True)
+info = get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 print(info["cook_info"]["cook_state"])  # "cooked"
 ```
 
 ### Force Cook and Check
 ```python
-info = get_node_info("/obj/geo1/sphere1", include_errors=True, force_cook=True)
+info = get_node_info("/obj/geo1/sphere1", cook_info="force_cook")
 if info["cook_info"]["cook_state"] == "error":
     for err in info["cook_info"]["errors"]:
         print(f"Error: {err['message']}")
@@ -202,7 +199,7 @@ if info["cook_info"]["cook_state"] == "error":
 
 ### Combined with Parameters
 ```python
-info = get_node_info("/obj/geo1/sphere1", include_params=True, include_errors=True)
+info = get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 # Returns both parameters and cook_info
 ```
 
@@ -211,7 +208,7 @@ info = get_node_info("/obj/geo1/sphere1", include_params=True, include_errors=Tr
 1. **Node hasn't cooked yet**: Returns `"uncooked"` or `"dirty"` state
 2. **Multiple errors**: Returns all in array with full details
 3. **Node with no errors**: Returns empty arrays (not null)
-4. **Force cook without include_errors**: Silently ignored, no crash
+4. **Forced cook at detail="compact"**: cook_info is still reported
 5. **Unknown cook states**: Fallback to lowercase string
 6. **Special characters in messages**: Preserved as-is
 7. **Missing error/warning methods**: Graceful degradation
@@ -265,9 +262,9 @@ DEMO 2-7: All features working
 ## Backward Compatibility
 
 ✓ **Fully Backward Compatible**
-- Default `include_errors=False` maintains existing behavior
+- Default `cook_info="none"` returns the record without cook_info
 - All existing tests pass without modification (except positional arg fixes)
-- No breaking changes to return structure when `include_errors=False`
+- Return structure is unchanged when `cook_info="none"`
 - Optional parameters only - existing code unaffected
 
 ## Performance Considerations
@@ -288,11 +285,11 @@ Potential future additions (not implemented):
 
 ## Acceptance Criteria - All Met ✓
 
-- ✓ Extended existing `get_node_info()` with `include_errors` parameter
+- ✓ Extended existing `get_node_info()` with the `cook_info` axis
 - ✓ Backward compatible - existing calls still work
 - ✓ Returns cook state (cooked, error, dirty, uncooked)
 - ✓ Returns errors and warnings in structured format
-- ✓ Optional `force_cook` parameter to trigger cook first
+- ✓ `cook_info="force_cook"` triggers a cook first
 - ✓ Written comprehensive unit tests with mocks
 - ✓ Updated `@mcp.tool()` decorator in server.py with new parameters
 - ✓ Documented return format with examples

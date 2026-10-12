@@ -102,9 +102,7 @@ def main():
 
     # Step 3: Use get_node_info to see current connections
     print("\n[Step 2] Using get_node_info to inspect noise node connections...")
-    noise_info = call_tool(
-        "get_node_info", node_path=noise_path, include_params=False, include_input_details=True
-    )
+    noise_info = call_tool("get_node_info", node_path=noise_path, detail="standard")
 
     print("\nNoise node info:")
     print(f"  Path: {noise_info['path']}")
@@ -168,9 +166,7 @@ def main():
 
     # Step 8: Verify new connections with get_node_info
     print("\n[Step 7] Verifying new connections with get_node_info...")
-    noise_info_after = call_tool(
-        "get_node_info", node_path=noise_path, include_params=False, include_input_details=True
-    )
+    noise_info_after = call_tool("get_node_info", node_path=noise_path, detail="standard")
 
     print("\nNoise node info AFTER insertion:")
     print(f"  Inputs: {noise_info_after['inputs']}")

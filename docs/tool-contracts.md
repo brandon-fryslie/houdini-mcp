@@ -155,8 +155,9 @@ When other tools don't cover your use case, `execute_code` is the escape hatch. 
 
 1. `hou` is pre-injected - don't import it
 2. Use `print()` for output - it will appear in `result["stdout"]`
-3. Heavy geometry operations are blocked by default (use `allow_heavy_geometry=True` if needed)
-4. Dangerous operations are blocked by default (use `allow_dangerous=True` if needed)
+3. Heavy geometry operations are blocked by default; `allow_heavy_geometry=True` unlocks them only under policy "normal" with `HOUDINI_MCP_ALLOW_BYPASS` set server-side (prefer `get_geo_summary`)
+4. Dangerous operations are blocked by default; `allow_dangerous=True` unlocks only them, under the same two conditions
+5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
 
 ```python
 result = execute_code("""
