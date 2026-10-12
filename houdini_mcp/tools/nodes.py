@@ -19,6 +19,7 @@ from ._common import (
     _json_safe_hou_value,
     ensure_connected,
     handle_connection_errors,
+    join_warnings,
     paginate,
     paging_fields,
     parse_page_request,
@@ -518,8 +519,8 @@ def list_children(
     if nodes_collected >= max_nodes:
         # [LAW:no-silent-failure] A capped walk and a further page are two facts;
         # neither may overwrite the other.
-        result["warning"] = "; ".join(
-            filter(None, (result.get("warning"), f"Collection limited to {max_nodes} nodes"))
+        result["warning"] = join_warnings(
+            result.get("warning"), f"Collection limited to {max_nodes} nodes"
         )
 
     # Add response size metadata for large responses

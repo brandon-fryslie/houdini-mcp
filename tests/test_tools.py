@@ -1207,7 +1207,7 @@ class TestListNodeTypes:
         if result["count"] >= 5:
             # If we hit the limit, warning should be present
             assert "warning" in result
-            assert "limited to 5" in result["warning"]
+            assert f"cursor={result['cursor']}" in result["warning"]
             assert result["total"] > 5
 
     def test_list_node_types_early_termination(self, mock_connection):

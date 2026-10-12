@@ -65,6 +65,9 @@ __all__ = [
     "Page",
     "paginate",
     "paging_fields",
+    "is_paged",
+    "join_warnings",
+    "WARNING_SEPARATOR",
     "apply_response_cap",
     "DEFAULT_RESPONSE_CAP_BYTES",
     # Serialization utilities
@@ -1050,12 +1053,22 @@ PAGE_LIMIT_MAX = 500
 class PageRequest:
     """Where a page starts and how long it may be: ``0 <= offset``, ``1 <= limit <= PAGE_LIMIT_MAX``.
 
-    Only ``parse_page_request`` builds one, so holding a PageRequest is proof the
-    bounds were enforced.
+    Construction refuses anything outside those bounds, so holding a PageRequest
+    is proof they hold; ``parse_page_request`` is the one place that clamps raw
+    arguments into them.
     """
 
     offset: int
     limit: int
+
+    def __post_init__(self) -> None:
+        # [LAW:types-are-the-program] The type, not its callers, refuses the
+        # empty or negative window that would repeat a cursor forever.
+        if self.offset < 0 or not 1 <= self.limit <= PAGE_LIMIT_MAX:
+            raise ValueError(
+                f"PageRequest needs 0 <= offset and 1 <= limit <= {PAGE_LIMIT_MAX}, "
+                f"got offset={self.offset} limit={self.limit}"
+            )
 
 
 def parse_page_request(
@@ -1075,12 +1088,22 @@ def parse_page_request(
     # bounds: everything downstream takes a PageRequest, so nothing re-clamps.
     requested = limit if limit is not None else max_results
     start = cursor if cursor is not None else offset
-    return PageRequest(
+    request = PageRequest(
         offset=max(0, int(start if start is not None else 0)),
         limit=min(
             PAGE_LIMIT_MAX, max(1, int(requested if requested is not None else default_limit))
         ),
     )
+    logger.debug(
+        "page request limit=%r cursor=%r max_results=%r offset=%r -> offset=%d limit=%d",
+        limit,
+        cursor,
+        max_results,
+        offset,
+        request.offset,
+        request.limit,
+    )
+    return request
 
 
 @dataclass(frozen=True)
@@ -1109,7 +1132,29 @@ def paginate(items: Iterable[T], request: PageRequest) -> Page[T]:
         if total in window:
             page.append(item)
         total += 1
-    return Page(items=page, offset=request.offset, total=total)
+    result = Page(items=page, offset=request.offset, total=total)
+    logger.debug(
+        "paged offset=%d limit=%d total=%d returned=%d has_more=%s",
+        request.offset,
+        request.limit,
+        result.total,
+        len(result.items),
+        result.has_more,
+    )
+    return result
+
+
+WARNING_SEPARATOR = "; "
+
+
+def join_warnings(*warnings: str | None) -> str:
+    """One ``warning`` string from several facts; empty parts contribute nothing."""
+    return WARNING_SEPARATOR.join(w for w in warnings if w)
+
+
+def is_paged(data: dict[str, Any]) -> bool:
+    """Whether ``data`` carries the paging contract ``paging_fields`` builds."""
+    return "offset" in data and "total" in data
 
 
 def paging_fields(page: Page[Any]) -> dict[str, Any]:
@@ -1133,7 +1178,7 @@ def paging_fields(page: Page[Any]) -> dict[str, Any]:
         fields["cursor"] = next_page
         fields["next_offset"] = next_page
         fields["warning"] = (
-            f"Results limited to {returned} of {page.total}. "
+            f"Returned {returned} of {page.total} starting at offset {page.offset}. "
             f"Use cursor={next_page} for the next page."
         )
     return fields
@@ -1200,6 +1245,7 @@ def apply_response_cap(
         "total",
         "returned",
         "has_more",
+        "offset",
         "cursor",
         "next_offset",
         "count",
@@ -1314,18 +1360,26 @@ def apply_response_cap(
                 result[f"{field_name}_truncated"] = True
                 result[f"{field_name}_original_count"] = len(field_value)
                 result[f"{field_name}_preserved_count"] = best
-                # If this list is a paginated payload, continuation must start
-                # after what was actually returned, not after the pre-cap page.
-                if field_name in {"children", "matches", "node_types"}:
-                    result.update(
-                        paging_fields(
-                            Page(
-                                items=field_value[:best],
-                                offset=int(data["offset"]),
-                                total=int(data["total"]),
-                            )
-                        )
-                    )
+            if is_paged(data):
+                # [LAW:one-source-of-truth] A capped page is still a page: its
+                # contract is rebuilt from what was actually kept (zero items
+                # included), and only the paging sentence of the warning is
+                # replaced, so a tool's own warning survives the cap.
+                before = Page(
+                    items=field_value, offset=int(data["offset"]), total=int(data["total"])
+                )
+                after = Page(items=field_value[:best], offset=before.offset, total=before.total)
+                paging_warning = paging_fields(before).get("warning")
+                kept = [
+                    part
+                    for part in (data.get("warning") or "").split(WARNING_SEPARATOR)
+                    if part != paging_warning
+                ]
+                fields = paging_fields(after)
+                warning = join_warnings(*kept, fields.get("warning"))
+                if warning:
+                    fields["warning"] = warning
+                result.update(fields)
         elif isinstance(field_value, dict):
             # Preserve bounded prefixes from nested geometry/category lists
             # instead of dropping the entire requested diagnostic dictionary.
@@ -1370,12 +1424,13 @@ def apply_response_cap(
         if "status" in data:
             minimal["status"] = data["status"]
 
-        # Try to preserve essential fields
+        # Try to preserve essential fields, as already re-derived for the kept
+        # page: the pre-cap cursor would advance past items never delivered.
         for field in essential_fields:
-            if field in data:
+            if field in result:
                 try:
                     test_minimal = dict(minimal)
-                    test_minimal[field] = data[field]
+                    test_minimal[field] = result[field]
                     test_json = json.dumps(test_minimal, ensure_ascii=False)
                     if len(test_json.encode("utf-8")) <= max_bytes:
                         minimal[field] = data[field]

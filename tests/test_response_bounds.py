@@ -237,6 +237,95 @@ class TestOnePagingContract:
         assert "Collection limited to 10 nodes" in result["warning"]
 
 
+class TestPagingEnforcer:
+    """The parser is the one clamp, the type refuses what it does not clamp, and both log."""
+
+    def test_page_request_refuses_illegal_bounds(self):
+        import pytest
+
+        from houdini_mcp.tools._common import PAGE_LIMIT_MAX, PageRequest
+
+        for offset, limit in ((-1, 10), (0, 0), (0, PAGE_LIMIT_MAX + 1)):
+            with pytest.raises(ValueError):
+                PageRequest(offset=offset, limit=limit)
+
+    def test_clamped_request_is_logged_with_raw_and_resolved_values(self, caplog):
+        import logging
+
+        from houdini_mcp.tools._common import parse_page_request
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools"):
+            parse_page_request(limit=0, cursor=-7, default_limit=20)
+        assert any(
+            "limit=0 cursor=-7 max_results=None offset=None -> offset=0 limit=1" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_served_page_is_logged(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools"):
+            _page(list(range(25)), limit=10, cursor=10)
+        assert any(
+            "paged offset=10 limit=10 total=25 returned=10 has_more=True" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_second_page_warning_names_its_offset(self):
+        result = _page(list(range(25)), limit=5, cursor=5)
+        assert "5 of 25 starting at offset 5" in result["warning"]
+        assert "cursor=10" in result["warning"]
+
+
+class TestCapOnPagedPayloads:
+    def test_non_paged_dict_with_children_list_is_capped_without_paging_keys(self):
+        from houdini_mcp.tools._common import apply_response_cap
+
+        # get_node_info's shape: children is a list of names, not a page.
+        result = apply_response_cap(
+            {
+                "status": "success",
+                "path": "/obj/geo1",
+                "children": [f"node_{i}" for i in range(3000)],
+                "inputs": [],
+                "outputs": [],
+            },
+            max_bytes=2000,
+        )
+        assert result["children_truncated"] is True
+        assert not ({"offset", "cursor", "next_offset", "has_more"} & set(result))
+
+    def test_capped_page_keeps_the_tool_warning_and_replaces_the_paging_one(self):
+        from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
+
+        page = Page(
+            items=[{"name": f"n{i}", "detail": "x" * 300} for i in range(20)], offset=0, total=1000
+        )
+        data = {"status": "success", "children": page.items, **paging_fields(page)}
+        data["warning"] = data["warning"] + "; Collection limited to 1000 nodes"
+
+        result = apply_response_cap(data, max_bytes=1400)
+        preserved = len(result["children"])
+        assert 0 < preserved < 20
+        assert "Collection limited to 1000 nodes" in result["warning"]
+        assert f"cursor={preserved}" in result["warning"]
+        assert "cursor=20" not in result["warning"]
+
+    def test_cursor_advances_by_the_items_kept_not_the_pre_cap_page(self):
+        from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
+
+        page = Page(items=[{"blob": "x" * 5000} for _ in range(100)], offset=40, total=1000)
+        data = {"status": "success", "matches": page.items, **paging_fields(page)}
+        assert data["cursor"] == 140
+
+        result = apply_response_cap(data, max_bytes=900)
+        kept = len(result["matches"])
+        assert 0 < kept < 100
+        assert result["returned"] == result["count"] == kept
+        assert result["offset"] == 40
+        assert result["cursor"] == result["next_offset"] == 40 + kept
+
+
 class TestLegacyPaginationCompatibility:
     def test_direct_positional_host_port_calls_still_work(self, mock_connection):
         from houdini_mcp.tools.nodes import find_nodes, list_children, list_node_types
