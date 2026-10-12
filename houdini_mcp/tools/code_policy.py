@@ -8,21 +8,24 @@ Two kinds of rail live here, and they fail in opposite directions on purpose:
 
 * ``read-only`` is an **allowlist** [LAW:parse-dont-validate]. The program may
   touch only names this module recognizes as inspection; anything else - a
-  known mutator, a hou API added next release, a dynamic attribute lookup - is
-  rejected because it is unrecognized, not because it was enumerated.
+  known mutator, a hou API added next release, a dynamic attribute lookup, a
+  private member of an admitted module - is rejected because it is
+  unrecognized, not because it was enumerated.
 * ``normal`` is a **denylist** against accidents. It refuses the operations
   that destroy work (process exit, scene wipe, file deletion, shell and
   network access, dynamic execution) and admits everything else. It is a
   guard rail, not a sandbox; a caller who needs a guarantee asks for
   ``read-only``.
 
-Callers parse the code once through :func:`parse_code` and reject what does not
-parse; the detectors below assume a program that parses.
+The caller parses the program once through :func:`parse_code` and hands the
+tree to every detector [LAW:single-enforcer]: the decision about unparseable
+code is made in one place, and the detectors are pure functions of the tree.
 """
 
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 
 __all__ = [
     "parse_code",
@@ -34,12 +37,7 @@ __all__ = [
 
 
 def parse_code(code: str) -> ast.Module:
-    """Parse user code; raises ``SyntaxError`` so the caller can refuse loudly.
-
-    [LAW:single-enforcer] The decision about unparseable code is made once, by
-    the caller of this function. The detectors re-parse for convenience but
-    never decide.
-    """
+    """Parse user code; raises ``SyntaxError`` so the caller can refuse loudly."""
     return ast.parse(code)
 
 
@@ -56,8 +54,70 @@ def _dotted_chain(node: ast.expr) -> list[str] | None:
     return parts
 
 
-def _top_module(dotted: str) -> str:
-    return dotted.partition(".")[0]
+@dataclass(frozen=True)
+class _Names:
+    """What the program's identifiers stand for, read once from the tree.
+
+    ``aliases`` maps an identifier to the dotted path it was imported as:
+    ``import os.path as p`` and ``from os import path as p`` both bind ``p`` to
+    ``("os", "path")``, and the one-step ``q = p`` binds ``q`` to the same path,
+    so a rename never changes a verdict [LAW:one-source-of-truth]. ``bound``
+    holds every other identifier the program binds itself - assignments, defs,
+    args, handlers, patterns. A name in both is an import the program rebound.
+    """
+
+    aliases: dict[str, tuple[str, ...]]
+    bound: frozenset[str]
+
+    def resolve(self, chain: list[str]) -> tuple[tuple[str, ...], bool]:
+        """Dotted path a chain names, and whether that path is rooted at an import."""
+        alias = self.aliases.get(chain[0])
+        if alias is None:
+            return tuple(chain), False
+        return alias + tuple(chain[1:]), True
+
+    def is_local(self, identifier: str) -> bool:
+        """A name the program binds and never imports is the program's own, not a module."""
+        return identifier in self.bound and identifier not in self.aliases
+
+
+def _names(tree: ast.Module) -> _Names:
+    aliases: dict[str, tuple[str, ...]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                path = tuple(alias.name.split("."))
+                aliases[alias.asname or path[0]] = path if alias.asname else path[:1]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = (*node.module.split("."), alias.name)
+
+    aliased_targets: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    aliases[target.id] = aliases[node.value.id]
+                    aliased_targets.add(id(target))
+
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if id(node) not in aliased_targets:
+                bound.add(node.id)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+    return _Names(aliases=aliases, bound=frozenset(bound))
 
 
 # =============================================================================
@@ -66,8 +126,10 @@ def _top_module(dotted: str) -> str:
 
 # Module rails: a module listed here admits only the members named. An empty set
 # refuses the module outright, including its import. Access is judged by the
-# root identifier (``os.remove``) whether or not an import statement is present,
-# so a program that merely names the member is refused, not just one that imports it.
+# path an identifier resolves to (``os.remove``, ``osp.join`` -> ``os.path.join``)
+# whether or not an import statement is present, so a program that merely names
+# the member is refused, not just one that imports it. Only the first hop below
+# the module is judged: ``os.path.join`` is admitted by ``path``.
 MODULE_RAILS: dict[str, frozenset[str]] = {
     # File-system state changers live in os; the read side stays open.
     "os": frozenset(
@@ -128,17 +190,36 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
     ),
     "io": frozenset({"StringIO", "BytesIO"}),
     "codecs": frozenset({"encode", "decode", "lookup", "getencoder", "getdecoder"}),
-    # Refused outright.
+    "tempfile": frozenset(
+        {"gettempdir", "gettempdirb", "gettempprefix", "gettempprefixb", "tempdir"}
+    ),
+    # Refused outright: process and shell, file-system and archive writers,
+    # databases, dynamic import, serialization that executes, network egress,
+    # and the debugger (which parks the server on stdin).
     "subprocess": frozenset(),
     "shutil": frozenset(),
     "pathlib": frozenset(),
     "importlib": frozenset(),
     "builtins": frozenset(),
+    "zipfile": frozenset(),
+    "tarfile": frozenset(),
+    "gzip": frozenset(),
+    "bz2": frozenset(),
+    "lzma": frozenset(),
+    "sqlite3": frozenset(),
+    "dbm": frozenset(),
     "socket": frozenset(),
     "requests": frozenset(),
     "urllib": frozenset(),
+    "urllib3": frozenset(),
+    "httpx": frozenset(),
+    "aiohttp": frozenset(),
     "http": frozenset(),
     "ftplib": frozenset(),
+    "smtplib": frozenset(),
+    "xmlrpc": frozenset(),
+    "telnetlib": frozenset(),
+    "webbrowser": frozenset(),
     "pty": frozenset(),
     "ctypes": frozenset(),
     "multiprocessing": frozenset(),
@@ -148,6 +229,7 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
     "shelve": frozenset(),
     "code": frozenset(),
     "runpy": frozenset(),
+    "pdb": frozenset(),
 }
 
 # hou calls that destroy the session or the scene under any policy but privileged.
@@ -166,39 +248,25 @@ DYNAMIC_EXECUTION_NAMES: frozenset[str] = frozenset(
 _WRITING_MODE_CHARS = frozenset("wax+")
 
 
-def _rails_for_root(root: str, aliases: dict[str, str]) -> tuple[str, frozenset[str]] | None:
-    """Resolve an identifier to the module it names, if that module has rails."""
-    module = aliases.get(root, root)
-    rails = MODULE_RAILS.get(module)
-    return None if rails is None else (module, rails)
-
-
-def _module_aliases(tree: ast.Module) -> dict[str, str]:
-    """Map local identifiers to the railed module they stand for.
-
-    ``import os as o`` and the one-step ``o = os`` both bind ``o``; judging
-    ``o.remove`` by its module keeps a rename from changing the verdict.
-    """
-    aliases: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                top = _top_module(alias.name)
-                if top in MODULE_RAILS and alias.asname:
-                    aliases[alias.asname] = top
-        elif (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in MODULE_RAILS
-        ):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    aliases[target.id] = node.value.id
-    return aliases
+def _rail_refusal(path: tuple[str, ...]) -> str | None:
+    """Why the rails refuse a resolved dotted path, or None when they admit it."""
+    rails = MODULE_RAILS.get(path[0])
+    if rails is None:
+        return None
+    if not rails:
+        return f"{'.'.join(path[:2])} - blocked module"
+    if len(path) > 1 and path[1] not in rails:
+        return f"{path[0]}.{path[1]} - restricted member of {path[0]}"
+    return None
 
 
 def _open_mode_is_writing(call: ast.Call) -> str | None:
     """Describe why an ``open()`` call writes, or None when it only reads."""
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
+        kw.arg is None for kw in call.keywords
+    ):
+        # Unpacked arguments can carry a mode the gate cannot read [LAW:no-silent-failure].
+        return "open() with unpacked arguments - file writing cannot be ruled out"
     mode: ast.expr | None = call.args[1] if len(call.args) > 1 else None
     for kw in call.keywords:
         if kw.arg == "mode":
@@ -213,40 +281,29 @@ def _open_mode_is_writing(call: ast.Call) -> str | None:
     return "open() with non-literal mode - file writing cannot be ruled out"
 
 
-def _detect_dangerous_code(code: str) -> list[str]:
+def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
-    tree = parse_code(code)
-    aliases = _module_aliases(tree)
+    names = _names(tree)
     detected: list[str] = []
+
+    def judge(chain: list[str]) -> None:
+        # A name the program binds itself is its own variable, not the module
+        # that happens to share its spelling (``code = parm.eval()``).
+        if names.is_local(chain[0]):
+            return
+        path, _ = names.resolve(chain)
+        if why := _rail_refusal(path):
+            detected.append(why)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                top = _top_module(alias.name)
-                rails = MODULE_RAILS.get(top)
-                if rails is None:
-                    continue
-                if not rails:
-                    detected.append(f"{top} - blocked module")
-                elif "." in alias.name and alias.name.split(".")[1] not in rails:
-                    detected.append(f"{alias.name} - restricted member of {top}")
+                if why := _rail_refusal(tuple(alias.name.split("."))):
+                    detected.append(why)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            top = _top_module(node.module)
-            rails = MODULE_RAILS.get(top)
-            if rails is None:
-                continue
-            if not rails:
-                detected.append(f"{top} - blocked module")
-            elif "." in node.module:
-                sub = node.module.split(".")[1]
-                if sub not in rails:
-                    detected.append(f"{top}.{sub} - restricted member of {top}")
-            else:
-                detected.extend(
-                    f"{top}.{alias.name} - restricted member of {top}"
-                    for alias in node.names
-                    if alias.name not in rails
-                )
+            for alias in node.names:
+                if why := _rail_refusal((*node.module.split("."), alias.name)):
+                    detected.append(why)
         elif isinstance(node, ast.Attribute):
             chain = _dotted_chain(node)
             if chain is None:
@@ -254,19 +311,12 @@ def _detect_dangerous_code(code: str) -> list[str]:
             dotted = ".".join(chain)
             if dotted in DANGEROUS_HOU_PATHS:
                 detected.append(DANGEROUS_HOU_PATHS[dotted])
-            railed = _rails_for_root(chain[0], aliases)
-            # Only the first hop below a railed module is judged: ``os.path.join``
-            # is admitted by ``path``.
-            if railed is not None and len(chain) == 2:
-                module, rails = railed
-                if chain[1] not in rails:
-                    what = "blocked module" if not rails else f"restricted member of {module}"
-                    detected.append(f"{module}.{chain[1]} - {what}")
+            judge(chain)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            if node.id in DYNAMIC_EXECUTION_NAMES:
+            if node.id in DYNAMIC_EXECUTION_NAMES and not names.is_local(node.id):
                 detected.append(f"{node.id} - dynamic code execution")
-            elif node.id in MODULE_RAILS and not MODULE_RAILS[node.id]:
-                detected.append(f"{node.id} - blocked module")
+            else:
+                judge([node.id])
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -292,26 +342,25 @@ HEAVY_GEOMETRY_METHODS: dict[str, str] = {
 }
 
 
-def _detect_heavy_geometry_code(code: str) -> list[str]:
-    """Method calls that can cook or iterate very large SOP data.
+def _detect_heavy_geometry_code(tree: ast.Module) -> list[str]:
+    """Methods that can cook or iterate very large SOP data.
 
     Not destructive, but in production scenes they block the UI, drop the RPC
     connection, or crash Houdini. Dedicated summary tools run bounded analysis
-    on the Houdini side instead.
+    on the Houdini side instead. The attribute is judged, not the call, so
+    binding the method or passing it to ``map`` is the same as calling it.
     """
     detected = [
-        HEAVY_GEOMETRY_METHODS[node.func.attr]
-        for node in ast.walk(parse_code(code))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in HEAVY_GEOMETRY_METHODS
+        HEAVY_GEOMETRY_METHODS[node.attr]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in HEAVY_GEOMETRY_METHODS
     ]
     return list(dict.fromkeys(detected))
 
 
-def _detect_import_hou(code: str) -> bool:
+def _detect_import_hou(tree: ast.Module) -> bool:
     """``import hou`` / ``from hou import`` - hou is pre-injected, so this always fails."""
-    for node in ast.walk(parse_code(code)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import) and any(a.name == "hou" for a in node.names):
             return True
         if isinstance(node, ast.ImportFrom) and node.module == "hou":
@@ -323,38 +372,231 @@ def _detect_import_hou(code: str) -> bool:
 # read-only policy: inspection allowlist
 # =============================================================================
 
-# Pure stdlib the inspection profile may import. ``operator`` is absent on
-# purpose: attrgetter/methodcaller reach attributes by string.
-READ_ONLY_MODULES: frozenset[str] = frozenset(
-    {
-        "json",
-        "math",
-        "re",
-        "collections",
-        "itertools",
-        "functools",
-        "statistics",
-        "string",
-        "textwrap",
-        "pprint",
-        "datetime",
-        "time",
-        "fnmatch",
-        "typing",
-        "dataclasses",
-        "enum",
-        "decimal",
-        "fractions",
-        "heapq",
-        "bisect",
-        "copy",
-        "random",
-        "abc",
-        "numbers",
-        "difflib",
-        "base64",
-    }
-)
+# Pure stdlib the inspection profile may import, each with the members it may
+# name. A module's attributes are not admitted wholesale: ``random._os`` and
+# ``typing.sys`` are real attributes of pure modules, so the first hop below a
+# module is judged against its member list and every private name is refused.
+# Capitalized members (classes, constants, flags) are admitted by shape and
+# need not be listed. ``operator`` is absent on purpose: attrgetter and
+# methodcaller reach attributes by string. ``time.sleep`` and ``random.seed``
+# are absent: one parks the RPC thread, the other mutates interpreter state.
+READ_ONLY_MODULES: dict[str, frozenset[str]] = {
+    "json": frozenset({"dumps", "loads"}),
+    "math": frozenset(
+        {
+            "sqrt",
+            "floor",
+            "ceil",
+            "fabs",
+            "pow",
+            "exp",
+            "log",
+            "log2",
+            "log10",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "atan2",
+            "degrees",
+            "radians",
+            "hypot",
+            "dist",
+            "isclose",
+            "isfinite",
+            "isinf",
+            "isnan",
+            "fsum",
+            "prod",
+            "gcd",
+            "lcm",
+            "trunc",
+            "copysign",
+            "fmod",
+            "modf",
+            "comb",
+            "perm",
+            "factorial",
+            "pi",
+            "e",
+            "tau",
+            "inf",
+            "nan",
+        }
+    ),
+    "re": frozenset(
+        {
+            "compile",
+            "match",
+            "search",
+            "fullmatch",
+            "findall",
+            "finditer",
+            "sub",
+            "subn",
+            "split",
+            "escape",
+        }
+    ),
+    "collections": frozenset({"namedtuple", "defaultdict", "deque", "abc"}),
+    "itertools": frozenset(
+        {
+            "chain",
+            "count",
+            "cycle",
+            "repeat",
+            "accumulate",
+            "groupby",
+            "islice",
+            "starmap",
+            "takewhile",
+            "dropwhile",
+            "zip_longest",
+            "product",
+            "permutations",
+            "combinations",
+            "combinations_with_replacement",
+            "compress",
+            "filterfalse",
+            "tee",
+            "pairwise",
+            "batched",
+        }
+    ),
+    "functools": frozenset(
+        {
+            "reduce",
+            "partial",
+            "partialmethod",
+            "lru_cache",
+            "cache",
+            "cmp_to_key",
+            "wraps",
+            "total_ordering",
+            "singledispatch",
+        }
+    ),
+    "statistics": frozenset(
+        {
+            "mean",
+            "fmean",
+            "geometric_mean",
+            "harmonic_mean",
+            "median",
+            "median_low",
+            "median_high",
+            "mode",
+            "multimode",
+            "stdev",
+            "pstdev",
+            "variance",
+            "pvariance",
+            "quantiles",
+        }
+    ),
+    "string": frozenset(
+        {
+            "ascii_letters",
+            "ascii_lowercase",
+            "ascii_uppercase",
+            "digits",
+            "hexdigits",
+            "octdigits",
+            "punctuation",
+            "printable",
+            "whitespace",
+            "capwords",
+        }
+    ),
+    "textwrap": frozenset({"wrap", "fill", "dedent", "indent", "shorten"}),
+    "pprint": frozenset({"pprint", "pformat", "pp", "isreadable", "isrecursive", "saferepr"}),
+    "datetime": frozenset({"datetime", "date", "time", "timedelta", "timezone", "tzinfo"}),
+    "time": frozenset(
+        {
+            "time",
+            "time_ns",
+            "monotonic",
+            "monotonic_ns",
+            "perf_counter",
+            "perf_counter_ns",
+            "process_time",
+            "strftime",
+            "strptime",
+            "gmtime",
+            "localtime",
+            "mktime",
+            "ctime",
+            "asctime",
+        }
+    ),
+    "fnmatch": frozenset({"fnmatch", "fnmatchcase", "filter", "translate"}),
+    "typing": frozenset({"cast", "overload", "final", "get_args", "get_origin", "get_type_hints"}),
+    "dataclasses": frozenset(
+        {
+            "dataclass",
+            "field",
+            "fields",
+            "asdict",
+            "astuple",
+            "is_dataclass",
+            "replace",
+            "make_dataclass",
+        }
+    ),
+    "enum": frozenset({"auto", "unique"}),
+    "decimal": frozenset({"getcontext"}),
+    "fractions": frozenset(),
+    "heapq": frozenset(
+        {
+            "heappush",
+            "heappop",
+            "heapify",
+            "heapreplace",
+            "heappushpop",
+            "nlargest",
+            "nsmallest",
+            "merge",
+        }
+    ),
+    "bisect": frozenset(
+        {"bisect", "bisect_left", "bisect_right", "insort", "insort_left", "insort_right"}
+    ),
+    "copy": frozenset({"copy", "deepcopy"}),
+    "random": frozenset(
+        {
+            "random",
+            "randint",
+            "randrange",
+            "choice",
+            "choices",
+            "sample",
+            "shuffle",
+            "uniform",
+            "gauss",
+            "triangular",
+            "normalvariate",
+        }
+    ),
+    "abc": frozenset({"abstractmethod"}),
+    "numbers": frozenset(),
+    "difflib": frozenset({"unified_diff", "context_diff", "ndiff", "get_close_matches", "restore"}),
+    "base64": frozenset(
+        {
+            "b64encode",
+            "b64decode",
+            "urlsafe_b64encode",
+            "urlsafe_b64decode",
+            "standard_b64encode",
+            "standard_b64decode",
+            "b16encode",
+            "b16decode",
+            "b32encode",
+            "b32decode",
+        }
+    ),
+}
 
 # Builtins the inspection profile may name. Anything that opens files, reaches
 # attributes by string, or evaluates text is absent.
@@ -423,6 +665,8 @@ READ_ONLY_BUILTINS: frozenset[str] = frozenset(
         "StopIteration",
         "NotImplementedError",
         "AssertionError",
+        "OSError",
+        "pow",
     }
 )
 
@@ -620,8 +864,6 @@ READ_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
         "isUIAvailable",
         "licenseCategory",
         "getenv",
-        "expandString",
-        "expandStringAtFrame",
         "homeHoudiniDirectory",
         "houdiniPath",
         "findFile",
@@ -787,6 +1029,7 @@ READ_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
         "issuperset",
         "most_common",
         "elements",
+        "from_iterable",
         "split",
         "rsplit",
         "splitlines",
@@ -844,75 +1087,51 @@ READ_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
 )
 
 
-def _bound_names(tree: ast.Module) -> set[str]:
-    """Identifiers the program binds itself: assignments, defs, args, handlers, patterns."""
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bound.add(node.id)
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            bound.add(node.name)
-        elif isinstance(node, ast.arg):
-            bound.add(node.arg)
-        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
-            bound.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            bound.add(node.rest)
-    return bound
+def _inspection_refusal(path: tuple[str, ...], rooted_at_import: bool) -> str | None:
+    """First hop of a dotted path the inspection profile does not recognize, or None.
+
+    The hop directly below an imported module is judged against that module's
+    member list; every other hop against :data:`READ_ONLY_ATTRIBUTES`. A private
+    name is refused at any depth, and a capitalized name is admitted by shape.
+    """
+    for depth, hop in enumerate(path[1:], start=1):
+        members = READ_ONLY_MODULES.get(path[0]) if rooted_at_import and depth == 1 else None
+        admitted = READ_ONLY_ATTRIBUTES if members is None else members
+        if hop.startswith("_") or not (hop in admitted or hop[:1].isupper()):
+            return hop
+    return None
 
 
-def _import_aliases(tree: ast.Module) -> dict[str, str]:
-    """Local identifier -> top-level module, for every import statement."""
-    aliases: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                aliases[alias.asname or _top_module(alias.name)] = _top_module(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for alias in node.names:
-                aliases[alias.asname or alias.name] = _top_module(node.module)
-    return aliases
-
-
-def _attribute_admitted(attr: str, root_module: str | None) -> bool:
-    if attr.startswith("__"):
-        return False
-    if root_module is not None and root_module in READ_ONLY_MODULES:
-        return True
-    return attr in READ_ONLY_ATTRIBUTES or attr[:1].isupper()
-
-
-def _detect_non_inspection_code(code: str) -> list[str]:
+def _detect_non_inspection_code(tree: ast.Module) -> list[str]:
     """Everything the ``read-only`` policy refuses: names it does not recognize as inspection.
 
-    The program may bind its own names, import the pure modules in
+    The program may bind its own names, import the modules and members in
     :data:`READ_ONLY_MODULES`, name the builtins in :data:`READ_ONLY_BUILTINS`,
     and read the attributes in :data:`READ_ONLY_ATTRIBUTES`. Anything else is
     reported, so a mutator this module has never heard of is refused the same
     way as one it has.
     """
-    tree = parse_code(code)
-    aliases = _import_aliases(tree)
-    bound = _bound_names(tree)
+    names = _names(tree)
     detected: list[str] = []
 
     # An imported module name that the program also rebinds no longer names
     # the module; refuse the ambiguity rather than guess.
-    for name in sorted(set(aliases) & bound):
+    for name in sorted(set(names.aliases) & names.bound):
         detected.append(f"{name} - imported name is rebound")
 
+    def judge_import(path: tuple[str, ...]) -> None:
+        if path[0] not in READ_ONLY_MODULES:
+            detected.append(f"import {path[0]} - module is not in the read-only allowlist")
+        elif hop := _inspection_refusal(path, rooted_at_import=True):
+            detected.append(f"{hop} - not in the read-only inspection allowlist")
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            modules = (
-                [a.name for a in node.names]
-                if isinstance(node, ast.Import)
-                else [node.module or ""]
-            )
-            detected.extend(
-                f"import {m} - module is not in the read-only allowlist"
-                for m in modules
-                if _top_module(m) not in READ_ONLY_MODULES
-            )
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                judge_import(tuple(alias.name.split(".")))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                judge_import((*(node.module or "").split("."), alias.name))
         elif isinstance(node, ast.With | ast.AsyncWith):
             detected.append("with statement - context managers may mutate")
         elif isinstance(node, ast.Attribute):
@@ -920,20 +1139,20 @@ def _detect_non_inspection_code(code: str) -> list[str]:
                 detected.append(f"{node.attr} - attribute assignment mutates")
                 continue
             chain = _dotted_chain(node)
-            root_module = aliases.get(chain[0]) if chain else None
-            if not _attribute_admitted(node.attr, root_module):
-                detected.append(f"{node.attr}() - not in the read-only inspection allowlist")
+            path, rooted = names.resolve(chain) if chain else (("", node.attr), False)
+            if hop := _inspection_refusal(path, rooted):
+                detected.append(f"{hop} - not in the read-only inspection allowlist")
         elif isinstance(node, ast.MatchClass):
             detected.extend(
                 f"{attr} - not in the read-only inspection allowlist"
                 for attr in node.kwd_attrs
-                if not _attribute_admitted(attr, None)
+                if _inspection_refusal(("", attr), rooted_at_import=False)
             )
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             allowed = (
                 node.id == "hou"
-                or node.id in bound
-                or node.id in aliases
+                or node.id in names.bound
+                or node.id in names.aliases
                 or node.id in READ_ONLY_BUILTINS
             )
             if not allowed or node.id.startswith("__"):

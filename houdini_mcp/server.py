@@ -89,10 +89,11 @@ def execute_code(
       "normal" (default; a guard rail against accidents, not a sandbox),
       "privileged" (requires server config gate).
     - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
-      state changes (os beyond its read side, shutil, pathlib, open() for
-      writing), shell and process access, dynamic import/execution, network
-      egress (socket/urllib/requests/http/ftplib). Judged on the parsed
-      program, so text in comments and strings is not code.
+      state changes (os and tempfile beyond their read side, shutil, pathlib,
+      archive and database modules, open() for writing), shell and process
+      access, dynamic import/execution, network egress (socket, urllib,
+      requests, httpx, http, ftplib, smtplib, ...) and the debugger. Judged on
+      the parsed program, so text in comments and strings is not code.
     - Code that does not parse is refused before any rail runs.
     - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
     - Config+request bypass: allow_dangerous / allow_heavy_geometry are only
@@ -118,11 +119,15 @@ def execute_code(
 
     Dangerous patterns detected (policy "normal"):
         - hou.exit() - closes Houdini; hou.hipFile.clear() - scene wipe
-        - os members outside its read side (remove, rename, makedirs, system, ...)
-        - shutil, pathlib, importlib, subprocess, pty, ctypes, pickle - whole modules
+        - os and tempfile members outside their read side (remove, rename,
+          makedirs, system, mkstemp, ...)
+        - shutil, pathlib, importlib, subprocess, pty, ctypes, pickle, zipfile,
+          tarfile, gzip, sqlite3, dbm, pdb - whole modules
         - eval(), exec(), compile(), __import__() - dynamic execution
-        - socket, urllib, requests, http, ftplib - network egress
-        - open() with a writing mode, or a mode that is not a literal
+        - socket, urllib, urllib3, requests, httpx, aiohttp, http, ftplib,
+          smtplib, xmlrpc, telnetlib, webbrowser - network egress
+        - open() with a writing mode, a mode that is not a literal, or
+          unpacked arguments
 
     Example:
         execute_code('''

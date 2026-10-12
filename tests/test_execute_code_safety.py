@@ -66,9 +66,9 @@ class TestNetworkPatternDetection:
         ],
     )
     def test_network_and_eval_flagged(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code(code), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
 
 
 class TestCommentAndStringEvasion:
@@ -84,9 +84,9 @@ class TestCommentAndStringEvasion:
         ],
     )
     def test_whitespace_variants_detected(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code(code), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +101,10 @@ class TestEvasionProperties:
         mid=st.text(alphabet=" \t", max_size=4),
     )
     def test_hou_exit_survives_inner_whitespace(self, pre, mid):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = f"hou{pre}.{mid}exit()"
-        assert _detect_dangerous_code(code)
+        assert _detect_dangerous_code(parse_code(code))
 
     @settings(max_examples=75, deadline=None)
     @given(
@@ -112,10 +112,10 @@ class TestEvasionProperties:
         mid=st.text(alphabet=" \t", max_size=4),
     )
     def test_subprocess_survives_inner_whitespace(self, pre, mid):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = f"subprocess{pre}.{mid}run(['x'])"
-        assert _detect_dangerous_code(code)
+        assert _detect_dangerous_code(parse_code(code))
 
     @settings(max_examples=75, deadline=None)
     @given(
@@ -124,10 +124,11 @@ class TestEvasionProperties:
         )
     )
     def test_safe_identifiers_not_flagged(self, name):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        # A bare variable assignment must never be considered dangerous.
-        assert _detect_dangerous_code(f"{name} = 1") == []
+        # A variable the program binds and reads back is never dangerous,
+        # whatever module or builtin shares its spelling.
+        assert _detect_dangerous_code(parse_code(f"{name} = 1\nprint({name})")) == []
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +185,10 @@ class TestPolicyProfiles:
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
 
     def test_normal_allows_houdini_parm_eval_read(self, mock_connection):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code("hou.node('/obj/geo1').parm('tx').eval()") == []
-        assert _detect_dangerous_code("eval('1 + 1')")
+        assert _detect_dangerous_code(parse_code("hou.node('/obj/geo1').parm('tx').eval()")) == []
+        assert _detect_dangerous_code(parse_code("eval('1 + 1')"))
 
     def test_read_only_ignores_bypass_flags(self, mock_connection, allow_bypass_config):
         """read-only is the strictest profile: bypass flags cannot escalate it."""
@@ -658,6 +659,14 @@ class TestReadOnlyIsAnAllowlist:
             "open('/tmp/x')",
             "eval('1')",
             "globals()",
+            # Attributes of an admitted pure module that are themselves os/sys.
+            "import random\nrandom._os.system('x')",
+            "import fnmatch\nfnmatch.os.remove('/a')",
+            "import typing\ntyping.sys.modules['os'].remove('/a')",
+            "from random import _os",
+            # expandString evaluates HScript backticks: the shell by another door.
+            "print(hou.expandString('`system(\"x\")`'))",
+            "hou.text.expandString('`run(\"opadd -n geo /obj/x\")`')",
         ],
     )
     def test_indirect_access_is_refused(self, mock_connection, code):
@@ -682,12 +691,17 @@ class TestReadOnlyIsAnAllowlist:
             "print(hou.hipFile.name(), hou.frame(), hou.fps())",
             "print(hou.Vector3(1, 2, 3).length())",
             "d = {}\nd['k'] = hou.node('/obj').name()\nprint(sorted(d.items()))",
+            "import datetime\nprint(datetime.datetime.now().isoformat())",
+            "from collections import Counter\nprint(Counter('aab').most_common(1))",
+            "import itertools\nprint(list(itertools.chain.from_iterable([[1], [2]])))",
+            "import json\nj = json\nprint(j.dumps({}))",
+            "try:\n    hou.node('/x').name()\nexcept OSError as e:\n    print(e)",
         ],
     )
     def test_inspection_programs_are_admitted(self, mock_connection, code):
-        from houdini_mcp.tools import _detect_non_inspection_code
+        from houdini_mcp.tools import _detect_non_inspection_code, parse_code
 
-        assert _detect_non_inspection_code(code) == []
+        assert _detect_non_inspection_code(parse_code(code)) == []
 
     def test_read_only_names_the_refused_symbol(self, mock_connection):
         from houdini_mcp.tools import execute_code
@@ -723,12 +737,19 @@ class TestNormalPolicyModuleRails:
             "f = open('/a', mode='a')",
             "m = 'w'\nf = open('/a', m)",
             "import io; io.open('/a', 'w')",
+            "from os import remove as r; r('/a')",
+            "opts = {'mode': 'w'}\nf = open('/a', **opts)",
+            "args = ['/a', 'w']\nf = open(*args)",
+            "import zipfile; zipfile.ZipFile('/a.zip', 'w')",
+            "import smtplib; smtplib.SMTP('h')",
+            "import pdb; pdb.set_trace()",
+            "import tempfile; tempfile.mkstemp()",
         ],
     )
     def test_file_and_import_operations_are_dangerous(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code(code), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
 
     @pytest.mark.parametrize(
         "code",
@@ -743,12 +764,36 @@ class TestNormalPolicyModuleRails:
             "import math, json, re, collections",
             "hou.node('/obj').createNode('geo').parm('tx').set(1)",
             "x = 'hou.exit()'  # a string, not a call",
+            "import os.path as osp; print(osp.join('a', 'b'))",
+            "import tempfile; print(tempfile.gettempdir())",
+            # A name the program binds is its own, whatever module shares its spelling.
+            "code = hou.node('/obj/geo1').parm('python').eval()\nprint(code)",
+            "signal = 1\nprint(signal)",
+            "http = hou.node('/obj')\nprint(http.name())",
+            "io = hou.node('/obj')\nprint(io.name())",
+            "compile = 5\nprint(compile)",
         ],
     )
     def test_read_side_of_railed_modules_is_admitted(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code(code) == []
+        assert _detect_dangerous_code(parse_code(code)) == []
+
+
+class TestHeavyGeometryRail:
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "hou.node('/obj/geo1/out').geometry()",
+            # Binding or passing the method is the same as calling it.
+            "g = hou.node('/obj/geo1/out').geometry\nprint(g())",
+            "print(list(map(hou.Node.geometry, hou.node('/obj').children())))",
+        ],
+    )
+    def test_geometry_access_is_judged_by_attribute(self, code):
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+
+        assert _detect_heavy_geometry_code(parse_code(code))
 
 
 class TestSyntaxGate:

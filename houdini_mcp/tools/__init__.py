@@ -32,6 +32,7 @@ from .code_policy import (
     _detect_dangerous_code,
     _detect_heavy_geometry_code,
     _detect_non_inspection_code,
+    parse_code,
 )
 from .errors import find_error_nodes
 from .geometry import get_geo_summary
@@ -134,6 +135,7 @@ __all__ = [
     "execute_code",
     "_detect_heavy_geometry_code",
     "_detect_non_inspection_code",
+    "parse_code",
     # Help/documentation
     "get_houdini_help",
     # Cache management

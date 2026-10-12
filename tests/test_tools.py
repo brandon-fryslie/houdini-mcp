@@ -590,29 +590,29 @@ class TestDangerousPatternDetection:
 
     def test_detect_empty_code(self):
         """Test detection on empty code."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("")
+        result = _detect_dangerous_code(parse_code(""))
         assert result == []
 
     def test_detect_safe_code(self):
         """Test detection on safe code."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("print('hello world')")
+        result = _detect_dangerous_code(parse_code("print('hello world')"))
         assert result == []
 
     def test_detect_single_pattern(self):
         """Test detection of single dangerous pattern."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("hou.exit()")
+        result = _detect_dangerous_code(parse_code("hou.exit()"))
         assert len(result) == 1
         assert "hou.exit()" in result[0]
 
     def test_detect_multiple_patterns(self):
         """Test detection of multiple dangerous patterns."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = """
 import os
@@ -620,20 +620,20 @@ import subprocess
 os.remove('/file')
 subprocess.call(['cmd'])
         """
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 2
 
     def test_pattern_in_comment_is_not_code(self):
         """A comment cannot execute; the gate reads the AST exec will compile."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code("# hou.exit()") == []
+        assert _detect_dangerous_code(parse_code("# hou.exit()")) == []
 
     def test_pattern_in_string_is_not_code(self):
         """A string literal cannot execute; the gate reads the AST exec will compile."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        assert _detect_dangerous_code("x = 'hou.exit()'") == []
+        assert _detect_dangerous_code(parse_code("x = 'hou.exit()'")) == []
 
 
 class TestTruncateOutput:

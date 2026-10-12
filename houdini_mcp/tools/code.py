@@ -259,7 +259,7 @@ def execute_code(
 
     # --- Syntax gate: a program the gates cannot read is a program that does not run
     try:
-        parse_code(code)
+        tree = parse_code(code)
     except SyntaxError as exc:
         # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
         logger.warning(
@@ -284,7 +284,7 @@ def execute_code(
 
     # Detect the common mistake of importing hou when it is pre-injected via RPyC.
     # (Preserved from bead houdini-mcp-vzp.1 / PR #9.)
-    if _detect_import_hou(code):
+    if _detect_import_hou(tree):
         return {
             "status": "error",
             "message": "Code attempts to import hou module, but hou is already available",
@@ -309,12 +309,12 @@ def execute_code(
             ),
         }
 
-    dangerous_patterns = _detect_dangerous_code(code)
-    heavy_geometry_patterns = _detect_heavy_geometry_code(code)
+    dangerous_patterns = _detect_dangerous_code(tree)
+    heavy_geometry_patterns = _detect_heavy_geometry_code(tree)
 
     # --- read-only profile: only recognized inspection runs ------------------
     if policy == "read-only":
-        mutation_patterns = _detect_non_inspection_code(code)
+        mutation_patterns = _detect_non_inspection_code(tree)
         if mutation_patterns:
             logger.warning("execute_code blocked under read-only policy: %s", mutation_patterns)
             return {

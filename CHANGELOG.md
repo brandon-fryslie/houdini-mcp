@@ -16,16 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution, including mutators the old denylist admitted (`changeNodeType`,
   `setExpression`, `setKeyframe`, `deleteAllKeyframes`, `insertInput`,
   `setUserData`, `setComment`), attribute assignment, `with` blocks, attribute
-  lookup by string, and any hou API added after this release. The refused
-  symbol is named in `mutation_patterns`.
+  lookup by string, and any hou API added after this release. The stdlib
+  modules are admitted member by member, so `random._os`, `fnmatch.os` and
+  `typing.sys` are refused like any other unrecognized name, and
+  `hou.expandString` / `hou.text.expandString` are refused because backtick
+  expressions run HScript. The refused symbol is named in `mutation_patterns`.
 - **`execute_code` dangerous-operation scan reads the parsed program**: the
   `normal` policy now refuses whole modules (`shutil`, `pathlib`, `importlib`,
   `subprocess`, `pickle`, ...) and admits only the read side of `os`, `sys`,
   `io` and `codecs`, closing `os.rename`, `pathlib.Path.unlink`/`write_text`,
-  `shutil.copy*` and `importlib.import_module`. An `open()` whose mode is not a
-  string literal is treated as writing. Text inside comments and string
-  literals is no longer flagged: the gate reads the same AST `exec` compiles.
-  Code that does not parse is refused with `blocked_reason="syntax_error"`.
+  `shutil.copy*` and `importlib.import_module`; archive, database, egress
+  and debugger modules (`zipfile`, `tarfile`, `sqlite3`, `smtplib`, `httpx`,
+  `pdb`, ...) are refused too, and `tempfile` keeps only its read side. An
+  `open()` whose mode is not a string literal, or whose arguments are
+  unpacked, is treated as writing. A variable the program binds itself
+  (`code = ...`, `signal = 1`) is never mistaken for the module of the same
+  name, and `import os.path as osp` is judged as `os.path`. Heavy-geometry
+  methods are judged where they are named, so binding `node.geometry` or
+  passing it to `map` is refused like calling it. Text inside comments and
+  string literals is no longer flagged: the gate reads the same AST `exec`
+  compiles, once per request. Code that does not parse is refused with
+  `blocked_reason="syntax_error"`.
 
 - **One paging contract for list tools**: `list_node_types`, `list_children` and
   `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
