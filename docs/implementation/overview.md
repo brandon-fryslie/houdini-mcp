@@ -28,7 +28,7 @@ Successfully implemented 3 new network introspection tools for the Houdini MCP S
 
 ### 3. tests/conftest.py
 **Changes:**
-- ✅ Added `inputConnectors()` method to `MockHouNode` class
+- ✅ `MockHouNode.inputConnections()` returns `MockNodeConnection` records in HOM's shape
 
 **Total additions:** ~10 lines
 

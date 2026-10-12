@@ -241,8 +241,10 @@ def reorder_inputs(
     """
     Reorder inputs on a node (useful for merge nodes).
 
-    Stores existing connections, disconnects all, then reconnects in new order.
-    new_order specifies the new position for each input: [1, 0, 2] swaps first two inputs.
+    Reads every wire (source item and its output), disconnects all, then reconnects
+    in new order. new_order is a permutation of the input indices: position i of
+    new_order names the old input that moves to input i, so [1, 0, 2] swaps the
+    first two inputs. Wires from a subnet's indirect inputs move like any other.
 
     Args:
         node_path: Path to the node
@@ -264,20 +266,16 @@ def reorder_inputs(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
+    # new_order is a permutation of the input indices: every wire gets exactly one
+    # new position, so none is dropped and none is doubled. [LAW:parse-dont-validate]
     input_count = len(node.inputs())
-
-    # Validate new_order
-    if len(new_order) > input_count:
+    if sorted(new_order) != list(range(input_count)):
         return {
             "status": "error",
-            "message": f"new_order length ({len(new_order)}) exceeds number of inputs ({input_count})",
-        }
-
-    # Validate indices
-    if not all(0 <= idx < input_count for idx in new_order):
-        return {
-            "status": "error",
-            "message": f"Invalid indices in new_order. Must be in range [0, {input_count - 1}]",
+            "message": (
+                f"new_order must be a permutation of the input indices 0..{input_count - 1}"
+                f" ({input_count} inputs); got {new_order}"
+            ),
         }
 
     # Read every wire, with the source output it comes from, before touching any.
@@ -290,11 +288,8 @@ def reorder_inputs(
         node.setInput(i, None)
 
     # Rewire each wire to its new input, from the same source output it came from.
-    # A wire whose old input is absent from new_order is not reconnected.
     reconnection_info: list[dict[str, Any]] = []
     for conn in connections:
-        if conn.input_index not in new_position:
-            continue
         new_idx = new_position[conn.input_index]
         node.setInput(new_idx, conn.source, conn.output_index)
         reconnection_info.append(

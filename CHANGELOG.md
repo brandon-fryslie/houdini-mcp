@@ -17,9 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong topology and `reorder_inputs` rewired every input from output 0. A
   connection record that cannot be read is now an error, and `reorder_inputs`
   reads every wire before disconnecting any, so a failed read leaves the
-  network untouched. `list_children` no longer swallows errors raised while
-  building a child's record; only a parent refusing to list its children is
-  tolerated.
+  network untouched. The source is read as the wire's item
+  (`inputItem()` / `inputItemOutputIndex()`), so a node inside a subnet fed from
+  one of the subnet's indirect inputs reports that indirect input by path and
+  `reorder_inputs` moves it like any other wire; the earlier `inputNode()` read
+  looked through to the parent network and was None when nothing was wired
+  there. `new_order` must be a permutation of the input indices: a shorter or
+  repeated order used to disconnect wires silently and report success, and is
+  now rejected before any wire is touched. `list_children` no longer swallows
+  errors raised while building a child's record; only a parent refusing to list
+  its children is tolerated. The uncalled `HscriptBatch.get_input_connections`,
+  a second derivation of the same fact with its own shape, is removed.
 
 ### Changed
 

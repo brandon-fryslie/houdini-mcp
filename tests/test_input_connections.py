@@ -9,7 +9,7 @@ an error rather than a 0.
 
 import pytest
 
-from tests.conftest import MockHouNode
+from tests.conftest import MockHouNode, MockSubnetIndirectInput
 
 
 def _merge_fed_from_split_output_1(mock_connection):
@@ -31,7 +31,7 @@ def _merge_fed_from_split_output_1(mock_connection):
 
 def _wires(node: MockHouNode) -> list[tuple[int, str, int]]:
     return [
-        (conn.inputIndex(), conn.inputNode().path(), conn.outputIndex())
+        (conn.inputIndex(), conn.inputItem().path(), conn.inputItemOutputIndex())
         for conn in node.inputConnections()
     ]
 
@@ -143,3 +143,79 @@ class TestUnreadableWireIsAnError:
         assert result["status"] == "error"
         assert "connection records unavailable" in result["message"]
         assert merge.inputs()[0].path() == "/obj/geo1/grid1"
+
+
+class TestSubnetIndirectInputs:
+    """A wire from a subnet's indirect input is a wire like any other.
+
+    HOM's ``inputNode()`` looks through the indirect input to whatever is wired into
+    the parent subnet, which here is nothing, so it returns None. The tools read the
+    wire itself (``inputItem()``), so the indirect input is reported by its path and
+    put back by ``reorder_inputs``.
+    """
+
+    @pytest.fixture
+    def merge(self, mock_connection) -> MockHouNode:
+        subnet = MockHouNode(path="/obj/subnet1", name="subnet1", node_type="subnet")
+        box = MockHouNode(path="/obj/subnet1/box1", name="box1", node_type="box")
+        merge = MockHouNode(path="/obj/subnet1/merge1", name="merge1", node_type="merge")
+        subnet._children = [box, merge]
+        for node in (subnet, box, merge):
+            mock_connection.add_node(node)
+        merge.setInput(0, MockSubnetIndirectInput(subnet, 1), 0)
+        merge.setInput(1, box, 0)
+        return merge
+
+    def test_get_node_info_reports_the_indirect_input(self, merge):
+        from houdini_mcp.tools import get_node_info
+
+        result = get_node_info(
+            "/obj/subnet1/merge1", detail="standard", host="localhost", port=18811
+        )
+
+        assert result["status"] == "success"
+        assert result["input_connections"] == [
+            {"input_index": 0, "source_node": "/obj/subnet1/1", "source_output_index": 0},
+            {"input_index": 1, "source_node": "/obj/subnet1/box1", "source_output_index": 0},
+        ]
+
+    def test_list_children_reports_the_indirect_input(self, merge):
+        from houdini_mcp.tools import list_children
+
+        result = list_children("/obj/subnet1", host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        merge_info = next(c for c in result["children"] if c["name"] == "merge1")
+        assert merge_info["inputs"] == [
+            {"index": 0, "source_node": "/obj/subnet1/1", "output_index": 0},
+            {"index": 1, "source_node": "/obj/subnet1/box1", "output_index": 0},
+        ]
+
+    def test_reorder_inputs_moves_the_indirect_input(self, merge):
+        from houdini_mcp.tools import reorder_inputs
+
+        result = reorder_inputs("/obj/subnet1/merge1", [1, 0], host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/1", 0)]
+
+
+class TestNewOrderIsAPermutation:
+    """new_order names a new position for every input, once; anything else is refused
+    before the network is touched, since the disconnect step would otherwise drop or
+    double a wire while reporting success."""
+
+    @pytest.mark.parametrize("new_order", [[0, 0, 1], [1, 0], [0, 1, 2, 3]])
+    def test_non_permutation_is_rejected_and_the_network_untouched(
+        self, mock_connection, new_order
+    ):
+        from houdini_mcp.tools import reorder_inputs
+
+        merge = _merge_fed_from_split_output_1(mock_connection)
+        before = _wires(merge)
+
+        result = reorder_inputs("/obj/geo1/merge1", new_order, host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert "permutation of the input indices 0..2" in result["message"]
+        assert _wires(merge) == before

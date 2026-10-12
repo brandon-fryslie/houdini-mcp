@@ -413,40 +413,6 @@ print(json.dumps(result))
     # Connections/Wiring
     # =========================================================================
 
-    def get_input_connections(self, node_path: str) -> list[dict[str, Any]]:
-        """
-        Get all input connections for a node.
-
-        Args:
-            node_path: Path to the node
-
-        Returns:
-            List of connection dicts with input_index, source_path, output_index
-        """
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = []
-if node:
-    for i, conn in enumerate(node.inputConnections()):
-        result.append({{
-            "input_index": i,
-            "source_path": conn.inputNode().path(),
-            "output_index": conn.outputIndex()
-        }})
-print(json.dumps(result))
-"""
-        try:
-            import json
-
-            output = self._exec_python(code)
-            if output:
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Get input connections failed: {e}")
-
-        return []
-
     def get_output_connections(self, node_path: str) -> list[dict[str, Any]]:
         """
         Get all output connections for a node.

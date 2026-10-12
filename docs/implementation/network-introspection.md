@@ -169,7 +169,7 @@ Both `list_children()` and `find_nodes()` use try/except blocks around node iter
    - Updated `get_node_info()` tool decorator
 
 3. **tests/conftest.py**
-   - Added `inputConnectors()` method to MockHouNode (10 lines)
+   - `MockHouNode.inputConnections()` returns `MockNodeConnection` records in HOM's shape
 
 4. **tests/test_tools.py**
    - Added 17 new tests

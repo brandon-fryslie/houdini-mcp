@@ -7,38 +7,72 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+class MockSubnetIndirectInput:
+    """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
+
+    Not a node, but a valid ``setInput`` source and a ``NetworkMovableItem`` with a
+    ``path()``. Houdini names them 1, 2, ... under the subnet.
+    """
+
+    def __init__(self, subnet: "MockHouNode", number: int):
+        self._subnet = subnet
+        self._number = number
+        self._outputs: list[Any] = []
+
+    def number(self) -> int:
+        return self._number
+
+    def name(self) -> str:
+        return str(self._number)
+
+    def path(self) -> str:
+        return f"{self._subnet.path()}/{self._number}"
+
+
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
 
-    ``inputNode()`` is the source and ``outputIndex()`` is which of its outputs the
-    wire leaves from; ``outputNode()`` is the node fed and ``inputIndex()`` the input
-    it arrives at. That is HOM's naming, kept so tool code reads the same against
-    the double as against Houdini.
+    ``inputItem()`` is what the wire is drawn from, a node or a subnet indirect
+    input, and ``inputItemOutputIndex()`` which of its outputs it leaves from.
+    ``inputNode()`` / ``outputIndex()`` look through an indirect input to the node
+    wired into the parent subnet; with nothing wired there, HOM returns None / 0,
+    and so does this double. ``outputNode()`` is the node fed and ``inputIndex()``
+    the input it arrives at. That is HOM's naming, kept so tool code reads the same
+    against the double as against Houdini.
     """
 
     def __init__(
         self,
-        input_node: "MockHouNode",
+        input_item: "MockHouNode | MockSubnetIndirectInput",
         output_node: "MockHouNode",
         input_index: int,
         output_index: int,
     ):
-        self._input_node = input_node
+        self._input_item = input_item
         self._output_node = output_node
         self._input_index = input_index
         self._output_index = output_index
 
-    def inputNode(self) -> "MockHouNode":
-        return self._input_node
+    def inputItem(self) -> "MockHouNode | MockSubnetIndirectInput":
+        return self._input_item
+
+    def inputItemOutputIndex(self) -> int:
+        return self._output_index
+
+    def subnetIndirectInput(self) -> "MockSubnetIndirectInput | None":
+        return self._input_item if isinstance(self._input_item, MockSubnetIndirectInput) else None
+
+    def inputNode(self) -> "MockHouNode | None":
+        return self._input_item if isinstance(self._input_item, MockHouNode) else None
+
+    def outputIndex(self) -> int:
+        return self._output_index if isinstance(self._input_item, MockHouNode) else 0
 
     def outputNode(self) -> "MockHouNode":
         return self._output_node
 
     def inputIndex(self) -> int:
         return self._input_index
-
-    def outputIndex(self) -> int:
-        return self._output_index
 
 
 class MockHouNode:
@@ -140,7 +174,7 @@ class MockHouNode:
         """One hou.NodeConnection per connected input, in input order."""
         return tuple(
             MockNodeConnection(
-                input_node=source,
+                input_item=source,
                 output_node=self,
                 input_index=idx,
                 output_index=self._input_output_indexes.get(idx, 0),
@@ -255,9 +289,12 @@ class MockHouNode:
         return self._bypass
 
     def setInput(
-        self, input_index: int, source_node: Optional["MockHouNode"], output_index: int = 0
+        self,
+        input_index: int,
+        source_node: "MockHouNode | MockSubnetIndirectInput | None",
+        output_index: int = 0,
     ) -> None:
-        """Set input connection."""
+        """Set input connection from a node or a subnet indirect input."""
         # Extend inputs list if needed
         while len(self._inputs) <= input_index:
             self._inputs.append(None)
