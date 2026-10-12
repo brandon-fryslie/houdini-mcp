@@ -256,6 +256,9 @@ def _serve(server: Any) -> None:
         pass  # rpyc's accept(): the listener was closed under it by stop()
     finally:
         server.close()
+        # Any other exception still propagates to threading.excepthook; this is
+        # the one record in the plugin's own log that the loop is gone.
+        logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
 def firewall_guidance(host: str, port: int) -> list[str]:
@@ -379,16 +382,16 @@ class RemoteListener:
                 }
 
             try:
-                server = self._launch_server(hrpyc, cfg, policy)
+                server, bound_port = self._launch_server(hrpyc, cfg, policy)
             except OSError as exc:
-                logger.error("Failed to bind hrpyc listener on %s:%s: %s", cfg.host, cfg.port, exc)
+                logger.error("Failed to listen on %s:%s: %s", cfg.host, cfg.port, exc)
                 return {
                     "status": "error",
                     "error_type": "bind",
                     "running": False,
                     "host": cfg.host,
                     "port": cfg.port,
-                    "message": f"Failed to bind hrpyc listener on {cfg.host}:{cfg.port}: {exc}",
+                    "message": f"Failed to listen on {cfg.host}:{cfg.port}: {exc}",
                 }
             except Exception as exc:  # noqa: BLE001 - report any startup failure cleanly
                 logger.error("Failed to start hrpyc listener: %s", exc)
@@ -398,10 +401,6 @@ class RemoteListener:
                     "running": False,
                     "message": f"Failed to start hrpyc listener: {exc}",
                 }
-
-            # [LAW:one-source-of-truth] rpyc resolves a port-0 bind in _listen(); its
-            # ``port`` is the only record of what the kernel actually handed out.
-            bound_port = server.port
 
             # _server is the running discriminator that the unlocked status() and
             # self_test() read, so it is assigned last. [LAW:no-ambient-temporal-coupling]
@@ -427,14 +426,16 @@ class RemoteListener:
             )
             return result
 
-    def _launch_server(self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy) -> Any:
+    def _launch_server(
+        self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy
+    ) -> tuple[Any, int]:
         """Construct the ThreadedServer, start listening, and spawn its accept loop.
 
-        The server returned is accepting connections: ``_listen()`` has run on
-        this thread, so the kernel queues clients from here on whether or not
-        the accept loop has been scheduled yet. A failure after construction
-        closes the server before propagating: the bound socket is this unit's
-        to release, and nothing else holds it yet.
+        Returns the server and the port it accepts on. The server is accepting
+        connections: ``_listen()`` has run on this thread, so the kernel queues
+        clients from here on whether or not the accept loop has been scheduled
+        yet. A failure after construction closes the server before propagating:
+        the bound socket is this unit's to release, and nothing else holds it yet.
         """
         kwargs: dict[str, Any] = {
             "hostname": cfg.host,
@@ -462,19 +463,16 @@ class RemoteListener:
         # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``.
         try:
             server._listen()
-            # [LAW:parse-dont-validate] the server's public readiness bits are what
-            # everything after this reads; a server that does not report them fails here.
-            if not (server.active and server.port):
-                raise RuntimeError(
-                    f"hrpyc server did not report accepting connections on {cfg.host}:{cfg.port}"
-                )
+            # [LAW:one-source-of-truth] rpyc's ``port`` is what the kernel handed out
+            # for a port-0 bind; read inside the region whose failure closes the server.
+            port: int = server.port
             threading.Thread(
                 target=_serve, args=(server,), name="houdini-hrpyc", daemon=True
             ).start()
         except BaseException:
             self._close_server(server)
             raise
-        return server
+        return server, port
 
     @staticmethod
     def _server_alive(server: Any) -> bool:

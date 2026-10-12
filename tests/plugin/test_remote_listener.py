@@ -200,7 +200,7 @@ class TestStartAwaitsReadiness:
             listener.stop()
             never.set()
 
-    def test_serve_thread_is_a_no_op_for_a_server_closed_before_it_ran(self, free_port):
+    def test_serve_thread_is_a_no_op_for_a_server_closed_before_it_ran(self, free_port, caplog):
         """stop() may land before the serve thread is scheduled.
 
         rpyc's ``start()`` would re-run ``_listen()`` on the closed socket and
@@ -219,19 +219,23 @@ class TestStartAwaitsReadiness:
         server = CountingServer(object(), hostname="127.0.0.1", port=free_port)
         server._listen()
         server.close()
-        _serve(server)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp_plugin.listener"):
+            _serve(server)
         assert server.accepts == 0
+        assert f"hrpyc accept loop ended on port {free_port}" in caplog.text
 
     def test_port_zero_reports_the_port_the_kernel_chose(self, fake_hou, fake_hrpyc):
-        """rpyc resolves a port-0 bind in ``_listen()``; start() reports that port."""
+        """rpyc resolves a port-0 bind from the socket; start() reports that port."""
         import socket
 
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
-        assert result["status"] == "success"
-        port = result["bound_port"]
-        assert port != 0
-        assert f"HOUDINI_PORT={port}" in result["message"]
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            pass
-        listener.stop()
+        try:
+            result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
+            assert result["status"] == "success"
+            port = result["bound_port"]
+            assert port != 0
+            assert f"HOUDINI_PORT={port}" in result["message"]
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                pass
+        finally:
+            listener.stop()

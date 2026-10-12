@@ -5,9 +5,8 @@ they inject light-weight fakes that emulate the small surface area the plugin
 depends on:
 
 - ``hrpyc.ThreadedServer(...)`` -> object with ``._listen()`` / ``.accept()`` /
-  ``.start()`` / ``.close()``, ``.active`` / ``.port`` and a ``.logger``
-  attribute, which runs its ``authenticator`` on every accepted socket exactly
-  as rpyc's server does.
+  ``.close()``, ``.active`` / ``.port`` and a ``.logger`` attribute, which runs
+  its ``authenticator`` on every accepted socket exactly as rpyc's server does.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
 
 The plugin package lives under ``houdini_plugin/python`` and is not installed,
@@ -33,10 +32,10 @@ if str(_PLUGIN_PATH) not in sys.path:
 class FakeThreadedServer:
     """Emulates ``hrpyc.ThreadedServer`` / ``rpyc.ThreadedServer``.
 
-    It binds a real TCP socket with rpyc's phases: ``__init__`` binds (so a
-    port collision surfaces there), ``_listen()`` starts accepting and sets
-    ``active``, ``accept()`` admits one client, and ``start()`` blocks draining
-    the accept queue. This keeps the
+    It binds a real TCP socket with rpyc's phases: ``__init__`` binds and
+    resolves ``port`` (so a port collision surfaces there), ``_listen()``
+    starts accepting and sets ``active``, and ``accept()`` admits one client.
+    This keeps the
     tests honest about "the listener is reachable" while remaining fully
     hermetic (no Houdini, no rpyc protocol). Each accepted socket goes through
     ``authenticator`` first, as in rpyc; ``authenticated`` and ``rejected``
@@ -80,17 +79,14 @@ class FakeThreadedServer:
         if reuse_addr:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((hostname, port))
-        # As rpyc: ``port`` is the requested port until ``_listen()`` resolves a
-        # port-0 bind to what the kernel handed out.
-        self.port = port
+        # As rpyc: a port-0 bind is resolved from the socket right after bind().
+        self.port = self._sock.getsockname()[1]
 
     def _listen(self) -> None:
         if self.active:
             return
         self._sock.listen(5)
         self._sock.settimeout(0.1)
-        if not self.port:
-            self.port = self._sock.getsockname()[1]
         self.active = True
 
     def accept(self) -> None:
@@ -104,16 +100,6 @@ class FakeThreadedServer:
             raise EOFError from exc
         with conn:
             self._admit(conn)
-
-    def start(self) -> None:
-        self._listen()
-        try:
-            while self.active:
-                self.accept()
-        except EOFError:
-            pass
-        finally:
-            self.close()
 
     def _admit(self, conn: socket.socket) -> None:
         # Mirrors rpyc.utils.server.Server._authenticate_and_serve_client: no
