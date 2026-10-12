@@ -84,8 +84,33 @@ class TestBindFailure:
         assert result["status"] == "success"
         listener.stop()
 
-    def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port):
-        listener = RemoteListener(hrpyc=None, hou=fake_hou)
+    def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou, free_port):
+        """rpyc's close() closes the listening socket and every client socket
+        unguarded; the error reaches stop()'s caller, and the listener no longer
+        holds the server, so start() is not answered already_running."""
+        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+
+        class CloseFails(FakeThreadedServer):
+            def close(self) -> None:
+                super().close()
+                raise OSError(104, "Connection reset by peer")
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: CloseFails(*a, **kw)
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        assert (
+            listener.start(ListenerConfig(host="127.0.0.1", port=free_port))["status"] == "success"
+        )
+        with pytest.raises(OSError):
+            listener.stop()
+        assert listener.is_running() is False
+        assert listener.stop()["status"] == "not_running"
+
+    def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port, monkeypatch):
+        # No injected hrpyc means the listener imports Houdini's; None in
+        # sys.modules makes that import raise ImportError, as outside Houdini.
+        monkeypatch.setitem(sys.modules, "hrpyc", None)
+        listener = RemoteListener(hou=fake_hou)
         result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
         assert result["status"] == "error"
         assert "hrpyc" in result["message"].lower()

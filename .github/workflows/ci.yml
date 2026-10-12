@@ -70,8 +70,12 @@ jobs:
         run: uv sync --locked
 
       - name: Run mypy
-        run: uv run mypy houdini_mcp/ houdini_plugin/python/houdini_mcp_plugin houdini_plugin/python/houdini_mcp_handshake
+        run: uv run mypy houdini_mcp/
         continue-on-error: true  # Don't fail CI on type errors initially
+
+      - name: Run mypy (plugin packages, gating)
+        # follow-imports=silent keeps houdini_mcp/'s advisory errors out of this step
+        run: uv run mypy --follow-imports=silent houdini_plugin/python/houdini_mcp_plugin houdini_plugin/python/houdini_mcp_handshake
 
   security:
     name: Security Scan

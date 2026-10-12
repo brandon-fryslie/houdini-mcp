@@ -8,15 +8,17 @@ runs the listener against it with no Houdini.
 
 from __future__ import annotations
 
+import logging
 import socket
 from types import SimpleNamespace
 
+import pytest
 import rpyc
 import rpyc.core
 import rpyc.utils.server
 from houdini_mcp_plugin.listener import HrpycModule, HrpycServer, ListenerConfig, RemoteListener
 
-from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+from tests.plugin.conftest import FakeHrpycModule
 
 
 def real_hrpyc() -> SimpleNamespace:
@@ -27,25 +29,30 @@ def real_hrpyc() -> SimpleNamespace:
 
 
 class TestContract:
-    def test_fake_satisfies_the_contract(self, free_port):
-        hrpyc = FakeHrpycModule()
-        assert isinstance(hrpyc, HrpycModule)
-        server = FakeThreadedServer(object, hostname="127.0.0.1", port=free_port)
-        try:
-            assert isinstance(server, HrpycServer)
-        finally:
-            server.close()
+    """``isinstance`` against a runtime Protocol proves the members exist; the
+    constructor call below, with exactly the keywords the listener passes, proves
+    the module takes them. Together they are what "satisfies the contract" means."""
 
-    def test_real_rpyc_satisfies_the_contract(self):
-        hrpyc = real_hrpyc()
+    @pytest.mark.parametrize("hrpyc", [FakeHrpycModule(), real_hrpyc()], ids=["fake", "rpyc"])
+    def test_module_and_server_satisfy_the_contract(self, hrpyc):
         assert isinstance(hrpyc, HrpycModule)
         server = hrpyc.ThreadedServer(
-            hrpyc.SlaveService, hostname="127.0.0.1", port=0, auto_register=False
+            hrpyc.SlaveService,
+            hostname="127.0.0.1",
+            port=0,
+            reuse_addr=True,
+            auto_register=False,
+            authenticator=None,
+            logger=logging.getLogger("test_hrpyc_contract"),
         )
         try:
             assert isinstance(server, HrpycServer)
+            server._listen()
+            assert server.active is True
+            assert server.port != 0
         finally:
             server.close()
+        assert server.active is False
 
 
 class TestListenerAgainstRealRpyc:

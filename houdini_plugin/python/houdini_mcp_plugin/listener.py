@@ -28,7 +28,7 @@ import os
 import socket
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
@@ -356,8 +356,7 @@ class RemoteListener:
             return self._hrpyc
         import hrpyc  # noqa: PLC0415 - lazy import; only present inside Houdini
 
-        module: HrpycModule = hrpyc
-        return module
+        return cast(HrpycModule, hrpyc)
 
     def _resolve_hou(self) -> Any:
         if self._hou is not None:
@@ -522,13 +521,18 @@ class RemoteListener:
                     "message": "hrpyc listener is not running.",
                 }
 
-            self._server.close()
             host = self._config.host if self._config else DEFAULT_HOST
             port = self._bound_port
-            self._server = None
-            self._config = None
-            self._policy = None
-            self._bound_port = None
+            # [LAW:no-silent-failure] a close() that raises surfaces to the caller;
+            # the listener still lets go of the server, so the next start() is not
+            # answered already_running by a server that is no longer anyone's.
+            try:
+                self._server.close()
+            finally:
+                self._server = None
+                self._config = None
+                self._policy = None
+                self._bound_port = None
             logger.info("Stopped hrpyc listener (%s:%s)", host, port)
             return {
                 "status": "success",
@@ -582,7 +586,14 @@ class RemoteListener:
         """
         from . import __version__ as plugin_version
 
-        if self._server is None or self._config is None or self._policy is None:
+        # One snapshot of the running state, taken under the lock a concurrent
+        # stop() clears it under; the probe below runs on the snapshot, unlocked.
+        with self._lock:
+            server = self._server
+            cfg = self._config
+            policy = self._policy
+            bound_port = self._bound_port
+        if server is None or cfg is None or policy is None:
             return {
                 "running": False,
                 "reachable": False,
@@ -591,12 +602,10 @@ class RemoteListener:
                 "guidance": ["Start the listener before running a self-test."],
             }
 
-        cfg = self._config
-        policy = self._policy
-        bound_port = self._bound_port or cfg.port
+        bound_port = bound_port or cfg.port
         # A server that reports closed is stale whatever a lingering accept()
         # window would tell the probe.
-        reachable = self._server.active and _probe_reachable(cfg.host, bound_port, timeout=1.0)
+        reachable = server.active and _probe_reachable(cfg.host, bound_port, timeout=1.0)
         # Stale = we still hold a server reference, but it is no longer serving.
         stale = not reachable
 

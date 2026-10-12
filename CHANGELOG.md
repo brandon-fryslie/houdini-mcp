@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both held to it by `tests/plugin/test_hrpyc_contract.py`, which also starts
   the listener on port 0 against real rpyc. rpyc's per-connection log lines
   now go to `houdini_mcp_plugin.listener.rpyc` (the previous "quiet" switch
-  only existed on the fake). The plugin packages are type-checked in CI.
+  only existed on the fake). The plugin packages are type-checked in CI, and
+  that check fails the build.
 
 - **Flags have a cap and an exit plan; the permission decision is one value**
   (houdini-laws-etg.pic):
