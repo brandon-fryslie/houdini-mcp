@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Houdini MCP!
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - SideFX Houdini (for integration testing)
 - Git
 
@@ -85,6 +85,7 @@ In Houdini's Python shell:
 
 ```python
 import hrpyc
+
 hrpyc.start_server(port=18811)
 ```
 
@@ -113,7 +114,7 @@ def create_node(
     parent_path: str = "/obj",
     name: Optional[str] = None,
     host: str = "localhost",
-    port: int = 18811
+    port: int = 18811,
 ) -> Dict[str, Any]:
     """
     Create a new node in the Houdini scene.

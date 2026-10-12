@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 # Must satisfy [tool.uv].required-version in pyproject.toml - uv checks it and fails otherwise.
 COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /bin/uv
 # The cache is a build mount on another filesystem, so hardlinks cannot work; compile
