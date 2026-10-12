@@ -325,6 +325,46 @@ class TestCapOnPagedPayloads:
         assert result["offset"] == 40
         assert result["cursor"] == result["next_offset"] == 40 + kept
 
+    def test_minimal_fallback_reports_the_kept_page_not_the_pre_cap_one(self):
+        from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
+
+        page = Page(items=[{"blob": "x" * 500} for _ in range(20)], offset=0, total=20)
+        data = {"status": "success", "matches": page.items, **paging_fields(page)}
+        assert data["has_more"] is False
+
+        result = apply_response_cap(data, max_bytes=300)
+        assert result["_truncated"] is True
+        assert "matches" not in result
+        assert result["returned"] < 20
+        assert result["has_more"] is True
+        assert result["cursor"] == result["returned"]
+
+    def test_undeliverable_item_is_consumed_so_the_cursor_advances(self):
+        from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
+
+        page = Page(items=[{"blob": "x" * 50_000}] * 3, offset=7, total=10)
+        data = {"status": "success", "matches": page.items, **paging_fields(page)}
+
+        result = apply_response_cap(data, max_bytes=600)
+        assert result["offset"] == 7
+        assert result["cursor"] == result["next_offset"] == 8
+        assert result["returned"] == 1
+
+    def test_paged_payload_with_two_list_fields_is_refused(self):
+        import pytest
+
+        from houdini_mcp.tools._common import Page, apply_response_cap, paging_fields
+
+        page = Page(items=[{"blob": "x" * 500} for _ in range(20)], offset=0, total=20)
+        data = {
+            "status": "success",
+            "children": page.items,
+            "inputs": [{"blob": "y" * 500} for _ in range(5)],
+            **paging_fields(page),
+        }
+        with pytest.raises(ValueError, match="exactly one list field"):
+            apply_response_cap(data, max_bytes=1400)
+
 
 class TestLegacyPaginationCompatibility:
     def test_direct_positional_host_port_calls_still_work(self, mock_connection):

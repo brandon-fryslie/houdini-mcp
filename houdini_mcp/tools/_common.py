@@ -1296,12 +1296,17 @@ def apply_response_cap(
         ("scene_changes", "scene_change"),
     ]
 
+    # How many items of each list field were kept; a paged payload's one list
+    # field is its page, and its contract is rebuilt from this after the loop.
+    kept_counts: dict[str, int] = {}
     for field_name, _singular_name in data_fields:
         if field_name not in data:
             continue
 
         field_value = data[field_name]
 
+        if isinstance(field_value, list):
+            kept_counts[field_name] = 0
         if isinstance(field_value, list) and len(field_value) > 0:
             # Find the longest useful prefix together with ALL truncation/size
             # metadata. Serialized size is monotonic with prefix length, so a
@@ -1347,12 +1352,13 @@ def apply_response_cap(
                     compact_item = item[: max(1, max_bytes // 8)] + "…"
                 else:
                     compact_item = str(item)[: max(1, max_bytes // 8)]
+                # [LAW:single-enforcer] No fit check here: the final size check
+                # below is the one place the cap is enforced. Always consuming
+                # the item also keeps a capped page's cursor from repeating.
                 candidate = prefix_candidate(1)
                 candidate[field_name] = [compact_item]
-                _set_final_serialized_size(candidate)
-                if _serialized_size(candidate) <= max_bytes:
-                    result.update(candidate)
-                    best = 1
+                result.update(candidate)
+                best = 1
 
             if best:
                 if field_name not in result:
@@ -1360,26 +1366,7 @@ def apply_response_cap(
                 result[f"{field_name}_truncated"] = True
                 result[f"{field_name}_original_count"] = len(field_value)
                 result[f"{field_name}_preserved_count"] = best
-            if is_paged(data):
-                # [LAW:one-source-of-truth] A capped page is still a page: its
-                # contract is rebuilt from what was actually kept (zero items
-                # included), and only the paging sentence of the warning is
-                # replaced, so a tool's own warning survives the cap.
-                before = Page(
-                    items=field_value, offset=int(data["offset"]), total=int(data["total"])
-                )
-                after = Page(items=field_value[:best], offset=before.offset, total=before.total)
-                paging_warning = paging_fields(before).get("warning")
-                kept = [
-                    part
-                    for part in (data.get("warning") or "").split(WARNING_SEPARATOR)
-                    if part != paging_warning
-                ]
-                fields = paging_fields(after)
-                warning = join_warnings(*kept, fields.get("warning"))
-                if warning:
-                    fields["warning"] = warning
-                result.update(fields)
+            kept_counts[field_name] = best
         elif isinstance(field_value, dict):
             # Preserve bounded prefixes from nested geometry/category lists
             # instead of dropping the entire requested diagnostic dictionary.
@@ -1410,6 +1397,31 @@ def apply_response_cap(
                 result[f"{field_name}_truncated"] = True
                 result[f"{field_name}_category_counts"] = category_counts
 
+    if is_paged(data):
+        # [LAW:one-source-of-truth] A capped page is still a page: its contract
+        # is rebuilt from the items actually kept, and only the paging sentence
+        # of the warning is replaced, so a tool's own warning survives the cap.
+        # [LAW:no-silent-failure] The contract pages exactly one list; anything
+        # else is a producer bug, not something to guess around.
+        if len(kept_counts) != 1:
+            raise ValueError(
+                f"a paged response carries exactly one list field, got {sorted(kept_counts)}"
+            )
+        ((page_key, best),) = kept_counts.items()
+        before = Page(items=data[page_key], offset=int(data["offset"]), total=int(data["total"]))
+        after = Page(items=before.items[:best], offset=before.offset, total=before.total)
+        paging_warning = paging_fields(before).get("warning")
+        kept = [
+            part
+            for part in (data.get("warning") or "").split(WARNING_SEPARATOR)
+            if part != paging_warning
+        ]
+        fields = paging_fields(after)
+        warning = join_warnings(*kept, fields.get("warning"))
+        if warning:
+            fields["warning"] = warning
+        result.update(fields)
+
     # Add exact final size metadata (including the field itself).
     _set_final_serialized_size(result)
 
@@ -1433,7 +1445,7 @@ def apply_response_cap(
                     test_minimal[field] = result[field]
                     test_json = json.dumps(test_minimal, ensure_ascii=False)
                     if len(test_json.encode("utf-8")) <= max_bytes:
-                        minimal[field] = data[field]
+                        minimal[field] = result[field]
                 except Exception:
                     pass
 
