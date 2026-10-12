@@ -10,15 +10,49 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 import rpyc
 import rpyc.core
 import rpyc.utils.server
-from houdini_mcp_plugin.listener import HrpycModule, HrpycServer, ListenerConfig, RemoteListener
+from houdini_mcp_plugin.listener import (
+    HrpycModule,
+    HrpycServer,
+    ListenerConfig,
+    RemoteListener,
+    is_ipv6_host,
+    probe_host,
+)
 
 from tests.plugin.conftest import FakeHrpycModule
+
+
+def _ipv6_loopback_available() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as s:
+            s.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+needs_ipv6 = pytest.mark.skipif(not _ipv6_loopback_available(), reason="no IPv6 loopback")
+
+
+def _await_rpyc_client_threads(timeout: float = 2.0) -> None:
+    """Wait for rpyc's per-client threads to notice the client's close.
+
+    rpyc serves each client on its own thread and re-raises, after logging,
+    when the server closes that client's socket under a poll. Stopping once
+    those threads have exited is what a clean stop needs, so wait on that.
+    """
+    deadline = time.monotonic() + timeout
+    while any(t.name.startswith("RpycSpawnThread") for t in threading.enumerate()):
+        assert time.monotonic() < deadline, "rpyc client thread did not exit"
+        time.sleep(0.01)
 
 
 def real_hrpyc() -> SimpleNamespace:
@@ -57,23 +91,33 @@ class TestContract:
 
 
 class TestListenerAgainstRealRpyc:
-    @pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "127.0.0.1",
+            pytest.param("::1", marks=needs_ipv6),
+            pytest.param("::", marks=needs_ipv6),
+        ],
+    )
     def test_port_zero_binds_reports_and_serves_a_classic_client(self, fake_hou, host):
         """Port 0 is resolved by rpyc; the reported port is the one a client
-        reaches, over the address family the host literal names."""
+        reaches, over the address family the host literal names. The wildcard
+        binds are the trusted-network opt-in's; a client reaches them on the
+        loopback of their own family, which is also what self_test probes."""
         listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
         try:
-            result = listener.start(ListenerConfig(host=host, port=0))
+            result = listener.start(ListenerConfig(host=host, port=0, trusted_network=True))
             assert result["status"] == "success", result
             port = result["bound_port"]
             assert port != 0
             assert listener.self_test()["reachable"] is True
 
-            conn = rpyc.classic.connect(host, port, ipv6=":" in host)
+            conn = rpyc.classic.connect(probe_host(host), port, ipv6=is_ipv6_host(host))
             try:
                 assert conn.modules.math.sqrt(16.0) == 4.0
             finally:
                 conn.close()
+                _await_rpyc_client_threads()
         finally:
             listener.stop()
 

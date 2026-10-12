@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import socket
 import sys
+import threading
 
 import houdini_mcp_handshake as handshake
 import pytest
@@ -91,14 +92,12 @@ class TestBindFailure:
         from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
 
         class CloseFails(FakeThreadedServer):
-            # Fails the first close, as a client socket reset would; a later
-            # close() (the accept loop's own, on exit) is the no-op rpyc's is.
-            failed = False
-
+            # stop()'s close, from the test's thread, fails as a client socket
+            # reset would; the accept loop's own close() on exit is left to work,
+            # since which of the two runs first is the kernel's choice.
             def close(self) -> None:
                 super().close()
-                if not self.failed:
-                    self.failed = True
+                if threading.current_thread() is threading.main_thread():
                     raise OSError(104, "Connection reset by peer")
 
         hrpyc = FakeHrpycModule()

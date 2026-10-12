@@ -44,6 +44,8 @@ __all__ = [
     "HrpycModule",
     "HrpycServer",
     "ListenerConfig",
+    "is_ipv6_host",
+    "probe_host",
     "SecurityPolicy",
     "SecurityError",
     "RemoteListener",
@@ -76,6 +78,24 @@ def is_loopback_host(host: str) -> bool:
 def is_wildcard_host(host: str) -> bool:
     """Return True if *host* binds all interfaces."""
     return host in _WILDCARD_HOSTS
+
+
+def is_ipv6_host(host: str) -> bool:
+    """Return True if *host* is an IPv6 literal: the colon is what makes it one."""
+    return ":" in host
+
+
+def probe_host(host: str) -> str:
+    """The address a local client connects to for a listener bound to *host*.
+
+    A wildcard bind cannot be connected to by its own name; its loopback, in
+    the same address family, is what accepts the local traffic.
+    """
+    if is_wildcard_host(host):
+        return "::1" if is_ipv6_host(host) else "127.0.0.1"
+    if host == "localhost":
+        return "127.0.0.1"
+    return host
 
 
 class SecurityError(RuntimeError):
@@ -282,11 +302,7 @@ def _detect_local_ip() -> str:
 
 def _probe_reachable(host: str, port: int, timeout: float) -> bool:
     """Return True when a TCP listener accepts a connection within *timeout*."""
-    # A wildcard/unspecified bind cannot be *connected* to directly; probe
-    # loopback in that case since the listener also accepts local traffic.
-    connect_host = "127.0.0.1" if is_wildcard_host(host) else host
-    if connect_host == "localhost":
-        connect_host = "127.0.0.1"
+    connect_host = probe_host(host)
     try:
         with socket.create_connection((connect_host, port), timeout=timeout):
             return True
@@ -486,11 +502,11 @@ class RemoteListener:
         # [LAW:dataflow-not-control-flow] one construction; the policy's
         # authenticator (None for an unauthenticated bind) is a value it carries,
         # and so is the address family: rpyc opens an AF_INET socket unless told
-        # ``ipv6``, and a colon is what makes a literal an IPv6 address.
+        # ``ipv6``.
         server = hrpyc.ThreadedServer(
             hrpyc.SlaveService,
             hostname=cfg.host,
-            ipv6=":" in cfg.host,
+            ipv6=is_ipv6_host(cfg.host),
             port=cfg.port,
             reuse_addr=cfg.reuse_addr,
             auto_register=False,
@@ -515,7 +531,7 @@ class RemoteListener:
             # of it is logged, not substituted for it.
             try:
                 server.close()
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 - the launch error is the one raised
                 logger.warning("hrpyc server did not close after a failed launch: %s", exc)
             raise
         return server, port
@@ -538,13 +554,16 @@ class RemoteListener:
             # already_running by a server that is no longer anyone's.
             try:
                 self._server.close()
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 - reported as the result, as start() does
                 logger.warning("hrpyc listener (%s:%s) did not close cleanly: %s", host, port, exc)
                 return {
                     "status": "error",
                     "error_type": "close",
                     "running": False,
-                    "message": f"hrpyc listener released; its server did not close cleanly: {exc}",
+                    "message": (
+                        f"hrpyc listener dropped its server, whose close() failed: {exc}. "
+                        f"Port {port} may stay bound until Houdini exits."
+                    ),
                 }
             finally:
                 self._server = None
@@ -561,11 +580,16 @@ class RemoteListener:
     def reload(
         self, config: ListenerConfig | None = None, *, raise_on_policy: bool = False
     ) -> dict[str, Any]:
-        """Stop (if running) and start again with *config*. Idempotent restart."""
+        """Stop (if running) and start again with *config*. Idempotent restart.
+
+        The result is ``start()``'s, carrying ``stop()``'s under ``"stop"``: a
+        server that failed to close is reported, not replaced by the fresh start.
+        """
         with self._lock:
-            if self._server is not None:
-                self.stop()
-            return self.start(config, raise_on_policy=raise_on_policy)
+            stopped = self.stop()
+            result = self.start(config, raise_on_policy=raise_on_policy)
+            result["stop"] = stopped
+            return result
 
     # -- introspection --------------------------------------------------------
 
@@ -658,7 +682,7 @@ class RemoteListener:
         if not policy.loopback_only and not is_wildcard_host(cfg.host):
             bound_endpoints.append(f"{local_ip}:{bound_port}")
         elif is_wildcard_host(cfg.host):
-            bound_endpoints.append(f"{local_ip}:{bound_port} (via 0.0.0.0)")
+            bound_endpoints.append(f"{local_ip}:{bound_port} (via {cfg.host})")
 
         return {
             "running": True,
