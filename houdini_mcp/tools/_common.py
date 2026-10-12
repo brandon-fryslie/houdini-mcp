@@ -11,7 +11,9 @@ This module contains common utilities used across all tool modules:
 import ast
 import logging
 import re
-from typing import Any
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
 
 from ..connection import (
     DEFAULT_OPERATION_TIMEOUT,
@@ -23,6 +25,8 @@ from ..connection import (
     quick_health_check,
     safe_execute,
 )
+
+T = TypeVar("T")
 
 # Re-export connection utilities for convenience
 __all__ = [
@@ -55,7 +59,15 @@ __all__ = [
     "_estimate_response_size",
     "_add_response_metadata",
     # Response pagination and bounds (HDMCP-52 / houdini-mcp-2t6)
-    "paginate_list",
+    "PAGE_LIMIT_MAX",
+    "PageRequest",
+    "parse_page_request",
+    "Page",
+    "paginate",
+    "paging_fields",
+    "is_paged",
+    "join_warnings",
+    "WARNING_SEPARATOR",
     "apply_response_cap",
     "DEFAULT_RESPONSE_CAP_BYTES",
     # Serialization utilities
@@ -937,9 +949,6 @@ def _flatten_parm_templates(hou: Any, parm_templates: list[Any], max_depth: int 
 import asyncio
 import os
 from collections.abc import Coroutine
-from typing import TypeVar
-
-T = TypeVar("T")
 
 # Default semaphore limit for bounded parallel execution
 # Can be overridden via environment variable
@@ -1037,56 +1046,198 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
 # =============================================================================
 
 
-def paginate_list(
-    items: list[Any],
-    limit: int = 20,
-    cursor: int | None = None,
-) -> dict[str, Any]:
+PAGE_LIMIT_MAX = 500
+
+
+@dataclass(frozen=True)
+class PageRequest:
+    """Where a page starts and how long it may be: ``0 <= offset``, ``1 <= limit <= PAGE_LIMIT_MAX``.
+
+    Construction refuses anything outside those bounds, so holding a PageRequest
+    is proof they hold; ``parse_page_request`` is the one place that clamps raw
+    arguments into them.
     """
-    Paginate a list with limit/cursor controls.
 
-    Args:
-        items: List to paginate
-        limit: Maximum items per page (default: 20)
-        cursor: Start offset for pagination (default: 0)
+    offset: int
+    limit: int
 
-    Returns:
-        Dict with:
-        - items: Page of items
-        - total: Total number of items
-        - returned: Number of items in this page
-        - has_more: Whether more pages exist
-        - cursor: Next cursor if has_more, otherwise omitted
+    def __post_init__(self) -> None:
+        # [LAW:types-are-the-program] The type, not its callers, refuses the
+        # empty or negative window that would repeat a cursor forever.
+        if self.offset < 0 or not 1 <= self.limit <= PAGE_LIMIT_MAX:
+            raise ValueError(
+                f"PageRequest needs 0 <= offset and 1 <= limit <= {PAGE_LIMIT_MAX}, "
+                f"got offset={self.offset} limit={self.limit}"
+            )
 
-    Example:
-        result = paginate_list(nodes, limit=10, cursor=0)
-        # Returns first 10 nodes with cursor=10 if more exist
+
+def parse_page_request(
+    *,
+    limit: int | None,
+    cursor: int | None,
+    max_results: int | None = None,
+    offset: int | None = None,
+    default_limit: int,
+) -> PageRequest:
+    """Resolve the limit/cursor arguments (and their max_results/offset aliases) into a PageRequest.
+
+    limit wins over max_results and cursor over offset; unset means the tool's
+    default page and the first page.
     """
-    # Clamp invalid inputs so callers cannot receive a repeating cursor (for
-    # example limit=0, cursor=0 forever) or negative Python-slice semantics.
-    limit = max(1, int(limit))
-    offset = max(0, int(cursor)) if cursor is not None else 0
-    total = len(items)
+    # [LAW:parse-dont-validate] [LAW:single-enforcer] The one checkpoint for page
+    # bounds: everything downstream takes a PageRequest, so nothing re-clamps.
+    requested = limit if limit is not None else max_results
+    start = cursor if cursor is not None else offset
+    request = PageRequest(
+        offset=max(0, int(start if start is not None else 0)),
+        limit=min(
+            PAGE_LIMIT_MAX, max(1, int(requested if requested is not None else default_limit))
+        ),
+    )
+    logger.debug(
+        "page request limit=%r cursor=%r max_results=%r offset=%r -> offset=%d limit=%d",
+        limit,
+        cursor,
+        max_results,
+        offset,
+        request.offset,
+        request.limit,
+    )
+    return request
 
-    # Slice the page
-    page = items[offset : offset + limit]
-    returned = len(page)
 
-    # Check if more pages exist
-    has_more = (offset + returned) < total
+@dataclass(frozen=True)
+class Page(Generic[T]):
+    """One page cut from a result set: the items at ``offset``, plus the set's total size."""
 
-    result: dict[str, Any] = {
-        "items": page,
-        "total": total,
-        "returned": returned,
-        "has_more": has_more,
-    }
+    items: list[T]
+    offset: int
+    total: int
 
-    # Add cursor for next page if more exist
-    if has_more:
-        result["cursor"] = offset + returned
+    @property
+    def has_more(self) -> bool:
+        return self.offset + len(self.items) < self.total
 
+
+def paginate(items: Iterable[T], request: PageRequest) -> Page[T]:
+    """Cut ``request``'s page from ``items``, counting the whole set for ``total``.
+
+    Works on any iterable, so a tool that streams matches pays per-item cost
+    (a Houdini round trip, say) only for the items it returns.
+    """
+    window = range(request.offset, request.offset + request.limit)
+    page: list[T] = []
+    total = 0
+    for item in items:
+        if total in window:
+            page.append(item)
+        total += 1
+    result = Page(items=page, offset=request.offset, total=total)
+    logger.debug(
+        "paged offset=%d limit=%d total=%d returned=%d has_more=%s",
+        request.offset,
+        request.limit,
+        result.total,
+        len(result.items),
+        result.has_more,
+    )
     return result
+
+
+WARNING_SEPARATOR = "; "
+
+
+def join_warnings(*warnings: str | None) -> str:
+    """One ``warning`` string from several facts; empty parts contribute nothing."""
+    return WARNING_SEPARATOR.join(w for w in warnings if w)
+
+
+def is_paged(data: dict[str, Any]) -> bool:
+    """Whether ``data`` carries the paging contract ``paging_fields`` builds."""
+    return "offset" in data and "total" in data
+
+
+def paging_fields(page: Page[Any]) -> dict[str, Any]:
+    """The paging response contract every list tool emits.
+
+    ``count`` and ``next_offset`` are aliases (of ``returned`` and ``cursor``)
+    that existing clients read; they are derived here and nowhere else.
+    """
+    # [LAW:single-enforcer] [LAW:one-source-of-truth] One builder for the contract;
+    # tools spread this dict and never hand-write a paging key.
+    returned = len(page.items)
+    fields: dict[str, Any] = {
+        "count": returned,
+        "total": page.total,
+        "returned": returned,
+        "has_more": page.has_more,
+        "offset": page.offset,
+    }
+    if page.has_more:
+        next_page = page.offset + returned
+        fields["cursor"] = next_page
+        fields["next_offset"] = next_page
+        fields["warning"] = (
+            f"Returned {returned} of {page.total} starting at offset {page.offset}. "
+            f"Use cursor={next_page} for the next page"
+        )
+    return fields
+
+
+def capped_paging_fields(data: dict[str, Any], kept: int) -> dict[str, Any]:
+    """The paging contract of ``data`` rebuilt for the first ``kept`` items of its page.
+
+    Only the paging sentence of ``warning`` is replaced; a tool's own warning
+    survives the cap.
+    """
+    # [LAW:one-source-of-truth] A capped page is still a page, described from
+    # what is actually delivered, by the same builder as the uncapped one.
+    page_key = _page_key(data)
+    before = Page(items=data[page_key], offset=int(data["offset"]), total=int(data["total"]))
+    after = Page(items=before.items[:kept], offset=before.offset, total=before.total)
+    paging_warning = paging_fields(before).get("warning")
+    others = [
+        part
+        for part in (data.get("warning") or "").split(WARNING_SEPARATOR)
+        if part != paging_warning
+    ]
+    fields = paging_fields(after)
+    warning = join_warnings(*others, fields.get("warning"))
+    if warning:
+        fields["warning"] = warning
+    return fields
+
+
+def _page_key(data: dict[str, Any]) -> str:
+    """The one list field a paged payload carries; any other shape is a producer bug."""
+    # [LAW:no-silent-failure] The cap can only preserve lists named in
+    # CAPPED_LIST_FIELDS, so a page under another key would be dropped: refuse.
+    keys = [key for key, _ in CAPPED_LIST_FIELDS if isinstance(data.get(key), list)]
+    if len(keys) != 1:
+        raise ValueError(
+            f"a paged response carries exactly one list field named in "
+            f"CAPPED_LIST_FIELDS, got {keys}"
+        )
+    return keys[0]
+
+
+CAPPED_LIST_FIELDS: list[tuple[str, str]] = [
+    ("items", "item"),
+    ("children", "child"),
+    ("matches", "match"),
+    ("node_types", "node_type"),
+    ("parameters", "parameter"),
+    ("sample_points", "sample_point"),
+    ("attributes", "attribute"),
+    ("groups", "group"),
+    ("error_nodes", "error_node"),
+    ("warning_nodes", "warning_node"),
+    ("inputs", "input"),
+    ("outputs", "output"),
+    ("methods", "method"),
+    ("vex_info", "vex_item"),
+    ("scene_changes", "scene_change"),
+]
 
 
 def apply_response_cap(
@@ -1149,10 +1300,11 @@ def apply_response_cap(
         "name",
         "total",
         "returned",
-        "has_more",
+        "count",
+        "offset",
         "cursor",
         "next_offset",
-        "count",
+        "has_more",
         "pattern",
         "category",
         "cook_state",
@@ -1182,24 +1334,11 @@ def apply_response_cap(
         result[field] = value
 
     # Try to preserve data fields (arrays, nested objects) within budget
-    data_fields = [
-        ("items", "item"),
-        ("children", "child"),
-        ("matches", "match"),
-        ("node_types", "node_type"),
-        ("parameters", "parameter"),
-        ("sample_points", "sample_point"),
-        ("attributes", "attribute"),
-        ("groups", "group"),
-        ("error_nodes", "error_node"),
-        ("warning_nodes", "warning_node"),
-        ("inputs", "input"),
-        ("outputs", "output"),
-        ("methods", "method"),
-        ("vex_info", "vex_item"),
-        ("scene_changes", "scene_change"),
-    ]
+    data_fields = CAPPED_LIST_FIELDS
 
+    # How many items of each list field were kept; a paged payload's page is
+    # one of them, and its contract is rebuilt from this after the loop.
+    kept_counts: dict[str, int] = {}
     for field_name, _singular_name in data_fields:
         if field_name not in data:
             continue
@@ -1251,12 +1390,13 @@ def apply_response_cap(
                     compact_item = item[: max(1, max_bytes // 8)] + "…"
                 else:
                     compact_item = str(item)[: max(1, max_bytes // 8)]
+                # [LAW:single-enforcer] No fit check here: the final size check
+                # below is the one place the cap is enforced. Always consuming
+                # the item also keeps a capped page's cursor from repeating.
                 candidate = prefix_candidate(1)
                 candidate[field_name] = [compact_item]
-                _set_final_serialized_size(candidate)
-                if _serialized_size(candidate) <= max_bytes:
-                    result.update(candidate)
-                    best = 1
+                result.update(candidate)
+                best = 1
 
             if best:
                 if field_name not in result:
@@ -1264,15 +1404,9 @@ def apply_response_cap(
                 result[f"{field_name}_truncated"] = True
                 result[f"{field_name}_original_count"] = len(field_value)
                 result[f"{field_name}_preserved_count"] = best
-                # If this list is a paginated payload, continuation must start
-                # after what was actually returned, not after the pre-cap page.
-                if field_name in {"items", "children", "matches", "node_types"}:
-                    current_offset = int(data.get("offset", 0))
-                    result["returned"] = best
-                    result["count"] = best
-                    result["has_more"] = True
-                    result["cursor"] = current_offset + best
-                    result["next_offset"] = current_offset + best
+            kept_counts[field_name] = best
+        elif isinstance(field_value, list):
+            kept_counts[field_name] = 0
         elif isinstance(field_value, dict):
             # Preserve bounded prefixes from nested geometry/category lists
             # instead of dropping the entire requested diagnostic dictionary.
@@ -1303,6 +1437,9 @@ def apply_response_cap(
                 result[f"{field_name}_truncated"] = True
                 result[f"{field_name}_category_counts"] = category_counts
 
+    if is_paged(data):
+        result.update(capped_paging_fields(data, kept_counts[_page_key(data)]))
+
     # Add exact final size metadata (including the field itself).
     _set_final_serialized_size(result)
 
@@ -1317,15 +1454,18 @@ def apply_response_cap(
         if "status" in data:
             minimal["status"] = data["status"]
 
-        # Try to preserve essential fields
+        # The minimal response delivers no items, and its paging fields say so:
+        # the cursor stays at this offset and the message tells the client why.
+        if is_paged(data):
+            result.update(capped_paging_fields(data, 0))
         for field in essential_fields:
-            if field in data:
+            if field in result:
                 try:
                     test_minimal = dict(minimal)
-                    test_minimal[field] = data[field]
+                    test_minimal[field] = result[field]
                     test_json = json.dumps(test_minimal, ensure_ascii=False)
                     if len(test_json.encode("utf-8")) <= max_bytes:
-                        minimal[field] = data[field]
+                        minimal[field] = result[field]
                 except Exception:
                     pass
 

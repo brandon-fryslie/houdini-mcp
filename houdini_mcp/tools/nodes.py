@@ -19,7 +19,10 @@ from ._common import (
     _json_safe_hou_value,
     ensure_connected,
     handle_connection_errors,
-    paginate_list,
+    join_warnings,
+    paginate,
+    paging_fields,
+    parse_page_request,
 )
 from .cache import node_type_cache
 
@@ -333,49 +336,21 @@ def list_node_types(
         - Subsequent calls: <1ms (filters from cache)
     """
     hou = ensure_connected(host, port)
-
-    # Backward-compatible aliases: limit/cursor take precedence over max_results/offset
-    if limit is not None:
-        max_results = limit
-    elif max_results is None:
-        max_results = 100
-
-    if cursor is not None:
-        offset = cursor
-    elif offset is None:
-        offset = 0
-
-    # Cap max_results to prevent excessive data transfer
-    if max_results > 500:
-        max_results = 500
-    elif max_results < 1:
-        max_results = 100
-
-    # Validate offset
-    if offset < 0:
-        offset = 0
+    request = parse_page_request(
+        limit=limit, cursor=cursor, max_results=max_results, offset=offset, default_limit=100
+    )
 
     # Populate cache if needed (first call fetches all types)
     # This is done automatically by get_all_types()
     node_type_cache.get_all_types(hou, host, port)
 
-    # Filter from cache (instant)
-    node_types, total_matched, has_more = node_type_cache.filter_types(
-        category=category,
-        name_filter=name_filter,
-        max_results=max_results,
-        offset=offset,
+    page = paginate(
+        node_type_cache.filter_types(category=category, name_filter=name_filter), request
     )
-
-    # Build result with consistent pagination metadata (HDMCP-52)
     result: dict[str, Any] = {
         "status": "success",
-        "node_types": node_types,
-        "count": len(node_types),  # Backward compat: count = returned
-        "total": total_matched,
-        "returned": len(node_types),
-        "has_more": has_more,
-        "offset": offset,
+        "node_types": page.items,
+        **paging_fields(page),
     }
 
     # Include category in result if filtered
@@ -384,20 +359,6 @@ def list_node_types(
     else:
         # Get available categories from cache
         result["categories_available"] = node_type_cache.get_categories(hou)
-
-    # Cursor is preferred; next_offset preserves the existing offset contract.
-    if has_more:
-        next_page = offset + len(node_types)
-        result["cursor"] = next_page
-        result["next_offset"] = next_page
-
-    # Add warning if results were limited
-    if len(node_types) >= max_results and has_more:
-        result["warning"] = (
-            f"Results limited to {max_results}. "
-            f"Use offset={offset + max_results} for next page, or use name_filter to narrow results."
-        )
-        result["total_matched"] = total_matched
 
     # Add cache stats for visibility
     cache_stats = node_type_cache.stats
@@ -437,7 +398,7 @@ def list_children(
         recursive: If True, recursively traverse child nodes
         max_depth: Maximum recursion depth (prevents infinite loops)
         max_nodes: Maximum total nodes to collect (safety limit, default: 1000)
-        limit: Maximum nodes per page (default: 20)
+        limit: Maximum nodes per page (default: 20, max: 500)
         cursor: Pagination cursor (offset) for next page
         compact: If True, return only path/name/type without connection details
 
@@ -447,6 +408,7 @@ def list_children(
         Includes pagination metadata: total, returned, has_more, cursor.
     """
     hou = ensure_connected(host, port)
+    request = parse_page_request(limit=limit, cursor=cursor, default_limit=20)
 
     parent = hou.node(node_path)
     if parent is None:
@@ -546,26 +508,20 @@ def list_children(
 
     collect_children(parent)
 
-    # Apply pagination to collected children
-    paginated = paginate_list(children_list, limit=limit, cursor=cursor)
-
+    page = paginate(children_list, request)
     result: dict[str, Any] = {
         "status": "success",
         "node_path": node_path,
-        "children": paginated["items"],
-        "count": paginated["total"],  # Backward compat: count was total collected
-        "total": paginated["total"],
-        "returned": paginated["returned"],
-        "has_more": paginated["has_more"],
-        "offset": max(0, int(cursor)) if cursor is not None else 0,
+        "children": page.items,
+        **paging_fields(page),
     }
 
-    if paginated["has_more"]:
-        result["cursor"] = paginated["cursor"]
-        result["next_offset"] = paginated["cursor"]
-
     if nodes_collected >= max_nodes:
-        result["warning"] = f"Collection limited to {max_nodes} nodes"
+        # [LAW:no-silent-failure] A capped walk and a further page are two facts;
+        # neither may overwrite the other.
+        result["warning"] = join_warnings(
+            result.get("warning"), f"Collection limited to {max_nodes} nodes"
+        )
 
     # Add response size metadata for large responses
     return _add_response_metadata(result)
@@ -618,11 +574,11 @@ def find_nodes(
         root_path: Root path to start search from
         pattern: Glob pattern or substring to match against node names (* for wildcard)
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
-        max_results: Maximum number of results to return (default: 100)
+        max_results: Maximum number of results to return (default: 100, max: 500)
                     DEPRECATED: Use limit instead for consistency
         offset: Number of results to skip for pagination (default: 0)
                DEPRECATED: Use cursor instead for consistency
-        limit: Maximum number of results per page (default: 100)
+        limit: Maximum number of results per page (default: 100, max: 500)
               Preferred alias for max_results
         cursor: Pagination cursor/offset (default: 0)
                Preferred alias for offset
@@ -642,43 +598,29 @@ def find_nodes(
     if root is None:
         return {"status": "error", "message": f"Root node not found: {root_path}"}
 
-    # Backward-compatible aliases: limit/cursor take precedence over max_results/offset
-    if limit is not None:
-        max_results = limit
-    elif max_results is None:
-        max_results = 100
-
-    if cursor is not None:
-        offset = cursor
-    elif offset is None:
-        offset = 0
-
-    # Invalid aliases must not produce empty repeating pages.
-    max_results = max(1, min(int(max_results), 500))
-    offset = max(0, int(offset))
+    request = parse_page_request(
+        limit=limit, cursor=cursor, max_results=max_results, offset=offset, default_limit=100
+    )
 
     # [LAW:single-enforcer] Caller strings are compared as data here, never formatted
     # into a program; find_nodes has no code-execution path of its own.
     # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
     # as an error instead of switching to a different result set.
-    page = range(offset, offset + max_results)
-    matches: list[dict[str, str]] = []
-    total_matched = 0
-    for child, name, child_type in _matching_descendants(root, pattern, node_type):
-        # path() is one more round trip; only the returned page pays it.
-        if total_matched in page:
-            matches.append({"path": child.path(), "name": name, "type": child_type})
-        total_matched += 1
-    has_more = total_matched > page.stop
+    page = paginate(_matching_descendants(root, pattern, node_type), request)
+    # path() is one more round trip; only the returned page pays it.
+    matches = [
+        {"path": child.path(), "name": name, "type": child_type}
+        for child, name, child_type in page.items
+    ]
     logger.debug(
         "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
         root_path,
         pattern,
         node_type,
-        offset,
-        total_matched,
+        page.offset,
+        page.total,
         len(matches),
-        has_more,
+        page.has_more,
     )
 
     result: dict[str, Any] = {
@@ -686,29 +628,11 @@ def find_nodes(
         "root_path": root_path,
         "pattern": pattern,
         "matches": matches,
-        "count": len(matches),  # Backward compat: count = returned
-        "total": total_matched,
-        "returned": len(matches),
-        "has_more": has_more,
+        **paging_fields(page),
     }
 
     if node_type:
         result["node_type_filter"] = node_type
-
-    # Add offset for backward compat
-    if offset > 0:
-        result["offset"] = offset
-
-    # Cursor is preferred; next_offset preserves the existing offset contract.
-    if has_more:
-        next_page = offset + len(matches)
-        result["cursor"] = next_page
-        result["next_offset"] = next_page
-
-    if len(matches) >= max_results:
-        result["warning"] = (
-            f"Results limited to {max_results} nodes. Use offset={offset + max_results} for next page."
-        )
 
     # Add response size metadata for large responses
     return _add_response_metadata(result)

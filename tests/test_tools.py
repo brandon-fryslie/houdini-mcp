@@ -1128,14 +1128,14 @@ class TestListNodeTypes:
         assert len(result["node_types"]) <= 500
 
     def test_list_node_types_max_results_minimum(self, mock_connection):
-        """Test that invalid max_results (< 1) defaults to 100."""
+        """An invalid max_results (< 1) pages one item, like every other list tool."""
         from houdini_mcp.tools import list_node_types
 
         result = list_node_types(None, max_results=0, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        # Should default to 100
-        assert result["count"] <= 100
+        assert result["count"] == 1
+        assert result["cursor"] == 1
 
     def test_list_node_types_name_filter(self, mock_connection):
         """Test name_filter parameter filters by substring."""
@@ -1207,9 +1207,8 @@ class TestListNodeTypes:
         if result["count"] >= 5:
             # If we hit the limit, warning should be present
             assert "warning" in result
-            assert "limited to 5" in result["warning"]
-            # New cached implementation uses total_matched instead of total_scanned
-            assert "total_matched" in result
+            assert f"cursor={result['cursor']}" in result["warning"]
+            assert result["total"] > 5
 
     def test_list_node_types_early_termination(self, mock_connection):
         """Test that iteration stops early when max_results reached."""
@@ -1494,8 +1493,8 @@ class TestListChildren:
         result = list_children(
             "/obj/geo1", compact=True, limit=10, cursor=10, host="localhost", port=18811
         )
-        assert result["returned"] == 10
-        assert result["total"] == result["count"] == 50
+        assert result["returned"] == result["count"] == 10
+        assert result["total"] == 50
         assert result["cursor"] == result["next_offset"] == 20
         assert result["offset"] == 10
 

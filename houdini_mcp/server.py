@@ -435,7 +435,7 @@ def find_nodes(
         pattern: Glob pattern or substring to match node names (default: "*")
                 Examples: "noise*", "*grid*", "sphere"
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
-        max_results: Maximum number of results to return (default: 100)
+        max_results: Maximum number of results to return (default: 100, max: 500)
         offset: Number of results to skip for pagination (default: 0)
 
     Returns:

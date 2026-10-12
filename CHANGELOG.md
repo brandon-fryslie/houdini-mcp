@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One paging contract for list tools**: `list_node_types`, `list_children` and
+  `find_nodes` parse `limit`/`cursor` (and the `max_results`/`offset` aliases)
+  through one enforcer: `limit` is clamped to 1..500 and `cursor` to >= 0 for all
+  three, and every response carries the same keys (`count`, `total`, `returned`,
+  `has_more`, `offset`, plus `cursor`/`next_offset`/`warning` when a further page
+  exists). `list_children.count` now means items returned, like the other two
+  tools; `list_node_types` no longer emits `total_matched` (use `total`).
+
 ### Added
 
 - **Remote hrpyc listener activation** (`houdini_mcp_plugin.listener`): the
