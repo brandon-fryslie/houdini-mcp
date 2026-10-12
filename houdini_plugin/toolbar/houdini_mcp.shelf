@@ -3,7 +3,6 @@
   <!-- Houdini MCP Shelf -->
   <toolshelf name="houdini_mcp" label="Houdini MCP">
     <memberTool name="mcp_start"/>
-    <memberTool name="mcp_stop"/>
     <memberTool name="mcp_status"/>
     <memberTool name="hrpyc_start"/>
     <memberTool name="hrpyc_stop"/>
@@ -19,7 +18,8 @@ The MCP server allows AI assistants to control Houdini
 through the Model Context Protocol.
 
 In stdio mode, the server runs in-process and communicates
-via standard input/output.
+via standard input/output. It serves until the MCP client
+closes stdin; there is no shelf Stop.
     ]]></helpText>
     <script scriptType="python"><![CDATA[
 import hou
@@ -62,42 +62,6 @@ except Exception as e:
     ]]></script>
   </tool>
 
-  <tool name="mcp_stop" label="Stop MCP" icon="MISC_python">
-    <helpText><![CDATA[
-Stop the Houdini MCP Server.
-    ]]></helpText>
-    <script scriptType="python"><![CDATA[
-import hou
-
-try:
-    from houdini_mcp_plugin import stop_server, is_server_running
-    
-    if not is_server_running():
-        hou.ui.displayMessage(
-            "MCP Server is not running.",
-            title="Houdini MCP"
-        )
-    else:
-        if stop_server():
-            hou.ui.displayMessage(
-                "MCP Server stopped.",
-                title="Houdini MCP"
-            )
-        else:
-            hou.ui.displayMessage(
-                "Failed to stop MCP Server.",
-                title="Houdini MCP",
-                severity=hou.severityType.Warning
-            )
-except ImportError as e:
-    hou.ui.displayMessage(
-        f"Failed to import houdini_mcp_plugin:\n{e}",
-        title="Houdini MCP",
-        severity=hou.severityType.Error
-    )
-    ]]></script>
-  </tool>
-
   <tool name="mcp_status" label="MCP Status" icon="MISC_python">
     <helpText><![CDATA[
 Check the status of the Houdini MCP Server.
@@ -112,7 +76,7 @@ try:
     if is_server_running():
         info = get_connection_info()
         
-        status_text = "MCP Server Status: RUNNING\n\n"
+        status_text = "MCP Server Status: RUNNING (ends when the client closes stdin)\n\n"
         status_text += f"Houdini: {info.get('target', 'unknown')}\n"
         status_text += f"Houdini Version: {info.get('houdini_version', 'unknown')}\n"
         status_text += f"Hip File: {info.get('hip_file', 'unknown')}\n"

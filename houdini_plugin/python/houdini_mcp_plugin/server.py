@@ -7,6 +7,12 @@ is running inside and starts the stdio transport.
 [LAW:one-source-of-truth] No tool is defined here. Every tool's rails, audit,
 transactions and response shape have exactly one implementation, in
 ``houdini_mcp.tools``, so stdio clients cannot see a different contract.
+
+A stdio server lives exactly as long as the client holds its stdin open: the
+transport's reader blocks on that pipe and returns only at EOF, and nothing in
+this process can end it sooner (cancelling the task waits on that same read).
+So there is no ``stop``. The client that started the server ends it by closing
+the pipe, and this module reports whether a server is serving right now.
 """
 
 import logging
@@ -15,9 +21,14 @@ from collections.abc import Callable
 
 logger = logging.getLogger("houdini_mcp_plugin.server")
 
-# Global server state
-_server_thread: threading.Thread | None = None
-_server_running = False
+
+class AlreadyServing(RuntimeError):
+    """A stdio server is already serving this process's stdin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "MCP server is already serving stdio; it ends when the client closes stdin"
+        )
 
 
 def _prepare_stdio_server() -> Callable[[], None]:
@@ -29,76 +40,90 @@ def _prepare_stdio_server() -> Callable[[], None]:
     return lambda: serve(transport="stdio")
 
 
+class StdioServer:
+    """The one owner of the stdio server's lifecycle.
+
+    [LAW:no-ambient-temporal-coupling] The serving thread is the state. It is
+    recorded before any thread starts and cleared by the serving thread itself
+    when the transport ends, so a second ``start`` is refused from the moment
+    the first one is accepted, not from whenever the thread gets scheduled.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._serving: threading.Thread | None = None
+
+    def is_serving(self) -> bool:
+        return self._serving is not None
+
+    def start(self, *, block: bool) -> bool:
+        """Serve stdio on a background thread, or on this thread until EOF.
+
+        Returns:
+            True once a background server is started, or once a blocking one
+            has served to EOF; False when a blocking serve ended with an error.
+
+        Raises:
+            AlreadyServing: a server is serving; nothing is started.
+        """
+        with self._lock:
+            if self._serving is not None:
+                raise AlreadyServing()
+            run = _prepare_stdio_server()
+            thread = (
+                threading.current_thread()
+                if block
+                else threading.Thread(target=self._serve, args=(run,), daemon=True)
+            )
+            self._serving = thread
+        where = "this thread" if block else "a background thread"
+        logger.info(f"Starting MCP server (stdio transport) in {where}")
+        if block:
+            return self._serve(run)
+        thread.start()
+        return True
+
+    def _serve(self, run: Callable[[], None]) -> bool:
+        """Run the transport to its end; the outcome is logged before state clears."""
+        try:
+            run()
+        except Exception:
+            # [LAW:no-silent-failure] on a background thread this is the only report
+            logger.exception("MCP server failed")
+            return False
+        else:
+            logger.info("MCP server stopped: client closed stdin")
+            return True
+        finally:
+            with self._lock:
+                self._serving = None
+
+
+_stdio = StdioServer()
+
+
 def start_server(use_thread: bool = True) -> bool:
     """Start the MCP server.
 
     Args:
-        use_thread: If True, run in a background thread. If False, block.
+        use_thread: If True, run in a background thread. If False, block until
+            the client closes stdin.
 
     Returns:
-        True if server started successfully, False otherwise.
+        True if the server started (and, when blocking, served to EOF without
+        error); False if one is already serving or the serve failed.
+
+    Raises:
+        Whatever binding the shared server to this Houdini raised: nothing was
+        started, and the caller (shelf or ``hython -c``) shows the cause.
     """
-    global _server_thread, _server_running
-
-    if _server_running:
-        logger.warning("MCP server is already running")
-        return False
-
     try:
-        serve = _prepare_stdio_server()
-
-        if use_thread:
-
-            def run_server():
-                global _server_running
-                _server_running = True
-                logger.info("Starting MCP server (stdio transport) in background thread")
-                try:
-                    serve()
-                except Exception as e:
-                    logger.error(f"MCP server error: {e}")
-                finally:
-                    _server_running = False
-
-            _server_thread = threading.Thread(target=run_server, daemon=True)
-            _server_thread.start()
-            logger.info("MCP server thread started")
-        else:
-            _server_running = True
-            logger.info("Starting MCP server (stdio transport) in main thread")
-            try:
-                serve()
-            finally:
-                _server_running = False
-
-        return True
-    except Exception as e:
-        logger.error(f"Failed to start MCP server: {e}")
+        return _stdio.start(block=not use_thread)
+    except AlreadyServing as e:
+        logger.warning(str(e))
         return False
-
-
-def stop_server() -> bool:
-    """Stop the MCP server.
-
-    Returns:
-        True if server was stopped, False if it wasn't running.
-    """
-    global _server_running, _server_thread
-
-    if not _server_running:
-        logger.warning("MCP server is not running")
-        return False
-
-    # Signal the server to stop
-    # Note: FastMCP doesn't have a clean shutdown mechanism for stdio,
-    # so we mainly just mark it as not running
-    _server_running = False
-    _server_thread = None
-
-    logger.info("MCP server stopped")
-    return True
 
 
 def is_server_running() -> bool:
-    """Check if the MCP server is running."""
-    return _server_running
+    """Whether a stdio server is serving this process's stdin right now."""
+    return _stdio.is_serving()
