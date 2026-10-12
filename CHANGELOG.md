@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Listener start no longer races its own serve thread**: `start()` listens
+  on the server socket before spawning the accept thread (rpyc's own readiness
+  step), so the listener is accepting connections when `start()` returns and
+  success no longer depends on thread scheduling. The two-second connect
+  poll, its `unreachable` error and the 50ms sleeps are gone; the self-test's
+  reachability probe is a single bounded connect.
 - **Token handshake has one definition** (`houdini_mcp_handshake`, in the plugin tree and shipped with the server): the MCP
   server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
   with a token is reachable from the server (previously only the verify script

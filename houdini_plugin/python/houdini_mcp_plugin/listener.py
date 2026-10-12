@@ -26,7 +26,6 @@ import logging
 import os
 import socket
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -227,25 +226,19 @@ def _detect_local_ip() -> str:
         return "localhost"
 
 
-def _probe_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
-    """Return True when a TCP listener actually accepts a connection."""
+def _probe_reachable(host: str, port: int, timeout: float) -> bool:
+    """Return True when a TCP listener accepts a connection within *timeout*."""
     # A wildcard/unspecified bind cannot be *connected* to directly; probe
     # loopback in that case since the listener also accepts local traffic.
     connect_host = "127.0.0.1" if is_wildcard_host(host) else host
     if connect_host == "localhost":
         connect_host = "127.0.0.1"
-    deadline = time.monotonic() + timeout
-    last_err: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((connect_host, port), timeout=0.3):
-                return True
-        except OSError as exc:
-            last_err = exc
-            time.sleep(0.05)
-    if last_err is not None:
-        logger.debug("reachability probe failed for %s:%s: %s", connect_host, port, last_err)
-    return False
+    try:
+        with socket.create_connection((connect_host, port), timeout=timeout):
+            return True
+    except OSError as exc:
+        logger.debug("reachability probe failed for %s:%s: %s", connect_host, port, exc)
+        return False
 
 
 def firewall_guidance(host: str, port: int) -> list[str]:
@@ -394,22 +387,10 @@ class RemoteListener:
 
             bound_port = getattr(server, "bound_port", None) or cfg.port
 
+            # The server is already accepting connections (see _build_server);
+            # this thread only drains the accept queue, so nothing waits on it.
             thread = threading.Thread(target=server.start, name="houdini-hrpyc", daemon=True)
             thread.start()
-
-            if not _probe_reachable(cfg.host, bound_port):
-                # Clean up the half-started server so state stays consistent.
-                self._close_server(server)
-                return {
-                    "status": "error",
-                    "error_type": "unreachable",
-                    "running": False,
-                    "host": cfg.host,
-                    "port": bound_port,
-                    "message": (
-                        f"hrpyc listener did not become reachable on {cfg.host}:{bound_port}."
-                    ),
-                }
 
             # _server is the running discriminator that the unlocked status() and
             # self_test() read, so it is assigned last. [LAW:no-ambient-temporal-coupling]
@@ -436,7 +417,12 @@ class RemoteListener:
             return result
 
     def _build_server(self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy) -> Any:
-        """Construct the underlying ThreadedServer, wiring auth if configured."""
+        """Construct the underlying ThreadedServer, wiring auth if configured.
+
+        The server returned is accepting connections: ``_listen()`` has run on
+        this thread, so the kernel queues clients from here on whether or not
+        the accept loop has been scheduled yet.
+        """
         kwargs: dict[str, Any] = {
             "hostname": cfg.host,
             "port": cfg.port,
@@ -456,6 +442,13 @@ class RemoteListener:
         server_logger = getattr(server, "logger", None)
         if server_logger is not None and hasattr(server_logger, "quiet"):
             server_logger.quiet = True
+
+        # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
+        # own ``active`` state, established here synchronously rather than raced
+        # against the serve thread. This is rpyc's readiness protocol: its own
+        # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``, and
+        # ``start()`` skips the listen once ``active`` is set.
+        server._listen()
         return server
 
     @staticmethod

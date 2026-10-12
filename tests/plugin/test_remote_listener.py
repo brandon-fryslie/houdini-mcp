@@ -151,3 +151,41 @@ class TestStartStop:
         result = listener.reload(ListenerConfig(host="127.0.0.1", port=free_port))
         assert result["status"] == "success"
         assert listener.is_running() is True
+
+
+# ---------------------------------------------------------------------------
+# Readiness
+# ---------------------------------------------------------------------------
+
+
+class TestStartAwaitsReadiness:
+    def test_start_returns_accepting_even_if_the_serve_thread_never_runs(self, fake_hou, free_port):
+        """Readiness is the listen state, not the accept loop's scheduling.
+
+        The serve thread here stalls forever before draining a single accept,
+        standing in for a scheduler that never gets round to it. ``start()``
+        still reports success, and a client still connects: the kernel queues
+        the connection on the listening socket. This is deterministic, not a
+        bet on timing.
+        """
+        import socket
+        import threading
+
+        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+
+        never = threading.Event()
+
+        class StalledServer(FakeThreadedServer):
+            def start(self) -> None:
+                never.wait()
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: StalledServer(*a, **kw)
+
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        assert result["status"] == "success"
+
+        with socket.create_connection(("127.0.0.1", free_port), timeout=1):
+            pass
+        listener.stop()
