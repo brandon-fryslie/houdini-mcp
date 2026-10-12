@@ -190,8 +190,8 @@ class TestListenerDerivesFromSharedHandshake:
         before = server.rejected
 
         with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
-            sock.sendall(b"nope!!!")
-            sock.recv(1)  # the fake closes the socket after rejecting
+            sock.sendall(handshake.exchange("nope")[0])
+            assert sock.recv(1) == b""  # the fake closes the socket after rejecting
         assert server.rejected == before + 1
 
     def test_stalled_client_is_rejected_not_held(

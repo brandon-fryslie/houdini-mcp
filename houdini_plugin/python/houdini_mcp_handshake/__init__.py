@@ -33,9 +33,6 @@ import struct
 from collections.abc import Callable
 from typing import Any
 
-import rpyc
-from rpyc.core.stream import SocketStream
-
 logger = logging.getLogger("houdini_mcp_handshake")
 
 # An rpyc authenticator: takes the accepted socket, returns ``(sock, credentials)``
@@ -127,11 +124,18 @@ def connect(host: str, port: int, token: str | None) -> Any:
     listener closes the connection on the token, ``TimeoutError`` when nothing
     acknowledges it within ``HANDSHAKE_TIMEOUT``.
     """
+    # rpyc is needed only here and in the authenticator, so reading the token
+    # from the environment never requires it.
+    import rpyc  # noqa: PLC0415
+    from rpyc.core.stream import SocketStream  # noqa: PLC0415
+
     sent, expected = exchange(token)
     stream = SocketStream.connect(host, port)
     try:
+        # A failed write is a transport error like any other, retried; only the
+        # listener closing after it has read the frame is evidence of rejection.
+        stream.write(sent)
         try:
-            stream.write(sent)
             _recv_exactly(stream.sock, len(expected))
         except EOFError as exc:
             raise HandshakeError(

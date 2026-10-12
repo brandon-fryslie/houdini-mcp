@@ -28,10 +28,9 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from houdini_mcp_handshake import Authenticator
+from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 
@@ -114,7 +113,7 @@ class ListenerConfig:
             port = int(port_str) if port_str else DEFAULT_PORT
         except ValueError:
             port = DEFAULT_PORT
-        token = _token_from_env()
+        token = token_from_env()
         trusted = _env_flag("HOUDINI_RPC_TRUSTED_NETWORK")
         return cls(host=host, port=port, trusted_network=trusted, token=token)
 
@@ -165,7 +164,7 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     """
     loopback = is_loopback_host(config.host)
     try:
-        authenticator = _token_authenticator(config.token) if config.token else None
+        authenticator = token_authenticator(config.token) if config.token else None
     except ImportError as exc:
         # [LAW:no-silent-failure] a configured token is enforced or nothing binds;
         # the refusal is a policy outcome, handled by the same path as every other.
@@ -631,25 +630,3 @@ class RemoteListener:
             "warnings": warnings,
             "guidance": firewall_guidance(cfg.host, bound_port),
         }
-
-
-def _token_authenticator(token: str) -> Authenticator:
-    """The listener's side of the shared handshake.
-
-    [LAW:one-source-of-truth] derived from ``houdini_mcp_handshake``, the one
-    definition the MCP server's client side also derives from. Imported here, not
-    at module load, so a Houdini whose rpyc lacks the authenticator primitives
-    still runs an untokened listener; with a token configured the ImportError
-    propagates to :func:`resolve_security_policy`, which refuses the bind.
-    """
-    from houdini_mcp_handshake import token_authenticator  # noqa: PLC0415
-
-    return token_authenticator(token)
-
-
-def _token_from_env() -> str | None:
-    """The handshake's reader of HOUDINI_RPC_TOKEN, imported lazily for the same
-    reason as :func:`_token_authenticator`."""
-    from houdini_mcp_handshake import token_from_env  # noqa: PLC0415
-
-    return token_from_env()
