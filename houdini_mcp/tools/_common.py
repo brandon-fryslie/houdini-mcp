@@ -11,7 +11,9 @@ This module contains common utilities used across all tool modules:
 import ast
 import logging
 import re
-from typing import Any
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
 
 from ..connection import (
     DEFAULT_OPERATION_TIMEOUT,
@@ -23,6 +25,8 @@ from ..connection import (
     quick_health_check,
     safe_execute,
 )
+
+T = TypeVar("T")
 
 # Re-export connection utilities for convenience
 __all__ = [
@@ -55,7 +59,12 @@ __all__ = [
     "_estimate_response_size",
     "_add_response_metadata",
     # Response pagination and bounds (HDMCP-52 / houdini-mcp-2t6)
-    "paginate_list",
+    "PAGE_LIMIT_MAX",
+    "PageRequest",
+    "parse_page_request",
+    "Page",
+    "paginate",
+    "paging_fields",
     "apply_response_cap",
     "DEFAULT_RESPONSE_CAP_BYTES",
     # Serialization utilities
@@ -937,9 +946,6 @@ def _flatten_parm_templates(hou: Any, parm_templates: list[Any], max_depth: int 
 import asyncio
 import os
 from collections.abc import Coroutine
-from typing import TypeVar
-
-T = TypeVar("T")
 
 # Default semaphore limit for bounded parallel execution
 # Can be overridden via environment variable
@@ -1037,56 +1043,100 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
 # =============================================================================
 
 
-def paginate_list(
-    items: list[Any],
-    limit: int = 20,
-    cursor: int | None = None,
-) -> dict[str, Any]:
+PAGE_LIMIT_MAX = 500
+
+
+@dataclass(frozen=True)
+class PageRequest:
+    """Where a page starts and how long it may be: ``0 <= offset``, ``1 <= limit <= PAGE_LIMIT_MAX``.
+
+    Only ``parse_page_request`` builds one, so holding a PageRequest is proof the
+    bounds were enforced.
     """
-    Paginate a list with limit/cursor controls.
 
-    Args:
-        items: List to paginate
-        limit: Maximum items per page (default: 20)
-        cursor: Start offset for pagination (default: 0)
+    offset: int
+    limit: int
 
-    Returns:
-        Dict with:
-        - items: Page of items
-        - total: Total number of items
-        - returned: Number of items in this page
-        - has_more: Whether more pages exist
-        - cursor: Next cursor if has_more, otherwise omitted
 
-    Example:
-        result = paginate_list(nodes, limit=10, cursor=0)
-        # Returns first 10 nodes with cursor=10 if more exist
+def parse_page_request(
+    *,
+    limit: int | None,
+    cursor: int | None,
+    max_results: int | None = None,
+    offset: int | None = None,
+    default_limit: int,
+) -> PageRequest:
+    """Resolve the limit/cursor arguments (and their max_results/offset aliases) into a PageRequest.
+
+    limit wins over max_results and cursor over offset; unset means the tool's
+    default page and the first page.
     """
-    # Clamp invalid inputs so callers cannot receive a repeating cursor (for
-    # example limit=0, cursor=0 forever) or negative Python-slice semantics.
-    limit = max(1, int(limit))
-    offset = max(0, int(cursor)) if cursor is not None else 0
-    total = len(items)
+    # [LAW:parse-dont-validate] [LAW:single-enforcer] The one checkpoint for page
+    # bounds: everything downstream takes a PageRequest, so nothing re-clamps.
+    requested = limit if limit is not None else max_results
+    start = cursor if cursor is not None else offset
+    return PageRequest(
+        offset=max(0, int(start if start is not None else 0)),
+        limit=min(
+            PAGE_LIMIT_MAX, max(1, int(requested if requested is not None else default_limit))
+        ),
+    )
 
-    # Slice the page
-    page = items[offset : offset + limit]
-    returned = len(page)
 
-    # Check if more pages exist
-    has_more = (offset + returned) < total
+@dataclass(frozen=True)
+class Page(Generic[T]):
+    """One page cut from a result set: the items at ``offset``, plus the set's total size."""
 
-    result: dict[str, Any] = {
-        "items": page,
-        "total": total,
+    items: list[T]
+    offset: int
+    total: int
+
+    @property
+    def has_more(self) -> bool:
+        return self.offset + len(self.items) < self.total
+
+
+def paginate(items: Iterable[T], request: PageRequest) -> Page[T]:
+    """Cut ``request``'s page from ``items``, counting the whole set for ``total``.
+
+    Works on any iterable, so a tool that streams matches pays per-item cost
+    (a Houdini round trip, say) only for the items it returns.
+    """
+    window = range(request.offset, request.offset + request.limit)
+    page: list[T] = []
+    total = 0
+    for item in items:
+        if total in window:
+            page.append(item)
+        total += 1
+    return Page(items=page, offset=request.offset, total=total)
+
+
+def paging_fields(page: Page[Any]) -> dict[str, Any]:
+    """The paging response contract every list tool emits.
+
+    ``count`` and ``next_offset`` are aliases (of ``returned`` and ``cursor``)
+    that existing clients read; they are derived here and nowhere else.
+    """
+    # [LAW:single-enforcer] [LAW:one-source-of-truth] One builder for the contract;
+    # tools spread this dict and never hand-write a paging key.
+    returned = len(page.items)
+    fields: dict[str, Any] = {
+        "count": returned,
+        "total": page.total,
         "returned": returned,
-        "has_more": has_more,
+        "has_more": page.has_more,
+        "offset": page.offset,
     }
-
-    # Add cursor for next page if more exist
-    if has_more:
-        result["cursor"] = offset + returned
-
-    return result
+    if page.has_more:
+        next_page = page.offset + returned
+        fields["cursor"] = next_page
+        fields["next_offset"] = next_page
+        fields["warning"] = (
+            f"Results limited to {returned} of {page.total}. "
+            f"Use cursor={next_page} for the next page."
+        )
+    return fields
 
 
 def apply_response_cap(
@@ -1266,13 +1316,16 @@ def apply_response_cap(
                 result[f"{field_name}_preserved_count"] = best
                 # If this list is a paginated payload, continuation must start
                 # after what was actually returned, not after the pre-cap page.
-                if field_name in {"items", "children", "matches", "node_types"}:
-                    current_offset = int(data.get("offset", 0))
-                    result["returned"] = best
-                    result["count"] = best
-                    result["has_more"] = True
-                    result["cursor"] = current_offset + best
-                    result["next_offset"] = current_offset + best
+                if field_name in {"children", "matches", "node_types"}:
+                    result.update(
+                        paging_fields(
+                            Page(
+                                items=field_value[:best],
+                                offset=int(data["offset"]),
+                                total=int(data["total"]),
+                            )
+                        )
+                    )
         elif isinstance(field_value, dict):
             # Preserve bounded prefixes from nested geometry/category lists
             # instead of dropping the entire requested diagnostic dictionary.

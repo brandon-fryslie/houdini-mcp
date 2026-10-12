@@ -7,22 +7,44 @@ detail/compact modes, and hard size caps with multibyte-safe JSON truncation.
 import json
 
 
+def _page(items, limit, cursor=None):
+    from houdini_mcp.tools._common import paginate, paging_fields, parse_page_request
+
+    page = paginate(items, parse_page_request(limit=limit, cursor=cursor, default_limit=20))
+    return {"items": page.items, **paging_fields(page)}
+
+
 class TestResponsePagination:
     """Test pagination with limit/cursor/offset controls."""
 
     def test_invalid_inputs_are_clamped_without_repeating_cursor(self):
-        from houdini_mcp.tools._common import paginate_list
-
-        result = paginate_list(list(range(5)), limit=0, cursor=-100)
+        result = _page(list(range(5)), limit=0, cursor=-100)
         assert result["items"] == [0]
         assert result["cursor"] == 1
         assert result["has_more"] is True
 
+    def test_limit_is_capped(self):
+        from houdini_mcp.tools._common import PAGE_LIMIT_MAX
+
+        result = _page(list(range(PAGE_LIMIT_MAX + 50)), limit=PAGE_LIMIT_MAX + 10)
+        assert result["returned"] == PAGE_LIMIT_MAX
+        assert result["cursor"] == PAGE_LIMIT_MAX
+
+    def test_limit_wins_over_max_results_and_cursor_over_offset(self):
+        from houdini_mcp.tools._common import parse_page_request
+
+        request = parse_page_request(limit=7, cursor=3, max_results=50, offset=40, default_limit=20)
+        assert (request.offset, request.limit) == (3, 7)
+        legacy = parse_page_request(
+            limit=None, cursor=None, max_results=50, offset=40, default_limit=20
+        )
+        assert (legacy.offset, legacy.limit) == (40, 50)
+        unset = parse_page_request(limit=None, cursor=None, default_limit=20)
+        assert (unset.offset, unset.limit) == (0, 20)
+
     def test_paginate_empty_list(self):
         """Paginating an empty list returns empty result with no cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
-        result = paginate_list([], limit=10)
+        result = _page([], limit=10)
         assert result["items"] == []
         assert result["total"] == 0
         assert result["returned"] == 0
@@ -31,9 +53,7 @@ class TestResponsePagination:
 
     def test_paginate_single_item(self):
         """Paginating a single item returns it with no cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
-        result = paginate_list([{"id": 1}], limit=10)
+        result = _page([{"id": 1}], limit=10)
         assert result["items"] == [{"id": 1}]
         assert result["total"] == 1
         assert result["returned"] == 1
@@ -42,59 +62,49 @@ class TestResponsePagination:
 
     def test_paginate_under_limit(self):
         """Items under limit return all items with no cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
         items = [{"id": i} for i in range(5)]
-        result = paginate_list(items, limit=10)
+        result = _page(items, limit=10)
         assert result["items"] == items
         assert result["total"] == 5
         assert result["returned"] == 5
         assert result["has_more"] is False
 
     def test_paginate_at_limit(self):
-        """Exactly at limit returns all items with no cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
+        """Exactly at limit returns all items with no cursor or warning."""
         items = [{"id": i} for i in range(10)]
-        result = paginate_list(items, limit=10)
+        result = _page(items, limit=10)
         assert result["items"] == items
         assert result["total"] == 10
         assert result["returned"] == 10
         assert result["has_more"] is False
+        assert "warning" not in result
 
     def test_paginate_over_limit(self):
-        """Items over limit return limited items with cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
+        """Items over limit return limited items with cursor, alias, and warning."""
         items = [{"id": i} for i in range(25)]
-        result = paginate_list(items, limit=10)
-        assert len(result["items"]) == 10
+        result = _page(items, limit=10)
         assert result["items"] == items[:10]
         assert result["total"] == 25
-        assert result["returned"] == 10
+        assert result["returned"] == result["count"] == 10
         assert result["has_more"] is True
-        assert result["cursor"] == 10
+        assert result["cursor"] == result["next_offset"] == 10
+        assert "cursor=10" in result["warning"]
 
     def test_paginate_with_cursor(self):
         """Using cursor returns next page."""
-        from houdini_mcp.tools._common import paginate_list
-
         items = [{"id": i} for i in range(25)]
-        result = paginate_list(items, limit=10, cursor=10)
-        assert len(result["items"]) == 10
+        result = _page(items, limit=10, cursor=10)
         assert result["items"] == items[10:20]
         assert result["total"] == 25
         assert result["returned"] == 10
+        assert result["offset"] == 10
         assert result["has_more"] is True
         assert result["cursor"] == 20
 
     def test_paginate_last_page(self):
         """Last page returns remaining items with no cursor."""
-        from houdini_mcp.tools._common import paginate_list
-
         items = [{"id": i} for i in range(25)]
-        result = paginate_list(items, limit=10, cursor=20)
-        assert len(result["items"]) == 5
+        result = _page(items, limit=10, cursor=20)
         assert result["items"] == items[20:25]
         assert result["total"] == 25
         assert result["returned"] == 5
@@ -103,14 +113,128 @@ class TestResponsePagination:
 
     def test_paginate_cursor_beyond_end(self):
         """Cursor beyond end returns empty page."""
-        from houdini_mcp.tools._common import paginate_list
-
         items = [{"id": i} for i in range(25)]
-        result = paginate_list(items, limit=10, cursor=30)
+        result = _page(items, limit=10, cursor=30)
         assert result["items"] == []
         assert result["total"] == 25
         assert result["returned"] == 0
         assert result["has_more"] is False
+
+    def test_paginate_streams_and_only_materializes_the_page(self):
+        """An iterator is consumed once; only the page's items are kept."""
+        from houdini_mcp.tools._common import paginate, parse_page_request
+
+        seen = []
+
+        def source():
+            for i in range(30):
+                seen.append(i)
+                yield i
+
+        page = paginate(source(), parse_page_request(limit=5, cursor=10, default_limit=20))
+        assert page.items == [10, 11, 12, 13, 14]
+        assert page.total == 30
+        assert seen == list(range(30))
+
+
+class TestOnePagingContract:
+    """Every list tool pages the same arguments the same way and emits the same keys."""
+
+    PAGING_KEYS = {
+        "count",
+        "total",
+        "returned",
+        "has_more",
+        "offset",
+        "cursor",
+        "next_offset",
+        "warning",
+    }
+
+    def _tools(self, mock_connection):
+        from houdini_mcp.tools.nodes import find_nodes, list_children, list_node_types
+        from tests.conftest import MockHouNode
+
+        children = [
+            MockHouNode(path=f"/obj/geo1/n{i}", name=f"n{i}", node_type="null") for i in range(12)
+        ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=children)
+        )
+        return (
+            lambda **kw: list_node_types(host="localhost", port=18811, **kw),
+            lambda **kw: list_children("/obj/geo1", host="localhost", port=18811, **kw),
+            lambda **kw: find_nodes("/obj/geo1", "*", host="localhost", port=18811, **kw),
+        )
+
+    def _paging(self, result):
+        return {k: v for k, v in result.items() if k in self.PAGING_KEYS}
+
+    def test_invalid_bounds_page_identically(self, mock_connection):
+        for tool in self._tools(mock_connection):
+            result = tool(limit=0, cursor=-7)
+            assert result["status"] == "success"
+            assert result["returned"] == result["count"] == 1
+            assert result["offset"] == 0
+            assert result["has_more"] is True
+            assert result["cursor"] == result["next_offset"] == 1
+            assert "cursor=1" in result["warning"]
+
+    def test_second_page_has_identical_contract_shape(self, mock_connection):
+        pages = [self._paging(tool(limit=5, cursor=5)) for tool in self._tools(mock_connection)]
+        for page in pages:
+            assert set(page) == {
+                "count",
+                "total",
+                "returned",
+                "has_more",
+                "offset",
+                "cursor",
+                "next_offset",
+                "warning",
+            }
+            assert page["offset"] == 5
+            assert page["returned"] == page["count"] == 5
+            assert page["cursor"] == page["next_offset"] == 10
+
+    def test_last_page_omits_continuation_everywhere(self, mock_connection):
+        for tool in self._tools(mock_connection):
+            result = tool(limit=500, cursor=0)
+            assert result["has_more"] is False
+            assert not ({"cursor", "next_offset", "warning"} & set(result))
+
+    def test_oversized_limit_is_capped_everywhere(self, mock_connection):
+        from houdini_mcp.tools._common import PAGE_LIMIT_MAX
+        from tests.conftest import MockHouNode
+
+        many = [
+            MockHouNode(path=f"/obj/big/n{i}", name=f"n{i}", node_type="null")
+            for i in range(PAGE_LIMIT_MAX + 1)
+        ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/big", name="big", node_type="geo", children=many)
+        )
+        from houdini_mcp.tools.nodes import find_nodes, list_children
+
+        for result in (
+            list_children("/obj/big", limit=10_000, compact=True, host="localhost", port=18811),
+            find_nodes("/obj/big", "*", limit=10_000, host="localhost", port=18811),
+        ):
+            # The byte cap may shorten the page further; the cursor then still
+            # advances by exactly what was returned.
+            assert result["total"] == PAGE_LIMIT_MAX + 1
+            assert 0 < result["returned"] <= PAGE_LIMIT_MAX
+            assert result["cursor"] == result["next_offset"] == result["returned"]
+
+    def test_list_children_keeps_both_warnings(self, mock_connection):
+        from houdini_mcp.tools.nodes import list_children
+
+        self._tools(mock_connection)
+        result = list_children("/obj/geo1", max_nodes=10, limit=4, host="localhost", port=18811)
+        assert result["total"] == 10
+        assert result["cursor"] == 4
+        assert "cursor=4" in result["warning"]
+        assert "Collection limited to 10 nodes" in result["warning"]
 
 
 class TestLegacyPaginationCompatibility:
@@ -300,12 +424,10 @@ class TestPerformanceAndSize:
         """Pagination on large lists is fast."""
         import time
 
-        from houdini_mcp.tools._common import paginate_list
-
         large_list = [{"id": i, "data": "x" * 100} for i in range(10000)]
 
         start = time.time()
-        result = paginate_list(large_list, limit=20)
+        result = _page(large_list, limit=20)
         elapsed = time.time() - start
 
         assert elapsed < 0.1  # Should be near instant
@@ -587,6 +709,7 @@ class TestSemanticTruncation:
                 "count": 20,
                 "total": 20,
                 "has_more": False,
+                "offset": 0,
             },
             max_bytes=1400,
         )
@@ -637,6 +760,7 @@ class TestSemanticTruncation:
                 "count": 20,
                 "total": 100,
                 "has_more": True,
+                "offset": 0,
                 "cursor": 20,
                 "next_offset": 20,
             },
@@ -854,8 +978,9 @@ class TestOversizedResponseRetainsUsefulData:
             "total": 5000,
             "returned": 100,
             "has_more": True,
+            "offset": 0,
             "cursor": 100,
-            "items": [{"large": "x" * 1000} for _ in range(100)],
+            "children": [{"large": "x" * 1000} for _ in range(100)],
         }
 
         result = apply_response_cap(data, max_bytes=2000)
@@ -864,7 +989,7 @@ class TestOversizedResponseRetainsUsefulData:
         assert result["status"] == "success"
         assert result["node_path"] == "/obj/geo1"
         assert result["total"] == 5000
-        preserved = len(result["items"])
+        preserved = len(result["children"])
         assert result["returned"] == result["count"] == preserved
         assert result["has_more"] is True
         assert result["cursor"] == result["next_offset"] == preserved
