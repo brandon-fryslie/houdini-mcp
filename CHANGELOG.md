@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pass `allow_heavy_geometry=True`.
 - **stdio transport**: The stdio server no longer passes `host`/`port` and
   suppresses the FastMCP startup banner so stdout stays JSON-RPC clean.
+- **uv owns the project**: `pyproject.toml` (dev tools under
+  `[dependency-groups]`) and `uv.lock` are the only dependency sources.
+  `requirements.txt` is gone; `httpx` and `starlette`, imported directly, are
+  now declared, and `python-dotenv`, never imported, is dropped. CI, the Docker image and pre-commit all install from the lock
+  (`uv sync --locked`), so every tool runs at one version everywhere.
+  Set up with `uv sync && uv run pytest`.
 
 ### Fixed
 
@@ -66,8 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replacing the missing `hrpyc.stop_server()` API. The bind host defaults to
   `127.0.0.1` and is configurable via `HOUDINI_RPC_BIND_HOST`.
 - **CI**: Added the missing `hypothesis` test dependency (used by the
-  `execute_code` safety-rail property/fuzz tests) to the `dev` extra,
-  `requirements.txt`, and the CI fallback install list.
+  `execute_code` safety-rail property/fuzz tests) to the `dev` dependency group.
 
 ## [1.0.0] - 2025-12-28
 

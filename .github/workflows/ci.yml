@@ -16,21 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff==0.13.0
+      - name: Install locked environment
+        run: uv sync --locked
 
       - name: Check formatting with Ruff
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: Lint with Ruff
-        run: ruff check .
+        run: uv run ruff check .
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -43,19 +41,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" || pip install fastmcp "rpyc>=5.0.0,<6.0.0" python-dotenv pytest pytest-cov hypothesis
+      - name: Install locked environment
+        run: uv sync --locked
 
       - name: Run unit tests with coverage
         run: |
-          python -m pytest tests/ -v -m 'not integration' --cov=houdini_mcp --cov-report=xml --cov-report=term-missing
+          uv run pytest tests/ -v -m 'not integration' --cov=houdini_mcp --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -72,19 +68,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install mypy types-requests
-          pip install fastmcp "rpyc>=5.0.0,<6.0.0" python-dotenv
+      - name: Install locked environment
+        run: uv sync --locked
 
       - name: Run mypy
-        run: mypy houdini_mcp/ --ignore-missing-imports --no-strict-optional
+        run: uv run mypy houdini_mcp/
         continue-on-error: true  # Don't fail CI on type errors initially
 
   security:
@@ -93,16 +86,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
-      - name: Install Bandit
-        run: pip install bandit[toml]
+      - name: Install locked environment
+        run: uv sync --locked
 
       - name: Run Bandit
-        run: bandit -r houdini_mcp/ -c pyproject.toml
+        run: uv run bandit -r houdini_mcp/ -c pyproject.toml
 
   build:
     name: Build Package
@@ -111,21 +104,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
+      - name: Install locked environment
+        run: uv sync --locked
 
       - name: Build package
-        run: python -m build
+        run: uv build
 
       - name: Check package
-        run: twine check dist/*
+        run: uv run twine check dist/*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

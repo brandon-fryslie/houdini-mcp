@@ -17,20 +17,18 @@ Thank you for your interest in contributing to Houdini MCP!
 git clone https://github.com/oculairmedia/houdini-mcp.git
 cd houdini-mcp
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# or .venv\Scripts\activate  # Windows
-
-# Install with dev dependencies
-pip install -e ".[dev]"
+# Create .venv and install runtime + dev dependencies from uv.lock
+uv sync
 
 # Install pre-commit hooks
-pre-commit install
-pre-commit install --hook-type pre-push
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
 ```
 
 ## Development Workflow
+
+The commands below run inside the uv environment: prefix each with `uv run`,
+or activate `.venv` first.
 
 ### Running Tests
 
@@ -119,14 +117,14 @@ def create_node(
 ) -> Dict[str, Any]:
     """
     Create a new node in the Houdini scene.
-    
+
     Args:
         node_type: The type of node to create (e.g., "geo", "sphere")
         parent_path: The parent node path (default: "/obj")
         name: Optional name for the new node
         host: Houdini server hostname
         port: Houdini RPC port
-        
+
     Returns:
         Dict with created node information or error details.
     """
