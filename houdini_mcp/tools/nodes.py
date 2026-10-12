@@ -11,6 +11,7 @@ This module provides tools for managing Houdini nodes:
 
 import fnmatch
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from ._common import (
@@ -570,23 +571,18 @@ def list_children(
     return _add_response_metadata(result)
 
 
-def _search_descendants(
-    root: Any, pattern: str, node_type: str | None, offset: int, fetch_limit: int
-) -> tuple[list[dict[str, str]], int]:
-    """Match every descendant of ``root`` by name pattern and type.
+def _matching_descendants(
+    root: Any, pattern: str, node_type: str | None
+) -> Iterator[tuple[Any, str, str]]:
+    """Yield ``(node, name, type)`` for every descendant of ``root`` that matches.
 
-    Returns up to ``fetch_limit`` matches after skipping ``offset`` of them, plus the
-    exact count of all matches. A pattern without ``*``/``?`` also matches as a
-    substring. Collecting one match past the page size tells the caller whether
-    another page exists without materializing the rest of a large network.
+    A pattern without ``*``/``?`` also matches as a substring. Paging is the
+    caller's job; this only decides membership.
     """
     pattern_lower = pattern.lower()
     has_wildcards = "*" in pattern or "?" in pattern
     type_lower = node_type.lower() if node_type is not None else None
 
-    matches: list[dict[str, str]] = []
-    total_matched = 0
-    # allSubChildren() returns all descendants in one RPC instead of one per level.
     for child in root.allSubChildren():
         name = child.name()
         name_lower = name.lower()
@@ -599,10 +595,7 @@ def _search_descendants(
         child_type = child.type().name()
         if type_lower is not None and child_type.lower() != type_lower:
             continue
-        total_matched += 1
-        if total_matched > offset and len(matches) < fetch_limit:
-            matches.append({"path": child.path(), "name": name, "type": child_type})
-    return matches, total_matched
+        yield child, name, child_type
 
 
 @handle_connection_errors("find_nodes")
@@ -668,14 +661,15 @@ def find_nodes(
     # into a program; find_nodes has no code-execution path of its own.
     # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
     # as an error instead of switching to a different result set.
-    matches, total_matched = _search_descendants(
-        root, pattern, node_type, offset, fetch_limit=max_results + 1
-    )
-
-    # The extra lookahead item is never returned; it only proves another page.
-    has_more = len(matches) > max_results
-    if has_more:
-        matches = matches[:max_results]
+    page = range(offset, offset + max_results)
+    matches: list[dict[str, str]] = []
+    total_matched = 0
+    for child, name, child_type in _matching_descendants(root, pattern, node_type):
+        # path() is one more round trip; only the returned page pays it.
+        if total_matched in page:
+            matches.append({"path": child.path(), "name": name, "type": child_type})
+        total_matched += 1
+    has_more = total_matched > page.stop
     logger.debug(
         "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
         root_path,
