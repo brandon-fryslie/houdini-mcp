@@ -190,15 +190,15 @@ code = f"""
 blur = hou.node("/obj/geo1").createNode("blur", "blur1")
 
 # Get nodes
-source = hou.node("{first_input['source_node']}")
+source = hou.node("{first_input["source_node"]}")
 target = hou.node("/obj/geo1/mountain1")
 
 # Disconnect
-target.setInput({first_input['input_index']}, None)
+target.setInput({first_input["input_index"]}, None)
 
 # Connect through blur
-blur.setInput(0, source, {first_input['source_output_index']})
-target.setInput({first_input['input_index']}, blur, 0)
+blur.setInput(0, source, {first_input["source_output_index"]})
+target.setInput({first_input["input_index"]}, blur, 0)
 """
 
 execute_code(code)
@@ -275,4 +275,3 @@ pytest tests/test_tools.py -v
 ```
 
 All tests should pass: 62 total (17 new HDMCP-5 tests)
-
