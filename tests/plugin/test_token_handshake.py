@@ -34,6 +34,7 @@ def _serve(authenticator: handshake.Authenticator | None) -> Iterator[int]:
         protocol_config={"allow_all_attrs": True},
     )
     server.logger.quiet = True
+    server._listen()  # accepting before the thread exists, as the plugin does
     thread = threading.Thread(target=server.start, daemon=True)
     thread.start()
     try:
@@ -141,7 +142,7 @@ class TestListenerDerivesFromSharedHandshake:
             assert authenticate(server_side) == (server_side, None)
             assert client.recv(len(expected)) == expected
             assert server_side.gettimeout() is None  # restored for rpyc
-        # The listener's own start-up reachability probe logs first, at info.
+        # The handshake logger is the only one captured here, so its line is last.
         assert (caplog.records[-1].levelno, caplog.records[-1].getMessage()[:25]) == (
             logging.INFO,
             "accepted hrpyc token from",
@@ -189,7 +190,7 @@ class TestListenerDerivesFromSharedHandshake:
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
-        with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
+        with socket.create_connection(("127.0.0.1", server.port)) as sock:
             sock.sendall(handshake.exchange("nope")[0])
             assert sock.recv(1) == b""  # the fake closes the socket after rejecting
         assert server.rejected == before + 1
@@ -202,7 +203,7 @@ class TestListenerDerivesFromSharedHandshake:
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
-        with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
+        with socket.create_connection(("127.0.0.1", server.port)) as sock:
             sock.sendall(b"\x00\x07hu")  # announces 7 bytes, sends 2, and never closes
             assert sock.recv(1) == b""  # the server gave up and closed
         assert server.rejected == before + 1

@@ -26,7 +26,6 @@ import logging
 import os
 import socket
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -227,25 +226,39 @@ def _detect_local_ip() -> str:
         return "localhost"
 
 
-def _probe_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
-    """Return True when a TCP listener actually accepts a connection."""
+def _probe_reachable(host: str, port: int, timeout: float) -> bool:
+    """Return True when a TCP listener accepts a connection within *timeout*."""
     # A wildcard/unspecified bind cannot be *connected* to directly; probe
     # loopback in that case since the listener also accepts local traffic.
     connect_host = "127.0.0.1" if is_wildcard_host(host) else host
     if connect_host == "localhost":
         connect_host = "127.0.0.1"
-    deadline = time.monotonic() + timeout
-    last_err: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((connect_host, port), timeout=0.3):
-                return True
-        except OSError as exc:
-            last_err = exc
-            time.sleep(0.05)
-    if last_err is not None:
-        logger.debug("reachability probe failed for %s:%s: %s", connect_host, port, last_err)
-    return False
+    try:
+        with socket.create_connection((connect_host, port), timeout=timeout):
+            return True
+    except OSError as exc:
+        logger.debug("reachability probe failed for %s:%s: %s", connect_host, port, exc)
+        return False
+
+
+def _serve(server: Any) -> None:
+    """Drain the accept queue of a listening server until it is closed.
+
+    This is rpyc's ``start()`` loop without its leading ``_listen()``: the
+    listener has already run that, and ``start()`` would run it again on the
+    closed socket when ``stop()`` lands before this thread is scheduled. A
+    server closed before the thread runs is simply not active, so nothing runs.
+    """
+    try:
+        while server.active:
+            server.accept()
+    except EOFError:
+        pass  # rpyc's accept(): the listener was closed under it by stop()
+    finally:
+        server.close()
+        # Any other exception still propagates to threading.excepthook; this is
+        # the one record in the plugin's own log that the loop is gone.
+        logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
 def firewall_guidance(host: str, port: int) -> list[str]:
@@ -369,19 +382,16 @@ class RemoteListener:
                 }
 
             try:
-                server = self._build_server(hrpyc, cfg, policy)
+                server, bound_port = self._launch_server(hrpyc, cfg, policy)
             except OSError as exc:
-                logger.error("Failed to bind hrpyc listener on %s:%s: %s", cfg.host, cfg.port, exc)
+                logger.error("Failed to listen on %s:%s: %s", cfg.host, cfg.port, exc)
                 return {
                     "status": "error",
                     "error_type": "bind",
                     "running": False,
                     "host": cfg.host,
                     "port": cfg.port,
-                    "message": (
-                        f"Failed to bind hrpyc listener on {cfg.host}:{cfg.port} "
-                        f"(address in use or not permitted): {exc}"
-                    ),
+                    "message": f"Failed to listen on {cfg.host}:{cfg.port}: {exc}",
                 }
             except Exception as exc:  # noqa: BLE001 - report any startup failure cleanly
                 logger.error("Failed to start hrpyc listener: %s", exc)
@@ -390,25 +400,6 @@ class RemoteListener:
                     "error_type": "start",
                     "running": False,
                     "message": f"Failed to start hrpyc listener: {exc}",
-                }
-
-            bound_port = getattr(server, "bound_port", None) or cfg.port
-
-            thread = threading.Thread(target=server.start, name="houdini-hrpyc", daemon=True)
-            thread.start()
-
-            if not _probe_reachable(cfg.host, bound_port):
-                # Clean up the half-started server so state stays consistent.
-                self._close_server(server)
-                return {
-                    "status": "error",
-                    "error_type": "unreachable",
-                    "running": False,
-                    "host": cfg.host,
-                    "port": bound_port,
-                    "message": (
-                        f"hrpyc listener did not become reachable on {cfg.host}:{bound_port}."
-                    ),
                 }
 
             # _server is the running discriminator that the unlocked status() and
@@ -435,8 +426,17 @@ class RemoteListener:
             )
             return result
 
-    def _build_server(self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy) -> Any:
-        """Construct the underlying ThreadedServer, wiring auth if configured."""
+    def _launch_server(
+        self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy
+    ) -> tuple[Any, int]:
+        """Construct the ThreadedServer, start listening, and spawn its accept loop.
+
+        Returns the server and the port it accepts on. The server is accepting
+        connections: ``_listen()`` has run on this thread, so the kernel queues
+        clients from here on whether or not the accept loop has been scheduled
+        yet. A failure after construction closes the server before propagating:
+        the bound socket is this unit's to release, and nothing else holds it yet.
+        """
         kwargs: dict[str, Any] = {
             "hostname": cfg.host,
             "port": cfg.port,
@@ -456,7 +456,23 @@ class RemoteListener:
         server_logger = getattr(server, "logger", None)
         if server_logger is not None and hasattr(server_logger, "quiet"):
             server_logger.quiet = True
-        return server
+
+        # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
+        # own ``active`` state, established here synchronously rather than raced
+        # against the serve thread. This is rpyc's readiness protocol: its own
+        # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``.
+        try:
+            server._listen()
+            # [LAW:one-source-of-truth] rpyc's ``port`` is what the kernel handed out
+            # for a port-0 bind; read inside the region whose failure closes the server.
+            port: int = server.port
+            threading.Thread(
+                target=_serve, args=(server,), name="houdini-hrpyc", daemon=True
+            ).start()
+        except BaseException:
+            self._close_server(server)
+            raise
+        return server, port
 
     @staticmethod
     def _server_alive(server: Any) -> bool:
