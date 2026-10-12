@@ -190,7 +190,7 @@ class TestListenerDerivesFromSharedHandshake:
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
-        with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
+        with socket.create_connection(("127.0.0.1", server.port)) as sock:
             sock.sendall(handshake.exchange("nope")[0])
             assert sock.recv(1) == b""  # the fake closes the socket after rejecting
         assert server.rejected == before + 1
@@ -203,7 +203,7 @@ class TestListenerDerivesFromSharedHandshake:
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
-        with socket.create_connection(("127.0.0.1", server.bound_port)) as sock:
+        with socket.create_connection(("127.0.0.1", server.port)) as sock:
             sock.sendall(b"\x00\x07hu")  # announces 7 bytes, sends 2, and never closes
             assert sock.recv(1) == b""  # the server gave up and closed
         assert server.rejected == before + 1

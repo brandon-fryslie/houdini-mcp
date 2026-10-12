@@ -362,7 +362,7 @@ class RemoteListener:
                 }
 
             try:
-                server = self._build_server(hrpyc, cfg, policy)
+                server = self._launch_server(hrpyc, cfg, policy)
             except OSError as exc:
                 logger.error("Failed to bind hrpyc listener on %s:%s: %s", cfg.host, cfg.port, exc)
                 return {
@@ -385,12 +385,9 @@ class RemoteListener:
                     "message": f"Failed to start hrpyc listener: {exc}",
                 }
 
-            bound_port = getattr(server, "bound_port", None) or cfg.port
-
-            # The server is already accepting connections (see _build_server);
-            # this thread only drains the accept queue, so nothing waits on it.
-            thread = threading.Thread(target=server.start, name="houdini-hrpyc", daemon=True)
-            thread.start()
+            # [LAW:one-source-of-truth] rpyc resolves a port-0 bind in _listen(); its
+            # ``port`` is the only record of what the kernel actually handed out.
+            bound_port = server.port
 
             # _server is the running discriminator that the unlocked status() and
             # self_test() read, so it is assigned last. [LAW:no-ambient-temporal-coupling]
@@ -416,12 +413,14 @@ class RemoteListener:
             )
             return result
 
-    def _build_server(self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy) -> Any:
-        """Construct the underlying ThreadedServer, wiring auth if configured.
+    def _launch_server(self, hrpyc: Any, cfg: ListenerConfig, policy: SecurityPolicy) -> Any:
+        """Construct the ThreadedServer, start listening, and spawn its accept loop.
 
         The server returned is accepting connections: ``_listen()`` has run on
         this thread, so the kernel queues clients from here on whether or not
-        the accept loop has been scheduled yet.
+        the accept loop has been scheduled yet. A failure after construction
+        closes the server before propagating: the bound socket is this unit's
+        to release, and nothing else holds it yet.
         """
         kwargs: dict[str, Any] = {
             "hostname": cfg.host,
@@ -447,8 +446,14 @@ class RemoteListener:
         # own ``active`` state, established here synchronously rather than raced
         # against the serve thread. This is rpyc's readiness protocol: its own
         # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``, and
-        # ``start()`` skips the listen once ``active`` is set.
-        server._listen()
+        # ``start()`` skips the listen once ``active`` is set. The thread only
+        # drains the accept queue, so nothing waits on it.
+        try:
+            server._listen()
+            threading.Thread(target=server.start, name="houdini-hrpyc", daemon=True).start()
+        except BaseException:
+            self._close_server(server)
+            raise
         return server
 
     @staticmethod

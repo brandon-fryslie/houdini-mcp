@@ -63,15 +63,12 @@ class FakeThreadedServer:
         self.protocol_config = protocol_config or {}
         self.logger = _FakeLogger()
 
-        self._fail_bind = fail_bind
-        self._sock: socket.socket | None = None
         self._closed = False
         self.active = False
-        self.bound_port = port
         self.authenticated = 0
         self.rejected = 0
 
-        if self._fail_bind:
+        if fail_bind:
             raise OSError(98, "Address already in use")
 
         # Bind eagerly (like ThreadedServer does in __init__) so that a
@@ -81,14 +78,17 @@ class FakeThreadedServer:
         if reuse_addr:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((hostname, port))
-        # Support port 0 -> resolve the actual bound port.
-        self.bound_port = self._sock.getsockname()[1]
+        # As rpyc: ``port`` is the requested port until ``_listen()`` resolves a
+        # port-0 bind to what the kernel handed out.
+        self.port = port
 
     def _listen(self) -> None:
         if self.active:
             return
         self._sock.listen(5)
         self._sock.settimeout(0.1)
+        if not self.port:
+            self.port = self._sock.getsockname()[1]
         self.active = True
 
     def start(self) -> None:
@@ -96,7 +96,7 @@ class FakeThreadedServer:
         while not self._closed:
             try:
                 conn, _ = self._sock.accept()
-            except (TimeoutError, OSError):
+            except OSError:
                 if self._closed:
                     return
                 continue
@@ -118,14 +118,11 @@ class FakeThreadedServer:
             self.authenticated += 1
 
     def close(self) -> None:
+        # The socket stays referenced: the accept loop's next accept() raises
+        # OSError on it and the loop sees _closed, with no attribute to race on.
         self._closed = True
         self.active = False
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
+        self._sock.close()
 
 
 class _FakeLogger:

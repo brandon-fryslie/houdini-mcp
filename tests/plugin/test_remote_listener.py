@@ -14,6 +14,8 @@ real Houdini or ``hrpyc`` is required.
 
 from __future__ import annotations
 
+import logging
+
 from houdini_mcp_plugin.listener import (
     DEFAULT_PORT,
     ListenerConfig,
@@ -159,7 +161,9 @@ class TestStartStop:
 
 
 class TestStartAwaitsReadiness:
-    def test_start_returns_accepting_even_if_the_serve_thread_never_runs(self, fake_hou, free_port):
+    def test_start_returns_accepting_even_if_the_serve_thread_never_runs(
+        self, fake_hou, free_port, caplog
+    ):
         """Readiness is the listen state, not the accept loop's scheduling.
 
         The serve thread here stalls forever before draining a single accept,
@@ -183,9 +187,28 @@ class TestStartAwaitsReadiness:
         hrpyc.ThreadedServer = lambda *a, **kw: StalledServer(*a, **kw)
 
         listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
-        assert result["status"] == "success"
+        try:
+            with caplog.at_level(logging.INFO, logger="houdini_mcp_plugin.listener"):
+                result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+            assert result["status"] == "success"
+            assert f"Started hrpyc listener on 127.0.0.1:{free_port}" in caplog.text
 
-        with socket.create_connection(("127.0.0.1", free_port), timeout=1):
+            with socket.create_connection(("127.0.0.1", free_port), timeout=1):
+                pass
+        finally:
+            listener.stop()
+            never.set()
+
+    def test_port_zero_reports_the_port_the_kernel_chose(self, fake_hou, fake_hrpyc):
+        """rpyc resolves a port-0 bind in ``_listen()``; start() reports that port."""
+        import socket
+
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
+        assert result["status"] == "success"
+        port = result["bound_port"]
+        assert port != 0
+        assert f"HOUDINI_PORT={port}" in result["message"]
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
             pass
         listener.stop()

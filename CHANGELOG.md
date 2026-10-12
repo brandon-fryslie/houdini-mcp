@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step), so the listener is accepting connections when `start()` returns and
   success no longer depends on thread scheduling. The two-second connect
   poll, its `unreachable` error and the 50ms sleeps are gone; the self-test's
-  reachability probe is a single bounded connect.
+  reachability probe is a single bounded connect. The reported port is
+  rpyc's own `server.port`, so `HOUDINI_RPC_PORT=0` reports the port the
+  kernel chose; a failure after the bind closes the server before it is
+  reported.
 - **Token handshake has one definition** (`houdini_mcp_handshake`, in the plugin tree and shipped with the server): the MCP
   server now presents `HOUDINI_RPC_TOKEN` when connecting, so a listener started
   with a token is reachable from the server (previously only the verify script
