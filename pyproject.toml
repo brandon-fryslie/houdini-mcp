@@ -33,6 +33,8 @@ dependencies = [
     # Imported directly (tools/summarization.py, server.py); not left to fastmcp's transitive set
     "httpx>=0.28",
     "starlette>=1.7",
+    # Field() constrains the served render schema (tools/_common.py)
+    "pydantic>=2.14",
 ]
 
 [dependency-groups]

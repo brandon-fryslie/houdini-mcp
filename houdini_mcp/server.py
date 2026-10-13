@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target, ensure_connected, get_connection_info, ping
-from .tools._common import Resolution, apply_response_cap
+from .tools._common import Resolution, Vec3, apply_response_cap
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
 
@@ -463,8 +463,8 @@ def find_nodes(
 
 @mcp.tool()
 def render_viewport(
-    camera_position: list[float] | None = None,
-    camera_rotation: list[float] | None = None,
+    camera_position: Vec3 | None = None,
+    camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
     resolution: Resolution | None = None,
     renderer: str = "opengl",

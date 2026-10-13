@@ -16,17 +16,15 @@ from typing import Any
 from ..connection import transport_failure
 from ._common import (
     Resolution,
+    Vec3,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
     node_category,
-    validate_resolution,
 )
 from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
-
-Vec3 = tuple[float, float, float]
 
 # [LAW:one-type-per-behavior] a renderer is the ROP type of its name and the
 # parms that ROP takes its resolution and engine through. The table is the
@@ -325,11 +323,7 @@ def _prepare(
     the first temporary node is made.
     """
     hou = ensure_connected(host, port)
-    if resolution is None:
-        resolution = _DEFAULT_RESOLUTION
-    if error := validate_resolution(resolution):
-        return error
-    width, height = resolution[0], resolution[1]
+    width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
     obj = hou.node("/obj")
     if obj is None:
         return {"status": "error", "message": "Cannot find /obj context"}
@@ -416,13 +410,6 @@ def _build_rop(
     return rop
 
 
-def _vec3_error(name: str, value: Sequence[float]) -> dict[str, Any] | None:
-    """The error for a camera vector that is not three numbers; None when it is."""
-    if len(value) == 3 and all(isinstance(v, int | float) for v in value):
-        return None
-    return {"status": "error", "message": f"{name} must be [x, y, z], got {list(value)!r}"}
-
-
 def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
     """Render the ROP into a fresh file on Houdini's machine and bring the image back base64-encoded.
 
@@ -460,8 +447,8 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
 
 @handle_connection_errors("render_viewport")
 def render_viewport(
-    camera_position: list[float] | None = None,
-    camera_rotation: list[float] | None = None,
+    camera_position: Vec3 | None = None,
+    camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
     resolution: Resolution | None = None,
     renderer: str = "opengl",
@@ -509,12 +496,6 @@ def render_viewport(
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
-    for name, vector in (
-        ("camera_position", camera_position),
-        ("camera_rotation", camera_rotation),
-    ):
-        if vector is not None and (error := _vec3_error(name, vector)):
-            return error
     prepared = _prepare(resolution, renderer, karma_engine, host, port)
     if isinstance(prepared, dict):
         return prepared
