@@ -92,6 +92,8 @@ class ConnectionState(enum.Enum):
 SOCKET_STATES = frozenset(
     {ConnectionState.CONNECTING, ConnectionState.HANDSHAKING, ConnectionState.CONNECTED}
 )
+# The states a started core passes through before it closes: start() is a no-op in these.
+ACTIVE_STATES = SOCKET_STATES | {ConnectionState.BACKOFF}
 
 
 class Timer(enum.Enum):
@@ -528,7 +530,7 @@ class WSClientCore:
 
     # ------------------------------------------------------------------ helpers
 
-    def _telemetry(self, event: str, **fields: Any) -> Action:
+    def _telemetry(self, event: str, **fields: Any) -> Telemetry:
         record = {"event": event, "state": self.state.value}
         record.update(redact(fields))
         return Telemetry(record)
@@ -569,7 +571,7 @@ class WSClientCore:
         queued = [frame["request_id"] for frame in self._command_queue]
         return sorted(queued + list(self._pending))
 
-    def _settle(self, outcome: RequestOutcome) -> Action:
+    def _settle(self, outcome: RequestOutcome) -> DeliverOutcome:
         """Retire a live request id with its one terminal outcome.
 
         [LAW:single-enforcer] This is the only code that removes an id from the
@@ -643,12 +645,7 @@ class WSClientCore:
 
         if self.state == ConnectionState.CLOSED:
             raise ClientClosedError("client is closed; a new connection needs a new core")
-        if self.state in (
-            ConnectionState.CONNECTING,
-            ConnectionState.HANDSHAKING,
-            ConnectionState.CONNECTED,
-            ConnectionState.BACKOFF,
-        ):
+        if self.state in ACTIVE_STATES:
             return []
         self._reset_backoff()
         return self._begin_connect()
@@ -708,14 +705,14 @@ class WSClientCore:
         """Driver reports the socket failed / dropped. Schedule reconnect."""
 
         if self.state not in SOCKET_STATES:
-            return [self._telemetry("ignored_socket_error")]
+            return [self._telemetry("ignored_socket_error", reason=reason)]
         return self._enter_backoff(reason=reason or "socket_error")
 
     def on_socket_closed(self, reason: str = "") -> list[Action]:
         """Driver reports the socket closed unexpectedly. Treat like an error."""
 
         if self.state not in SOCKET_STATES:
-            return [self._telemetry("ignored_socket_closed")]
+            return [self._telemetry("ignored_socket_closed", reason=reason)]
         return self._enter_backoff(reason=reason or "socket_closed")
 
     def _enter_backoff(self, *, reason: str) -> list[Action]:
@@ -911,7 +908,11 @@ class WSClientCore:
         if limit_reached(len(self._command_queue), self.config.max_command_queue):
             raise QueueFullError(f"command queue full ({self.config.max_command_queue})")
         rid = self._allocate_request_id()
-        self._command_queue.append({"type": COMMAND, "request_id": rid, "payload": payload})
+        # [LAW:effects-at-boundaries] The queue owns its copy: a caller that reuses
+        # the dict cannot change what is sent later, or re-sent after a drop.
+        self._command_queue.append(
+            {"type": COMMAND, "request_id": rid, "payload": copy.deepcopy(payload)}
+        )
         return rid
 
     def cancel_command(self, request_id: int) -> list[Action]:

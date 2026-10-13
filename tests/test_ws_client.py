@@ -53,6 +53,7 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     HELLO,
     PING,
     PONG,
+    SOCKET_STATES,
     UNBOUNDED,
     WELCOME,
     Acked,
@@ -240,6 +241,15 @@ class TestConfig:
             make_config(backoff_multiplier=bad)
         assert make_config(backoff_multiplier=1.0).backoff_multiplier == 1.0
 
+    def test_queued_payload_is_the_callers_at_submission_time(self):
+        # The caller may reuse its dict; what was submitted is what gets sent.
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s")
+        payload = {"op": "set", "value": 1}
+        core.send_command(payload)
+        payload["value"] = 2
+        assert sent_frames(core.drain())[0]["payload"] == {"op": "set", "value": 1}
+
     def test_config_is_frozen(self):
         # What __post_init__ proved must stay proved for the config's whole life.
         cfg = make_config()
@@ -360,8 +370,14 @@ class TestLifecycleTransitions:
     def test_closed_is_terminal_ignores_socket_events(self):
         core = WSClientCore(make_config())
         core.stop()
-        assert telemetry_events(core.on_socket_error()) == ["ignored_socket_error"]
-        assert telemetry_events(core.on_socket_closed()) == ["ignored_socket_closed"]
+        assert (
+            telemetry_records(core.on_socket_error("reset"), "ignored_socket_error")[0]["reason"]
+            == "reset"
+        )
+        assert (
+            telemetry_records(core.on_socket_closed("eof"), "ignored_socket_closed")[0]["reason"]
+            == "eof"
+        )
         assert core.state == ConnectionState.CLOSED
 
     def test_drop_reported_during_backoff_is_not_a_second_failure(self):
@@ -1291,9 +1307,22 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def socket_open(self):
         self._run(self.core.on_socket_open())
 
+    def _drop(self, report, reason):
+        # A drop outside the socket states is stale: it changes nothing.
+        before = (self.core.state, self.core.backoff_attempt)
+        actions = report(reason)
+        self._run(actions)
+        if before[0] not in SOCKET_STATES:
+            assert (self.core.state, self.core.backoff_attempt) == before
+            assert len(actions) == 1 and telemetry_events(actions)[0].startswith("ignored_")
+
     @rule(reason=st.sampled_from(["reset", "partition", "restart"]))
     def socket_error(self, reason):
-        self._run(self.core.on_socket_error(reason))
+        self._drop(self.core.on_socket_error, reason)
+
+    @rule(reason=st.sampled_from(["eof", "going_away"]))
+    def socket_closed(self, reason):
+        self._drop(self.core.on_socket_closed, reason)
 
     @rule()
     def backoff_elapsed(self):
@@ -1380,6 +1409,11 @@ class WSClientStateMachine(RuleBasedStateMachine):
         assert set(self.settled) <= set(self.allocated)
         live = len(self.core.pending_request_ids) + self.core.command_backlog
         assert len(self.allocated) == len(self.settled) + live
+
+    @invariant()
+    def reconnects_stay_within_budget(self):
+        budget = self.core.config.max_reconnect_attempts
+        assert budget is UNBOUNDED or self.core.backoff_attempt <= budget
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):
