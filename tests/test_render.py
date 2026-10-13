@@ -873,7 +873,7 @@ class TestRenderLeavesSceneUnchanged:
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["error_type"] == "connection_error", result
+        assert result["kind"] == "connection_lost", result
         assert len(destroyed) == 1, destroyed
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -981,7 +981,7 @@ class TestRenderLeavesSceneUnchanged:
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["error_type"] == "connection_error", result
+        assert result["kind"] == "connection_lost", result
         assert result["operation"] == tool
         assert destroyed == []
 

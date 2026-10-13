@@ -17,17 +17,25 @@ from pydantic import Field
 
 from ..connection import (
     HoudiniConnectionError,
-    TransportFailure,
     disconnect,
     ensure_connected,
     ensure_link,
     is_connected,
-    transport_failure,
+)
+from .failure import (
+    FAILURE,
+    InvalidInput,
+    OperationFailed,
+    TimedOut,
+    ToolError,
+    ToolFailure,
+    failure_for,
+    failure_response,
 )
 from .hscript import HscriptBatch
 from .parms import evaluated
 from .transactions import TOOL_POLICIES
-from .workers import WORKERS, WorkerStillRunning
+from .workers import WORKERS
 
 T = TypeVar("T")
 
@@ -39,8 +47,17 @@ __all__ = [
     "is_connected",
     "HoudiniConnectionError",
     "disconnect",
-    # Error handling
-    "handle_connection_errors",  # Decorator for consistent error handling
+    # Error handling: the boundary, the one result type, and what a tool body raises
+    "handle_connection_errors",
+    "ToolFailure",
+    "FAILURE",
+    "failure_for",
+    "failure_response",
+    "ToolError",
+    "InvalidInput",
+    "OperationFailed",
+    "TimedOut",
+    "node_at",
     # Output utilities
     "_truncate_output",
     # Response size utilities
@@ -88,7 +105,6 @@ logger = logging.getLogger("houdini_mcp.tools")
 
 import functools
 import inspect
-import traceback
 from collections.abc import Callable
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
@@ -100,11 +116,12 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
     The tool boundary: every tool call enters and leaves through this wrapper.
 
-    Every exception the tool raises becomes the response ``_tool_error_response``
-    builds for it; connection loss is the only failure that tears the connection down.
-    A tool whose policy waits for a worker (it writes the scene, or reads it
-    through a program) first asks the worker ledger whether a program is still
-    running against Houdini, and is refused with that worker named when it is.
+    Every exception the tool raises becomes the one arm of ``ToolFailure`` that
+    ``failure_response`` builds for it; connection loss is the only failure that
+    tears the connection down. A tool whose policy waits for a worker (it writes
+    the scene, or reads it through a program) first asks the worker ledger whether
+    a program is still running against Houdini, and is refused with that worker
+    named when it is.
 
     Args:
         operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
@@ -118,7 +135,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         @handle_connection_errors("get_scene_info")
         def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
             hou = ensure_connected(host, port)
-            # ... actual logic without try/except boilerplate
+            node = node_at(hou, "/obj")  # raises InvalidInput when absent
             return {"status": "success", ...}
     """
 
@@ -141,84 +158,11 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                     WORKERS.admit(operation_name)
                 return func(*args, **kwargs)
             except Exception as e:
-                return _tool_error_response(e, operation_name)
+                return failure_response(e, operation_name)
 
         return cast(ToolFn, wrapper)
 
     return decorator
-
-
-def _tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
-    """Turn the exception a tool raised into its error response.
-
-    [LAW:single-enforcer] The one definition of how a tool failure reads to the
-    caller. Connection loss is whatever ``transport_failure`` says it is; that is
-    the only failure that tears the connection down. Everything else - a missing
-    file, a denied path, a Houdini operation error - reaches the caller as its own
-    kind with the connection left standing.
-    """
-    if isinstance(e, HoudiniConnectionError):
-        return {"status": "error", "message": str(e)}
-    if isinstance(e, WorkerStillRunning):
-        return {
-            "status": "error",
-            "error_type": "worker_still_running",
-            "message": str(e),
-            "operation": operation,
-            "worker": e.worker.describe(),
-            "recoverable": True,
-        }
-    failure = transport_failure(e)
-    if failure is not None:
-        return _handle_connection_error(failure, operation)
-    logger.error(f"Error during {operation}: {type(e).__name__}: {e}")
-    return {
-        "status": "error",
-        "message": str(e),
-        "traceback": "".join(traceback.format_exception(e)),
-    }
-
-
-def _handle_connection_error(failure: TransportFailure, operation: str) -> dict[str, Any]:
-    """
-    Report a lost connection to Houdini and tear it down so the next call reconnects.
-
-    Args:
-        failure: Proof from ``transport_failure`` that the link itself failed
-        operation: Name of the operation that failed
-
-    Returns:
-        Error response dict
-    """
-    e = failure.exc
-    error_type = type(e).__name__
-    error_msg = str(e)
-
-    # Clean up the broken connection so next call can reconnect
-    disconnect()
-
-    logger.error(f"Connection error during {operation}: {error_type}: {error_msg}")
-
-    if isinstance(e, TimeoutError):
-        message = (
-            f"Operation '{operation}' timed out. Houdini may be busy with a heavy computation. "
-            "The connection has been reset - subsequent calls will reconnect automatically."
-        )
-    else:
-        message = (
-            f"Connection to Houdini closed unexpectedly during '{operation}'. "
-            "Houdini may have crashed, the RPC server stopped, or the connection was reset. "
-            "The connection has been reset - subsequent calls will attempt to reconnect."
-        )
-
-    return {
-        "status": "error",
-        "error_type": "connection_error",
-        "exception": error_type,
-        "message": message,
-        "operation": operation,
-        "recoverable": True,
-    }
 
 
 # =============================================================================
@@ -229,6 +173,20 @@ def _handle_connection_error(failure: TransportFailure, operation: str) -> dict[
 def node_category(node: Any) -> str:
     """The name of the category a node's type belongs to: Object, Sop, Driver, ..."""
     return str(node.type().category().name())
+
+
+def node_at(hou: Any, path: str, what: str = "Node") -> Any:
+    """The node at ``path``, which cannot be absent.
+
+    [LAW:parse-dont-validate] The one place a caller's path is resolved: a tool
+    body receives a node or never runs, instead of guarding ``hou.node()`` for
+    None. ``what`` names the role the path plays in the failure ("Parent node",
+    "ROP"); the arm it raises is ``invalid_input``, since the fix is the path.
+    """
+    node = hou.node(path)
+    if node is None:
+        raise InvalidInput(f"{what} not found: {path}", path=path)
+    return node
 
 
 # [LAW:types-are-the-program] the render inputs are typed exactly as the domain
@@ -860,18 +818,14 @@ def apply_response_cap(
     """
     import json
 
-    # Serialize to measure size
+    # Serialize to measure size. [LAW:no-silent-failure] a result that cannot be
+    # serialized is the tool's bug, not a large response: it raises as one instead
+    # of reaching the caller dressed as truncation.
     try:
         json_str = json.dumps(data, ensure_ascii=False)
-        json_bytes = json_str.encode("utf-8")
-        original_size = len(json_bytes)
-    except Exception:
-        # If can't serialize, return error metadata
-        return {
-            "status": "error",
-            "message": "Response serialization failed",
-            "_truncated": True,
-        }
+    except (TypeError, ValueError) as e:
+        raise TypeError(f"tool result is not JSON-serializable: {e}") from e
+    original_size = len(json_str.encode("utf-8"))
 
     # If under cap, return as-is
     if original_size <= max_bytes:

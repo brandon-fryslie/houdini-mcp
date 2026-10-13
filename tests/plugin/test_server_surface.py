@@ -51,7 +51,7 @@ class TestInProcessConnection:
         assert ensure_connected("render-farm", 19999) is in_process_houdini
 
     def test_ping_reaches_houdini_without_a_network(self, in_process_houdini: Any) -> None:
-        assert ping("some-remote-host", 1) is True
+        assert ping("some-remote-host", 1) == in_process_houdini.applicationVersionString()
 
     def test_connection_info_names_this_interpreter_not_a_socket(
         self, in_process_houdini: Any
@@ -152,15 +152,16 @@ class TestStdioServerSurface:
         import houdini_mcp.server as shared_server
 
         def refuse(*_a: Any, **_k: Any) -> None:
-            raise conn_module.HoudiniConnectionError("no hou here")
+            raise conn_module.HoudiniConnectionError("no hou here", target="this interpreter")
 
         monkeypatch.setattr(shared_server, "ensure_connected", refuse)
         async with Client(shared_server.mcp) as client:
             payload = (await client.call_tool("check_connection", {})).structured_content
 
-        assert payload["status"] == "disconnected"
+        assert payload["status"] == "error"
+        assert payload["kind"] == "connection_unavailable"
         assert payload["target"] == "this interpreter"
-        assert payload["error"] == "no hou here"
+        assert payload["message"] == "no hou here"
 
     async def test_pane_tools_get_qt_from_this_interpreter(
         self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any

@@ -64,7 +64,8 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 
 Until that program ends, every scene-writing tool, another `execute_code`, and
 `get_geo_summary` (which reads through a program in the same worker slot) return
-`error_type: "worker_still_running"` naming the same worker; plain reads,
+`kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
+worker; plain reads,
 `save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 
 ## render_viewport

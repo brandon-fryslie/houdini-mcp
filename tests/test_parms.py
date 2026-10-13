@@ -139,10 +139,10 @@ class TestToolsShareTheOwner:
 
         mock_connection.add_node(node_with(t=[0.0, 0.0, 0.0]))
         result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
-        assert result == {
-            "status": "error",
-            "message": "Parameter t is a tuple, provide a list/tuple value",
-        }
+        assert result["status"] == "error"
+        assert result["kind"] == "invalid_input"
+        assert result["message"] == "Parameter t is a tuple, provide a list/tuple value"
+        assert result["failed"][0]["name"] == "t"
 
     def test_create_material_reports_the_parameter_it_could_not_set(self, mock_connection):
         from houdini_mcp.tools import create_material

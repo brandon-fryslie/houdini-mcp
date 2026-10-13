@@ -49,6 +49,9 @@ from io import StringIO
 from typing import Any, Literal, get_args
 
 from ._common import (
+    InvalidInput,
+    OperationFailed,
+    TimedOut,
     _get_scene_diff,
     _serialize_scene_state,
     _truncate_output,
@@ -371,8 +374,8 @@ def _blocked(
     message: str,
     hint: str,
     **fields: Any,
-) -> dict[str, Any]:
-    """The one shape of a pre-execution refusal."""
+) -> InvalidInput:
+    """The one shape of a pre-execution refusal: the program is the caller's to fix."""
     # Patterns only, never the source: this line is the durable server-side trail.
     logger.warning(
         "execute_code blocked: %s policy=%s mutation=%s dangerous=%s heavy=%s",
@@ -382,14 +385,13 @@ def _blocked(
         detected.dangerous,
         detected.heavy_geometry,
     )
-    return {
-        "status": "error",
-        "message": message,
-        "policy": grant.policy,
-        "hint": hint,
+    return InvalidInput(
+        message,
+        policy=grant.policy,
+        hint=hint,
         **fields,
-        "audit": _build_audit(code=code, grant=grant, detected=detected, blocked_reason=reason),
-    }
+        audit=_build_audit(code=code, grant=grant, detected=detected, blocked_reason=reason),
+    )
 
 
 @handle_connection_errors("execute_code")
@@ -439,7 +441,7 @@ def execute_code(
     # [LAW:parse-dont-validate] An unknown policy already holds no permission;
     # refuse it by name so the caller learns the value, not a mutation refusal.
     if policy not in VALID_POLICIES:
-        return _blocked(
+        raise _blocked(
             code=code,
             grant=grant,
             detected=DetectedPatterns.scan(code),
@@ -502,7 +504,7 @@ def _execute_with_grant(
         # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
         exc = detected.syntax_error
         location = f" (line {exc.lineno})" if exc.lineno is not None else ""
-        return _blocked(
+        raise _blocked(
             code=code,
             grant=grant,
             detected=detected,
@@ -526,7 +528,7 @@ def _execute_with_grant(
     # Detect the common mistake of importing hou when it is pre-injected via RPyC.
     # (Preserved from bead houdini-mcp-vzp.1 / PR #9.)
     if detected.import_hou:
-        return _blocked(
+        raise _blocked(
             code=code,
             grant=grant,
             detected=detected,
@@ -543,7 +545,7 @@ def _execute_with_grant(
         )
 
     if detected.mutation and not grant.mutation:
-        return _blocked(
+        raise _blocked(
             code=code,
             grant=grant,
             detected=detected,
@@ -565,7 +567,7 @@ def _execute_with_grant(
         patterns = gate.patterns(detected)
         if patterns and not gate.granted(grant):
             reason, message, hint = _bypass_refusal(gate, grant)
-            return _blocked(
+            raise _blocked(
                 code=code,
                 grant=grant,
                 detected=detected,
@@ -654,22 +656,21 @@ def _execute_with_grant(
             timeout,
             detected.code_sha256,
         )
-        return {
-            "status": "error",
-            "message": f"Execution timeout: code did not complete within {timeout} seconds",
-            "policy": grant.policy,
-            "stdout": stdout_capture.getvalue()[:max_stdout_size],
-            "stderr": stderr_capture.getvalue()[:max_stderr_size],
-            "timeout": timeout,
-            "warning": (
+        raise TimedOut(
+            f"Execution timeout: code did not complete within {timeout} seconds",
+            policy=grant.policy,
+            stdout=stdout_capture.getvalue()[:max_stdout_size],
+            stderr=stderr_capture.getvalue()[:max_stderr_size],
+            timeout=timeout,
+            warning=(
                 "Execution timed out while its background thread and undo group are still active. "
                 "No undo was attempted because doing so could undo a previous human action. "
                 "Every tool that writes the scene is refused until this worker finishes. "
                 f"{HOW_A_WORKER_ENDS} Scene consistency is unknown: verify state before "
                 "further edits."
             ),
-            "worker": worker.describe(),
-            "rollback": {
+            worker=worker.describe(),
+            rollback={
                 "attempted": False,
                 "succeeded": False,
                 "error": None,
@@ -679,7 +680,7 @@ def _execute_with_grant(
                 "thread_still_running": True,
                 "scene_consistency": "unknown",
             },
-            "audit": _build_audit(
+            audit=_build_audit(
                 code=code,
                 grant=grant,
                 detected=detected,
@@ -687,7 +688,7 @@ def _execute_with_grant(
                 rollback_attempted=False,
                 rollback_succeeded=False,
             ),
-        }
+        )
 
     audit = _build_audit(code=code, grant=grant, detected=detected)
 
@@ -695,9 +696,7 @@ def _execute_with_grant(
     if exec_exception[0] is not None:
         stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
         stderr_val, stderr_truncated = _truncate_output(stderr_capture.getvalue(), max_stderr_size)
-        error_result: dict[str, Any] = {
-            "status": "error",
-            "message": str(exec_exception[0]),
+        error_fields: dict[str, Any] = {
             "traceback": exec_traceback[0],
             "stdout": stdout_val,
             "stderr": stderr_val,
@@ -705,10 +704,10 @@ def _execute_with_grant(
             "audit": audit,
         }
         if stdout_truncated:
-            error_result["stdout_truncated"] = True
+            error_fields["stdout_truncated"] = True
         if stderr_truncated:
-            error_result["stderr_truncated"] = True
-        return error_result
+            error_fields["stderr_truncated"] = True
+        raise OperationFailed(str(exec_exception[0]), **error_fields)
 
     # --- Success -------------------------------------------------------------
     stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)

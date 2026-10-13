@@ -3076,7 +3076,7 @@ class TestConnectionErrorHandling:
         def tool():
             raise exc
 
-        with patch("houdini_mcp.tools._common.disconnect") as disconnect:
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
             return tool(), disconnect
 
     def test_handle_connection_error_timeout(self):
@@ -3084,11 +3084,12 @@ class TestConnectionErrorHandling:
         result, disconnect = self._run(TimeoutError("Connection timed out"), "render_viewport")
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
+        assert result["kind"] == "timeout"
+        assert result["connection_reset"] is True
+        assert result["retry"] == "call_again"
         assert result["exception"] == "TimeoutError"
         assert "timed out" in result["message"]
         assert "render_viewport" in result["message"]
-        assert result["recoverable"] is True
         disconnect.assert_called_once()
 
     def test_handle_connection_error_eof(self):
@@ -3096,10 +3097,10 @@ class TestConnectionErrorHandling:
         result, disconnect = self._run(EOFError("Connection closed"), "get_scene_info")
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
+        assert result["kind"] == "connection_lost"
+        assert result["retry"] == "call_again"
         assert result["exception"] == "EOFError"
         assert "closed unexpectedly" in result["message"]
-        assert result["recoverable"] is True
         disconnect.assert_called_once()
 
     def test_handle_connection_error_reset_arrives_as_eof(self):
@@ -3108,7 +3109,7 @@ class TestConnectionErrorHandling:
             EOFError("[Errno 54] Connection reset by peer"), "create_node"
         )
 
-        assert result["error_type"] == "connection_error"
+        assert result["kind"] == "connection_lost"
         assert "reset" in result["message"]
         disconnect.assert_called_once()
 
@@ -3127,8 +3128,8 @@ class TestConnectionErrorHandling:
         result, disconnect = self._run(exc, "set_parameter")
 
         assert result["status"] == "error"
-        assert result.get("error_type") != "connection_error"
-        assert "recoverable" not in result
+        assert result["kind"] == "operation_failed"
+        assert result["retry"] == "none"
         assert str(exc) in result["message"]
         assert type(exc).__name__ in result["traceback"]
         disconnect.assert_not_called()
@@ -3142,7 +3143,7 @@ class TestConnectionErrorHandling:
         )
 
         assert result["status"] == "error"
-        assert result.get("error_type") != "connection_error"
+        assert result["kind"] == "operation_failed"
         assert "cook timed out" in result["message"]
         disconnect.assert_not_called()
 
@@ -3154,7 +3155,7 @@ class TestConnectionErrorHandling:
         result, disconnect = self._run(EOFError("Ran out of input"), "execute_code")
 
         assert result["status"] == "error"
-        assert result.get("error_type") != "connection_error"
+        assert result["kind"] == "operation_failed"
         assert "EOFError" in result["traceback"]
         disconnect.assert_not_called()
 
@@ -3168,9 +3169,9 @@ class TestConnectionErrorHandling:
         result = get_scene_info(host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
+        assert result["kind"] == "timeout"
+        assert result["connection_reset"] is True
         assert "timed out" in result["message"]
-        assert result["recoverable"] is True
 
     @patch("houdini_mcp.tools.nodes.ensure_connected")
     def test_create_node_handles_eof_error(self, mock_ensure):
@@ -3182,8 +3183,8 @@ class TestConnectionErrorHandling:
         result = create_node("geo", host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
-        assert result["recoverable"] is True
+        assert result["kind"] == "connection_lost"
+        assert result["retry"] == "call_again"
 
 
 class TestParallelExecution:
@@ -3304,10 +3305,13 @@ class TestHandleConnectionErrorsDecorator:
 
         @handle_connection_errors("get_scene_info")
         def failing_function():
-            raise HoudiniConnectionError("Connection failed")
+            raise HoudiniConnectionError("Connection failed", target="localhost:18811")
 
         result = failing_function()
         assert result["status"] == "error"
+        assert result["kind"] == "connection_unavailable"
+        assert result["retry"] == "start_houdini"
+        assert result["target"] == "localhost:18811"
         assert "Connection failed" in result["message"]
 
     def test_decorator_handles_connection_errors(self):
@@ -3318,12 +3322,12 @@ class TestHandleConnectionErrorsDecorator:
         def timeout_function():
             raise TimeoutError("Operation timed out")
 
-        with patch("houdini_mcp.tools._common.disconnect"):
+        with patch("houdini_mcp.tools.failure.disconnect"):
             result = timeout_function()
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
-        assert result["recoverable"] is True
+        assert result["kind"] == "timeout"
+        assert result["retry"] == "call_again"
         assert "get_scene_info" in result["operation"]
 
     def test_decorator_handles_eof_error(self):
@@ -3334,12 +3338,12 @@ class TestHandleConnectionErrorsDecorator:
         def eof_function():
             raise EOFError("Connection closed")
 
-        with patch("houdini_mcp.tools._common.disconnect"):
+        with patch("houdini_mcp.tools.failure.disconnect"):
             result = eof_function()
 
         assert result["status"] == "error"
-        assert result["error_type"] == "connection_error"
-        assert result["recoverable"] is True
+        assert result["kind"] == "connection_lost"
+        assert result["retry"] == "call_again"
 
     def test_decorator_handles_generic_exception(self):
         """Test decorator handles generic exceptions with traceback."""
@@ -3387,7 +3391,7 @@ class TestHandleConnectionErrorsDecorator:
         def closed_link_function():
             raise EOFError("stream has been closed")
 
-        with patch("houdini_mcp.tools._common.disconnect"):
+        with patch("houdini_mcp.tools.failure.disconnect"):
             result = closed_link_function()
 
         assert result["operation"] == "list_children"

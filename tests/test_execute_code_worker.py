@@ -49,9 +49,9 @@ class TestWorkerBlocksMutation:
         result = create_node("geo", "/obj", name="late", host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["error_type"] == "worker_still_running"
+        assert result["kind"] == "worker_still_running"
         assert result["operation"] == "create_node"
-        assert result["recoverable"] is True
+        assert result["retry"] == "wait_for_worker"
         assert result["worker"]["code_sha256"] == WORKERS.running().code_sha256
         assert "create_node refused" in result["message"]
         assert "late" not in _child_names(mock_connection)
@@ -62,7 +62,7 @@ class TestWorkerBlocksMutation:
         result = execute_code("print('me too')", host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["error_type"] == "worker_still_running"
+        assert result["kind"] == "worker_still_running"
         assert result["operation"] == "execute_code"
 
     def test_reads_still_work(self, mock_connection, stalled_program):
@@ -92,7 +92,7 @@ class TestWorkerBlocksMutation:
 
         result = render()
 
-        assert result["error_type"] == "worker_still_running"
+        assert result["kind"] == "worker_still_running"
         assert result["operation"] == render_tool
 
     def test_program_running_read_is_refused_naming_itself(
@@ -105,7 +105,7 @@ class TestWorkerBlocksMutation:
             result = get_geo_summary("/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["error_type"] == "worker_still_running"
+        assert result["kind"] == "worker_still_running"
         assert result["operation"] == "get_geo_summary"
         assert result["message"].startswith(
             "get_geo_summary refused: a program launched by execute_code"

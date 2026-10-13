@@ -91,9 +91,16 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
 
 
 class HoudiniConnectionError(Exception):
-    """Raised when unable to connect to Houdini."""
+    """Raised when the Houdini a call named cannot be reached.
 
-    pass
+    [LAW:types-are-the-program] ``target`` names that Houdini the way its
+    ``HoudiniTarget`` describes it, so the failure a client reads says where
+    Houdini was expected rather than leaving it to be parsed out of the message.
+    """
+
+    def __init__(self, message: str, *, target: str) -> None:
+        super().__init__(message)
+        self.target = target
 
 
 class _InterpreterModules:
@@ -281,7 +288,8 @@ def _open_link_with_retries(
             if not target.open_is_retryable(e):
                 raise HoudiniConnectionError(
                     f"Non-retryable error connecting to Houdini at "
-                    f"{target.describe(host, port)}: {e}. {target.remedy}"
+                    f"{target.describe(host, port)}: {e}. {target.remedy}",
+                    target=target.describe(host, port),
                 ) from e
             last_error = e
             logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
@@ -301,7 +309,8 @@ def _open_link_with_retries(
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {target.describe(host, port)} after {max_retries} attempts. "
         f"{target.remedy} "
-        f"Last error: {last_error}"
+        f"Last error: {last_error}",
+        target=target.describe(host, port),
     )
 
 
@@ -364,7 +373,8 @@ class HoudiniConnection:
                     raise HoudiniConnectionError(
                         f"Connected to Houdini at {link.name}, but {requested} was requested. "
                         "This server holds one connection; disconnect before targeting "
-                        "another Houdini."
+                        "another Houdini.",
+                        target=requested,
                     )
                 return link
             logger.info("Connection lost or not established, reconnecting...")
@@ -539,7 +549,7 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bool:
+def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> str:
     """
     Quick connectivity test without maintaining connection.
 
@@ -550,14 +560,23 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
             the TCP connect and token handshake are bounded by the handshake module
 
     Returns:
-        True if Houdini RPC server is reachable, False otherwise.
+        The version string of the Houdini reached.
+
+    Raises:
+        HoudiniConnectionError: naming the target and the cause, when no Houdini
+            answered there. [LAW:no-silent-failure] the cause travels with the
+            failure instead of being logged and collapsed into False.
     """
+    target = _houdini.target.describe(host, port)
     try:
         conn = _houdini.target.open(host, port, timeout)
-        hou = conn.modules.hou
-        hou.applicationVersion()  # Validate we can call methods
-        conn.close()
-        return True
+        try:
+            version = str(conn.modules.hou.applicationVersionString())
+        finally:
+            conn.close()
     except Exception as e:
-        logger.debug(f"Ping failed: {e}")
-        return False
+        raise HoudiniConnectionError(
+            f"No Houdini answered at {target}: {type(e).__name__}: {e}. {_houdini.target.remedy}",
+            target=target,
+        ) from e
+    return version

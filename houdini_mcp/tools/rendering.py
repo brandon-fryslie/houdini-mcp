@@ -15,11 +15,14 @@ from typing import Any
 
 from ..connection import transport_failure
 from ._common import (
+    InvalidInput,
+    OperationFailed,
     Resolution,
     Vec3,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
+    node_at,
     node_category,
 )
 from .parms import read_present, write_all
@@ -315,8 +318,8 @@ class _Prepared:
 
 def _prepare(
     resolution: Resolution | None, renderer: str, karma_engine: str, host: str, port: int
-) -> _Prepared | dict[str, Any]:
-    """Check every input and resolve every context a render needs; the error is the result.
+) -> _Prepared:
+    """Check every input and resolve every context a render needs, or raise.
 
     [LAW:no-ambient-temporal-coupling] a bad input creates nothing: resolution,
     renderer, engine, both contexts and the link are all settled here, before
@@ -324,18 +327,14 @@ def _prepare(
     """
     hou = ensure_connected(host, port)
     width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
-    obj = hou.node("/obj")
-    if obj is None:
-        return {"status": "error", "message": "Cannot find /obj context"}
+    obj = node_at(hou, "/obj", "Context")
     rop_type = renderer.lower()
     if rop_type not in _RENDERERS:
-        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+        raise InvalidInput(f"Unknown renderer: {renderer}", renderer=renderer)
     engine = _KARMA_ENGINES.get(karma_engine.lower())
     if engine is None:
-        return {"status": "error", "message": f"Unknown karma_engine: {karma_engine}"}
-    out = hou.node("/out")
-    if out is None:
-        return {"status": "error", "message": "Cannot find /out context"}
+        raise InvalidInput(f"Unknown karma_engine: {karma_engine}", karma_engine=karma_engine)
+    out = node_at(hou, "/out", "Context")
     remote_os, remote_tempfile = _get_remote_modules(host, port)
     return _Prepared(
         hou=hou,
@@ -497,20 +496,13 @@ def render_viewport(
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
     prepared = _prepare(resolution, renderer, karma_engine, host, port)
-    if isinstance(prepared, dict):
-        return prepared
 
     # What to frame: the node asked for, else what the viewport shows, else nothing.
     if look_at is not None:
-        target = prepared.hou.node(look_at)
-        if target is None:
-            return {"status": "error", "message": f"Node not found: {look_at}"}
+        target = node_at(prepared.hou, look_at)
         anchor = _object_of(target)
         if anchor is None:
-            return {
-                "status": "error",
-                "message": f"look_at must name an object or a SOP: {look_at}",
-            }
+            raise InvalidInput(f"look_at must name an object or a SOP: {look_at}", look_at=look_at)
         framing = _framing(prepared.hou, _shapes(target, anchor))
         if framing.bounds is None:
             # A node with nothing to show is framed where it stands.
@@ -595,8 +587,6 @@ def render_quad_view(
     start_time = time.time()
 
     prepared = _prepare(resolution, renderer, karma_engine, host, port)
-    if isinstance(prepared, dict):
-        return prepared
 
     views = [(name, rotation, orthographic) for name, rotation in _QUAD_VIEWS]
     if include_perspective:
@@ -731,9 +721,7 @@ def list_render_nodes(
     """
     hou = ensure_connected(host, port)
 
-    out_context = hou.node("/out")
-    if out_context is None:
-        return {"status": "error", "message": "Cannot find /out context"}
+    out_context = node_at(hou, "/out", "Context")
 
     render_nodes = []
     for node in out_context.children():
@@ -790,9 +778,7 @@ def get_render_settings(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(rop_path)
-    if node is None:
-        return {"status": "error", "message": f"ROP not found: {rop_path}"}
+    node = node_at(hou, rop_path, "ROP")
 
     node_type = node.type().name()
 
@@ -838,9 +824,7 @@ def set_render_settings(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(rop_path)
-    if node is None:
-        return {"status": "error", "message": f"ROP not found: {rop_path}"}
+    node = node_at(hou, rop_path, "ROP")
 
     return {**write_all(node, settings).fields(), "rop_path": rop_path}
 
@@ -879,18 +863,13 @@ def create_render_node(
     """
     hou = ensure_connected(host, port)
 
-    out_context = hou.node("/out")
-    if out_context is None:
-        return {"status": "error", "message": "Cannot find /out context"}
+    out_context = node_at(hou, "/out", "Context")
 
     # Create the node
     node = out_context.createNode(rop_type, name) if name else out_context.createNode(rop_type)
 
     if node is None:
-        return {
-            "status": "error",
-            "message": f"Failed to create ROP of type '{rop_type}'",
-        }
+        raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
     return {
         **write_all(node, settings or {}).fields(),

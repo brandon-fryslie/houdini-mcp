@@ -8,8 +8,10 @@ import logging
 from typing import Any
 
 from ._common import (
+    InvalidInput,
     ensure_connected,
     handle_connection_errors,
+    node_at,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.layout")
@@ -48,9 +50,7 @@ def layout_children(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     children = node.children()
     child_count = len(children)
@@ -113,13 +113,11 @@ def set_node_color(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     # Validate color values
     if len(color) != 3:
-        return {"status": "error", "message": "Color must be [r, g, b] with 3 values"}
+        raise InvalidInput("Color must be [r, g, b] with 3 values", color=color)
 
     # Clamp values to 0-1 range
     clamped_color = [max(0.0, min(1.0, c)) for c in color]
@@ -165,9 +163,7 @@ def set_node_position(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     # Create position vector and set it
     position = hou.Vector2(x, y)
@@ -216,26 +212,19 @@ def create_network_box(
     """
     hou = ensure_connected(host, port)
 
-    parent = hou.node(parent_path)
-    if parent is None:
-        return {"status": "error", "message": f"Parent node not found: {parent_path}"}
+    parent = node_at(hou, parent_path, "Parent node")
 
     # Validate all nodes exist and are children of parent
     nodes = []
     for path in node_paths:
-        node = hou.node(path)
-        if node is None:
-            return {"status": "error", "message": f"Node not found: {path}"}
+        node = node_at(hou, path)
         # Check if it's a child of the parent
         if node.parent().path() != parent_path:
-            return {
-                "status": "error",
-                "message": f"Node {path} is not a child of {parent_path}",
-            }
+            raise InvalidInput(f"Node {path} is not a child of {parent_path}", path=path)
         nodes.append(node)
 
     if not nodes:
-        return {"status": "error", "message": "No nodes specified for network box"}
+        raise InvalidInput("No nodes specified for network box", node_paths=node_paths)
 
     # Create network box
     netbox = parent.createNetworkBox()

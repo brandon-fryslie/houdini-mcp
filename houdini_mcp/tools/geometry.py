@@ -9,6 +9,8 @@ import logging
 from typing import Any
 
 from ._common import (
+    InvalidInput,
+    OperationFailed,
     _add_response_metadata,
     handle_connection_errors,
 )
@@ -234,20 +236,17 @@ print(json.dumps(result))
         port=port,
     )
 
-    if exec_result.get("status") == "error":
-        return exec_result
-
     # Parse the JSON output from stdout
-    stdout = exec_result.get("stdout", "").strip()
+    stdout = exec_result["stdout"].strip()
     if not stdout:
-        return {"status": "error", "message": "No output from geometry analysis"}
+        raise OperationFailed("No output from geometry analysis")
 
     try:
         result = json.loads(stdout)
-        return _add_response_metadata(result, apply_cap=not _defer_cap)
     except json.JSONDecodeError as e:
-        return {
-            "status": "error",
-            "message": f"Failed to parse geometry data: {e}",
-            "raw_output": stdout[:500],
-        }
+        raise OperationFailed(f"Failed to parse geometry data: {e}", raw_output=stdout[:500]) from e
+    # The program's own refusals (no node there, no geometry) are the caller's
+    # input to fix; they cross back into the one failure type here.
+    if result["status"] == "error":
+        raise InvalidInput(result["message"], path=node_path)
+    return _add_response_metadata(result, apply_cap=not _defer_cap)

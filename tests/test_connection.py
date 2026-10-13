@@ -459,23 +459,26 @@ class TestPing:
     """Tests for the ping function."""
 
     def test_ping_success(self, mock_hou):
-        """Test ping returns True when Houdini is reachable."""
+        """A reachable Houdini answers the probe with its version."""
         mock_conn = MockRpycConnection(mock_hou)
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = mock_conn
             result = ping("localhost", 18811)
 
-        assert result is True
+        assert result == mock_hou.applicationVersionString()
         assert mock_conn.closed is True  # Connection should be closed
 
-    def test_ping_failure(self):
-        """Test ping returns False when Houdini is not reachable."""
+    def test_ping_failure_names_the_target_and_the_cause(self):
+        """An unreachable Houdini is a failure that says where and why, not False."""
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
-            result = ping("localhost", 18811)
+            with pytest.raises(HoudiniConnectionError) as raised:
+                ping("localhost", 18811)
 
-        assert result is False
+        assert raised.value.target == "localhost:18811"
+        assert "Connection refused" in str(raised.value)
+        assert isinstance(raised.value.__cause__, ConnectionError)
 
     def test_ping_closes_connection(self, mock_hou):
         """Test ping closes connection after checking."""
@@ -493,12 +496,13 @@ class TestHoudiniConnectionError:
 
     def test_exception_message(self):
         """Test exception contains useful message."""
-        error = HoudiniConnectionError("Test error message")
+        error = HoudiniConnectionError("Test error message", target="localhost:18811")
         assert str(error) == "Test error message"
+        assert error.target == "localhost:18811"
 
     def test_exception_inheritance(self):
         """Test exception inherits from Exception."""
-        error = HoudiniConnectionError("Test")
+        error = HoudiniConnectionError("Test", target="localhost:18811")
         assert isinstance(error, Exception)
 
 

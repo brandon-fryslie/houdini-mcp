@@ -8,9 +8,12 @@ import logging
 from typing import Any
 
 from ._common import (
+    InvalidInput,
+    OperationFailed,
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
+    node_at,
     node_category,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
@@ -73,16 +76,13 @@ def create_material(
         if parent_path == "/mat":
             try:
                 parent = hou.node("/").createNode("matnet", "mat")
-            except Exception:
-                return {
-                    "status": "error",
-                    "message": f"Cannot find or create material context: {parent_path}",
-                }
+            except Exception as e:
+                raise OperationFailed(
+                    f"Cannot find or create material context: {parent_path}: {e}",
+                    parent_path=parent_path,
+                ) from e
         else:
-            return {
-                "status": "error",
-                "message": f"Parent context not found: {parent_path}",
-            }
+            raise InvalidInput(f"Parent context not found: {parent_path}", path=parent_path)
 
     # Generate name if not provided
     if not name:
@@ -92,11 +92,11 @@ def create_material(
     try:
         mat_node = parent.createNode(material_type, name)
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to create material of type '{material_type}': {str(e)}. "
+        raise OperationFailed(
+            f"Failed to create material of type '{material_type}': {str(e)}. "
             f"Check if this material type is available in your Houdini installation.",
-        }
+            material_type=material_type,
+        ) from e
 
     writes = write_all(mat_node, parameters or {})
 
@@ -143,25 +143,21 @@ def assign_material(
     hou = ensure_connected(host, port)
 
     # Validate geometry node
-    geo_node = hou.node(geometry_path)
-    if geo_node is None:
-        return {"status": "error", "message": f"Geometry node not found: {geometry_path}"}
+    geo_node = node_at(hou, geometry_path, "Geometry node")
 
     # Check if it's an OBJ-level geo node
     node_type = geo_node.type().name()
     category = node_category(geo_node)
 
     if category != "Object":
-        return {
-            "status": "error",
-            "message": f"Node {geometry_path} is not an Object-level node. "
+        raise InvalidInput(
+            f"Node {geometry_path} is not an Object-level node. "
             f"Expected geo node, got {category}/{node_type}",
-        }
+            path=geometry_path,
+        )
 
-    # Validate material exists
-    mat_node = hou.node(material_path)
-    if mat_node is None:
-        return {"status": "error", "message": f"Material not found: {material_path}"}
+    # The material must exist before anything is written to the geometry.
+    node_at(hou, material_path, "Material")
 
     # Method 1: Try setting shop_materialpath on the OBJ node directly
     if not group:
@@ -184,10 +180,9 @@ def assign_material(
         # No display node, try to find any SOP
         children = geo_node.children()
         if not children:
-            return {
-                "status": "error",
-                "message": f"Geometry node {geometry_path} has no SOP nodes inside",
-            }
+            raise InvalidInput(
+                f"Geometry node {geometry_path} has no SOP nodes inside", path=geometry_path
+            )
         display_node = children[-1]
 
     # Check if a material SOP already exists and is connected
@@ -250,9 +245,7 @@ def get_material_info(
     """
     hou = ensure_connected(host, port)
 
-    mat_node = hou.node(material_path)
-    if mat_node is None:
-        return {"status": "error", "message": f"Material not found: {material_path}"}
+    mat_node = node_at(hou, material_path, "Material")
 
     # Get basic info
     result: dict[str, Any] = {
