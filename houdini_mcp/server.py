@@ -85,10 +85,18 @@ def execute_code(
     Use this for complex operations that aren't covered by other tools.
 
     SAFETY FEATURES:
-    - Policy profiles: "read-only" (inspection only; bypass flags grant nothing)
-      and "normal" (default).
-    - Dangerous operation detection: hou.exit(), os.remove(), subprocess,
-      eval/exec, network egress (socket/urllib/requests), etc.
+    - Policy profiles: "read-only" (inspection only: the code may name only
+      recognized inspection APIs, pure stdlib and dicts for its own records;
+      anything else, including hou APIs added after this release, is refused,
+      and bypass flags grant nothing) and "normal" (default; a guard rail
+      against accidents, not a sandbox).
+    - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
+      state changes (os and tempfile beyond their read side, shutil, pathlib,
+      archive and database modules, open() for writing), shell and process
+      access, dynamic import/execution, network egress (socket, urllib,
+      requests, httpx, http, ftplib, smtplib, ...) and the debugger. Judged on
+      the parsed program, so text in comments and strings is not code.
+    - Code that does not parse is refused before any rail runs.
     - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
     - Config+request bypass: allow_dangerous unlocks dangerous patterns and
       allow_heavy_geometry unlocks heavy geometry, each only when the server
@@ -113,15 +121,17 @@ def execute_code(
             Prefer get_geo_summary().
         policy: Safety profile - "read-only" or "normal" (default).
 
-    Dangerous patterns detected:
-        - hou.exit() - closes Houdini
-        - os.remove(), os.unlink() - file deletion
-        - shutil.rmtree() - directory deletion
-        - subprocess, os.system() - shell execution
-        - eval(), exec(), __import__() - dynamic execution
-        - socket, urllib, requests, http - network egress
-        - open() with write modes - file writing
-        - hou.hipFile.clear() - scene wipe
+    Dangerous patterns detected (policy "normal"):
+        - hou.exit() - closes Houdini; hou.hipFile.clear() - scene wipe
+        - os and tempfile members outside their read side (remove, rename,
+          makedirs, system, mkstemp, ...)
+        - shutil, pathlib, importlib, subprocess, pty, ctypes, pickle, zipfile,
+          tarfile, gzip, sqlite3, dbm, pdb - whole modules
+        - eval(), exec(), compile(), __import__() - dynamic execution
+        - socket, urllib, urllib3, requests, httpx, aiohttp, http, ftplib,
+          smtplib, xmlrpc, telnetlib, webbrowser - network egress
+        - open() with a writing mode, a mode that is not a literal, or
+          unpacked arguments
 
     Example:
         execute_code('''
@@ -855,18 +865,20 @@ def reorder_inputs(node_path: str, new_order: list[int]) -> dict[str, Any]:
     """
     Reorder inputs on a node (useful for merge nodes).
 
-    Stores existing connections, disconnects all, then reconnects in new order.
-    new_order specifies the new position for each input: [1, 0, 2] swaps first two inputs.
+    new_order is a permutation of the input indices 0..last wired input: position i
+    names the old input that moves to input i. Anything else (a repeated index, a
+    shorter or longer list) is rejected before any wire is touched. Each wire keeps
+    the source output it came from.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/merge1")
-        new_order: List specifying new input order (e.g., [1, 0, 2] to swap first two)
+        new_order: Permutation of the input indices (e.g., [1, 0, 2] on a 3-input node)
 
     Returns:
         Dict with reordering result including reconnection details.
 
     Examples:
-        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two inputs
+        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two of four inputs
         reorder_inputs("/obj/geo1/merge1", [2, 1, 0])  # Reverse three inputs
     """
     return tools.reorder_inputs(node_path, new_order, HOUDINI_HOST, HOUDINI_PORT)

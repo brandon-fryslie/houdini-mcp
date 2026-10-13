@@ -26,7 +26,12 @@ _listener = RemoteListener()
 
 
 def _config_from_env(port: int | None) -> ListenerConfig:
-    """The environment's listener config, with ``port`` overriding ``HOUDINI_RPC_BIND_PORT``."""
+    """The environment's listener config, with ``port`` overriding ``HOUDINI_RPC_BIND_PORT``.
+
+    Raises:
+        ValueError: a listener variable is set to something it cannot mean
+            (see :meth:`ListenerConfig.from_env`); nothing is started.
+    """
     cfg = ListenerConfig.from_env()
     if port is not None:
         cfg.port = port
@@ -40,6 +45,10 @@ def start_hrpyc_server(port: int | None = None) -> dict:
     (``HOUDINI_RPC_BIND_HOST``, ``HOUDINI_RPC_TRUSTED_NETWORK``,
     ``HOUDINI_RPC_TOKEN``). ``port`` overrides ``HOUDINI_RPC_BIND_PORT`` when
     provided.
+
+    Raises:
+        ValueError: a listener variable is set to something it cannot mean
+            (see :meth:`ListenerConfig.from_env`); nothing is started.
     """
     return _listener.start(_config_from_env(port))
 
@@ -65,5 +74,11 @@ def self_test_hrpyc() -> dict:
 
 
 def reload_hrpyc_server(port: int | None = None) -> dict:
-    """Restart the hrpyc listener with current environment configuration."""
+    """Restart the hrpyc listener with current environment configuration.
+
+    Raises:
+        ValueError: a listener variable is set to something it cannot mean
+            (see :meth:`ListenerConfig.from_env`); the running listener is
+            left as it is.
+    """
     return _listener.reload(_config_from_env(port))

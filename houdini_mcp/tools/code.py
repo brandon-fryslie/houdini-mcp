@@ -10,12 +10,18 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
   once from the policy, the request's bypass flags and the server
   configuration. Every gate reads the grant; nothing re-derives permission.
 * Policy profiles:
-    - ``read-only``  : inspection only; mutation, dangerous and heavy-geometry
-                       patterns are all blocked before execution, and the
-                       bypass flags grant nothing.
-    - ``normal``     : default; dangerous and heavy-geometry patterns are
-                       blocked unless the caller opts in *and* the server is
-                       configured to permit bypass.
+    - ``read-only``  : inspection only. The program may name only what the
+                       inspection allowlist in ``code_policy`` recognizes; a
+                       mutator the allowlist has never heard of is refused the
+                       same way as one it has, and the bypass flags grant
+                       nothing.
+    - ``normal``     : default; recognized dangerous operations and
+                       heavy-geometry calls are blocked unless the caller opts
+                       in *and* the server is configured to permit bypass. A
+                       guard rail against accidents, not a sandbox.
+* Every gate reads the parsed program, the same AST ``exec`` compiles, so text
+  in comments and strings is not code and a program that does not parse is
+  refused before any rail.
 * Each bypass flag unlocks exactly its own capability: ``allow_dangerous``
   the dangerous patterns, ``allow_heavy_geometry`` the heavy-geometry
   patterns. Both require server configuration (``HOUDINI_MCP_ALLOW_BYPASS``).
@@ -41,15 +47,18 @@ from io import StringIO
 from typing import Any, Literal, get_args
 
 from ._common import (
-    _detect_dangerous_code,
-    _detect_heavy_geometry_code,
-    _detect_import_hou,
-    _detect_mutation_code,
     _get_scene_diff,
     _serialize_scene_state,
     _truncate_output,
     ensure_connected,
     handle_connection_errors,
+)
+from .code_policy import (
+    _detect_dangerous_code,
+    _detect_heavy_geometry_code,
+    _detect_import_hou,
+    _detect_non_inspection_code,
+    parse_code,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -166,18 +175,33 @@ class ExecutionGrant:
 
 @dataclass(frozen=True)
 class DetectedPatterns:
-    """Everything the static scan found in the code, whatever the grant says about it."""
+    """Everything the static scan found in the code, whatever the grant says about it.
+
+    The program is parsed once, here; every gate reads the same AST ``exec``
+    compiles. A program that does not parse carries its ``syntax_error`` and
+    nothing else, because nothing else could be read [LAW:parse-dont-validate].
+    """
 
     mutation: list[str]
     dangerous: list[str]
     heavy_geometry: list[str]
+    import_hou: bool
+    syntax_error: SyntaxError | None
 
     @classmethod
     def scan(cls, code: str) -> "DetectedPatterns":
+        try:
+            tree = parse_code(code)
+        except SyntaxError as exc:
+            return cls(
+                mutation=[], dangerous=[], heavy_geometry=[], import_hou=False, syntax_error=exc
+            )
         return cls(
-            mutation=_detect_mutation_code(code),
-            dangerous=_detect_dangerous_code(code),
-            heavy_geometry=_detect_heavy_geometry_code(code),
+            mutation=_detect_non_inspection_code(tree),
+            dangerous=_detect_dangerous_code(tree),
+            heavy_geometry=_detect_heavy_geometry_code(tree),
+            import_hou=_detect_import_hou(tree),
+            syntax_error=None,
         )
 
 
@@ -355,6 +379,7 @@ def _blocked(
     }
 
 
+@handle_connection_errors("execute_code")
 def execute_code(
     code: str,
     capture_diff: bool = False,
@@ -422,7 +447,6 @@ def execute_code(
     )
 
 
-@handle_connection_errors("execute_code")
 def _execute_with_grant(
     code: str,
     grant: ExecutionGrant,
@@ -457,6 +481,21 @@ def _execute_with_grant(
     # log line reports all of it, whatever stopped the code.
     detected = DetectedPatterns.scan(code)
 
+    # --- Syntax gate: a program the gates cannot read is a program that does not run
+    if detected.syntax_error is not None:
+        # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
+        exc = detected.syntax_error
+        location = f" (line {exc.lineno})" if exc.lineno is not None else ""
+        return _blocked(
+            code=code,
+            grant=grant,
+            detected=detected,
+            reason="syntax_error",
+            message=f"Code does not parse: {exc.msg}{location}",
+            hint="Fix the syntax error; the gates judge the parsed program and refuse one they cannot read.",
+            traceback="".join(traceback.format_exception_only(exc)),
+        )
+
     # --- Empty code ----------------------------------------------------------
     if not code or not code.strip():
         return {
@@ -470,7 +509,7 @@ def _execute_with_grant(
 
     # Detect the common mistake of importing hou when it is pre-injected via RPyC.
     # (Preserved from bead houdini-mcp-vzp.1 / PR #9.)
-    if _detect_import_hou(code):
+    if detected.import_hou:
         return _blocked(
             code=code,
             grant=grant,
@@ -494,12 +533,14 @@ def _execute_with_grant(
             detected=detected,
             reason="read_only_mutation",
             message=(
-                "Scene mutation blocked under read-only policy. "
-                "Use policy='normal' (default) for changes."
+                "Blocked under read-only policy: the code names something outside "
+                "the inspection allowlist. Use policy='normal' (default) for changes."
             ),
             hint=(
-                "read-only permits inspection only. Re-run with policy='normal' "
-                "to allow scene changes."
+                "read-only admits only recognized inspection (navigation, parameter "
+                "reads, flags, wiring, geometry reads, pure stdlib); keep your own "
+                "records in dicts, not attributes. Re-run with policy='normal' to "
+                "allow anything else."
             ),
             mutation_patterns=detected.mutation,
         )

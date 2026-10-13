@@ -7,7 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Input connections report the real source output; reorder_inputs preserves
+  it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
+  `reorder_inputs` read the source output index from Houdini's
+  `inputConnections()` records. The old `inputConnectors()[idx][1]` read never
+  matched HOM's shape, so every index fell back to 0: inspection reported the
+  wrong topology and `reorder_inputs` rewired every input from output 0. A
+  connection record that cannot be read is now an error naming the node, and
+  `reorder_inputs` reads every wire first and then sets each input to its new
+  wire in input order, clearing only the inputs left unwired, so no wire is
+  unplugged before its replacement is known. `connect_nodes`,
+  `disconnect_node_input`, and the `inputs` list and `inputs_count` of
+  `get_node_info` read the same records. The source is read as the wire's item
+  (`inputItem()` / `inputItemOutputIndex()`), so a node inside a subnet fed from
+  one of the subnet's indirect inputs reports that indirect input by path and
+  `reorder_inputs` moves it like any other wire; the earlier `inputNode()` read
+  looked through to the parent network and was None when nothing was wired
+  there. `new_order` must be a permutation of the input indices: a shorter or
+  repeated order used to disconnect wires silently and report success, and is
+  now rejected before any wire is touched. `list_children` no longer swallows
+  errors raised while building a child's record; only a parent refusing to list
+  its children is tolerated. The uncalled `HscriptBatch.get_input_connections`
+  and `get_output_connections`, second derivations of the same facts with their
+  own shapes, are removed.
+
 ### Changed
+
+- **Plugin config and lifecycle failures surface with their cause**
+  (houdini-laws-etg.o3a): `ListenerConfig.from_env` and the **Start Remote**
+  port prompt parse their input through `listener.parse_port` /
+  `listener.parse_flag`, which refuse anything that is not a port or a flag with
+  a `ValueError` naming the setting and the value; neither falls back to 18811
+  or to "off" any more. `self_test()` reports a `hou` that does not import as a
+  "Could not read Houdini version" warning with the cause. `status()` and
+  `self_test()` of a running listener carry both `local_ip` and
+  `local_ip_error`: the address with `local_ip_error: None`, or `local_ip: None`
+  beside the cause, in place of the former "localhost" stand-in. `self_test()` lists the machine's address
+  among `bound_endpoints` only for a `0.0.0.0` bind, the one bind it is known
+  to reach. `RemoteListener.start()`/`reload()` take their config; the
+  environment is read by the `remote` facade.
+
+- **`execute_code` read-only is an allowlist**: under `policy="read-only"` the
+  program may name only recognized inspection APIs (navigation, parameter
+  reads, flags, wiring, geometry reads), a fixed set of pure stdlib modules and
+  builtins, and dicts for its own records. Anything else is refused before
+  execution, including mutators the old denylist admitted (`changeNodeType`,
+  `setExpression`, `setKeyframe`, `deleteAllKeyframes`, `insertInput`,
+  `setUserData`, `setComment`), attribute assignment, `with` blocks, attribute
+  lookup by string, and any hou API added after this release. The stdlib
+  modules are admitted member by member, so `random._os`, `fnmatch.os` and
+  `typing.sys` are refused like any other unrecognized name,
+  `typing.get_type_hints` is absent because it evaluates string annotations,
+  and `hou.expandString` / `hou.text.expandString` are refused because
+  backtick expressions run HScript. The refused symbol is named in `mutation_patterns`.
+- **`execute_code` dangerous-operation scan reads the parsed program**: the
+  `normal` policy now refuses whole modules (`shutil`, `pathlib`, `importlib`,
+  `subprocess`, `pickle`, ...) and admits only the read side of `os`, `sys`,
+  `io` and `codecs`, closing `os.rename`, `pathlib.Path.unlink`/`write_text`,
+  `shutil.copy*` and `importlib.import_module`; archive, database, egress
+  and debugger modules (`zipfile`, `tarfile`, `sqlite3`, `smtplib`, `httpx`,
+  `pdb`, ...) are refused too, and `tempfile` keeps only its read side. An
+  `open()` whose mode is not a string literal, or whose arguments are
+  unpacked, is treated as writing. A variable the program binds itself
+  (`code = ...`, `signal = 1`) is never mistaken for the module of the same
+  name, `import os.path as osp` is judged as `os.path`, and a rename of `hou`
+  or a path below it (`hf = hou.hipFile`) keeps its verdict. `open` reached
+  by any route but a readable call (`o = open`, `partial(open, ...)`) is
+  treated as writing. Heavy-geometry
+  methods are judged where they are named, so binding `node.geometry` or
+  passing it to `map` is refused like calling it. Text inside comments and
+  string literals is no longer flagged: the gate reads the same AST `exec`
+  compiles, once per request. Code that does not parse is refused with
+  `blocked_reason="syntax_error"`.
+- **Listener depends on a declared server contract that real hrpyc satisfies**
+  (houdini-laws-etg.zu6): `listener.HrpycModule` and `listener.HrpycServer`
+  declare the rpyc surface the listener drives; the test fake and real rpyc are
+  both held to it by `tests/plugin/test_hrpyc_contract.py`, which also starts
+  the listener on port 0 against real rpyc, over IPv4 and IPv6 (`::1`/`::`
+  binds now reach rpyc as IPv6; before, only the fake accepted them). A
+  server that fails to close is reported by `stop()` as `error_type:
+  "close"` and released. rpyc's per-connection log lines
+  now go to `houdini_mcp_plugin.listener.rpyc` (the previous "quiet" switch
+  only existed on the fake). The plugin packages are type-checked in CI, and
+  that check fails the build.
 
 - **Flags have a cap and an exit plan; the permission decision is one value**
   (houdini-laws-etg.pic):

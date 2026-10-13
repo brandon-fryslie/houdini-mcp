@@ -28,7 +28,7 @@ Successfully implemented 3 new network introspection tools for the Houdini MCP S
 
 ### 3. tests/conftest.py
 **Changes:**
-- ✅ Added `inputConnectors()` method to `MockHouNode` class
+- ✅ `MockHouNode.inputConnections()` returns `MockNodeConnection` records in HOM's shape
 
 **Total additions:** ~10 lines
 
@@ -117,7 +117,7 @@ Implementation complete locally. No git push performed.
 1. **Locked HDAs**: Gracefully handled with try/except, execution continues
 2. **Deep hierarchies**: Limited with max_depth parameter
 3. **Large node counts**: Limited with max_nodes/limit parameters
-4. **Missing inputConnectors()**: Fallback to output_index=0
+4. **Unreadable connection records**: The tool returns an error; no output index is guessed
 5. **None inputs**: Properly filtered/handled
 6. **Multiple inputs**: All connections tracked in array
 7. **Empty children**: Returns empty array, not error
@@ -126,11 +126,14 @@ Implementation complete locally. No git push performed.
 ## Technical Highlights
 
 ### Connection Info Extraction
-Uses Houdini's `inputConnectors()` method for accurate output indices:
+One derivation, `houdini_mcp/tools/connections.py`, reads Houdini's own
+connection records:
 ```python
-connectors = node.inputConnectors()
-# Returns: [(input_idx, output_idx), ...]
+for conn in node.inputConnections():  # one hou.NodeConnection per connected input
+    conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex()
 ```
+Every tool that reports or rewires an input uses it, so the source output index
+is the one Houdini holds, never a default.
 
 ### Pattern Matching
 Combines fnmatch (glob) with substring matching:
@@ -163,7 +166,7 @@ def collect_children(node, depth=0):
 
 ## Known Limitations
 
-1. **inputConnectors() compatibility**: Some rare node types may not support it → fallback to index 0
+1. **Connection records**: A node whose `inputConnections()` cannot be read fails the tool call; there is no fallback index
 2. **Case-insensitive matching only**: All pattern matching is case-insensitive by design
 3. **Glob patterns only**: No regex support (intentional simplification)
 4. **Mock testing only**: Live integration tests recommended for future work

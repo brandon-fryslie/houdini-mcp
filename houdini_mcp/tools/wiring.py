@@ -11,6 +11,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
+from .connections import input_connections, input_span
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
@@ -70,13 +71,13 @@ def connect_nodes(
         logger.warning(f"Could not validate node categories: {e}")
         # Continue if category check fails - let Houdini validate
 
-    # Check if destination input is already connected
-    existing_inputs = dst_node.inputs()
-    if dst_input_index < len(existing_inputs) and existing_inputs[dst_input_index] is not None:
-        existing_src = existing_inputs[dst_input_index]
-        logger.info(
-            f"Disconnecting existing connection from {existing_src.path()} to {dst_path}[{dst_input_index}]"
-        )
+    # setInput replaces whatever wire is at the input; say which one.
+    for existing in input_connections(dst_node):
+        if existing.input_index == dst_input_index:
+            logger.info(
+                f"Disconnecting existing connection from {existing.source.path()} "
+                f"to {dst_path}[{dst_input_index}]"
+            )
 
     # Make the connection
     dst_node.setInput(dst_input_index, src_node, src_output_index)
@@ -126,8 +127,9 @@ def disconnect_node_input(
             "message": f"Input index {input_index} out of range for node {node_path} (has {len(inputs)} inputs)",
         }
 
-    existing_input = inputs[input_index] if input_index < len(inputs) else None
-    was_connected = existing_input is not None
+    # The wire itself, from Houdini's connection records: inputs() looks through a
+    # subnet's indirect input to None, which would cut the wire and call it absent.
+    existing = next((c for c in input_connections(node) if c.input_index == input_index), None)
 
     # Disconnect the input
     node.setInput(input_index, None)
@@ -136,14 +138,14 @@ def disconnect_node_input(
         "status": "success",
         "node_path": node_path,
         "input_index": input_index,
-        "was_connected": was_connected,
+        "was_connected": existing is not None,
     }
 
-    if was_connected:
+    if existing is not None:
         result["message"] = (
-            f"Disconnected input {input_index} on {node_path} (was connected to {existing_input.path()})"
+            f"Disconnected input {input_index} on {node_path} (was connected to {existing.source.path()})"
         )
-        result["previous_source"] = existing_input.path()
+        result["previous_source"] = existing.source.path()
     else:
         result["message"] = f"Input {input_index} on {node_path} was already disconnected"
 
@@ -240,8 +242,12 @@ def reorder_inputs(
     """
     Reorder inputs on a node (useful for merge nodes).
 
-    Stores existing connections, disconnects all, then reconnects in new order.
-    new_order specifies the new position for each input: [1, 0, 2] swaps first two inputs.
+    new_order is a permutation of the input indices 0..last wired input: position i
+    of new_order names the old input that moves to input i, so [1, 0, 2] swaps the
+    first two of three inputs. Every wire is read first (source item and its output),
+    then each input is set to its new wire in input order, so no wire is ever
+    unplugged without its replacement in hand. Wires from a subnet's indirect
+    inputs move like any other.
 
     Args:
         node_path: Path to the node
@@ -263,66 +269,46 @@ def reorder_inputs(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    # Get current inputs
-    current_inputs = node.inputs()
-    if current_inputs is None:
-        current_inputs = []
+    # Read every wire, with the source output it comes from, before touching any.
+    # [LAW:no-silent-failure] a wire whose output cannot be read fails the whole
+    # reorder here, before the network has been changed.
+    # [LAW:one-source-of-truth] the wire records are the only read: the input span
+    # comes from them too, not from inputs(), which looks through a subnet's indirect
+    # input to the parent network and so does not count the same wires.
+    connections = input_connections(node)
+    span = list(input_span(connections))
 
-    # Validate new_order
-    if len(new_order) > len(current_inputs):
+    # new_order is a permutation of the span: every wire gets exactly one new
+    # position, so none is dropped and none is doubled. [LAW:parse-dont-validate]
+    if sorted(new_order) != span:
         return {
             "status": "error",
-            "message": f"new_order length ({len(new_order)}) exceeds number of inputs ({len(current_inputs)})",
+            "message": f"new_order must be a permutation of {span}; got {new_order}",
         }
+    new_position = {old_idx: new_idx for new_idx, old_idx in enumerate(new_order)}
 
-    # Validate indices
-    if not all(0 <= idx < len(current_inputs) for idx in new_order):
-        return {
-            "status": "error",
-            "message": f"Invalid indices in new_order. Must be in range [0, {len(current_inputs) - 1}]",
-        }
-
-    # Store connection information (input_node, output_index)
-    stored_connections: list[tuple[Any, int] | None] = []
-    for idx, input_node in enumerate(current_inputs):
-        if input_node is not None:
-            # Try to get output index from inputConnectors
-            try:
-                connectors = node.inputConnectors()
-                if idx < len(connectors):
-                    output_idx = connectors[idx][1] if len(connectors[idx]) > 1 else 0
-                else:
-                    output_idx = 0
-            except Exception:
-                output_idx = 0
-            stored_connections.append((input_node, int(output_idx)))
-        else:
-            stored_connections.append(None)
-
-    # Disconnect all inputs
-    for i in range(len(current_inputs)):
-        node.setInput(i, None)
-
-    # Reconnect in new order
+    # Each input is overwritten with its new wire, ascending, then the inputs that
+    # end up unwired are cleared. Nothing is unplugged before its replacement is
+    # known, so a failed write leaves every wire attached somewhere, and the
+    # ascending order holds for nodes whose inputs compact when one is cleared
+    # (a merge) as well as for nodes that keep the gap.
+    rewired = sorted(connections, key=lambda conn: new_position[conn.input_index])
     reconnection_info: list[dict[str, Any]] = []
-    for new_idx, old_idx in enumerate(new_order):
-        if old_idx >= len(stored_connections):
-            continue
-
-        stored_connection = stored_connections[old_idx]
-        if stored_connection is None:
-            continue
-
-        src_node, output_idx = stored_connection
-        node.setInput(new_idx, src_node, output_idx)
+    for conn in rewired:
+        new_idx = new_position[conn.input_index]
+        node.setInput(new_idx, conn.source, conn.output_index)
         reconnection_info.append(
             {
                 "new_input_index": new_idx,
-                "old_input_index": old_idx,
-                "source_node": src_node.path(),
-                "source_output_index": output_idx,
+                "old_input_index": conn.input_index,
+                "source_node": conn.source.path(),
+                "source_output_index": conn.output_index,
             }
         )
+    for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
+        node.setInput(idx, None)
+
+    logger.info(f"Reordered inputs on {node_path}: {new_order}, {len(connections)} wires")
 
     return {
         "status": "success",

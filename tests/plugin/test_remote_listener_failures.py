@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import socket
 import sys
+import threading
 
 import houdini_mcp_handshake as handshake
+import houdini_mcp_plugin.listener as listener_module
 import pytest
 from houdini_mcp_plugin.listener import (
     ListenerConfig,
@@ -84,8 +86,38 @@ class TestBindFailure:
         assert result["status"] == "success"
         listener.stop()
 
-    def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port):
-        listener = RemoteListener(hrpyc=None, hou=fake_hou)
+    def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou, free_port):
+        """rpyc's close() closes the listening socket and every client socket
+        unguarded; the error is stop()'s result, and the listener no longer holds
+        the server, so start() is not answered already_running."""
+        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
+
+        class CloseFails(FakeThreadedServer):
+            # stop()'s close, from the test's thread, fails as a client socket
+            # reset would; the accept loop's own close() on exit is left to work,
+            # since which of the two runs first is the kernel's choice.
+            def close(self) -> None:
+                super().close()
+                if threading.current_thread() is threading.main_thread():
+                    raise OSError(104, "Connection reset by peer")
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: CloseFails(*a, **kw)
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        assert (
+            listener.start(ListenerConfig(host="127.0.0.1", port=free_port))["status"] == "success"
+        )
+        result = listener.stop()
+        assert result["status"] == "error"
+        assert result["error_type"] == "close"
+        assert listener.is_running() is False
+        assert listener.stop()["status"] == "not_running"
+
+    def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port, monkeypatch):
+        # No injected hrpyc means the listener imports Houdini's; None in
+        # sys.modules makes that import raise ImportError, as outside Houdini.
+        monkeypatch.setitem(sys.modules, "hrpyc", None)
+        listener = RemoteListener(hou=fake_hou)
         result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
         assert result["status"] == "error"
         assert "hrpyc" in result["message"].lower()
@@ -249,6 +281,75 @@ class TestSelfTestAndStatus:
         report = listener.self_test()
         assert report["reachable"] is False
         assert report["stale"] is True
+
+
+class TestReportedCauses:
+    """A report never substitutes a value for something it could not find out."""
+
+    def test_self_test_without_hou_reports_the_import_failure(
+        self, fake_hrpyc, free_port, monkeypatch
+    ):
+        # No ``hou`` injected and none importable: the version is unknown, and
+        # the report says why rather than leaving None unexplained.
+        monkeypatch.setitem(sys.modules, "hou", None)
+        listener = RemoteListener(hrpyc=fake_hrpyc)
+        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+
+        report = listener.self_test()
+
+        assert report["reachable"] is True
+        assert report["houdini_version"] is None
+        assert report["houdini_version_tuple"] is None
+        assert any("Could not read Houdini version" in w and "hou" in w for w in report["warnings"])
+
+    def test_local_ip_detection_failure_is_reported_not_substituted(
+        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+    ):
+        def no_route() -> str:
+            raise OSError(101, "Network is unreachable")
+
+        monkeypatch.setattr(listener_module, "detect_local_ip", no_route)
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+
+        status = listener.status()
+        assert status["local_ip"] is None
+        assert "Network is unreachable" in status["local_ip_error"]
+
+        report = listener.self_test()
+        assert report["local_ip"] is None
+        assert any("Network is unreachable" in w for w in report["warnings"])
+        # Nothing an operator could mistake for an address to connect to.
+        assert report["bound_endpoints"] == [f"0.0.0.0:{free_port}"]
+        assert "localhost" not in str(report)
+
+    def test_local_ip_names_the_wildcard_bind_it_reaches(
+        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+    ):
+        monkeypatch.setattr(listener_module, "detect_local_ip", lambda: "192.0.2.7")
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+
+        report = listener.self_test()
+        assert report["local_ip"] == "192.0.2.7"
+        assert report["bound_endpoints"] == [
+            f"0.0.0.0:{free_port}",
+            f"192.0.2.7:{free_port} (via 0.0.0.0)",
+        ]
+        assert report["local_ip_error"] is None
+
+    def test_local_ip_is_not_claimed_for_an_ipv6_wildcard_bind(
+        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+    ):
+        # detect_local_ip() is IPv4; whether a "::" socket also serves IPv4 is
+        # the platform's choice, so the report does not claim it.
+        monkeypatch.setattr(listener_module, "detect_local_ip", lambda: "192.0.2.7")
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="::", port=free_port, trusted_network=True))
+
+        report = listener.self_test()
+        assert report["local_ip"] == "192.0.2.7"
+        assert report["bound_endpoints"] == [f":::{free_port}"]
 
 
 # ---------------------------------------------------------------------------
