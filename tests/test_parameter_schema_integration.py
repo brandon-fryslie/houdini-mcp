@@ -1,9 +1,9 @@
 """Integration test for get_parameter_schema demonstrating real-world usage."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
-def test_get_parameter_schema_sphere_real_world():
+def test_get_parameter_schema_sphere_real_world(connected_to):
     """
     Integration test demonstrating get_parameter_schema with a sphere node.
 
@@ -109,11 +109,8 @@ def test_get_parameter_schema_sphere_real_world():
     mock_hou.node.return_value = mock_node
 
     # Execute test
-    with (
-        patch("houdini_mcp.connection._hou", mock_hou),
-        patch("houdini_mcp.connection._connection", MagicMock()),
-    ):
-        result = get_parameter_schema("/obj/geo1/sphere1")
+    connected_to(mock_hou)
+    result = get_parameter_schema("/obj/geo1/sphere1")
 
     # Assertions
     assert result["status"] == "success"
@@ -173,7 +170,7 @@ def test_get_parameter_schema_sphere_real_world():
     print("✓ Validated float, int, menu, and vector parameter types")
 
 
-def test_get_parameter_schema_specific_parameter():
+def test_get_parameter_schema_specific_parameter(connected_to):
     """Test getting schema for a specific parameter only."""
     from houdini_mcp.tools import get_parameter_schema
 
@@ -201,11 +198,8 @@ def test_get_parameter_schema_specific_parameter():
     mock_node.parm.return_value = mock_parm
     mock_hou.node.return_value = mock_node
 
-    with (
-        patch("houdini_mcp.connection._hou", mock_hou),
-        patch("houdini_mcp.connection._connection", MagicMock()),
-    ):
-        result = get_parameter_schema("/obj/geo1/sphere1", parm_name="radx")
+    connected_to(mock_hou)
+    result = get_parameter_schema("/obj/geo1/sphere1", parm_name="radx")
 
     assert result["status"] == "success"
     assert result["count"] == 1

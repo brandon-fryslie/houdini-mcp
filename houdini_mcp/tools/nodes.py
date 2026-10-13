@@ -341,7 +341,7 @@ def list_node_types(
 
     # Populate cache if needed (first call fetches all types)
     # This is done automatically by get_all_types()
-    node_type_cache.get_all_types(hou, host, port)
+    node_type_cache.get_all_types(hou)
 
     page = paginate(
         node_type_cache.filter_types(category=category, name_filter=name_filter), request
@@ -357,7 +357,7 @@ def list_node_types(
         result["category"] = category
     else:
         # Get available categories from cache
-        result["categories_available"] = node_type_cache.get_categories(hou)
+        result["categories_available"] = node_type_cache.get_categories()
 
     # Add cache stats for visibility
     cache_stats = node_type_cache.stats

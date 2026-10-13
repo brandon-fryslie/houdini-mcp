@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import tools
-from .connection import describe_target, ensure_connected, get_connection_info, is_connected, ping
+from .connection import describe_target, ensure_connected, get_connection_info, ping
 from .tools._common import apply_response_cap
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
@@ -748,22 +748,18 @@ def check_connection() -> dict[str, Any]:
     Returns connection status, Houdini version, build info, and current hip file.
     Attempts to connect if not already connected.
     """
+    # [LAW:single-enforcer] ensure is the one check: it reconnects when the link is
+    # gone and fails when the live link reaches a different Houdini. [LAW:one-source-of-truth]
+    # ``status`` is ``connected`` in words, whichever Houdini the link reaches; the
+    # failure, if any, is reported beside it rather than overruling it.
     try:
-        # First try a quick ping
-        if not is_connected():
-            # Try to connect
-            ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
-
-        # Get detailed connection info
+        ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
         info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        info["status"] = "connected" if info["connected"] else "disconnected"
-        return info
-
     except Exception as e:
         info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        info["status"] = "disconnected"
         info["error"] = str(e)
-        return info
+    info["status"] = "connected" if info["connected"] else "disconnected"
+    return info
 
 
 @mcp.tool()
@@ -1247,9 +1243,8 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
     """
     Manage the Houdini MCP cache system.
 
-    The cache stores frequently-accessed data like node types and parameter
-    schemas to improve performance. Node types are cached on first access
-    and subsequent calls are instant.
+    The cache stores node types, read once per Houdini instance; subsequent
+    calls are instant.
 
     Args:
         action: Cache action to perform:
@@ -1260,7 +1255,7 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
     Returns:
         Dict with cache information including:
         - action: The action that was performed
-        - For "stats": Cache statistics for node_types and parameter_schemas
+        - For "stats": Cache statistics for node_types
         - For "invalidate": Confirmation message
         - For "warmup": Warmup timing and entry counts
 
@@ -1292,7 +1287,7 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
         try:
             hou = ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
             # Populate node type cache
-            tools.node_type_cache.get_all_types(hou, HOUDINI_HOST, HOUDINI_PORT)
+            tools.node_type_cache.get_all_types(hou)
             elapsed_ms = (time.time() - start) * 1000
             return {
                 "status": "success",

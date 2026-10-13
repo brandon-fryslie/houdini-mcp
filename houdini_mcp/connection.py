@@ -10,6 +10,7 @@ import concurrent.futures
 import importlib
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,13 +23,6 @@ logger = logging.getLogger("houdini_mcp.connection")
 
 # Type variable for generic retry decorator
 F = TypeVar("F", bound=Callable[..., Any])
-
-# Global connection state
-_connection: Any | None = None
-_hou: Any | None = None
-
-# Thread pool for controlled execution with timeouts
-_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
 # Connection configuration
 DEFAULT_MAX_RETRIES = 3
@@ -96,7 +90,7 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
     classified, and the installed target is what decides it: over rpyc, the channel's
     own exceptions when Houdini's code did not raise them; in-process, nothing.
     """
-    return _target.transport_failure(exc)
+    return _houdini.target.transport_failure(exc)
 
 
 class HoudiniConnectionError(Exception):
@@ -149,14 +143,18 @@ class InProcessConnection:
         self.closed = True
 
 
-def _open_rpyc(host: str, port: int) -> Any:
+def _open_rpyc(host: str, port: int, sync_timeout: float) -> Any:
     logger.info(f"Connecting to Houdini at {host}:{port}")
     # [LAW:one-source-of-truth] the token handshake, and the reading of its
     # token, are houdini_mcp_handshake's; this is the MCP server's client side.
-    return handshake.connect(host, port, token=handshake.token_from_env())
+    # A sync request that Houdini never answers (a heavy cook) raises after
+    # ``sync_timeout`` instead of hanging the tool.
+    return handshake.connect(
+        host, port, token=handshake.token_from_env(), sync_request_timeout=sync_timeout
+    )
 
 
-def _open_in_process(host: str, port: int) -> InProcessConnection:
+def _open_in_process(host: str, port: int, sync_timeout: float) -> InProcessConnection:
     logger.info("Connected to Houdini in-process")
     return InProcessConnection()
 
@@ -169,9 +167,11 @@ class HoudiniTarget(NamedTuple):
     target, the remedy for failing to reach it, and the classification of its
     failures travel together, so an error can never describe a host:port - or
     prescribe a listener, or report a lost link - that the connection never used.
+    ``describe`` names the Houdini a connection to ``host:port`` reaches, so two
+    requests name the same Houdini exactly when their descriptions are equal.
     """
 
-    open: Callable[[str, int], Any]
+    open: Callable[[str, int, float], Any]
     describe: Callable[[str, int], str]
     remedy: str
     open_is_retryable: Callable[[BaseException], bool]
@@ -196,26 +196,264 @@ IN_PROCESS_HOUDINI = HoudiniTarget(
     _no_transport,
 )
 
-# [LAW:dataflow-not-control-flow] where Houdini lives is a value, not a branch:
-# every connect, ping and diagnostic reads whichever target is installed.
-_target: HoudiniTarget = REMOTE_HOUDINI
+
+@dataclass(frozen=True, eq=False)
+class Link:
+    """One open connection to one Houdini, and the ``hou`` it exposes.
+
+    [LAW:types-are-the-program] ``conn`` and ``hou`` are installed together, after the
+    link proved it reaches Houdini, so no holder can see one without the other.
+    ``target``, ``host`` and ``port`` are what the link was opened to: a request is
+    checked against the Houdini actually reached, and diagnostics name that one.
+    Identity is the instance: a reconnect is a new ``Link``.
+    """
+
+    target: HoudiniTarget
+    host: str
+    port: int
+    conn: Any
+    hou: Any
+
+    @property
+    def name(self) -> str:
+        return self.target.describe(self.host, self.port)
+
+    @property
+    def alive(self) -> bool:
+        return not self.conn.closed
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+            logger.info(f"Disconnected from Houdini at {self.name}")
+        except Exception as e:
+            logger.warning(f"Error disconnecting from {self.name}: {e}")
+
+
+def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini."""
+    conn = target.open(host, port, sync_timeout)
+    # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
+    # proved it reaches Houdini; a link that fails validation is closed, so a failed
+    # attempt leaves neither an open socket nor a half-connected state behind.
+    try:
+        hou = conn.modules.hou
+
+        # Validate connection by checking Houdini version
+        version = hou.applicationVersionString()
+        logger.info(f"Connected to Houdini version: {version}")
+
+        # Additional validation - ensure we can access common nodes
+        obj_node = hou.node("/obj")
+        if obj_node is None:
+            logger.warning("Connected but /obj node not accessible - unusual state")
+    except BaseException as validation_error:
+        logger.warning(
+            f"Closing link to {target.describe(host, port)}: failed validation: "
+            f"{type(validation_error).__name__}: {validation_error}"
+        )
+        try:
+            conn.close()
+        except Exception as close_error:
+            logger.debug(f"Closing the unvalidated link also failed: {close_error}")
+        raise
+
+    return Link(target, host, port, conn, hou)
+
+
+def _open_link_with_retries(
+    target: HoudiniTarget,
+    host: str,
+    port: int,
+    max_retries: int,
+    retry_delay: float,
+    sync_timeout: float,
+    jitter: bool,
+) -> Link:
+    """Open a link with exponential backoff, or raise ``HoudiniConnectionError``.
+
+    Backoff with jitter keeps clients that lost Houdini at the same moment from
+    reconnecting in lockstep.
+    """
+    last_error: Exception | None = None
+    current_delay = retry_delay
+
+    for attempt in range(max_retries):
+        try:
+            return _open_link(target, host, port, sync_timeout)
+
+        except Exception as e:
+            if not target.open_is_retryable(e):
+                raise HoudiniConnectionError(
+                    f"Non-retryable error connecting to Houdini at "
+                    f"{target.describe(host, port)}: {e}. {target.remedy}"
+                ) from e
+            last_error = e
+            logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
+
+            if attempt < max_retries - 1:
+                # Calculate delay with cap
+                delay = min(current_delay, DEFAULT_MAX_DELAY)
+
+                # Add jitter to prevent thundering herd
+                if jitter:
+                    delay += random.uniform(0, delay * 0.1)
+
+                logger.info(f"Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+                current_delay *= 2  # Exponential backoff
+
+    raise HoudiniConnectionError(
+        f"Failed to connect to Houdini at {target.describe(host, port)} after {max_retries} attempts. "
+        f"{target.remedy} "
+        f"Last error: {last_error}"
+    )
+
+
+class HoudiniConnection:
+    """The one owner of this process's connection to Houdini.
+
+    [LAW:no-shared-mutable-globals] Every write to connection state happens here,
+    under one lock: which ``HoudiniTarget`` is in use, and the one ``Link`` open to
+    it. Invariants: at most one link is open at a time; a link is installed only
+    after it proved it reaches Houdini; a link that is replaced or dropped is closed;
+    ``ensure`` hands out a link only to a request that names the Houdini it reaches;
+    the queries (``link``, ``is_connected``, ``info``) never write.
+    """
+
+    def __init__(self, target: HoudiniTarget) -> None:
+        self._lock = threading.RLock()
+        self._target = target
+        self._link: Link | None = None
+
+    @property
+    def target(self) -> HoudiniTarget:
+        return self._target
+
+    def use(self, target: HoudiniTarget) -> None:
+        """Make every connection resolve to ``target`` from now on.
+
+        Any live link is dropped so the next ``ensure`` opens on the new target;
+        reconnects after a timeout or error stay on it too - there is no fallback.
+        """
+        with self._lock:
+            self._target = target
+            self.close()
+
+    def link(self) -> Link | None:
+        """The link currently installed, open or not."""
+        return self._link
+
+    def _live(self) -> Link | None:
+        """The installed link if it is open, else None; a socket-state read, no RPC."""
+        link = self._link
+        return link if link is not None and link.alive else None
+
+    def is_connected(self) -> bool:
+        """Whether an open link is installed; a socket-state read, no RPC."""
+        return self._live() is not None
+
+    def ensure(self, host: str, port: int) -> Link:
+        """The open link to the Houdini ``host:port`` names, opening one if there is none.
+
+        [LAW:no-silent-failure] A live link to a *different* Houdini is not it: the
+        call fails naming both rather than reaching a Houdini the caller did not ask
+        for. Reconnects are serialized by the lock, so concurrent callers that find
+        the link gone share one reconnect instead of racing their own.
+        """
+        with self._lock:
+            link = self._link
+            if link is not None and link.alive:
+                requested = self._target.describe(host, port)
+                if link.name != requested:
+                    raise HoudiniConnectionError(
+                        f"Connected to Houdini at {link.name}, but {requested} was requested. "
+                        "This server holds one connection; disconnect before targeting "
+                        "another Houdini."
+                    )
+                return link
+            logger.info("Connection lost or not established, reconnecting...")
+            return self.connect(host, port)
+
+    def connect(
+        self,
+        host: str,
+        port: int,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+        sync_timeout: float = DEFAULT_SYNC_TIMEOUT,
+        jitter: bool = True,
+    ) -> Link:
+        """Open a fresh link to ``host:port`` on the current target and install it.
+
+        The link it replaces is closed only once the new one is proven, so a failed
+        open leaves whatever was installed standing.
+        """
+        with self._lock:
+            link = _open_link_with_retries(
+                self._target, host, port, max_retries, retry_delay, sync_timeout, jitter
+            )
+            previous, self._link = self._link, link
+        if previous is not None:
+            previous.close()
+        return link
+
+    def close(self) -> None:
+        """Drop the installed link, closing it."""
+        with self._lock:
+            link, self._link = self._link, None
+        if link is not None:
+            link.close()
+
+    def info(self, host: str, port: int) -> dict[str, Any]:
+        """Connection state for diagnostics: the Houdini reached when connected, else
+        the one a connection to ``host:port`` would reach."""
+        link = self._live()
+        if link is not None:
+            host, port, target = link.host, link.port, link.name
+        else:
+            target = self._target.describe(host, port)
+        info: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "target": target,
+            "connected": link is not None,
+            "houdini_version": None,
+            "houdini_build": None,
+            "hip_file": None,
+        }
+
+        if link is not None:
+            try:
+                info["houdini_version"] = link.hou.applicationVersionString()
+                version_tuple = link.hou.applicationVersion()
+                info["houdini_build"] = {
+                    "major": version_tuple[0],
+                    "minor": version_tuple[1],
+                    "build": version_tuple[2],
+                }
+                info["hip_file"] = link.hou.hipFile.path() or "untitled.hip"
+            except Exception as e:
+                logger.warning(f"Error getting connection info: {e}")
+                info["error"] = str(e)
+
+        return info
+
+
+# [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
+# not a branch: every connect, ping and diagnostic reads whichever target is installed.
+_houdini = HoudiniConnection(REMOTE_HOUDINI)
 
 
 def describe_target(host: str, port: int) -> str:
     """Name the Houdini a connection to ``host:port`` would actually reach."""
-    return _target.describe(host, port)
+    return _houdini.target.describe(host, port)
 
 
-def use_in_process_houdini() -> None:
-    """Make every connection resolve to the Houdini this interpreter runs inside.
-
-    For the Houdini plugin's stdio server. Any live rpyc connection is dropped so
-    the next ``ensure_connected`` opens in-process; reconnects after a timeout or
-    error stay in-process too - there is no fallback to rpyc.
-    """
-    global _target
-    _target = IN_PROCESS_HOUDINI
-    disconnect()
+def use_houdini(target: HoudiniTarget) -> None:
+    """Make every connection resolve to ``target``: ``IN_PROCESS_HOUDINI`` for the
+    Houdini plugin's stdio server, ``REMOTE_HOUDINI`` for an rpyc listener."""
+    _houdini.use(target)
 
 
 def retry_with_backoff(
@@ -289,53 +527,6 @@ def retry_with_backoff(
     return decorator
 
 
-def _do_connect(
-    host: str,
-    port: int,
-    sync_timeout: float,
-) -> tuple[Any, Any]:
-    """
-    Internal function to establish a single connection attempt.
-
-    This is wrapped by connect() with retry logic.
-    """
-    global _connection, _hou
-
-    conn = _target.open(host, port)
-    # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
-    # proved it reaches Houdini; a link that fails validation is closed, so a failed
-    # attempt leaves neither an open socket nor a half-connected state behind.
-    try:
-        # Set sync_request_timeout on the connection after establishing it
-        # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
-        if hasattr(conn, "_config"):
-            conn._config["sync_request_timeout"] = sync_timeout
-
-        hou = conn.modules.hou
-
-        # Validate connection by checking Houdini version
-        version = hou.applicationVersionString()
-        logger.info(f"Connected to Houdini version: {version}")
-
-        # Additional validation - ensure we can access common nodes
-        obj_node = hou.node("/obj")
-        if obj_node is None:
-            logger.warning("Connected but /obj node not accessible - unusual state")
-    except BaseException as validation_error:
-        logger.warning(
-            f"Closing link to {_target.describe(host, port)}: failed validation: "
-            f"{type(validation_error).__name__}: {validation_error}"
-        )
-        try:
-            conn.close()
-        except Exception as close_error:
-            logger.debug(f"Closing the unvalidated link also failed: {close_error}")
-        raise
-
-    _connection, _hou = conn, hou
-    return conn, hou
-
-
 def connect(
     host: str = "localhost",
     port: int = 18811,
@@ -343,12 +534,9 @@ def connect(
     retry_delay: float = DEFAULT_RETRY_DELAY,
     sync_timeout: float = DEFAULT_SYNC_TIMEOUT,
     jitter: bool = True,
-) -> tuple[Any, Any]:
+) -> Link:
     """
-    Connect to Houdini RPC server using rpyc with retry logic.
-
-    Uses exponential backoff with optional jitter to prevent thundering herd
-    problems when multiple clients reconnect simultaneously.
+    Open a fresh link to Houdini with retry logic, replacing any installed one.
 
     Args:
         host: Houdini server hostname (default: localhost)
@@ -359,136 +547,48 @@ def connect(
         jitter: If True, add random jitter to delays (default: True)
 
     Returns:
-        Tuple of (connection, hou module)
+        The installed ``Link``
 
     Raises:
         HoudiniConnectionError: If connection fails after all retries
     """
-    last_error: Exception | None = None
-    current_delay = retry_delay
-
-    for attempt in range(max_retries):
-        try:
-            return _do_connect(host, port, sync_timeout)
-
-        except Exception as e:
-            if not _target.open_is_retryable(e):
-                raise HoudiniConnectionError(
-                    f"Non-retryable error connecting to Houdini at "
-                    f"{_target.describe(host, port)}: {e}. {_target.remedy}"
-                ) from e
-            last_error = e
-            logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
-
-            if attempt < max_retries - 1:
-                # Calculate delay with cap
-                delay = min(current_delay, DEFAULT_MAX_DELAY)
-
-                # Add jitter to prevent thundering herd
-                if jitter:
-                    delay += random.uniform(0, delay * 0.1)
-
-                logger.info(f"Retrying in {delay:.2f} seconds...")
-                time.sleep(delay)
-                current_delay *= 2  # Exponential backoff
-
-    raise HoudiniConnectionError(
-        f"Failed to connect to Houdini at {_target.describe(host, port)} after {max_retries} attempts. "
-        f"{_target.remedy} "
-        f"Last error: {last_error}"
-    )
-
-
-def get_hou(host: str = "localhost", port: int = 18811) -> Any:
-    """
-    Get the remote hou module, connecting if necessary.
-
-    Args:
-        host: Houdini server hostname
-        port: Houdini RPC port
-
-    Returns:
-        The remote hou module
-
-    Raises:
-        HoudiniConnectionError: If connection fails
-    """
-    global _hou
-
-    if _hou is None:
-        connect(host, port)
-
-    return _hou
+    return _houdini.connect(host, port, max_retries, retry_delay, sync_timeout, jitter)
 
 
 def get_connection() -> Any | None:
-    """Get the current connection object."""
-    return _connection
+    """The installed connection object, or None when none is installed."""
+    link = _houdini.link()
+    return None if link is None else link.conn
 
 
 def disconnect() -> None:
-    """Disconnect from Houdini gracefully."""
-    global _connection, _hou
-
-    if _connection is not None:
-        try:
-            _connection.close()
-            logger.info("Disconnected from Houdini")
-        except Exception as e:
-            logger.warning(f"Error disconnecting: {e}")
-        finally:
-            _connection = None
-            _hou = None
+    """Drop the installed link to Houdini, closing it."""
+    _houdini.close()
 
 
-def is_connected(validate: bool = False) -> bool:
+def is_connected() -> bool:
+    """Whether an open link to Houdini is installed. Reads socket state; no RPC."""
+    return _houdini.is_connected()
+
+
+def ensure_link(host: str = "localhost", port: int = 18811) -> Link:
     """
-    Check if connected to Houdini.
+    The open ``Link`` to the Houdini ``host:port`` names, connecting or reconnecting if needed.
 
-    By default, only checks if connection objects exist and socket is open.
-    This is fast (no RPC call). Set validate=True to perform an RPC call
-    to verify Houdini is actually responsive (slower but more thorough).
+    [LAW:parse-dont-validate] A ``Link`` is proof the connection reached Houdini:
+    a tool that needs the connection object asks here and gets one that cannot be
+    absent, instead of reading the installed one and guarding against None.
 
-    Args:
-        validate: If True, perform RPC call to verify connection is alive.
-                  If False (default), only check socket state for speed.
-
-    Returns:
-        True if connected, False otherwise.
+    Raises:
+        HoudiniConnectionError: If unable to establish connection, or if the
+            installed connection reaches a different Houdini than the one named
     """
-    global _connection, _hou
-
-    if _connection is None or _hou is None:
-        return False
-
-    try:
-        # Fast path: check if connection is closed without RPC
-        # Use explicit comparison to True/False to handle MagicMock correctly
-        if hasattr(_connection, "closed"):
-            closed_val = _connection.closed
-            # Handle both bool and MagicMock cases
-            if closed_val is True:
-                logger.debug("Connection socket is closed")
-                _connection = None
-                _hou = None
-                return False
-
-        # If validation requested, do an RPC call
-        if validate:
-            _hou.applicationVersion()
-
-        return True
-    except Exception as e:
-        logger.debug(f"Connection check failed: {e}")
-        # Connection is dead, clean up
-        _connection = None
-        _hou = None
-        return False
+    return _houdini.ensure(host, port)
 
 
 def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
     """
-    Ensure we're connected to Houdini, reconnecting if necessary.
+    The ``hou`` of the Houdini ``host:port`` names, connecting or reconnecting if needed.
 
     This is the preferred method for tools to get the hou module,
     as it handles connection recovery automatically.
@@ -497,12 +597,10 @@ def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
         The remote hou module
 
     Raises:
-        HoudiniConnectionError: If unable to establish connection
+        HoudiniConnectionError: If unable to establish connection, or if the
+            installed connection reaches a different Houdini than the one named
     """
-    if not is_connected():
-        logger.info("Connection lost or not established, reconnecting...")
-        connect(host, port)
-    return _hou
+    return ensure_link(host, port).hou
 
 
 def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
@@ -510,34 +608,10 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     Get detailed information about the current connection state.
 
     Returns:
-        Dict with connection status, host, port, and Houdini info if connected.
+        Dict with connection status, the host, port and target actually reached when
+        connected (else the ones a connection would reach), and Houdini info if connected.
     """
-    info: dict[str, Any] = {
-        "host": host,
-        "port": port,
-        "target": _target.describe(host, port),
-        "connected": False,
-        "houdini_version": None,
-        "houdini_build": None,
-        "hip_file": None,
-    }
-
-    if is_connected():
-        try:
-            info["connected"] = True
-            info["houdini_version"] = _hou.applicationVersionString()
-            version_tuple = _hou.applicationVersion()
-            info["houdini_build"] = {
-                "major": version_tuple[0],
-                "minor": version_tuple[1],
-                "build": version_tuple[2],
-            }
-            info["hip_file"] = _hou.hipFile.path() or "untitled.hip"
-        except Exception as e:
-            logger.warning(f"Error getting connection info: {e}")
-            info["error"] = str(e)
-
-    return info
+    return _houdini.info(host, port)
 
 
 def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bool:
@@ -547,14 +621,14 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     Args:
         host: Houdini server hostname
         port: Houdini RPC port
-        timeout: Timeout in seconds for the ping (default: 5.0)
+        timeout: How long each of the probe's sync requests may wait (default: 5.0);
+            the TCP connect and token handshake are bounded by the handshake module
 
     Returns:
         True if Houdini RPC server is reachable, False otherwise.
     """
     try:
-        # timeout is not enforced at connection level for classic connections
-        conn = _target.open(host, port)
+        conn = _houdini.target.open(host, port, timeout)
         hou = conn.modules.hou
         hou.applicationVersion()  # Validate we can call methods
         conn.close()
@@ -615,14 +689,8 @@ class SafeExecutionResult:
         }
 
 
-def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
-    """Get or create the thread pool executor."""
-    global _executor
-    if _executor is None:
-        _executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="houdini_rpc"
-        )
-    return _executor
+# Thread pool for controlled execution with timeouts; its threads start on first use.
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="houdini_rpc")
 
 
 def _finished_within(future: concurrent.futures.Future[Any], timeout: float) -> bool:
@@ -670,11 +738,11 @@ def safe_execute(
     Returns:
         SafeExecutionResult with success/failure info
     """
-    future = _get_executor().submit(func, *args, **kwargs)
+    future = _executor.submit(func, *args, **kwargs)
     if not _finished_within(future, timeout):
         logger.error(f"Operation '{operation_name}' timed out after {timeout}s")
         # Clean up the potentially broken connection
-        _safe_disconnect()
+        disconnect()
         return SafeExecutionResult(
             success=False,
             error=f"Timed out after {timeout} seconds",
@@ -690,26 +758,13 @@ def safe_execute(
             logger.error(f"Error during '{operation_name}': {type(e).__name__}: {e}")
             return SafeExecutionResult(success=False, error=str(e), error_type=type(e).__name__)
         logger.error(f"Connection lost during '{operation_name}': {type(e).__name__}: {e}")
-        _safe_disconnect()
+        disconnect()
         return SafeExecutionResult(
             success=False,
             error=str(e),
             error_type="connection_error",
             connection_lost=True,
         )
-
-
-def _safe_disconnect() -> None:
-    """Safely disconnect without raising exceptions."""
-    global _connection, _hou
-    try:
-        if _connection is not None:
-            _connection.close()
-    except Exception as e:
-        logger.debug(f"Error during safe disconnect: {e}")
-    finally:
-        _connection = None
-        _hou = None
 
 
 def execute_with_timeout(
@@ -737,40 +792,7 @@ def execute_with_timeout(
         HoudiniOperationTimeout: If the operation times out
         Various exceptions: If the operation fails for other reasons
     """
-    future = _get_executor().submit(func, *args, **kwargs)
+    future = _executor.submit(func, *args, **kwargs)
     if not _finished_within(future, timeout):
         raise HoudiniOperationTimeout(f"Operation timed out after {timeout} seconds")
     return future.result()
-
-
-def quick_health_check(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bool:
-    """
-    Quick health check with strict timeout - use before heavy operations.
-
-    Uses is_connected(validate=True) to perform an actual RPC call
-    and verify Houdini is responsive.
-
-    Args:
-        host: Houdini server hostname
-        port: Houdini RPC port
-        timeout: Maximum time to wait
-
-    Returns:
-        True if Houdini is responsive, False otherwise
-    """
-    # First do fast check without RPC
-    if not is_connected(validate=False):
-        return False
-
-    def _check():
-        try:
-            _hou.applicationVersion()
-            return True
-        except Exception:
-            return False
-
-    try:
-        result = execute_with_timeout(_check, timeout=timeout)
-        return result
-    except (HoudiniOperationTimeout, Exception):
-        return False

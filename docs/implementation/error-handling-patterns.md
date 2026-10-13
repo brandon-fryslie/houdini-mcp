@@ -28,9 +28,9 @@ This document describes the error handling patterns used throughout the Houdini 
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Connection Layer                             │
 │  connection.py                                                  │
-│  - retry_with_backoff() decorator                               │
+│  - HoudiniConnection: the one owner of the target and the link  │
 │  - connect() with exponential backoff + jitter                  │
-│  - ensure_connected() for auto-reconnection                     │
+│  - ensure_connected() reaches the Houdini named, or fails       │
 │  - safe_execute() for timeout protection                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -140,15 +140,22 @@ def connect_to_houdini(): ...
 
 #### `ensure_connected()` Function
 
-Auto-reconnects when connection is lost:
+Returns the `hou` of the Houdini `host:port` names, reconnecting when the link is
+gone. Connection state has one owner, `HoudiniConnection`: the target in use and at
+most one open `Link` (target, host, port, connection, `hou`), written only under its
+lock, so concurrent tool calls that find the link gone share one reconnect. A live
+link to a *different* Houdini is not an answer: the call raises
+`HoudiniConnectionError` naming both, and the link it did not ask for stands.
+In-process (the Houdini plugin), every address names this interpreter.
 
 ```python
-def ensure_connected(host: str, port: int) -> Any:
-    if not is_connected():
-        logger.info("Connection lost or not established, reconnecting...")
-        connect(host, port)
-    return _hou
+def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
+    return _houdini.ensure(host, port).hou
 ```
+
+`is_connected()` and `get_connection_info()` are queries: they read the link and
+never tear it down. `get_connection_info` reports the host, port and target of the
+Houdini actually reached when connected, not the ones it was asked about.
 
 #### `safe_execute()` Function
 
@@ -304,14 +311,16 @@ def execute_code(
 
 ### Mock Setup
 
-Tests use `MockHouModule` and `MockHouNode` from `tests/conftest.py`:
+Tests use `MockHouModule` and `MockHouNode` from `tests/conftest.py`. The
+`mock_connection` fixture connects to the double through the connection module's own
+API (the handshake seam hands out a `MockRpycConnection`, `ensure_connected` installs
+it), so a test sees exactly what a tool call would; `connected_to(hou)` does the same
+for any other `hou` double:
 
 ```python
-@pytest.fixture
-def mock_connection(monkeypatch):
-    mock_hou = MockHouModule()
-    monkeypatch.setattr("houdini_mcp.tools._common.ensure_connected", lambda *a, **kw: mock_hou)
-    return mock_hou
+def test_reads_my_double(self, connected_to):
+    hou = connected_to(MagicMock())
+    ...
 ```
 
 ### Testing Connection Errors

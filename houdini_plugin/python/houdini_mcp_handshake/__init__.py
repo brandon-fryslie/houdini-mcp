@@ -153,18 +153,24 @@ def _recv_framed(sock: Any) -> bytes:
         return header + read(length)
 
 
-def connect(host: str, port: int, token: str | None) -> Any:
+def connect(host: str, port: int, token: str | None, *, sync_request_timeout: float) -> Any:
     """Open a classic (SlaveService) rpyc connection, presenting ``token`` first.
 
     Equivalent to ``rpyc.classic.connect(host, port)`` with the exchange done on
     the socket before the protocol handshake. Raises ``HandshakeError`` when the
     listener closes the connection on the token, ``TimeoutError`` when nothing
     acknowledges it within ``HANDSHAKE_TIMEOUT``.
+
+    ``sync_request_timeout`` bounds every sync request on the connection, the
+    root request the classic service makes while connecting included:
+    [LAW:no-ambient-temporal-coupling] it is part of the connection from the
+    moment the connection exists, not a setting written onto it afterwards.
     """
     # rpyc is needed only here and in the authenticator, so reading the token
     # from the environment never requires it.
-    import rpyc  # noqa: PLC0415
+    from rpyc.core.service import ClassicService  # noqa: PLC0415
     from rpyc.core.stream import SocketStream  # noqa: PLC0415
+    from rpyc.utils.factory import connect_stream  # noqa: PLC0415
 
     sent, expected = exchange(token)
     stream = SocketStream.connect(host, port)
@@ -185,7 +191,10 @@ def connect(host: str, port: int, token: str | None) -> Any:
                 f"listener at {host}:{port} did not acknowledge the token within "
                 f"{HANDSHAKE_TIMEOUT}s (it enforces no token, or Houdini is too busy to answer)"
             ) from exc
-        return rpyc.classic.connect_stream(stream)
+        # what rpyc.classic.connect_stream does, with the config it does not take
+        return connect_stream(
+            stream, ClassicService, config={"sync_request_timeout": sync_request_timeout}
+        )
     except BaseException:
         stream.close()
         raise

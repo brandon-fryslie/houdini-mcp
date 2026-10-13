@@ -10,9 +10,8 @@ import math
 from typing import Any
 
 from ._common import (
-    HoudiniConnectionError,
     ensure_connected,
-    get_connection,
+    ensure_link,
     handle_connection_errors,
     validate_resolution,
 )
@@ -20,11 +19,9 @@ from ._common import (
 logger = logging.getLogger("houdini_mcp.tools.rendering")
 
 
-def _get_remote_modules():
+def _get_remote_modules(host: str, port: int):
     """Get remote os and tempfile modules via RPyC for file operations on Houdini machine."""
-    conn = get_connection()
-    if conn is None:
-        raise HoudiniConnectionError("No active connection to Houdini")
+    conn = ensure_link(host, port).conn
     # Access remote modules through the RPyC connection
     remote_os = conn.modules.os
     remote_tempfile = conn.modules.tempfile
@@ -240,7 +237,7 @@ def render_viewport(
         camera.parm("projection").set(0)  # Perspective
 
     # Get remote modules for file operations on the Houdini machine
-    remote_os, remote_tempfile = _get_remote_modules()
+    remote_os, remote_tempfile = _get_remote_modules(host, port)
 
     # Create temp file for output ON THE REMOTE MACHINE
     suffix = f".{output_format}"
@@ -386,7 +383,7 @@ def render_quad_view(
     width, height = resolution[0], resolution[1]
 
     # Get remote modules for file operations on the Houdini machine
-    remote_os, remote_tempfile = _get_remote_modules()
+    remote_os, remote_tempfile = _get_remote_modules(host, port)
 
     # Define the 4 canonical views
     # Using rotations that match standard 3D viewport conventions

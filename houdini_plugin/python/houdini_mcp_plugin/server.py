@@ -33,10 +33,10 @@ class AlreadyServing(RuntimeError):
 
 def _prepare_stdio_server() -> Callable[[], None]:
     """Bind the shared server to this interpreter's Houdini; return what runs it."""
-    from houdini_mcp.connection import use_in_process_houdini
+    from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
     from houdini_mcp.server import serve
 
-    use_in_process_houdini()
+    use_houdini(IN_PROCESS_HOUDINI)
     return lambda: serve(transport="stdio")
 
 
