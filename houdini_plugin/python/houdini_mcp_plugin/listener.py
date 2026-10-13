@@ -27,8 +27,9 @@ import logging
 import os
 import socket
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
@@ -49,6 +50,10 @@ __all__ = [
     "SecurityPolicy",
     "SecurityError",
     "RemoteListener",
+    "detect_local_ip",
+    "parse_flag",
+    "parse_host",
+    "parse_port",
     "resolve_security_policy",
     "is_loopback_host",
 ]
@@ -59,15 +64,56 @@ DEFAULT_PORT = 18811
 # Hosts that only accept connections from the local machine.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Hosts that bind every interface (wildcard).
-_WILDCARD_HOSTS = {"0.0.0.0", "::"}
+IPV4_WILDCARD_HOST = "0.0.0.0"
+_WILDCARD_HOSTS = {IPV4_WILDCARD_HOST, "::"}
+T = TypeVar("T")
 
 
-def _env_flag(name: str) -> bool:
-    """Interpret an environment variable as a boolean flag."""
-    val = os.getenv(name)
-    if val is None:
+# [LAW:parse-dont-validate] configuration text crosses into the program through
+# these two parsers and nowhere else; what they refuse names the setting and the
+# value, and nothing downstream sees a substituted default.
+_TRUE_FLAGS = {"1", "true", "yes", "on"}
+_FALSE_FLAGS = {"0", "false", "no", "off"}
+
+
+def parse_port(text: str, source: str) -> int:
+    """The TCP port *text* names, or ValueError saying what *source* held instead."""
+    digits = text.strip()
+    # A port is ASCII digits; int() alone would also read "1_8811", "+1" and
+    # non-ASCII numerals, rewriting a typo into a port nobody typed.
+    if digits.isascii() and digits.isdigit() and (port := int(digits)) <= 65535:
+        return port
+    raise ValueError(f"{source}={text!r} is not a TCP port (an integer from 0 to 65535)")
+
+
+def parse_flag(text: str, source: str) -> bool:
+    """The boolean *text* spells, or ValueError saying what *source* held instead."""
+    word = text.strip().lower()
+    if word in _TRUE_FLAGS:
+        return True
+    if word in _FALSE_FLAGS:
         return False
-    return val.strip().lower() in {"1", "true", "yes", "on"}
+    raise ValueError(
+        f"{source}={text!r} is not a flag (one of {sorted(_TRUE_FLAGS)} or {sorted(_FALSE_FLAGS)})"
+    )
+
+
+def _env_setting(name: str, parse: Callable[[str, str], T], default: T) -> T:
+    """The variable *name* read through *parse*, or *default* when it is unset or blank.
+
+    [LAW:single-enforcer] "unset or empty means the default" is decided here for
+    every listener variable; the parsers themselves refuse an empty value.
+    """
+    text = os.getenv(name, "")
+    return parse(text, name) if text.strip() else default
+
+
+def parse_host(text: str, _name: str) -> str:
+    """The host *text* names: its text without surrounding whitespace.
+
+    Whether it is an address this machine can bind is the socket's to say.
+    """
+    return text.strip()
 
 
 def is_loopback_host(host: str) -> bool:
@@ -179,16 +225,16 @@ class ListenerConfig:
             HOUDINI_RPC_BIND_PORT       (default 18811)
             HOUDINI_RPC_TRUSTED_NETWORK (default off)
             HOUDINI_RPC_TOKEN           (default unset)
+
+        Raises:
+            ValueError: a variable is set to something it cannot mean; the
+                message names the variable and the value. An unset or empty
+                variable is its default.
         """
-        host = os.getenv("HOUDINI_RPC_BIND_HOST", DEFAULT_HOST)
-        port_str = os.getenv("HOUDINI_RPC_BIND_PORT")
-        try:
-            port = int(port_str) if port_str else DEFAULT_PORT
-        except ValueError:
-            port = DEFAULT_PORT
-        token = token_from_env()
-        trusted = _env_flag("HOUDINI_RPC_TRUSTED_NETWORK")
-        return cls(host=host, port=port, trusted_network=trusted, token=token)
+        host = _env_setting("HOUDINI_RPC_BIND_HOST", parse_host, DEFAULT_HOST)
+        port = _env_setting("HOUDINI_RPC_BIND_PORT", parse_port, DEFAULT_PORT)
+        trusted = _env_setting("HOUDINI_RPC_TRUSTED_NETWORK", parse_flag, False)
+        return cls(host=host, port=port, trusted_network=trusted, token=token_from_env())
 
 
 @dataclass
@@ -287,17 +333,27 @@ def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     )
 
 
-def _detect_local_ip() -> str:
-    """Best-effort discovery of the machine's outward-facing IPv4 address."""
+def detect_local_ip() -> str:
+    """The machine's outward-facing IPv4 address: the source of its route to the Internet.
+
+    Raises:
+        OSError: the machine has no such route (offline, or no IPv4 at all).
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("8.8.8.8", 80))
+        return str(s.getsockname()[0])
+
+
+def _local_ip_fields() -> dict[str, Any]:
+    """The ``local_ip`` and ``local_ip_error`` a report carries: the address, or None beside the cause.
+
+    [LAW:no-silent-failure] a detection that failed is reported as that, never
+    as a stand-in address an operator would try to connect to.
+    """
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            return str(s.getsockname()[0])
-        finally:
-            s.close()
-    except OSError:
-        return "localhost"
+        return {"local_ip": detect_local_ip(), "local_ip_error": None}
+    except OSError as exc:
+        return {"local_ip": None, "local_ip_error": f"local IP detection failed: {exc}"}
 
 
 def _probe_reachable(host: str, port: int, timeout: float) -> bool:
@@ -378,25 +434,20 @@ class RemoteListener:
     def _resolve_hou(self) -> Any:
         if self._hou is not None:
             return self._hou
-        try:
-            import hou  # noqa: PLC0415 - only present inside Houdini
+        import hou  # noqa: PLC0415 - only present inside Houdini
 
-            return hou
-        except ImportError:
-            return None
+        return hou
 
     # -- lifecycle ------------------------------------------------------------
 
     def is_running(self) -> bool:
         return self._server is not None
 
-    def start(
-        self, config: ListenerConfig | None = None, *, raise_on_policy: bool = False
-    ) -> dict[str, Any]:
+    def start(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Start the listener. Idempotent: a second call reports already_running.
 
         Args:
-            config: bind configuration (defaults to :meth:`ListenerConfig.from_env`).
+            config: bind configuration.
             raise_on_policy: when True, a policy violation raises
                 :class:`SecurityError` instead of returning an error dict.
         """
@@ -414,7 +465,7 @@ class RemoteListener:
                     ),
                 }
 
-            cfg = config if config is not None else ListenerConfig.from_env()
+            cfg = config
             policy = resolve_security_policy(cfg)
 
             if not policy.allowed:
@@ -577,9 +628,7 @@ class RemoteListener:
                 "message": "hrpyc listener stopped.",
             }
 
-    def reload(
-        self, config: ListenerConfig | None = None, *, raise_on_policy: bool = False
-    ) -> dict[str, Any]:
+    def reload(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Stop (if running) and start again with *config*. Idempotent restart.
 
         The result is ``start()``'s, carrying ``stop()``'s under ``"stop"``: a
@@ -606,7 +655,7 @@ class RemoteListener:
             "host": self._config.host,
             "port": self._config.port,
             "bound_port": self._bound_port,
-            "local_ip": _detect_local_ip(),
+            **_local_ip_fields(),
             "loopback_only": policy.loopback_only,
             "authenticated": policy.authenticated,
             "security": policy.as_dict(),
@@ -667,22 +716,26 @@ class RemoteListener:
                 "answering. The underlying server may have died (stale listener)."
             )
 
-        hou = self._resolve_hou()
+        # [LAW:no-silent-failure] a Houdini that cannot be asked its version, a
+        # ``hou`` that does not import included, is a warning with the cause.
         houdini_version: str | None = None
         houdini_version_tuple: list[int] | None = None
-        if hou is not None:
-            try:
-                houdini_version = hou.applicationVersionString()
-                houdini_version_tuple = list(hou.applicationVersion())
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"Could not read Houdini version: {exc}")
+        try:
+            hou = self._resolve_hou()
+            houdini_version = hou.applicationVersionString()
+            houdini_version_tuple = list(hou.applicationVersion())
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Could not read Houdini version: {exc}")
 
-        local_ip = _detect_local_ip()
+        ip_fields = _local_ip_fields()
+        if ip_fields["local_ip_error"] is not None:
+            warnings.append(ip_fields["local_ip_error"])
         bound_endpoints = [f"{cfg.host}:{bound_port}"]
-        if not policy.loopback_only and not is_wildcard_host(cfg.host):
-            bound_endpoints.append(f"{local_ip}:{bound_port}")
-        elif is_wildcard_host(cfg.host):
-            bound_endpoints.append(f"{local_ip}:{bound_port} (via {cfg.host})")
+        # The machine's IPv4 address reaches an IPv4 wildcard bind and nothing
+        # else that is reported here: a specific bind is reachable only where
+        # it is bound, and detect_local_ip() knows nothing of an IPv6 socket.
+        if ip_fields["local_ip"] is not None and cfg.host == IPV4_WILDCARD_HOST:
+            bound_endpoints.append(f"{ip_fields['local_ip']}:{bound_port} (via {cfg.host})")
 
         return {
             "running": True,
@@ -692,7 +745,7 @@ class RemoteListener:
             "port": cfg.port,
             "bound_port": bound_port,
             "bound_endpoints": bound_endpoints,
-            "local_ip": local_ip,
+            **ip_fields,
             "loopback_only": policy.loopback_only,
             "authenticated": policy.authenticated,
             "security": policy.as_dict(),

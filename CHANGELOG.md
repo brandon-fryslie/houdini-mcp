@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Plugin config and lifecycle failures surface with their cause**
+  (houdini-laws-etg.o3a): `ListenerConfig.from_env` and the **Start Remote**
+  port prompt parse their input through `listener.parse_port` /
+  `listener.parse_flag`, which refuse anything that is not a port or a flag with
+  a `ValueError` naming the setting and the value; neither falls back to 18811
+  or to "off" any more. `self_test()` reports a `hou` that does not import as a
+  "Could not read Houdini version" warning with the cause. `status()` and
+  `self_test()` of a running listener carry both `local_ip` and
+  `local_ip_error`: the address with `local_ip_error: None`, or `local_ip: None`
+  beside the cause, in place of the former "localhost" stand-in. `self_test()` lists the machine's address
+  among `bound_endpoints` only for a `0.0.0.0` bind, the one bind it is known
+  to reach. `RemoteListener.start()`/`reload()` take their config; the
+  environment is read by the `remote` facade.
+
 - **`execute_code` read-only is an allowlist**: under `policy="read-only"` the
   program may name only recognized inspection APIs (navigation, parameter
   reads, flags, wiring, geometry reads), a fixed set of pure stdlib modules and
