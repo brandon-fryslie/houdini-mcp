@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connection failure has one definition each of classification, retry and error**
+  (houdini-laws-etg.c3b): the in-use failure set is the one union `TransportException`,
+  which is both the check `transport_failure()` runs and the type of the proof it
+  returns; opening a link is the one retry policy (`_open_link_with_retries`); and the
+  tool decorator's `_tool_error_response` is the one caller-facing error. Removed as
+  dead, with their tests: the never-applied `retry_with_backoff` decorator,
+  `safe_execute`, `SafeExecutionResult`, `execute_with_timeout`,
+  `HoudiniOperationTimeout`, `HoudiniOperationError`, the module thread pool, and the
+  unused `DEFAULT_TIMEOUT` / `DEFAULT_OPERATION_TIMEOUT` constants.
+
 - **Connection state has one owner** (houdini-laws-etg.bfq): `connection.py`'s
   module globals (`_connection`, `_hou`, `_target`, `_executor`) are replaced by
   `HoudiniConnection`, which holds the target and at most one `Link` (target, host,

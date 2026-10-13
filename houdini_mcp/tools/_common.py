@@ -14,14 +14,12 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from ..connection import (
-    DEFAULT_OPERATION_TIMEOUT,
     HoudiniConnectionError,
     TransportFailure,
     disconnect,
     ensure_connected,
     ensure_link,
     is_connected,
-    safe_execute,
     transport_failure,
 )
 from .hscript import HscriptBatch
@@ -36,8 +34,6 @@ __all__ = [
     "is_connected",
     "HoudiniConnectionError",
     "disconnect",
-    "safe_execute",
-    "DEFAULT_OPERATION_TIMEOUT",
     # Error handling
     "handle_connection_errors",  # Decorator for consistent error handling
     # Output utilities

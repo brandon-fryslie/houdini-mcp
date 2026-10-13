@@ -6,7 +6,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
-import concurrent.futures
 import importlib
 import logging
 import random
@@ -14,23 +13,17 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import wraps
-from typing import Any, NamedTuple, TypeVar
+from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
 
 logger = logging.getLogger("houdini_mcp.connection")
 
-# Type variable for generic retry decorator
-F = TypeVar("F", bound=Callable[..., Any])
-
 # Connection configuration
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1.0  # seconds
 DEFAULT_MAX_DELAY = 30.0  # maximum delay cap
-DEFAULT_TIMEOUT = 10.0  # seconds
 DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - reduced from 60
-DEFAULT_OPERATION_TIMEOUT = 45.0  # max time for any single tool operation
 
 # [LAW:types-are-the-program] Exactly what rpyc's channel raises when a link to
 # Houdini fails in use: EOFError, or TimeoutError (rpyc's AsyncResultTimeout) when a
@@ -38,7 +31,9 @@ DEFAULT_OPERATION_TIMEOUT = 45.0  # max time for any single tool operation
 # rpyc's SocketStream wraps every socket error it meets on read or write, so no
 # ConnectionError ever crosses the channel. Not OSError: that admits
 # FileNotFoundError and PermissionError, which are the tool's errors, not the link's.
-_TRANSPORT_EXCEPTIONS = (EOFError, TimeoutError)
+# [LAW:one-source-of-truth] The same union is the ``isinstance`` check and the type of
+# the proof it yields, so the two cannot disagree.
+TransportException = EOFError | TimeoutError
 
 
 @dataclass(frozen=True)
@@ -50,7 +45,7 @@ class TransportFailure:
     report connection loss.
     """
 
-    exc: EOFError | TimeoutError
+    exc: TransportException
 
 
 def _raised_inside_houdini(exc: BaseException) -> bool:
@@ -60,7 +55,7 @@ def _raised_inside_houdini(exc: BaseException) -> bool:
 
 
 def _rpyc_transport_failure(exc: BaseException) -> TransportFailure | None:
-    if isinstance(exc, _TRANSPORT_EXCEPTIONS) and not _raised_inside_houdini(exc):
+    if isinstance(exc, TransportException) and not _raised_inside_houdini(exc):
         return TransportFailure(exc)
     return None
 
@@ -95,12 +90,6 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
 
 class HoudiniConnectionError(Exception):
     """Raised when unable to connect to Houdini."""
-
-    pass
-
-
-class HoudiniOperationError(Exception):
-    """Raised when a Houdini operation fails."""
 
     pass
 
@@ -456,77 +445,6 @@ def use_houdini(target: HoudiniTarget) -> None:
     _houdini.use(target)
 
 
-def retry_with_backoff(
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    base_delay: float = DEFAULT_RETRY_DELAY,
-    max_delay: float = DEFAULT_MAX_DELAY,
-    exponential_base: float = 2.0,
-    jitter: bool = True,
-    retryable_exceptions: tuple[type[Exception], ...] = _TRANSPORT_EXCEPTIONS,
-) -> Callable[[F], F]:
-    """
-    Decorator that retries a function with exponential backoff and optional jitter.
-
-    This prevents thundering herd problems when multiple clients try to reconnect
-    simultaneously, and provides graceful degradation under load.
-
-    Args:
-        max_retries: Maximum number of retry attempts (default: 3)
-        base_delay: Initial delay in seconds (default: 1.0)
-        max_delay: Maximum delay cap in seconds (default: 30.0)
-        exponential_base: Base for exponential backoff (default: 2.0)
-        jitter: If True, add random jitter to prevent thundering herd (default: True)
-        retryable_exceptions: Tuple of exception types that trigger retry
-
-    Returns:
-        Decorated function that retries on specified exceptions
-
-    Example:
-        @retry_with_backoff(max_retries=5, jitter=True)
-        def connect_to_houdini():
-            ...
-    """
-
-    def decorator(func: F) -> F:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            last_exception: Exception | None = None
-            current_delay = base_delay
-
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except retryable_exceptions as e:
-                    last_exception = e
-
-                    if attempt < max_retries - 1:
-                        # Calculate delay with exponential backoff
-                        delay = min(current_delay, max_delay)
-
-                        # Add jitter to prevent thundering herd
-                        if jitter:
-                            # Add up to 10% random jitter
-                            delay += random.uniform(0, delay * 0.1)
-
-                        logger.warning(
-                            f"Attempt {attempt + 1}/{max_retries} failed: {e}. "
-                            f"Retrying in {delay:.2f}s..."
-                        )
-                        time.sleep(delay)
-                        current_delay *= exponential_base
-                    else:
-                        logger.error(f"All {max_retries} attempts failed. Last error: {e}")
-
-            # Re-raise the last exception after all retries exhausted
-            if last_exception:
-                raise last_exception
-            return None  # Should never reach here
-
-        return wrapper  # type: ignore
-
-    return decorator
-
-
 def connect(
     host: str = "localhost",
     port: int = 18811,
@@ -636,163 +554,3 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     except Exception as e:
         logger.debug(f"Ping failed: {e}")
         return False
-
-
-class HoudiniOperationTimeout(Exception):
-    """Raised when a Houdini operation times out."""
-
-    pass
-
-
-class SafeExecutionResult:
-    """Result wrapper for safe_execute operations."""
-
-    def __init__(
-        self,
-        success: bool,
-        result: Any = None,
-        error: str | None = None,
-        error_type: str | None = None,
-        timed_out: bool = False,
-        connection_lost: bool = False,
-    ):
-        self.success = success
-        self.result = result
-        self.error = error
-        self.error_type = error_type
-        self.timed_out = timed_out
-        self.connection_lost = connection_lost
-
-    def to_error_dict(self, operation: str) -> dict[str, Any]:
-        """Convert to standardized error response dict."""
-        if self.timed_out:
-            message = (
-                f"Operation '{operation}' timed out. Houdini may be processing heavy geometry. "
-                "Try with less data or simpler operations."
-            )
-        elif self.connection_lost:
-            message = (
-                f"Connection to Houdini was lost during '{operation}'. "
-                "The connection will be re-established on the next call."
-            )
-        else:
-            message = f"Operation '{operation}' failed: {self.error}"
-
-        return {
-            "status": "error",
-            "error_type": self.error_type or "operation_error",
-            "message": message,
-            "operation": operation,
-            "timed_out": self.timed_out,
-            "connection_lost": self.connection_lost,
-            "recoverable": True,
-        }
-
-
-# Thread pool for controlled execution with timeouts; its threads start on first use.
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="houdini_rpc")
-
-
-def _finished_within(future: concurrent.futures.Future[Any], timeout: float) -> bool:
-    """Whether ``future`` settled before our own deadline; if not, it is cancelled.
-
-    [LAW:types-are-the-program] [LAW:single-enforcer] The deadline is a fact about the
-    future, not an exception type: since 3.11 ``concurrent.futures.TimeoutError`` *is*
-    ``TimeoutError``, so catching it would also claim a TimeoutError the operation
-    itself raised. An rpyc call already running cannot be cancelled; the cancel is
-    for work still queued.
-    """
-    done = future in concurrent.futures.wait([future], timeout=timeout).done
-    if not done:
-        never_started = future.cancel()
-        logger.warning(
-            f"Deadline of {timeout}s passed; the work "
-            f"{'never started' if never_started else 'is still running on the link'}"
-        )
-    return done
-
-
-def safe_execute(
-    func: Callable[..., Any],
-    *args: Any,
-    timeout: float = DEFAULT_OPERATION_TIMEOUT,
-    operation_name: str = "unknown",
-    **kwargs: Any,
-) -> SafeExecutionResult:
-    """
-    Execute a function with timeout protection and connection error handling.
-
-    This wraps any Houdini RPC operation to ensure:
-    1. It cannot hang indefinitely (controlled timeout)
-    2. Connection errors are caught and reported cleanly
-    3. The connection is torn down only when the link itself failed or the deadline
-       passed; any other failure leaves it standing
-
-    Args:
-        func: The function to execute
-        *args: Arguments to pass to the function
-        timeout: Maximum execution time in seconds
-        operation_name: Name of the operation for error messages
-        **kwargs: Keyword arguments to pass to the function
-
-    Returns:
-        SafeExecutionResult with success/failure info
-    """
-    future = _executor.submit(func, *args, **kwargs)
-    if not _finished_within(future, timeout):
-        logger.error(f"Operation '{operation_name}' timed out after {timeout}s")
-        # Clean up the potentially broken connection
-        disconnect()
-        return SafeExecutionResult(
-            success=False,
-            error=f"Timed out after {timeout} seconds",
-            error_type="timeout",
-            timed_out=True,
-        )
-
-    try:
-        return SafeExecutionResult(success=True, result=future.result())
-    except Exception as e:
-        failure = transport_failure(e)
-        if failure is None:
-            logger.error(f"Error during '{operation_name}': {type(e).__name__}: {e}")
-            return SafeExecutionResult(success=False, error=str(e), error_type=type(e).__name__)
-        logger.error(f"Connection lost during '{operation_name}': {type(e).__name__}: {e}")
-        disconnect()
-        return SafeExecutionResult(
-            success=False,
-            error=str(e),
-            error_type="connection_error",
-            connection_lost=True,
-        )
-
-
-def execute_with_timeout(
-    func: Callable[..., Any],
-    *args: Any,
-    timeout: float = DEFAULT_OPERATION_TIMEOUT,
-    **kwargs: Any,
-) -> Any:
-    """
-    Execute a function with a timeout, raising HoudiniOperationTimeout if exceeded.
-
-    Unlike safe_execute, this raises exceptions rather than returning a result object.
-    Use this for internal operations where you want to handle the exception yourself.
-
-    Args:
-        func: Function to execute
-        *args: Arguments to pass
-        timeout: Maximum execution time in seconds
-        **kwargs: Keyword arguments to pass
-
-    Returns:
-        The function result
-
-    Raises:
-        HoudiniOperationTimeout: If the operation times out
-        Various exceptions: If the operation fails for other reasons
-    """
-    future = _executor.submit(func, *args, **kwargs)
-    if not _finished_within(future, timeout):
-        raise HoudiniOperationTimeout(f"Operation timed out after {timeout} seconds")
-    return future.result()
