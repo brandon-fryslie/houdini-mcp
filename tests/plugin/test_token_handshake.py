@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import closing
 
@@ -99,6 +100,31 @@ class TestSharedHandshake:
         # decides immediately; no timer on either side is involved.
         with pytest.raises(handshake.HandshakeError, match="closed the connection"):
             handshake.connect("127.0.0.1", tokened_server, token=mistyped)
+
+    def test_stalled_clients_are_disconnected_and_their_threads_released(
+        self, tokened_server, short_handshake
+    ):
+        # [LAW:no-ambient-temporal-coupling] houdini-laws-etg.ml7: the handshake's
+        # deadline is HANDSHAKE_TIMEOUT, owned by the handshake, not the peer. rpyc
+        # runs the authenticator on a per-connection thread, so a client that
+        # announces a token and never finishes sending it must be dropped by the
+        # deadline, or N such clients pin N threads of the RCE listener forever.
+        baseline = threading.active_count()
+        stalled = [socket.create_connection(("127.0.0.1", tokened_server)) for _ in range(5)]
+        try:
+            for sock in stalled:
+                sock.sendall(b"\x00\x07hu")  # announces 7 bytes, sends 2, never closes
+            for sock in stalled:
+                sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
+                assert sock.recv(1) == b""  # the listener gave up and closed
+        finally:
+            for sock in stalled:
+                sock.close()
+        for _ in range(50):  # rpyc closes the socket before its thread exits
+            if threading.active_count() == baseline:
+                break
+            time.sleep(0.05)
+        assert threading.active_count() == baseline
 
     def test_no_token_is_the_empty_exchange(self):
         assert handshake.exchange(None) == (b"", b"")
