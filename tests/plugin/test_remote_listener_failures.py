@@ -336,7 +336,20 @@ class TestReportedCauses:
             f"0.0.0.0:{free_port}",
             f"192.0.2.7:{free_port} (via 0.0.0.0)",
         ]
-        assert "local_ip_error" not in report
+        assert report["local_ip_error"] is None
+
+    def test_local_ip_is_not_claimed_for_an_ipv6_wildcard_bind(
+        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+    ):
+        # detect_local_ip() is IPv4; whether a "::" socket also serves IPv4 is
+        # the platform's choice, so the report does not claim it.
+        monkeypatch.setattr(listener_module, "detect_local_ip", lambda: "192.0.2.7")
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="::", port=free_port, trusted_network=True))
+
+        report = listener.self_test()
+        assert report["local_ip"] == "192.0.2.7"
+        assert report["bound_endpoints"] == [f":::{free_port}"]
 
 
 # ---------------------------------------------------------------------------

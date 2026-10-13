@@ -27,8 +27,9 @@ import logging
 import os
 import socket
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
@@ -62,25 +63,26 @@ DEFAULT_PORT = 18811
 # Hosts that only accept connections from the local machine.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Hosts that bind every interface (wildcard).
-_WILDCARD_HOSTS = {"0.0.0.0", "::"}
+IPV4_WILDCARD_HOST = "0.0.0.0"
+_WILDCARD_HOSTS = {IPV4_WILDCARD_HOST, "::"}
+T = TypeVar("T")
 
 
 # [LAW:parse-dont-validate] configuration text crosses into the program through
 # these two parsers and nowhere else; what they refuse names the setting and the
 # value, and nothing downstream sees a substituted default.
 _TRUE_FLAGS = {"1", "true", "yes", "on"}
-_FALSE_FLAGS = {"", "0", "false", "no", "off"}
+_FALSE_FLAGS = {"0", "false", "no", "off"}
 
 
 def parse_port(text: str, source: str) -> int:
     """The TCP port *text* names, or ValueError saying what *source* held instead."""
-    try:
-        port = int(text)
-    except ValueError:
-        port = -1
-    if not 0 <= port <= 65535:
-        raise ValueError(f"{source}={text!r} is not a TCP port (an integer from 0 to 65535)")
-    return port
+    digits = text.strip()
+    # A port is ASCII digits; int() alone would also read "1_8811", "+1" and
+    # non-ASCII numerals, rewriting a typo into a port nobody typed.
+    if digits.isascii() and digits.isdigit() and (port := int(digits)) <= 65535:
+        return port
+    raise ValueError(f"{source}={text!r} is not a TCP port (an integer from 0 to 65535)")
 
 
 def parse_flag(text: str, source: str) -> bool:
@@ -93,6 +95,21 @@ def parse_flag(text: str, source: str) -> bool:
     raise ValueError(
         f"{source}={text!r} is not a flag (one of {sorted(_TRUE_FLAGS)} or {sorted(_FALSE_FLAGS)})"
     )
+
+
+def _env_setting(name: str, parse: Callable[[str, str], T], default: T) -> T:
+    """The variable *name* read through *parse*, or *default* when it is unset or blank.
+
+    [LAW:single-enforcer] "unset or empty means the default" is decided here for
+    every listener variable; the parsers themselves refuse an empty value.
+    """
+    text = os.getenv(name, "")
+    return parse(text, name) if text.strip() else default
+
+
+def _env_text(text: str, _name: str) -> str:
+    """The identity parser: a host is any text; the socket is where it is checked."""
+    return text
 
 
 def is_loopback_host(host: str) -> bool:
@@ -210,12 +227,9 @@ class ListenerConfig:
                 message names the variable and the value. An unset or empty
                 variable is its default.
         """
-        host = os.getenv("HOUDINI_RPC_BIND_HOST", DEFAULT_HOST)
-        port_text = os.getenv("HOUDINI_RPC_BIND_PORT", "")
-        port = parse_port(port_text, "HOUDINI_RPC_BIND_PORT") if port_text else DEFAULT_PORT
-        trusted = parse_flag(
-            os.getenv("HOUDINI_RPC_TRUSTED_NETWORK", ""), "HOUDINI_RPC_TRUSTED_NETWORK"
-        )
+        host = _env_setting("HOUDINI_RPC_BIND_HOST", _env_text, DEFAULT_HOST)
+        port = _env_setting("HOUDINI_RPC_BIND_PORT", parse_port, DEFAULT_PORT)
+        trusted = _env_setting("HOUDINI_RPC_TRUSTED_NETWORK", parse_flag, False)
         return cls(host=host, port=port, trusted_network=trusted, token=token_from_env())
 
 
@@ -327,13 +341,13 @@ def detect_local_ip() -> str:
 
 
 def _local_ip_fields() -> dict[str, Any]:
-    """The ``local_ip`` a report carries: the address, or None beside the cause.
+    """The ``local_ip`` and ``local_ip_error`` a report carries: the address, or None beside the cause.
 
     [LAW:no-silent-failure] a detection that failed is reported as that, never
     as a stand-in address an operator would try to connect to.
     """
     try:
-        return {"local_ip": detect_local_ip()}
+        return {"local_ip": detect_local_ip(), "local_ip_error": None}
     except OSError as exc:
         return {"local_ip": None, "local_ip_error": f"local IP detection failed: {exc}"}
 
@@ -710,15 +724,14 @@ class RemoteListener:
             warnings.append(f"Could not read Houdini version: {exc}")
 
         ip_fields = _local_ip_fields()
-        local_ip = ip_fields["local_ip"]
-        if local_ip is None:
+        if ip_fields["local_ip_error"] is not None:
             warnings.append(ip_fields["local_ip_error"])
         bound_endpoints = [f"{cfg.host}:{bound_port}"]
-        # A network-exposed listener is also reachable at the machine's address,
-        # when that address is known.
-        if local_ip is not None and not policy.loopback_only:
-            via = f" (via {cfg.host})" if is_wildcard_host(cfg.host) else ""
-            bound_endpoints.append(f"{local_ip}:{bound_port}{via}")
+        # The machine's IPv4 address reaches an IPv4 wildcard bind and nothing
+        # else that is reported here: a specific bind is reachable only where
+        # it is bound, and detect_local_ip() knows nothing of an IPv6 socket.
+        if ip_fields["local_ip"] is not None and cfg.host == IPV4_WILDCARD_HOST:
+            bound_endpoints.append(f"{ip_fields['local_ip']}:{bound_port} (via {cfg.host})")
 
         return {
             "running": True,

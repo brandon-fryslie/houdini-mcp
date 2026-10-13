@@ -16,9 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `ValueError` naming the setting and the value; neither falls back to 18811
   or to "off" any more. `self_test()` reports a `hou` that does not import as a
   "Could not read Houdini version" warning with the cause. `status()` and
-  `self_test()` carry `local_ip: None` beside a `local_ip_error` when the
-  machine's address could not be detected, in place of the former "localhost"
-  stand-in. `RemoteListener.start()`/`reload()` take their config; the
+  `self_test()` always carry both `local_ip` and `local_ip_error`: the address
+  with `local_ip_error: None`, or `local_ip: None` beside the cause, in place
+  of the former "localhost" stand-in. `self_test()` lists the machine's address
+  among `bound_endpoints` only for a `0.0.0.0` bind, the one bind it is known
+  to reach. `RemoteListener.start()`/`reload()` take their config; the
   environment is read by the `remote` facade.
 
 - **Listener depends on a declared server contract that real hrpyc satisfies**

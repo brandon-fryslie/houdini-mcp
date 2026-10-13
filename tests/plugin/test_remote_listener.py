@@ -15,9 +15,11 @@ real Houdini or ``hrpyc`` is required.
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 from houdini_mcp_plugin.listener import (
+    DEFAULT_HOST,
     DEFAULT_PORT,
     ListenerConfig,
     RemoteListener,
@@ -84,26 +86,43 @@ class TestSecurityPolicy:
 class TestConfigParsing:
     """Configuration text is parsed once; what cannot be meant is refused with the cause."""
 
-    @pytest.mark.parametrize(("text", "port"), [("0", 0), ("18811", 18811), ("65535", 65535)])
+    @pytest.mark.parametrize(
+        ("text", "port"), [("0", 0), ("18811", 18811), (" 18811\n", 18811), ("65535", 65535)]
+    )
     def test_parse_port_accepts_every_tcp_port(self, text, port):
         assert parse_port(text, "HOUDINI_RPC_BIND_PORT") == port
 
-    @pytest.mark.parametrize("text", ["", "abc", "-1", "65536", "18811.0", "0x1"])
+    # int() reads "1_8811", "+1" and non-ASCII numerals; a port is ASCII digits only.
+    @pytest.mark.parametrize(
+        "text", ["", " ", "abc", "-1", "+1", "1_8811", "\u0661\u0668", "65536", "18811.0", "0x1"]
+    )
     def test_parse_port_refuses_what_is_not_a_port(self, text):
-        with pytest.raises(ValueError, match=f"HOUDINI_RPC_BIND_PORT={text!r} is not a TCP port"):
+        with pytest.raises(
+            ValueError, match=re.escape(f"HOUDINI_RPC_BIND_PORT={text!r} is not a TCP port")
+        ):
             parse_port(text, "HOUDINI_RPC_BIND_PORT")
 
     @pytest.mark.parametrize(
         ("text", "flag"),
         [("1", True), ("true", True), (" Yes ", True), ("on", True)]
-        + [("", False), ("0", False), ("false", False), ("No", False), ("off", False)],
+        + [("0", False), ("false", False), ("No", False), ("off", False)],
     )
     def test_parse_flag_reads_both_spellings(self, text, flag):
         assert parse_flag(text, "HOUDINI_RPC_TRUSTED_NETWORK") is flag
 
-    def test_parse_flag_refuses_an_unknown_word(self):
-        with pytest.raises(ValueError, match="HOUDINI_RPC_TRUSTED_NETWORK='maybe' is not a flag"):
-            parse_flag("maybe", "HOUDINI_RPC_TRUSTED_NETWORK")
+    @pytest.mark.parametrize("text", ["maybe", ""])
+    def test_parse_flag_refuses_an_unknown_word(self, text):
+        with pytest.raises(
+            ValueError, match=re.escape(f"HOUDINI_RPC_TRUSTED_NETWORK={text!r} is not a flag")
+        ):
+            parse_flag(text, "HOUDINI_RPC_TRUSTED_NETWORK")
+
+    def test_from_env_reads_a_blank_variable_as_its_default(self, monkeypatch):
+        monkeypatch.setenv("HOUDINI_RPC_BIND_HOST", "")
+        monkeypatch.setenv("HOUDINI_RPC_BIND_PORT", " ")
+        monkeypatch.setenv("HOUDINI_RPC_TRUSTED_NETWORK", "")
+        cfg = ListenerConfig.from_env()
+        assert (cfg.host, cfg.port, cfg.trusted_network) == (DEFAULT_HOST, DEFAULT_PORT, False)
 
     def test_from_env_refuses_an_invalid_port_instead_of_defaulting(self, monkeypatch):
         monkeypatch.setenv("HOUDINI_RPC_BIND_PORT", "188l1")
