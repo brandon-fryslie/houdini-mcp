@@ -84,11 +84,11 @@ TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "manage_cache": TransactionPolicy.READS_ONLY,
     "new_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
     "ping_houdini": TransactionPolicy.READS_ONLY,
-    # Render tools write files and create temporary scene nodes; checkpointing
-    # covers the scene component while side_effects records the output files.
-    "render_quad_view": TransactionPolicy.CHECKPOINT_REQUIRED,
+    # Render tools leave the scene as they found it; what they do outside the
+    # scene is write and read back image files on the Houdini machine.
+    "render_quad_view": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "render_node_network": TransactionPolicy.READS_ONLY,
-    "render_viewport": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "render_viewport": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "reorder_inputs": TransactionPolicy.UNDOABLE,
     "save_scene": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "serialize_scene": TransactionPolicy.READS_ONLY,

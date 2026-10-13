@@ -895,28 +895,6 @@ class TestRenderLeavesSceneUnchanged:
         assert "OpenGL ROP: no display" in str(result), result
         assert self._scene(render_raises) == before
 
-    def test_quad_view_connection_loss_is_not_a_view_error(
-        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The link dying mid-view ends the call as connection loss, not as a view that failed."""
-        from houdini_mcp.tools import render_quad_view
-        from tests.conftest import MockHouNode
-
-        renders = 0
-
-        def render(self: Any) -> None:
-            nonlocal renders
-            renders += 1
-            raise EOFError("stream has been closed")
-
-        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
-
-        result = render_quad_view(host="localhost", port=18811)
-
-        assert result["error_type"] == "connection_error", result
-        assert result["operation"] == "render_quad_view"
-        assert renders == 1
-
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"resolution": [0, 0]}])
     def test_a_bad_input_creates_nothing(
@@ -938,12 +916,9 @@ class TestRenderLeavesSceneUnchanged:
         assert result["status"] == "error", result
         assert created == []
 
-    @pytest.mark.parametrize("tool", TOOLS)
-    def test_every_node_is_destroyed_even_when_one_destroy_fails(
-        self, render_raises: Any, tool: str, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """One destroy raising does not spare the others; the failure is reported."""
-        import houdini_mcp.tools as tools
+    @pytest.fixture
+    def camera_refuses_to_go(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Destroying the temporary camera fails; every other node destroys normally."""
         from tests.conftest import MockHouNode
 
         original = MockHouNode.destroy
@@ -953,29 +928,81 @@ class TestRenderLeavesSceneUnchanged:
                 raise RuntimeError("camera is locked")
             original(self)
 
-        before = {
-            ctx: [name for _, name in nodes] for ctx, nodes in self._scene(render_raises).items()
-        }
-        with (
-            patch.object(MockHouNode, "destroy", destroy),
-            caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"),
-        ):
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+    @staticmethod
+    def _names(scene: dict[str, list[tuple[int, str]]]) -> dict[str, list[str]]:
+        return {ctx: [name for _, name in nodes] for ctx, nodes in scene.items()}
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_every_node_is_destroyed_even_when_one_destroy_fails(
+        self,
+        rendering_scene: Any,
+        camera_refuses_to_go: None,
+        tool: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """One destroy raising spares none of the others; the failure is the result and an event."""
+        import houdini_mcp.tools as tools
+
+        prefix = {"render_viewport": "_mcp_", "render_quad_view": "_mcp_quad_"}[tool]
+        cam = f"{prefix}render_cam"
+        before = self._names(self._scene(rendering_scene))
+        with caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"):
             result = getattr(tools, tool)(host="localhost", port=18811)
 
         assert result["status"] == "error", result
-        assert "camera is locked" in str(result), result
+        assert result["message"] == "camera is locked", result
         # The locked camera is the one node left behind; null and ROP are gone.
-        after = {
-            ctx: [name for _, name in nodes] for ctx, nodes in self._scene(render_raises).items()
-        }
-        cam = {"render_viewport": "_mcp_render_cam", "render_quad_view": "_mcp_quad_render_cam"}[
-            tool
-        ]
+        after = self._names(self._scene(rendering_scene))
         assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
-        removed = [
-            r.getMessage() for r in caplog.records if "temporary render nodes" in r.getMessage()
+        events = [r for r in caplog.records if "temporary render node" in r.getMessage()]
+        assert [(r.levelname, r.getMessage()) for r in events] == [
+            (
+                "ERROR",
+                f"Failed to destroy temporary render node /obj/{cam}: RuntimeError('camera is locked')",
+            ),
+            (
+                "DEBUG",
+                f"Removed temporary render nodes: ['/out/{prefix}opengl_rop', '/obj/{prefix}cam_center']",
+            ),
         ]
-        assert len(removed) == 1 and cam not in removed[0], removed
+
+    def test_the_render_failure_outranks_a_destroy_failure(
+        self, render_raises: Any, camera_refuses_to_go: None
+    ) -> None:
+        """The caller hears what broke the render; the node that refused to go is a note on it."""
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "error", result
+        assert result["message"] == "OpenGL ROP: no display", result
+        assert (
+            "also failed to destroy temporary render node /obj/_mcp_render_cam: "
+            "RuntimeError('camera is locked')"
+        ) in result["traceback"]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_nothing_is_sent_over_a_failed_link(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """A render that dies with the link ends as connection loss and attempts no destroy."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            raise EOFError("stream has been closed")
+
+        destroyed: list[str] = []
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        monkeypatch.setattr(MockHouNode, "destroy", lambda self: destroyed.append(self.path()))
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["error_type"] == "connection_error", result
+        assert result["operation"] == tool
+        assert destroyed == []
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("outcome", ["success", "failure"])

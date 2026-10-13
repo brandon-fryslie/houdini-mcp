@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Temporary nodes are destroyed by reference, never looked up by name, so a
   user's node that happens to be called `_mcp_render_cam` is no longer
   destroyed by a render. `render_viewport`'s result no longer carries
-  `camera_path`: there is no camera after the call.
+  `camera_path`: there is no camera after the call. Both tools' transaction
+  policy is `external_side_effect`, like the pane screenshots: there is no
+  scene change left to checkpoint.
 
 ### Changed
 

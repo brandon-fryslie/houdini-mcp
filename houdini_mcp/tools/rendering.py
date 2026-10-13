@@ -34,6 +34,22 @@ def _get_remote_modules(host: str, port: int):
     return remote_os, remote_tempfile
 
 
+def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
+    """Destroy every node, last created first; the ones that refused, with why."""
+    removed: list[str] = []
+    failures: list[tuple[str, Exception]] = []
+    for path, node in reversed(created):
+        try:
+            node.destroy()
+        except Exception as e:
+            logger.error("Failed to destroy temporary render node %s: %r", path, e)
+            failures.append((path, e))
+        else:
+            removed.append(path)
+    logger.debug("Removed temporary render nodes: %s", removed)
+    return failures
+
+
 @contextmanager
 def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
     """Nodes that exist only for the duration of one render.
@@ -54,21 +70,18 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
 
     try:
         yield create
-    finally:
-        # [LAW:no-silent-failure] every node gets its destroy whatever happened to
-        # the others'; the first failure is raised once all have been tried, bare,
-        # so connection loss keeps the type the error classifier recognizes, with
-        # the rest attached as notes.
-        removed: list[str] = []
-        failures: list[tuple[str, Exception]] = []
-        for path, node in reversed(created):
-            try:
-                node.destroy()
-            except Exception as e:
-                failures.append((path, e))
-            else:
-                removed.append(path)
-        logger.debug("Removed temporary render nodes: %s", removed)
+    except BaseException as body:
+        # [LAW:no-silent-failure] the body's failure is the one the caller hears,
+        # with its type intact for the error classifier; a node that refused to
+        # go rides along as a note. A link that failed reaches nothing, so nothing
+        # is sent over it: the connection owner tears the link down, and the nodes
+        # are Houdini's to keep.
+        if transport_failure(body) is None:
+            for path, failure in _destroy(created):
+                body.add_note(f"also failed to destroy temporary render node {path}: {failure!r}")
+        raise
+    else:
+        failures = _destroy(created)
         if failures:
             first_path, first = failures[0]
             first.add_note(f"destroying temporary render node {first_path}")
