@@ -11,7 +11,6 @@ import logging
 import os
 import socket
 import threading
-import time
 from collections.abc import Iterator
 from contextlib import closing
 
@@ -59,11 +58,11 @@ def short_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(handshake, "HANDSHAKE_TIMEOUT", 0.3)
 
 
-def _trickle(sock: socket.socket) -> None:
-    """Send one byte well inside each idle window until the listener hangs up."""
+def _trickle(sock: socket.socket, interval: float | None, stop: threading.Event) -> None:
+    """Send one byte every ``interval`` seconds (never, when None) until told to stop
+    or the listener hangs up."""
     try:
-        while True:
-            time.sleep(handshake.HANDSHAKE_TIMEOUT / 3)
+        while not stop.wait(interval):
             sock.sendall(b"h")
     except OSError:
         return  # the listener closed the socket; the test asserts that on its own
@@ -119,33 +118,46 @@ class TestSharedHandshake:
         with pytest.raises(handshake.HandshakeError, match="closed the connection"):
             handshake.connect("127.0.0.1", tokened_server, token=mistyped)
 
-    @pytest.mark.parametrize("stall", ["silent", "trickle"])
+    @pytest.mark.parametrize(
+        "trickle_every",
+        [pytest.param(None, id="silent"), pytest.param(1 / 3, id="trickle")],
+    )
     def test_stalled_clients_are_disconnected_and_their_threads_released(
-        self, tokened_server, short_handshake, stall
+        self, tokened_server, short_handshake, caplog, trickle_every
     ):
         # [LAW:no-ambient-temporal-coupling] houdini-laws-etg.ml7: the handshake's
-        # deadline is HANDSHAKE_TIMEOUT from the first byte, owned by the handshake,
-        # not the peer. rpyc runs the authenticator on a per-connection thread, so
-        # a client that announces a token and never finishes sending it must be
-        # dropped at the deadline, whether it goes silent or keeps one byte
-        # trickling, or N such clients pin N threads of the RCE listener forever.
+        # deadline is HANDSHAKE_TIMEOUT from the moment the listener starts reading,
+        # owned by the handshake, not the peer. rpyc runs the authenticator on a
+        # per-connection thread, so a client that announces a token and never
+        # finishes sending it must be dropped at the deadline, whether it goes
+        # silent or keeps one byte trickling inside every idle window, or N such
+        # clients pin N threads of the RCE listener forever.
+        interval = None if trickle_every is None else trickle_every * handshake.HANDSHAKE_TIMEOUT
         before = set(threading.enumerate())
+        stop = threading.Event()
         stalled = [socket.create_connection(("127.0.0.1", tokened_server)) for _ in range(5)]
         tricklers = [
-            threading.Thread(target=_trickle, args=(sock,), daemon=True) for sock in stalled
+            threading.Thread(target=_trickle, args=(sock, interval, stop), daemon=True)
+            for sock in stalled
         ]
         try:
-            for sock in stalled:
-                sock.sendall(b"\xff\xff")  # announces 65535 bytes
-            if stall == "trickle":
+            with caplog.at_level(logging.INFO, logger="houdini_mcp_handshake"):
+                for sock in stalled:
+                    sock.sendall(b"\xff\xff")  # announces 65535 bytes
                 for thread in tricklers:
                     thread.start()
-            for sock in stalled:
-                sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
-                assert _hung_up(sock)  # the listener gave up at the deadline
+                for sock in stalled:
+                    sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
+                    assert _hung_up(sock)  # the listener gave up at the deadline
         finally:
+            stop.set()
+            for thread in tricklers:
+                thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
             for sock in stalled:
                 sock.close()
+        rejections = [r.getMessage() for r in caplog.records if "left before completing" in r.msg]
+        assert len(rejections) == len(stalled)
+        assert all("did not complete the handshake within" in r for r in rejections)
         for thread in set(threading.enumerate()) - before:
             thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
             assert not thread.is_alive(), f"{thread.name} still alive"
