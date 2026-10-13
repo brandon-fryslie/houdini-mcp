@@ -158,9 +158,12 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
 
     Equivalent to ``rpyc.classic.connect(host, port)`` with the exchange done on
     the socket before the protocol handshake. Raises ``HandshakeError`` when the
-    listener closes the connection on the token, ``TimeoutError`` when nothing
-    acknowledges it within ``HANDSHAKE_TIMEOUT``.
+    listener closes the connection on the token, ``TimeoutError`` when the TCP
+    connect or the acknowledgement takes longer than ``HANDSHAKE_TIMEOUT``.
 
+    Reaching the listener - connect, token, acknowledgement - is bounded here,
+    each step by ``HANDSHAKE_TIMEOUT``, and attempted once: retrying is the
+    connection module's one policy, so no attempt hides inside this one.
     ``sync_request_timeout`` bounds every sync request on the connection, the
     root request the classic service makes while connecting included:
     [LAW:no-ambient-temporal-coupling] it is part of the connection from the
@@ -173,7 +176,10 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
     from rpyc.utils.factory import connect_stream  # noqa: PLC0415
 
     sent, expected = exchange(token)
-    stream = SocketStream.connect(host, port)
+    # [LAW:single-enforcer] rpyc's connect would otherwise retry a connect timeout
+    # six times with backoff under a 3s deadline of its own: a second retry policy
+    # beneath the connection module's, and a bound nobody here owns.
+    stream = SocketStream.connect(host, port, timeout=HANDSHAKE_TIMEOUT, attempts=1)
     try:
         # A failed write is a transport error like any other, retried; only the
         # listener closing after it has read the frame is evidence of rejection.

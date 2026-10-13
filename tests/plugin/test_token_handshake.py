@@ -338,3 +338,27 @@ class TestMcpServerPresentsToken:
         with pytest.raises(connection.HoudiniConnectionError, match="did not acknowledge"):
             connection.connect("houdini-box", 18811, max_retries=2, retry_delay=0.01)
         assert attempts == [TOKEN, TOKEN]
+
+
+class TestReachingTheListenerIsBounded:
+    def test_the_tcp_connect_is_one_attempt_under_the_handshake_deadline(
+        self, short_handshake, monkeypatch
+    ):
+        """A listener whose port swallows the SYN fails the connect after
+        ``HANDSHAKE_TIMEOUT``, tried once: rpyc's own six backoff attempts under a
+        deadline of its own would be a second retry policy beneath the connection
+        module's, and a bound nobody here owns."""
+        from rpyc.core.stream import SocketStream
+
+        attempts: list[dict[str, object]] = []
+
+        def blackholed(host: str, port: int, **kwargs: object) -> None:
+            attempts.append(kwargs)
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(SocketStream, "connect", blackholed)
+        with pytest.raises(TimeoutError):
+            handshake.connect("10.255.255.1", 18811, token=TOKEN, sync_request_timeout=5.0)
+
+        assert attempts == [{"timeout": handshake.HANDSHAKE_TIMEOUT, "attempts": 1}]
+        assert handshake.HANDSHAKE_TIMEOUT == 0.3  # the deadline is read when the call is made

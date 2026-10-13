@@ -259,7 +259,7 @@ class Link:
                 "minor": version_tuple[1],
                 "build": version_tuple[2],
             },
-            "hip_file": self.hou.hipFile.path() or "untitled.hip",
+            "hip_file": self.hou.hipFile.path(),
         }
 
 
@@ -569,18 +569,22 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> str:
+def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> dict[str, Any]:
     """
     Quick connectivity test without maintaining connection.
 
     Args:
         host: Houdini server hostname
         port: Houdini RPC port
-        timeout: How long each of the probe's sync requests may wait (default: 5.0);
-            the TCP connect and token handshake are bounded by the handshake module
+        timeout: How long each of the probe's sync requests may wait (default: 5.0).
+            Reaching the listener - TCP connect, token, acknowledgement - is bounded
+            by the handshake module's ``HANDSHAKE_TIMEOUT``, one attempt, no retry.
 
     Returns:
-        The version string of the Houdini reached.
+        The Houdini reached, as ``Link.info`` records it: the same record
+        ``check_connection`` reports, naming the target the probe actually used.
+        [LAW:one-source-of-truth] a probe never labels its answer with a host:port
+        the connection did not use; in-process the target is this interpreter.
 
     Raises:
         HoudiniConnectionError: naming the target and the cause, when no Houdini
@@ -601,9 +605,9 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> st
     except Exception as e:
         raise unanswered(e) from e
     # The probe's link closes like any other: a close that fails is logged, and
-    # the version Houdini already gave is still the answer.
+    # the record Houdini already gave is still the answer.
     try:
-        return str(link.hou.applicationVersionString())
+        return link.info()
     except Exception as e:
         raise unanswered(e) from e
     finally:

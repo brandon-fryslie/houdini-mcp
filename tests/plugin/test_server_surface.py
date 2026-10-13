@@ -54,7 +54,11 @@ class TestInProcessConnection:
         assert ensure_connected("render-farm", 19999) is in_process_houdini
 
     def test_ping_reaches_houdini_without_a_network(self, in_process_houdini: Any) -> None:
-        assert ping("some-remote-host", 1) == in_process_houdini.applicationVersionString()
+        """The probe's record names the Houdini it reached - this interpreter - never
+        the socket it was asked about and did not use."""
+        probe = ping("some-remote-host", 1)
+        assert probe["target"] == "this interpreter"
+        assert probe["houdini_version"] == in_process_houdini.applicationVersionString()
 
     def test_connection_info_names_this_interpreter_not_a_socket(
         self, in_process_houdini: Any
