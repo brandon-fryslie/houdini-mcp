@@ -4,37 +4,8 @@ This module provides tools for capturing screenshots of Houdini pane tabs
 using Qt's screen grab functionality. Screenshots are returned as base64-encoded
 PNG images.
 
-Available pane types (30 total):
-    - NetworkEditor: Node network editor (default)
-    - SceneViewer: 3D scene viewer
-    - Parm: Parameter editor panel
-    - CompositorViewer: Compositor/COP viewer
-    - ChannelEditor: Animation channel editor
-    - ParmSpreadsheet: Parameter spreadsheet
-    - Textport: Houdini textport/console
-    - PythonShell: Python shell
-    - IPRViewer: Interactive render preview
-    - MaterialPalette: Material palette
-    - AssetBrowser: Asset browser
-    - TreeView: Tree view
-    - DetailsView: Details view
-    - DataTree: Data tree (USD)
-    - SceneGraphTree: Scene graph tree (USD/Solaris)
-    - RenderGallery: Render gallery
-    - ChannelList: Channel list
-    - ChannelViewer: Channel viewer
-    - TakeList: Take list
-    - BundleList: Bundle list
-    - HandleList: Handle list
-    - LightLinker: Light linker
-    - HelpBrowser: Help browser
-    - PerformanceMonitor: Performance monitor
-    - OutputViewer: Output viewer
-    - ShaderViewer: Shader viewer
-    - ApexEditor: APEX graph editor
-    - ContextViewer: Context viewer
-    - EngineSessionSync: Engine session sync
-    - PythonPanel: Python panel
+Pane type names are read from the connected Houdini's ``hou.paneTabType``;
+``list_visible_panes`` returns them under ``available_types``.
 
 Note: Panes on inactive desktops may report -1x-1 geometry and cannot be captured.
 """
@@ -51,41 +22,6 @@ from ._common import (
 )
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
-
-
-# All valid pane type names from hou.paneTabType
-VALID_PANE_TYPES: list[str] = [
-    "ApexEditor",
-    "AssetBrowser",
-    "BundleList",
-    "ChannelEditor",
-    "ChannelList",
-    "ChannelViewer",
-    "CompositorViewer",
-    "ContextViewer",
-    "DataTree",
-    "DetailsView",
-    "EngineSessionSync",
-    "HandleList",
-    "HelpBrowser",
-    "IPRViewer",
-    "LightLinker",
-    "MaterialPalette",
-    "NetworkEditor",
-    "OutputViewer",
-    "Parm",
-    "ParmSpreadsheet",
-    "PerformanceMonitor",
-    "PythonPanel",
-    "PythonShell",
-    "RenderGallery",
-    "SceneGraphTree",
-    "SceneViewer",
-    "ShaderViewer",
-    "TakeList",
-    "Textport",
-    "TreeView",
-]
 
 
 def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
@@ -105,20 +41,33 @@ def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
     return QtWidgets, QtCore, QtGui
 
 
-def _get_available_pane_types(hou: Any) -> list[str]:
-    """
-    Get list of available pane type names from hou.paneTabType enum.
+def pane_type_member(hou: Any, name: str) -> Any | None:
+    """The ``hou.paneTabType`` member ``name`` names, or None when it names no pane type.
 
-    Args:
-        hou: The hou module reference
-
-    Returns:
-        List of pane type names (strings)
+    [LAW:parse-dont-validate] [LAW:single-enforcer] This is the one place a
+    name becomes a pane type: a member whose value is a ``hou.EnumValue``. The
+    enum class's other attributes (SWIG's ``thisown`` flag, the dunders) and a
+    name it lacks are not. The dunders and a missing name are decided here
+    without ``isinstance`` because rpyc 5.3 raises when a value it passed by
+    value (``__doc__`` is None, as is ``getattr``'s default) is checked against
+    a netref class; a member's class id matches the netref's locally, and
+    ``thisown`` is asked of Houdini once.
     """
-    try:
-        return [t for t in dir(hou.paneTabType) if not t.startswith("_") and t != "thisown"]
-    except Exception:
-        return VALID_PANE_TYPES
+    if name.startswith("_"):
+        return None
+    value = getattr(hou.paneTabType, name, None)
+    return value if value is not None and isinstance(value, hou.EnumValue) else None
+
+
+def pane_type_names(hou: Any) -> list[str]:
+    """Every pane type name this Houdini has, read from ``hou.paneTabType``.
+
+    [LAW:one-source-of-truth] Houdini's enum is the one list of pane types: the
+    list a tool advertises and the names an unknown-type error offers both
+    derive from it here, so a new Houdini release cannot leave a hand copy
+    behind.
+    """
+    return [name for name in dir(hou.paneTabType) if pane_type_member(hou, name) is not None]
 
 
 def _fit_pane_contents(pane: Any, pane_type_name: str) -> str | None:
@@ -176,16 +125,21 @@ def _capture_pane_to_bytes(
     Returns:
         Dict with either success data (including raw_bytes) or error info
     """
-    # Get pane type enum
-    pane_type = getattr(hou.paneTabType, pane_type_name, None)
+    # The list of names is read only to answer an unknown name, not on every capture.
+    pane_type = pane_type_member(hou, pane_type_name)
     if pane_type is None:
+        names = pane_type_names(hou)
+        logger.warning(
+            "Unknown pane type %r refused; this Houdini has %d pane types",
+            pane_type_name,
+            len(names),
+        )
         return {
             "status": "error",
             "message": f"Unknown pane type: {pane_type_name}",
-            "available_types": _get_available_pane_types(hou),
+            "available_types": names,
         }
 
-    # Find pane
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
         return {
@@ -275,16 +229,9 @@ def capture_pane_screenshot(
     accessed remotely via RPyC.
 
     Args:
-        pane_type_name: Name of the pane type to capture. Common values:
-            - "NetworkEditor": Node network editor (default)
-            - "SceneViewer": 3D scene viewer
-            - "Parm": Parameter editor panel
-            - "CompositorViewer": Compositor/COP viewer
-            - "IPRViewer": Interactive render preview
-            - "ChannelEditor": Animation channel editor
-            - "ParmSpreadsheet": Parameter spreadsheet
-            - "Textport": Houdini textport/console
-            - "PythonShell": Python shell
+        pane_type_name: Name of the pane type to capture, as ``hou.paneTabType``
+            names it (default: "NetworkEditor"). ``list_visible_panes`` returns
+            every name this Houdini has under ``available_types``.
         save_path: Optional path to save PNG file. If provided, saves to disk
             instead of returning base64. Parent directories are created if needed.
         fit_contents: If True, fit/frame all contents before capture (default: False).
@@ -448,7 +395,7 @@ def list_visible_panes(
         "panes": panes_info,
         "capturable_count": sum(1 for p in panes_info if p["capturable"]),
         "total_count": len(panes_info),
-        "available_types": VALID_PANE_TYPES,
+        "available_types": pane_type_names(hou),
     }
 
 

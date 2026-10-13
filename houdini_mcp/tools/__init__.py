@@ -45,7 +45,6 @@ from .nodes import (
     list_node_types,
 )
 from .pane_screenshot import (
-    VALID_PANE_TYPES,
     capture_multiple_panes,
     capture_pane_screenshot,
     list_visible_panes,
@@ -160,7 +159,6 @@ __all__ = [
     "list_visible_panes",
     "capture_multiple_panes",
     "render_node_network",
-    "VALID_PANE_TYPES",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "RESPONSE_SIZE_LARGE_THRESHOLD",
     "RESPONSE_SIZE_WARNING_THRESHOLD",

@@ -1351,9 +1351,9 @@ def capture_pane_screenshot(
     base64-encoded PNG or saves to disk if save_path provided.
 
     Args:
-        pane_type_name: Pane type to capture (default: "NetworkEditor")
-            Common types: NetworkEditor, SceneViewer, Parm, IPRViewer,
-            CompositorViewer, ChannelEditor, PythonShell, Textport
+        pane_type_name: Pane type to capture, as ``hou.paneTabType`` names it
+            (default: "NetworkEditor"). list_visible_panes() returns every name
+            this Houdini has under ``available_types``.
         save_path: Optional path to save PNG file (returns base64 if not provided)
         fit_contents: If True, fit/frame all contents before capture (default: False).
             When False, captures the current view (what the user is looking at).
