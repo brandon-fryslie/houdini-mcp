@@ -1,82 +1,106 @@
-"""Tests that validate tool contracts and documented examples."""
+"""The MCP contract as a client observes it.
 
-import inspect
+[LAW:behavior-not-structure] Every assertion here is made against what the
+server serves over the protocol: the tool list and input schemas a client
+receives from ``list_tools``, and what ``call_tool`` returns. Nothing reads a
+Python signature, a docstring, or the spelling of an annotation, so a different
+implementation of the same contract passes, and a broken contract fails whatever
+its docstring says.
+
+The documented examples in ``docs/tool-contracts.md`` are a map of that contract
+[LAW:one-source-of-truth]: each call they show is checked against the served
+schema, and each program they hand to ``execute_code`` is run through the served
+tool, so the doc cannot drift from the server.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import pathlib
 import re
+import textwrap
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
+
+import jsonschema
+import pytest
+from fastmcp import Client
+from mcp_types import Tool
+
+from houdini_mcp.server import mcp
+from houdini_mcp.tools.code import VALID_POLICIES
+
+CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
+
+# A markdown heading that presents the example beneath it as a mistake.
+WRONG_EXAMPLE_MARK = "❌"
 
 
-class TestExecuteCodeContract:
-    """Validate execute_code tool contract."""
-
-    def test_execute_code_docstring_mentions_preinjected_hou(self):
-        """Ensure execute_code docstring clearly states hou is pre-injected."""
-        from houdini_mcp.tools import execute_code
-
-        docstring = execute_code.__doc__
-        assert docstring is not None, "execute_code must have a docstring"
-
-        # Check for key phrases
-        docstring_lower = docstring.lower()
-        assert "pre-inject" in docstring_lower or "available" in docstring_lower, (
-            "Docstring must mention that hou is pre-injected or available"
-        )
-
-    def test_execute_code_parameter_types(self):
-        """Validate execute_code parameter type hints."""
-        from houdini_mcp.tools import execute_code
-
-        sig = inspect.signature(execute_code)
-
-        # Check required parameters
-        assert "code" in sig.parameters
-        assert sig.parameters["code"].annotation is str
-
-        # Check optional parameters have correct types
-        assert sig.parameters["capture_diff"].annotation is bool
-        assert sig.parameters["allow_dangerous"].annotation is bool
-        assert sig.parameters["allow_heavy_geometry"].annotation is bool
-
-    def test_detect_import_hou_function_exists(self):
-        """Verify _detect_import_hou helper exists."""
-        from houdini_mcp.tools.code_policy import _detect_import_hou
-
-        assert callable(_detect_import_hou)
-
-    def test_detect_import_hou_catches_basic_import(self):
-        """Test _detect_import_hou catches 'import hou'."""
-        from houdini_mcp.tools.code_policy import _detect_import_hou, parse_code
-
-        assert _detect_import_hou(parse_code("import hou"))
-        assert _detect_import_hou(parse_code("import hou\n"))
-        assert _detect_import_hou(parse_code("import hou  # comment"))
-        assert _detect_import_hou(parse_code("import hou; print('test')"))
-
-    def test_detect_import_hou_catches_from_import(self):
-        """Test _detect_import_hou catches 'from hou import'."""
-        from houdini_mcp.tools.code_policy import _detect_import_hou, parse_code
-
-        assert _detect_import_hou(parse_code("from hou import node"))
-        assert _detect_import_hou(parse_code("from hou import node, parm"))
-
-    def test_detect_import_hou_ignores_safe_code(self):
-        """Test _detect_import_hou doesn't flag safe code."""
-        from houdini_mcp.tools.code_policy import _detect_import_hou, parse_code
-
-        assert not _detect_import_hou(parse_code("hou.node('/obj')"))
-        assert not _detect_import_hou(parse_code("# This uses hou"))
-        assert not _detect_import_hou(parse_code("x = hou.applicationVersion()"))
+@pytest.fixture
+async def served() -> dict[str, Tool]:
+    """Every tool the server serves, by name, as a client lists them."""
+    async with Client(mcp) as client:
+        return {tool.name: tool for tool in await client.list_tools()}
 
 
-class TestRenderViewportContract:
-    """Validate render_viewport tool contract."""
+def accepts(tool: Tool, arguments: dict[str, Any]) -> bool:
+    """Whether the served schema admits this call.
 
-    def test_render_viewport_parameter_names(self):
-        """Ensure render_viewport uses correct parameter names."""
-        from houdini_mcp.tools import render_viewport
+    [LAW:single-enforcer] the schema is the one statement of what a tool accepts;
+    the test asks it rather than restating it as a keyword list.
+    """
+    try:
+        jsonschema.validate(arguments, tool.input_schema)
+    except jsonschema.ValidationError:
+        return False
+    return True
 
-        sig = inspect.signature(render_viewport)
 
-        # Should have these parameters
-        expected_params = {
+# =============================================================================
+# Served schemas
+# =============================================================================
+
+
+class TestServedSchemas:
+    def test_every_served_schema_is_a_json_schema(self, served: dict[str, Tool]) -> None:
+        """What a client receives is a schema it can hand to any JSON Schema validator."""
+        assert served
+        for tool in served.values():
+            schema = tool.input_schema
+            assert json.loads(json.dumps(schema)) == schema, tool.name
+            jsonschema.Draft202012Validator.check_schema(schema)
+
+    def test_execute_code_requires_only_the_program(self, served: dict[str, Tool]) -> None:
+        tool = served["execute_code"]
+        schema = tool.input_schema
+        assert schema["required"] == ["code"]
+        assert accepts(tool, {"code": "hou.node('/obj')"})
+        assert not accepts(tool, {})
+        assert not accepts(tool, {"code": 42})
+        # The Houdini address is the server's, never the caller's.
+        assert not accepts(tool, {"code": "", "host": "elsewhere", "port": 1})
+
+    def test_execute_code_rails_are_opt_in_booleans(self, served: dict[str, Tool]) -> None:
+        tool = served["execute_code"]
+        properties = tool.input_schema["properties"]
+        for flag in ("capture_diff", "allow_dangerous", "allow_heavy_geometry"):
+            assert properties[flag]["type"] == "boolean", flag
+            assert properties[flag]["default"] is False, flag
+            assert not accepts(tool, {"code": "", flag: "yes"}), flag
+
+    def test_execute_code_policy_is_the_closed_domain(self, served: dict[str, Tool]) -> None:
+        """[LAW:parse-dont-validate] a client learns the legal policies from the schema."""
+        tool = served["execute_code"]
+        policy = tool.input_schema["properties"]["policy"]
+        assert policy["enum"] == list(VALID_POLICIES)
+        assert policy["default"] == "normal"
+        assert not accepts(tool, {"code": "", "policy": "yolo"})
+
+    def test_render_viewport_parameters(self, served: dict[str, Tool]) -> None:
+        tool = served["render_viewport"]
+        assert set(tool.input_schema["properties"]) == {
             "camera_position",
             "camera_rotation",
             "look_at",
@@ -87,53 +111,24 @@ class TestRenderViewportContract:
             "orthographic",
             "karma_engine",
         }
+        assert "required" not in tool.input_schema
+        assert accepts(tool, {})
+        # The intuitive-but-wrong spellings the doc warns about are refused on the wire.
+        assert not accepts(tool, {"width": 512, "height": 512})
+        assert not accepts(tool, {"camera_path": "/obj/cam1"})
 
-        actual_params = set(sig.parameters.keys()) - {"host", "port"}
-        assert expected_params == actual_params, (
-            f"render_viewport parameters mismatch. "
-            f"Expected: {expected_params}, Got: {actual_params}"
-        )
+    def test_render_viewport_resolution_is_a_pair_of_integers_or_absent(
+        self, served: dict[str, Tool]
+    ) -> None:
+        tool = served["render_viewport"]
+        assert accepts(tool, {"resolution": [512, 512]})
+        assert accepts(tool, {"resolution": None})
+        assert not accepts(tool, {"resolution": "512x512"})
+        assert not accepts(tool, {"resolution": [512.5, 512]})
 
-        # Should NOT have these (common mistakes)
-        forbidden_params = {"width", "height", "camera_path"}
-        assert not (forbidden_params & actual_params), (
-            f"render_viewport should not have parameters: {forbidden_params & actual_params}"
-        )
-
-    def test_render_viewport_resolution_is_list(self):
-        """Ensure resolution parameter is typed as list."""
-        from houdini_mcp.tools import render_viewport
-
-        sig = inspect.signature(render_viewport)
-        resolution_param = sig.parameters["resolution"]
-
-        # Should be list[int] | None
-        annotation_str = str(resolution_param.annotation)
-        assert "list" in annotation_str.lower() or "none" in annotation_str.lower()
-
-    def test_render_viewport_docstring_documents_resolution_format(self):
-        """Ensure docstring clearly documents resolution as [width, height]."""
-        from houdini_mcp.tools import render_viewport
-
-        docstring = render_viewport.__doc__
-        assert docstring is not None
-
-        # Check for list format documentation
-        assert "[width, height]" in docstring or "width, height" in docstring, (
-            "Docstring must document resolution format"
-        )
-
-
-class TestRenderQuadViewContract:
-    """Validate render_quad_view tool contract."""
-
-    def test_render_quad_view_parameter_names(self):
-        """Ensure render_quad_view has correct parameters."""
-        from houdini_mcp.tools import render_quad_view
-
-        sig = inspect.signature(render_quad_view)
-
-        expected_params = {
+    def test_render_quad_view_parameters(self, served: dict[str, Tool]) -> None:
+        tool = served["render_quad_view"]
+        assert set(tool.input_schema["properties"]) == {
             "resolution",
             "renderer",
             "output_format",
@@ -141,137 +136,104 @@ class TestRenderQuadViewContract:
             "include_perspective",
             "karma_engine",
         }
+        assert "required" not in tool.input_schema
+        assert accepts(tool, {})
 
-        actual_params = set(sig.parameters.keys()) - {"host", "port"}
-        assert expected_params == actual_params
+    def test_no_served_description_teaches_importing_hou(self, served: dict[str, Tool]) -> None:
+        """A program line importing hou in a tool's description would teach the one
+        mistake execute_code refuses; prose that *mentions* the import is not a line of code."""
+        import_line = re.compile(r"^\s*(import hou\b|from hou import\b)", re.MULTILINE)
+        for tool in served.values():
+            assert not import_line.search(tool.description or ""), tool.name
 
 
-class TestDocumentedExamplesValid:
-    """Validate that documented examples follow tool contracts."""
+# =============================================================================
+# Documented examples
+# =============================================================================
 
-    def test_readme_execute_code_example_no_import_hou(self):
-        """Ensure README examples don't use 'import hou'."""
-        import pathlib
 
-        readme_path = pathlib.Path(__file__).parent.parent / "README.md"
-        if not readme_path.exists():
-            return  # Skip if README not found
+@dataclass(frozen=True)
+class DocumentedCall:
+    """One tool call shown in the contracts doc, and whether the doc presents it as correct."""
 
-        readme_content = readme_path.read_text()
+    tool: str
+    arguments: dict[str, Any]
+    correct: bool
+    heading: str
 
-        # Find all code blocks that might use execute_code
-        code_blocks = re.findall(r"```(?:python|bash)?\n(.*?)```", readme_content, re.DOTALL)
 
-        for block in code_blocks:
-            if "execute_code" in block or "hou." in block:
-                # This block references Houdini - check it doesn't import
-                assert "import hou" not in block, (
-                    f"README example incorrectly uses 'import hou':\n{block}"
-                )
+def python_blocks(markdown: str) -> Iterator[tuple[str, str]]:
+    """Each fenced python block with the heading it sits under."""
+    heading = ""
+    for match in re.finditer(
+        r"^(#+[^\n]*)|```python\n(.*?)```", markdown, re.MULTILINE | re.DOTALL
+    ):
+        if match.group(1) is not None:
+            heading = match.group(1)
+        else:
+            yield heading, match.group(2)
 
-    def test_server_py_execute_code_example_no_import_hou(self):
-        """Ensure server.py docstring example doesn't use 'import hou'."""
-        import pathlib
 
-        server_path = pathlib.Path(__file__).parent.parent / "houdini_mcp" / "server.py"
-        assert server_path.exists()
+def documented_calls(markdown: str, served: dict[str, Tool]) -> list[DocumentedCall]:
+    """Every call to a served tool in the doc's python blocks, arguments evaluated.
 
-        content = server_path.read_text()
-
-        # Find execute_code function and its docstring
-        if "def execute_code" in content and "Example:" in content:
-            # Extract the section between execute_code and the next function
-            execute_code_section = content.split("def execute_code")[1]
-            if "Example:" in execute_code_section:
-                example_section = execute_code_section.split("Example:")[1].split("def ")[0]
-                assert "import hou" not in example_section, (
-                    "server.py execute_code example incorrectly uses 'import hou'"
-                )
-
-    def test_examples_directory_no_import_hou(self):
-        """Ensure example Python files don't use 'import hou'."""
-        import pathlib
-
-        examples_dir = pathlib.Path(__file__).parent.parent / "examples"
-        if not examples_dir.exists():
-            return
-
-        for py_file in examples_dir.rglob("*.py"):
-            content = py_file.read_text()
-            assert "import hou" not in content, (
-                f"Example file {py_file.name} incorrectly uses 'import hou'"
+    Positional arguments are matched to the schema's properties in order; a
+    property order is the one a client sees, so the doc can rely on it too.
+    """
+    calls = []
+    for heading, block in python_blocks(markdown):
+        for node in ast.walk(ast.parse(textwrap.dedent(block))):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            if node.func.id not in served:
+                continue
+            properties = served[node.func.id].input_schema["properties"]
+            arguments = dict(
+                zip(properties, (ast.literal_eval(a) for a in node.args), strict=False)
             )
+            arguments.update({kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg})
+            calls.append(
+                DocumentedCall(
+                    tool=node.func.id,
+                    arguments=arguments,
+                    correct=WRONG_EXAMPLE_MARK not in heading,
+                    heading=heading,
+                )
+            )
+    return calls
 
 
-class TestToolSchemaExportability:
-    """Validate that tool signatures can be exported as JSON schemas."""
+class TestDocumentedExamples:
+    """The doc's correct examples are accepted by the server and its wrong ones refused."""
 
-    def test_execute_code_parameters_json_serializable(self):
-        """Ensure execute_code parameters can be described in JSON schema."""
-        from houdini_mcp.tools import execute_code
+    @pytest.fixture
+    def calls(self, served: dict[str, Tool]) -> list[DocumentedCall]:
+        calls = documented_calls(CONTRACTS_DOC.read_text(), served)
+        # [LAW:verifiable-goals] a doc with no examples of a kind cannot make either test pass.
+        assert any(call.correct for call in calls)
+        assert any(not call.correct for call in calls)
+        return calls
 
-        sig = inspect.signature(execute_code)
+    async def accepted_by_server(self, served: dict[str, Tool], call: DocumentedCall) -> bool:
+        """Schema first; a program handed to execute_code must also clear its rails."""
+        if not accepts(served[call.tool], call.arguments):
+            return False
+        if call.tool != "execute_code":
+            return True
+        async with Client(mcp) as client:
+            result = await client.call_tool("execute_code", call.arguments)
+        return bool(result.structured_content["status"] == "success")
 
-        # All parameters should have serializable types
-        for param_name, param in sig.parameters.items():
-            annotation = param.annotation
-            if annotation == inspect.Parameter.empty:
-                continue
+    async def test_correct_examples_are_accepted(
+        self, in_process_houdini: Any, served: dict[str, Tool], calls: list[DocumentedCall]
+    ) -> None:
+        for call in calls:
+            if call.correct:
+                assert await self.accepted_by_server(served, call), call
 
-            # Should be basic types or None
-            annotation_str = str(annotation)
-            # Just verify it's a reasonable type hint
-            assert any(
-                t in annotation_str
-                for t in ["str", "int", "bool", "float", "list", "dict", "None", "Literal"]
-            ), f"Parameter {param_name} has non-serializable type: {annotation}"
-
-    def test_render_viewport_parameters_json_serializable(self):
-        """Ensure render_viewport parameters can be described in JSON schema."""
-        from houdini_mcp.tools import render_viewport
-
-        sig = inspect.signature(render_viewport)
-
-        for param_name, param in sig.parameters.items():
-            annotation = param.annotation
-            if annotation == inspect.Parameter.empty:
-                continue
-
-            annotation_str = str(annotation)
-            assert any(
-                t in annotation_str
-                for t in ["str", "int", "bool", "float", "list", "dict", "None", "Literal"]
-            ), f"Parameter {param_name} has non-serializable type: {annotation}"
-
-
-class TestMinimalValidExamplesInDocs:
-    """Validate that minimal valid examples exist for key tools."""
-
-    def test_tool_contracts_doc_exists(self):
-        """Ensure tool-contracts.md documentation exists."""
-        import pathlib
-
-        doc_path = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
-        assert doc_path.exists(), "docs/tool-contracts.md must exist"
-
-        content = doc_path.read_text()
-        assert "execute_code" in content
-        assert "render_viewport" in content
-        assert "pre-inject" in content.lower() or "pre-injected" in content.lower()
-
-    def test_tool_contracts_doc_has_examples(self):
-        """Ensure tool-contracts.md has minimal valid examples."""
-        import pathlib
-
-        doc_path = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
-        if not doc_path.exists():
-            return
-
-        content = doc_path.read_text()
-
-        # Should have code examples
-        assert "```python" in content
-        # Should document the import hou issue
-        assert "import hou" in content
-        # Should have correct examples
-        assert "render_viewport()" in content or "execute_code(" in content
+    async def test_wrong_examples_are_refused(
+        self, in_process_houdini: Any, served: dict[str, Tool], calls: list[DocumentedCall]
+    ) -> None:
+        for call in calls:
+            if not call.correct:
+                assert not await self.accepted_by_server(served, call), call

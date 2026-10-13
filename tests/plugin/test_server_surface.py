@@ -1,8 +1,7 @@
 """The plugin's stdio server is the shared MCP server, reached in-process.
 
-Houdini is faked by installing the root conftest's ``MockHouModule`` as
-``sys.modules["hou"]``; rpyc is forbidden outright so any attempt to reach a
-remote Houdini fails the test.
+Houdini is faked by the root conftest's ``in_process_houdini`` fixture, which
+forbids rpyc outright so any attempt to reach a remote Houdini fails the test.
 """
 
 from __future__ import annotations
@@ -19,30 +18,13 @@ from fastmcp import Client
 
 import houdini_mcp.connection as conn_module
 from houdini_mcp.connection import (
-    IN_PROCESS_HOUDINI,
     InProcessConnection,
     describe_target,
     disconnect,
     ensure_connected,
     get_connection_info,
     ping,
-    use_houdini,
 )
-
-
-@pytest.fixture
-def in_process_houdini(
-    monkeypatch: pytest.MonkeyPatch, mock_hou: Any, reset_connection_state: None
-) -> Generator[Any, None, None]:
-    """This interpreter *is* Houdini (a fake one), and rpyc is unreachable."""
-
-    def _no_rpyc(*_a: Any, **_k: Any) -> None:
-        raise AssertionError("rpyc must not be used when Houdini is in-process")
-
-    monkeypatch.setitem(sys.modules, "hou", mock_hou)
-    monkeypatch.setattr(conn_module.handshake, "connect", _no_rpyc)
-    use_houdini(IN_PROCESS_HOUDINI)
-    yield mock_hou
 
 
 class TestInProcessConnection:

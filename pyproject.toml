@@ -40,6 +40,8 @@ dev = [
     "pytest>=9",
     "pytest-cov>=7",
     "pytest-asyncio>=1.4",
+    # Contract tests validate documented calls against the served input schemas
+    "jsonschema>=4.26",
     # Property-based / stateful tests (outbound WSS state-machine core,
     # execute_code safety-rail evasion fuzzing).
     "hypothesis>=6.169",

@@ -48,8 +48,13 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 
 ```python
 {
-    "worker": {"operation": "execute_code", "code_sha256": "...", "timeout": 30, "running_for_seconds": 30.0},
-    "audit": {"timed_out": True, "code_sha256": "...", ...},
+    "worker": {
+        "operation": "execute_code",
+        "code_sha256": "...",
+        "timeout": 30,
+        "running_for_seconds": 30.0,
+    },
+    "audit": {"timed_out": True, "code_sha256": "..."},
 }
 ```
 

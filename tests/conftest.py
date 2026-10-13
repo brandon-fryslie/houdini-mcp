@@ -741,6 +741,29 @@ def mock_hou() -> MockHouModule:
 
 
 @pytest.fixture
+def in_process_houdini(
+    monkeypatch: pytest.MonkeyPatch, mock_hou: MockHouModule, reset_connection_state: None
+) -> Generator[MockHouModule, None, None]:
+    """This interpreter *is* Houdini (a fake one), and rpyc is unreachable.
+
+    The server then serves tools against ``mock_hou`` exactly as the plugin's
+    stdio server does inside Houdini.
+    """
+    import sys
+
+    import houdini_mcp.connection as conn_module
+    from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
+
+    def _no_rpyc(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("rpyc must not be used when Houdini is in-process")
+
+    monkeypatch.setitem(sys.modules, "hou", mock_hou)
+    monkeypatch.setattr(conn_module.handshake, "connect", _no_rpyc)
+    use_houdini(IN_PROCESS_HOUDINI)
+    yield mock_hou
+
+
+@pytest.fixture
 def reset_connection_state() -> Generator[None, None, None]:
     """No connection to Houdini before the test, and none left behind after it.
 
