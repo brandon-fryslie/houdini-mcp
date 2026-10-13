@@ -5,6 +5,7 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rpyc.core import vinegar
 
 
 class MockSubnetIndirectInput:
@@ -958,3 +959,27 @@ class MockGeometry:
     def setBoundingBox(self, min_vec: tuple, max_vec: tuple) -> None:
         """Helper to set bounding box."""
         self._bbox = MockBoundingBox(min_vec, max_vec)
+
+
+def raised_inside_houdini(exc: BaseException) -> BaseException:
+    """Return ``exc`` as the MCP server would receive it after Houdini raised it.
+
+    rpyc serializes a remote exception and rebuilds it locally as the same class,
+    tagged with the remote traceback; this runs that exact round trip.
+    """
+    try:
+        raise exc
+    except BaseException as caught:
+        dumped = vinegar.dump(
+            type(caught),
+            caught,
+            caught.__traceback__,
+            include_local_traceback=True,
+            include_local_version=True,
+        )
+    return vinegar.load(
+        dumped,
+        import_custom_exceptions=False,
+        instantiate_custom_exceptions=False,
+        instantiate_oldstyle_exceptions=False,
+    )

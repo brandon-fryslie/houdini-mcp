@@ -149,12 +149,17 @@ reorder_inputs("/obj/geo1/merge1", [2, 1, 0])
 **Response:**
 ```python
 {
-  "status": "success",
-  "reconnection_count": 3,
-  "reconnections": [
-    {"input_index": 0, "source_node": "/obj/geo1/sphere1", "source_output_index": 0, "previous_input_index": 1},
-    ...
-  ]
+    "status": "success",
+    "reconnection_count": 3,
+    "reconnections": [
+        {
+            "input_index": 0,
+            "source_node": "/obj/geo1/sphere1",
+            "source_output_index": 0,
+            "previous_input_index": 1,
+        },
+        ...,
+    ],
 }
 ```
 
