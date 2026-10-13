@@ -88,6 +88,10 @@ class TestContract:
         finally:
             server.close()
         assert server.active is False
+        # The listener's stop() closes a server that may already be dead and
+        # reports success, so a second close must be a no-op, not an error.
+        server.close()
+        assert server.active is False
 
 
 class TestListenerAgainstRealRpyc:
