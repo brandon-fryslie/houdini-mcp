@@ -137,7 +137,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         @handle_connection_errors("get_scene_info")
         def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
             hou = ensure_connected(host, port)
-            node = node_at(hou, "/obj")  # raises InvalidInput when absent
+            node = node_at(hou, "/obj/geo1")  # raises InvalidInput when absent
             return {"status": "success", ...}
     """
 
@@ -149,15 +149,34 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         # worker unseen.
         waits_for_worker = TOOL_POLICIES[operation_name].waits_for_worker
 
+        # [LAW:no-silent-failure] A call that does not fit the tool's signature is
+        # the caller's bug and raises as one, before the boundary opens; only what
+        # the tool itself raises becomes an error response.
+        def admit(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+            if waits_for_worker:
+                WORKERS.admit(operation_name)
+
+        # A served tool that finishes its result asynchronously (summarizing it,
+        # then capping it) is the same boundary awaited: whatever that finishing
+        # raises is the tool's failure, not a protocol error.
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
+                signature.bind(*args, **kwargs)
+                try:
+                    admit(args, kwargs)
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    return failure_response(e, operation_name)
+
+            return cast(ToolFn, async_wrapper)
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
-            # [LAW:no-silent-failure] A call that does not fit the tool's signature is
-            # the caller's bug and raises as one; only what the tool itself raises
-            # becomes an error response.
             signature.bind(*args, **kwargs)
             try:
-                if waits_for_worker:
-                    WORKERS.admit(operation_name)
+                admit(args, kwargs)
                 return func(*args, **kwargs)
             except Exception as e:
                 return failure_response(e, operation_name)

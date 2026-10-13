@@ -327,14 +327,14 @@ def _prepare(
     """
     hou = ensure_connected(host, port)
     width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
-    obj = node_at(hou, "/obj", "Context")
+    obj = hou.node("/obj")
     rop_type = renderer.lower()
     if rop_type not in _RENDERERS:
         raise InvalidInput(f"Unknown renderer: {renderer}", renderer=renderer)
     engine = _KARMA_ENGINES.get(karma_engine.lower())
     if engine is None:
         raise InvalidInput(f"Unknown karma_engine: {karma_engine}", karma_engine=karma_engine)
-    out = node_at(hou, "/out", "Context")
+    out = hou.node("/out")
     remote_os, remote_tempfile = _get_remote_modules(host, port)
     return _Prepared(
         hou=hou,
@@ -721,7 +721,7 @@ def list_render_nodes(
     """
     hou = ensure_connected(host, port)
 
-    out_context = node_at(hou, "/out", "Context")
+    out_context = hou.node("/out")
 
     render_nodes = []
     for node in out_context.children():
@@ -863,7 +863,7 @@ def create_render_node(
     """
     hou = ensure_connected(host, port)
 
-    out_context = node_at(hou, "/out", "Context")
+    out_context = hou.node("/out")
 
     # Create the node
     node = out_context.createNode(rop_type, name) if name else out_context.createNode(rop_type)

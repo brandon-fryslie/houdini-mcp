@@ -21,7 +21,7 @@ from ._common import (
     ToolError,
     ensure_connected,
     ensure_link,
-    failure_for,
+    failure_response,
     handle_connection_errors,
     node_at,
 )
@@ -51,7 +51,7 @@ def _qt(host: str, port: int) -> tuple[Any, Any]:
     failure every capture tool reports when Houdini has no PySide2."""
     try:
         QtWidgets, QtCore, _ = _get_qt_modules(host, port)
-    except Exception as e:
+    except ImportError as e:
         raise OperationFailed(
             f"Failed to access PySide2 modules: {e}. Ensure Houdini has PySide2 available."
         ) from e
@@ -143,8 +143,9 @@ def _capture_pane_to_bytes(
         Dict with the capture's data, including raw_bytes.
 
     Raises:
-        InvalidInput: the pane type is unknown here, or no such pane is open.
-        OperationFailed: the pane is open but could not be captured.
+        InvalidInput: the pane type is unknown here.
+        OperationFailed: no pane of that type is open in the layout, or the pane
+            is open but could not be captured; a human changes the layout.
     """
     # The list of names is read only to answer an unknown name, not on every capture.
     pane_type = pane_type_member(hou, pane_type_name)
@@ -159,7 +160,7 @@ def _capture_pane_to_bytes(
 
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
-        raise InvalidInput(
+        raise OperationFailed(
             f"No pane of type {pane_type_name} found in the current Houdini layout. "
             "Make sure a pane of this type is visible in the UI.",
             pane_type=pane_type_name,
@@ -472,7 +473,10 @@ def render_node_network(
     pane_type = hou.paneTabType.NetworkEditor
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
-        raise OperationFailed("No NetworkEditor pane found in the current Houdini layout.")
+        raise OperationFailed(
+            "No NetworkEditor pane found in the current Houdini layout.",
+            pane_type="NetworkEditor",
+        )
 
     # Navigate to the node (set as current network)
     try:
@@ -550,7 +554,7 @@ def capture_multiple_panes(
         try:
             result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
         except ToolError as e:
-            results[pane_type_name] = failure_for(e, "capture_multiple_panes").model_dump()
+            results[pane_type_name] = failure_response(e, "capture_multiple_panes")
             continue
 
         raw_bytes: bytes = result.pop("raw_bytes")

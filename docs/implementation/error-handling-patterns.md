@@ -64,11 +64,14 @@ discriminated on `kind`; each kind fixes its own `retry`:
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
-| Anything else | `operation_failed` | `none` | `exception`, `traceback` |
+| Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error with the traceback |
 
 A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
-its cause, and the cause is what `failure_for` classifies: a torn link wrapped that
-way is still `connection_lost`, and still tears the connection down.
+its cause, and the link's own failures in that cause outrank the label: a torn link,
+an unreachable Houdini or a mismatched one wrapped that way is still its own arm, and
+a torn link still tears the connection down. A served tool that finishes its result
+after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then cap)
+is under the same boundary, awaited.
 
 Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`
 or `TimedOut` with the fields their caller needs, and `node_at(hou, path, what)`

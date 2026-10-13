@@ -68,6 +68,7 @@ def create_node(
 
 
 @mcp.tool()
+@handle_connection_errors("execute_code")
 def execute_code(
     code: str,
     capture_diff: bool = False,
@@ -697,6 +698,7 @@ def create_render_node(
 
 
 @mcp.tool()
+@handle_connection_errors("find_error_nodes")
 async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
@@ -936,6 +938,7 @@ def get_parameter_schema(
 
 
 @mcp.tool()
+@handle_connection_errors("get_geo_summary")
 async def get_geo_summary(
     node_path: str,
     max_sample_points: int = 16,

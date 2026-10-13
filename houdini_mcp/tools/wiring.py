@@ -68,16 +68,11 @@ def connect_nodes(
 
     dst_node = node_at(hou, dst_path, "Destination node")
 
-    # Validate compatible node types
-    # Get category name (e.g., "Sop", "Object", "Dop")
-    try:
-        src_category = source_category(hou, src_node)
-        dst_category = source_category(hou, dst_node)
-    except Exception as e:
-        logger.warning(f"Could not validate node categories: {e}")
-        # Continue if category check fails - let Houdini validate
-        src_category = dst_category = None
-
+    # Validate compatible node types by category name (e.g., "Sop", "Object", "Dop").
+    # [LAW:no-silent-failure] a category Houdini cannot report is the boundary's
+    # to classify, not a check to skip.
+    src_category = source_category(hou, src_node)
+    dst_category = source_category(hou, dst_node)
     if src_category != dst_category:
         raise InvalidInput(
             f"Incompatible node types: {src_category} -> {dst_category}. "

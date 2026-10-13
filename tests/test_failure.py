@@ -48,6 +48,11 @@ def failing(exc: BaseException, operation: str = "get_scene_info") -> dict[str, 
         return tool()
 
 
+def failing_tool(tool: Any) -> dict[str, Any]:
+    with patch("houdini_mcp.tools.failure.disconnect"):
+        return tool()
+
+
 def arm(result: dict[str, Any]) -> Any:
     """The result parsed as exactly one arm of the union, or the test fails."""
     parsed = FAILURE.validate_python(result)
@@ -147,6 +152,22 @@ class TestEveryFailureIsOneArm:
         assert result.exception == "EOFError"
         disconnect.assert_called_once()
 
+    def test_a_tool_error_wrapping_an_unreachable_houdini_is_unavailable(self) -> None:
+        @handle_connection_errors("capture_pane_screenshot")
+        def tool() -> dict[str, Any]:
+            try:
+                raise HoudiniConnectionError("gone", target="farm:1")
+            except HoudiniConnectionError as e:
+                raise OperationFailed("Failed to access PySide2 modules") from e
+
+        result = arm(failing_tool(tool))
+        assert (result.kind, result.retry, result.target) == (
+            "connection_unavailable",
+            "start_houdini",
+            "farm:1",
+        )
+        assert result.message == "gone"
+
     def test_a_tool_error_wrapping_houdinis_own_raise_keeps_its_label(self) -> None:
         @handle_connection_errors("list_visible_panes")
         def tool() -> dict[str, Any]:
@@ -200,13 +221,18 @@ class TestEveryFailureIsOneArm:
     def test_every_failure_is_logged_once_with_its_kind(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """One WARNING audit line per failure. A bug (an exception nobody
+        classified) also sounds one ERROR alarm carrying its traceback."""
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
             failing(InvalidInput("Node not found: /obj/x"), operation="get_node_info")
             failing(KeyError("stdout"), operation="get_node_info")
-        assert [r.getMessage() for r in caplog.records] == [
-            "get_node_info failed (invalid_input): Node not found: /obj/x",
-            "get_node_info failed (operation_failed): 'stdout'",
+        assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+            ("WARNING", "get_node_info failed (invalid_input): Node not found: /obj/x"),
+            ("ERROR", "get_node_info raised KeyError: 'stdout'"),
+            ("WARNING", "get_node_info failed (operation_failed): 'stdout'"),
         ]
+        [alarm] = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert alarm.exc_info is not None and alarm.exc_info[0] is KeyError
 
 
 class TestNodeAt:

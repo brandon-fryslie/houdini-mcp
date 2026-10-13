@@ -378,6 +378,23 @@ class TestServedFailures:
             assert failure.retry == "start_houdini", probe
             assert failure.target == "farm:1", probe
 
+    async def test_a_result_the_server_cannot_serialize_is_the_tools_failure(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cap runs after ``get_geo_summary`` returns and is awaited under the
+        same boundary: a tool bug there is one arm, never a protocol error."""
+        import houdini_mcp.server as server
+
+        def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
+            return {"status": "success", "points": {1, 2}}
+
+        monkeypatch.setattr(server.tools, "get_geo_summary", unserializable)
+        failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.operation == "get_geo_summary"
+        assert failure.exception == "TypeError"
+        assert "not JSON-serializable" in failure.message
+
     async def test_the_probes_report_success_as_success(self, client: Client[Any]) -> None:
         for probe in ("check_connection", "ping_houdini"):
             result = await client.call_tool(probe, {})

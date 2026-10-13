@@ -84,7 +84,7 @@ class _Failure(BaseModel):
 
 
 class ConnectionUnavailableFailure(_Failure):
-    """No link to Houdini could be opened, or the live link reaches another Houdini."""
+    """No link to Houdini could be opened at the target."""
 
     kind: Literal["connection_unavailable"] = "connection_unavailable"
     retry: Literal["start_houdini"] = "start_houdini"
@@ -225,19 +225,26 @@ def failure_for(e: Exception, operation: str) -> _Failure:
     [LAW:single-enforcer] Connection loss is whatever ``transport_failure`` says
     it is, and it is the only failure that tears the connection down. A tool body
     that wrapped an exception in a ``ToolError`` with ``from`` stated its cause,
-    and the link's failure outranks the body's label: the cause is what is
+    and the link's own failures outrank the body's label: the cause is what is
     classified. Everything else reaches the caller as its own kind with the
     connection left standing.
     """
-    if isinstance(e, HoudiniConnectionError):
-        return ConnectionUnavailableFailure(operation=operation, message=str(e), target=e.target)
-    if isinstance(e, HoudiniTargetMismatch):
-        return ConnectionMismatchFailure(
-            operation=operation, message=str(e), target=e.requested, connected=e.connected
-        )
-    if isinstance(e, WorkerStillRunning):
-        return WorkerBusyFailure(operation=operation, message=str(e), worker=e.worker.describe())
     cause = e.__cause__ if isinstance(e, ToolError) and e.__cause__ is not None else e
+    if isinstance(cause, HoudiniConnectionError):
+        return ConnectionUnavailableFailure(
+            operation=operation, message=str(cause), target=cause.target
+        )
+    if isinstance(cause, HoudiniTargetMismatch):
+        return ConnectionMismatchFailure(
+            operation=operation,
+            message=str(cause),
+            target=cause.requested,
+            connected=cause.connected,
+        )
+    if isinstance(cause, WorkerStillRunning):
+        return WorkerBusyFailure(
+            operation=operation, message=str(cause), worker=cause.worker.describe()
+        )
     lost = transport_failure(cause)
     if lost is not None:
         # Clean up the broken connection so the next call can reconnect.
@@ -266,8 +273,11 @@ def failure_for(e: Exception, operation: str) -> _Failure:
         )
     if isinstance(e, ToolError):
         return e.failure(operation)
-    # [LAW:no-silent-failure] an exception nobody classified is a bug; the
-    # traceback goes to the caller so it can be found.
+    # [LAW:no-silent-failure] an exception nobody classified is a bug: the alarm
+    # is an ERROR with the traceback in the server log, and the traceback also
+    # travels to the caller. The boundary's WARNING line below is the audit every
+    # failure gets; this is the one only a bug gets.
+    logger.error("%s raised %s: %s", operation, type(e).__name__, e, exc_info=e)
     unclassified: dict[str, Any] = {
         "exception": type(e).__name__,
         "traceback": "".join(traceback.format_exception(e)),
