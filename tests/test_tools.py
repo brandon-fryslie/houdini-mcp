@@ -217,7 +217,7 @@ class TestExecuteCodeSafetyRails:
 
         assert result["status"] == "error"
         assert "dangerous_patterns" in result
-        assert any("os.remove()" in p for p in result["dangerous_patterns"])
+        assert any("os.remove" in p for p in result["dangerous_patterns"])
 
     def test_detects_os_unlink(self, mock_connection):
         """Test detection of os.unlink() pattern."""
@@ -228,7 +228,7 @@ class TestExecuteCodeSafetyRails:
         )
 
         assert result["status"] == "error"
-        assert any("os.unlink()" in p for p in result["dangerous_patterns"])
+        assert any("os.unlink" in p for p in result["dangerous_patterns"])
 
     def test_detects_shutil_rmtree(self, mock_connection):
         """Test detection of shutil.rmtree() pattern."""
@@ -242,7 +242,7 @@ class TestExecuteCodeSafetyRails:
         )
 
         assert result["status"] == "error"
-        assert any("shutil.rmtree()" in p for p in result["dangerous_patterns"])
+        assert any("shutil.rmtree" in p for p in result["dangerous_patterns"])
 
     def test_detects_subprocess(self, mock_connection):
         """Test detection of subprocess pattern."""
@@ -267,7 +267,7 @@ class TestExecuteCodeSafetyRails:
         )
 
         assert result["status"] == "error"
-        assert any("os.system()" in p for p in result["dangerous_patterns"])
+        assert any("os.system" in p for p in result["dangerous_patterns"])
 
     def test_detects_open_write_mode(self, mock_connection):
         """Test detection of open() with write mode."""
@@ -356,16 +356,16 @@ x = 1 + 2
 
         monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
 
-        # This code contains a pattern but we allow it
+        # Names a restricted member without calling it: detected, and harmless to run.
         result = execute_code(
-            "print('Would call hou.exit() but just printing')",
+            "import os; print(os.remove)",
             host="localhost",
             port=18811,
             capture_diff=False,
             allow_dangerous=True,
         )
 
-        # Code actually runs (pattern is in string), but warnings should be present
+        # Code actually runs (nothing is called), but warnings should be present
         assert result["status"] == "success"
         assert "dangerous_patterns_executed" in result
         assert "safety_warning" in result
@@ -590,29 +590,29 @@ class TestDangerousPatternDetection:
 
     def test_detect_empty_code(self):
         """Test detection on empty code."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("")
+        result = _detect_dangerous_code(parse_code(""))
         assert result == []
 
     def test_detect_safe_code(self):
         """Test detection on safe code."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("print('hello world')")
+        result = _detect_dangerous_code(parse_code("print('hello world')"))
         assert result == []
 
     def test_detect_single_pattern(self):
         """Test detection of single dangerous pattern."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        result = _detect_dangerous_code("hou.exit()")
+        result = _detect_dangerous_code(parse_code("hou.exit()"))
         assert len(result) == 1
         assert "hou.exit()" in result[0]
 
     def test_detect_multiple_patterns(self):
         """Test detection of multiple dangerous patterns."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = """
 import os
@@ -620,24 +620,20 @@ import subprocess
 os.remove('/file')
 subprocess.call(['cmd'])
         """
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 2
 
-    def test_pattern_in_comment_still_detected(self):
-        """Test that patterns in comments are still detected (conservative approach)."""
-        from houdini_mcp.tools import _detect_dangerous_code
+    def test_pattern_in_comment_is_not_code(self):
+        """A comment cannot execute; the gate reads the AST exec will compile."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        # We intentionally detect patterns even in comments for safety
-        result = _detect_dangerous_code("# hou.exit()")
-        assert len(result) == 1
+        assert _detect_dangerous_code(parse_code("# hou.exit()")) == []
 
-    def test_pattern_in_string_still_detected(self):
-        """Test that patterns in strings are still detected (conservative approach)."""
-        from houdini_mcp.tools import _detect_dangerous_code
+    def test_pattern_in_string_is_not_code(self):
+        """A string literal cannot execute; the gate reads the AST exec will compile."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
-        # We intentionally detect patterns even in strings for safety
-        result = _detect_dangerous_code("x = 'hou.exit()'")
-        assert len(result) == 1
+        assert _detect_dangerous_code(parse_code("x = 'hou.exit()'")) == []
 
 
 class TestTruncateOutput:

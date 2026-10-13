@@ -35,6 +35,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`execute_code` read-only is an allowlist**: under `policy="read-only"` the
+  program may name only recognized inspection APIs (navigation, parameter
+  reads, flags, wiring, geometry reads), a fixed set of pure stdlib modules and
+  builtins, and dicts for its own records. Anything else is refused before
+  execution, including mutators the old denylist admitted (`changeNodeType`,
+  `setExpression`, `setKeyframe`, `deleteAllKeyframes`, `insertInput`,
+  `setUserData`, `setComment`), attribute assignment, `with` blocks, attribute
+  lookup by string, and any hou API added after this release. The stdlib
+  modules are admitted member by member, so `random._os`, `fnmatch.os` and
+  `typing.sys` are refused like any other unrecognized name,
+  `typing.get_type_hints` is absent because it evaluates string annotations,
+  and `hou.expandString` / `hou.text.expandString` are refused because
+  backtick expressions run HScript. The refused symbol is named in `mutation_patterns`.
+- **`execute_code` dangerous-operation scan reads the parsed program**: the
+  `normal` policy now refuses whole modules (`shutil`, `pathlib`, `importlib`,
+  `subprocess`, `pickle`, ...) and admits only the read side of `os`, `sys`,
+  `io` and `codecs`, closing `os.rename`, `pathlib.Path.unlink`/`write_text`,
+  `shutil.copy*` and `importlib.import_module`; archive, database, egress
+  and debugger modules (`zipfile`, `tarfile`, `sqlite3`, `smtplib`, `httpx`,
+  `pdb`, ...) are refused too, and `tempfile` keeps only its read side. An
+  `open()` whose mode is not a string literal, or whose arguments are
+  unpacked, is treated as writing. A variable the program binds itself
+  (`code = ...`, `signal = 1`) is never mistaken for the module of the same
+  name, `import os.path as osp` is judged as `os.path`, and a rename of `hou`
+  or a path below it (`hf = hou.hipFile`) keeps its verdict. `open` reached
+  by any route but a readable call (`o = open`, `partial(open, ...)`) is
+  treated as writing. Heavy-geometry
+  methods are judged where they are named, so binding `node.geometry` or
+  passing it to `map` is refused like calling it. Text inside comments and
+  string literals is no longer flagged: the gate reads the same AST `exec`
+  compiles, once per request. Code that does not parse is refused with
+  `blocked_reason="syntax_error"`.
 - **Listener depends on a declared server contract that real hrpyc satisfies**
   (houdini-laws-etg.zu6): `listener.HrpycModule` and `listener.HrpycServer`
   declare the rpyc surface the listener drives; the test fake and real rpyc are
