@@ -98,6 +98,9 @@ TIMER_HEARTBEAT = "heartbeat"
 TIMER_HEARTBEAT_TIMEOUT = "heartbeat_timeout"
 TIMER_HANDSHAKE_TIMEOUT = "handshake_timeout"
 TIMER_BACKOFF = "backoff"
+# The timers a live socket may hold; closing for good also kills the backoff timer.
+CONNECTION_TIMERS = (TIMER_HEARTBEAT, TIMER_HEARTBEAT_TIMEOUT, TIMER_HANDSHAKE_TIMEOUT)
+ALL_TIMERS = (*CONNECTION_TIMERS, TIMER_BACKOFF)
 
 
 @dataclass(frozen=True)
@@ -347,21 +350,25 @@ class WSClientCore:
         error all close through here, so none can strand a request.
         """
 
+        self.state = ConnectionState.CLOSED
         actions: list[Action] = []
         for rid in self._live_request_ids():
             actions.append(self._settle(Failed(rid, reason)))
             actions.append(self._telemetry("command_failed", request_id=rid, reason=reason.value))
-        self.state = ConnectionState.CLOSED
-        actions.extend(
-            [
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_BACKOFF),
-                Action(ActionType.CLOSE),
-            ]
-        )
+        actions.extend(self._close_socket(ALL_TIMERS))
         return actions
+
+    def _close_socket(self, timers: tuple[str, ...]) -> list[Action]:
+        """Cancel ``timers`` and close the socket: the teardown shared by backoff and closing for good.
+
+        [LAW:one-source-of-truth] The two paths once kept their own copies of
+        this list and drifted; which timers die is the only thing that differs.
+        """
+
+        return [
+            *(Action(ActionType.CANCEL_TIMER, timer=t) for t in timers),
+            Action(ActionType.CLOSE),
+        ]
 
     # ------------------------------------------------------------- public state
 
@@ -515,10 +522,7 @@ class WSClientCore:
         self._session_id = None
         self._awaiting_pong = False
         return [
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT),
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
-            Action(ActionType.CLOSE),
+            *self._close_socket(CONNECTION_TIMERS),
             Action(ActionType.SCHEDULE_TIMER, timer=TIMER_BACKOFF, delay=delay),
             self._telemetry(
                 "backoff_scheduled", reason=reason, delay=delay, attempt=self._backoff_attempt
@@ -549,6 +553,10 @@ class WSClientCore:
         """
 
         ftype = frame.get("type")
+        if self.state == ConnectionState.CLOSED:
+            # The socket is being closed and every live id has its outcome;
+            # a frame the driver still had buffered has nothing left to act on.
+            return [self._telemetry("ignored_frame", frame_type=ftype)]
         handler = {
             WELCOME: self._on_welcome,
             PONG: self._on_pong,
@@ -561,16 +569,16 @@ class WSClientCore:
         return handler(frame)
 
     def _validate_session(self, frame: dict[str, Any]) -> bool:
-        """Return True if the frame's session id matches the active session.
+        """Return True unless the frame belongs to a session other than the active one.
 
-        Frames without a session id are accepted (session-agnostic). Frames
-        carrying a *different* session id are stale and must be rejected.
+        Frames without a session id are accepted (session-agnostic), and so is
+        every frame while no session is established yet: before ``welcome``
+        there is nothing for a frame to be stale against, and a fatal rejection
+        of the ``hello`` must reach the client whatever session id it carries.
         """
 
         sid = frame.get("session_id")
-        if sid is None:
-            return True
-        return bool(sid == self._session_id)
+        return sid is None or self._session_id is None or bool(sid == self._session_id)
 
     def _on_welcome(self, frame: dict[str, Any]) -> list[Action]:
         if self.state != ConnectionState.HANDSHAKING:
@@ -650,7 +658,9 @@ class WSClientCore:
             # Duplicate / unknown ack: ignore (already settled or never sent).
             return [self._telemetry("ignored_ack", request_id=rid)]
         return [
-            self._settle(Acked(rid, frame)),
+            # A copy: the outcome the app holds must not change under it when
+            # the driver reuses its receive buffer.
+            self._settle(Acked(rid, dict(frame))),
             self._telemetry("command_acked", request_id=rid),
         ]
 
@@ -659,9 +669,6 @@ class WSClientCore:
             return self._reject_stale(frame)
         fatal = bool(frame.get("fatal"))
         code = frame.get("code")
-        if self.state == ConnectionState.CLOSED:
-            # The socket is already being closed; nothing is left to fail.
-            return [self._telemetry("ignored_error", code=code, fatal=fatal)]
         if fatal:
             prev = self.state
             return [

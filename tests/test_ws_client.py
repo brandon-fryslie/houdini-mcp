@@ -725,14 +725,22 @@ class TestErrors:
         assert actions == [
             Action(
                 ActionType.TELEMETRY,
-                telemetry={
-                    "event": "ignored_error",
-                    "state": "closed",
-                    "code": "auth_failed",
-                    "fatal": True,
-                },
+                telemetry={"event": "ignored_frame", "state": "closed", "frame_type": ERROR},
             )
         ]
+
+    def test_fatal_error_during_handshake_closes_whatever_session_it_names(self):
+        # The gateway rejecting the hello may carry the session id it assigned;
+        # before welcome there is no session for the frame to be stale against.
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        core.start()
+        core.on_socket_open()
+        actions = core.on_frame(
+            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "assigned"}
+        )
+        assert core.state == ConnectionState.CLOSED
+        assert outcomes_of(actions) == [Failed(rid, CloseReason.FATAL_ERROR)]
 
     def test_nonfatal_error_stays_connected(self):
         core = WSClientCore(make_config())
@@ -771,13 +779,13 @@ class TestTerminalOutcomes:
         assert telemetry_records(actions, "command_failed") == [
             {
                 "event": "command_failed",
-                "state": "connected",
+                "state": "closed",
                 "request_id": pending,
                 "reason": "stopped",
             },
             {
                 "event": "command_failed",
-                "state": "connected",
+                "state": "closed",
                 "request_id": queued,
                 "reason": "stopped",
             },
@@ -835,7 +843,24 @@ class TestTerminalOutcomes:
         core.stop()
         late = core.on_frame({"type": ACK, "request_id": pending, "session_id": "s1"})
         assert outcomes_of(late) == []
-        assert "ignored_ack" in telemetry_events(late)
+        assert "ignored_frame" in telemetry_events(late)
+
+    def test_event_after_close_is_not_delivered(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        core.stop()
+        late = core.on_frame({"type": EVENT, "id": 7, "session_id": "s1"})
+        assert not [a for a in late if a.type == ActionType.DELIVER_EVENT]
+        assert "ignored_frame" in telemetry_events(late)
+
+    def test_acked_outcome_does_not_alias_the_drivers_frame(self):
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        connect_core(core, session_id="s1")
+        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": 1}
+        (outcome,) = outcomes_of(core.on_frame(buffer))
+        buffer["result"] = 2
+        assert isinstance(outcome, Acked) and outcome.frame["result"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -1102,6 +1127,17 @@ class WSClientStateMachine(RuleBasedStateMachine):
         rid = self.core.pending_request_ids[0]
         self._run(self.core.cancel_command(rid))
 
+    @rule()
+    @precondition(lambda self: self.core.command_backlog > 0)
+    def cancel_queued(self):
+        # The newest allocated id that is neither pending nor settled is in the queue.
+        rid = next(
+            r
+            for r in reversed(self.allocated)
+            if r not in self.core.pending_request_ids and r not in self.settled
+        )
+        self._run(self.core.cancel_command(rid))
+
     @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
     @precondition(lambda self: self.core.pending_request_ids)
     def ack_pending(self, sid):
@@ -1114,9 +1150,12 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def drain(self):
         self._run(self.core.drain())
 
-    @rule()
-    def fatal_error(self):
-        self._run(self.core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True}))
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
+    def fatal_error(self, sid):
+        frame: dict = {"type": ERROR, "code": "auth_failed", "fatal": True}
+        if sid is not None:
+            frame["session_id"] = sid
+        self._run(self.core.on_frame(frame))
 
     def teardown(self):
         # Closing for good settles whatever is still live; after that every id
