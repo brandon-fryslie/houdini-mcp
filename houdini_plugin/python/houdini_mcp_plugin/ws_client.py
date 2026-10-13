@@ -48,6 +48,7 @@ frame :meth:`WSClientCore.on_frame` takes:
 
 from __future__ import annotations
 
+import copy
 import enum
 import random
 from collections import deque
@@ -194,14 +195,13 @@ def _parse_pong(raw: Mapping[str, Any]) -> PongFrame:
     return PongFrame(_field(raw, "session_id", str))
 
 
-# [LAW:parse-dont-validate] The copies make a frame the driver's buffer cannot
-# reach once it is stamped: the app holds the frame, and the driver may reuse
-# the decoded dict under it.
+# [LAW:parse-dont-validate] A stamped frame is the app's outright: its payload is a
+# deep copy, so nothing the driver does to its decoded dict afterwards reaches it.
 def _parse_event(raw: Mapping[str, Any]) -> EventFrame:
     return EventFrame(
         _field(raw, "session_id", str),
         _field(raw, "id", str),
-        dict(_field(raw, "payload", dict)),
+        copy.deepcopy(_field(raw, "payload", dict)),
     )
 
 
@@ -209,12 +209,13 @@ def _parse_ack(raw: Mapping[str, Any]) -> AckFrame:
     return AckFrame(
         _field(raw, "session_id", str),
         _field(raw, "request_id", int),
-        dict(_field(raw, "result", dict)),
+        copy.deepcopy(_field(raw, "result", dict)),
     )
 
 
 def _parse_error(raw: Mapping[str, Any]) -> ErrorFrame:
-    session_id = _field(raw, "session_id", str) if "session_id" in raw else None
+    # A serializer writes an unset session as null or leaves it out; both mean none.
+    session_id = None if raw.get("session_id") is None else _field(raw, "session_id", str)
     return ErrorFrame(_field(raw, "code", str), _field(raw, "fatal", bool), session_id)
 
 
@@ -232,15 +233,17 @@ _PARSERS = {wire: parse for wire, _, parse in _INBOUND}
 _WIRE_TYPE = {frame_type: wire for wire, frame_type, _ in _INBOUND}
 
 
-def parse_frame(raw: Mapping[str, Any]) -> InboundFrame:
-    """Parse a decoded wire frame into the typed frame the core takes.
+def parse_frame(raw: object) -> InboundFrame:
+    """Parse a decoded wire message into the typed frame the core takes.
 
     [LAW:parse-dont-validate] This is the one boundary between the wire and the
-    state machine. The driver calls it where it decodes JSON, and a
+    state machine. The driver hands it whatever the JSON decoded to, and a
     :class:`FrameParseError` is the gateway breaking the protocol, which the
     driver reports exactly as it reports undecodable JSON.
     """
 
+    if not isinstance(raw, Mapping):
+        raise FrameParseError(f"frame must be an object, got {type(raw).__name__}")
     wire = _field(raw, "type", str)
     try:
         parse = _PARSERS[wire]

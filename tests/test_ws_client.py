@@ -545,7 +545,7 @@ class TestCommandsAndQueues:
         assert core.state == ConnectionState.DISCONNECTED
 
 
-class TestEventBackpressure:
+class TestEventDelivery:
     def test_events_delivered_to_app(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
@@ -740,6 +740,8 @@ class TestFrameParsing:
                 "ack frame: 'request_id' must be int, got bool",
             ),
             ({"type": ERROR, "code": "x"}, "error frame: 'fatal' is missing"),
+            ([], "frame must be an object, got list"),
+            (None, "frame must be an object, got NoneType"),
             (
                 {"type": ERROR, "code": "x", "fatal": True, "session_id": 3},
                 "error frame: 'session_id' must be str, got int",
@@ -749,6 +751,16 @@ class TestFrameParsing:
     def test_malformed_frame_is_rejected_naming_the_field(self, raw, message):
         with pytest.raises(FrameParseError, match=f"^{message}$"):
             parse_frame(raw)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            {"type": ERROR, "code": "x", "fatal": True, "session_id": None},
+            {"type": ERROR, "code": "x", "fatal": True},
+        ],
+    )
+    def test_error_without_a_session_parses_whether_null_or_absent(self, raw):
+        assert parse_frame(raw) == ErrorFrame("x", True, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -970,18 +982,18 @@ class TestTerminalOutcomes:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": {"n": 1}}
+        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": {"n": {"m": 1}}}
         (outcome,) = outcomes_of(core.on_frame(parse_frame(buffer)))
-        buffer["result"]["n"] = 2
-        assert isinstance(outcome, Acked) and outcome.ack.result == {"n": 1}
+        buffer["result"]["n"]["m"] = 2
+        assert isinstance(outcome, Acked) and outcome.ack.result == {"n": {"m": 1}}
 
     def test_delivered_event_does_not_alias_the_drivers_frame(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
-        buffer = {"type": EVENT, "session_id": "s1", "id": "e1", "payload": {"n": 1}}
+        buffer = {"type": EVENT, "session_id": "s1", "id": "e1", "payload": {"n": {"m": 1}}}
         (delivered,) = [a for a in core.on_frame(parse_frame(buffer)) if a.event]
-        buffer["payload"]["n"] = 2
-        assert delivered.event is not None and delivered.event.payload == {"n": 1}
+        buffer["payload"]["n"]["m"] = 2
+        assert delivered.event is not None and delivered.event.payload == {"n": {"m": 1}}
 
 
 # --------------------------------------------------------------------------- #
