@@ -25,9 +25,11 @@ sockets, sleeps, or threads.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import random
 import sys
+from typing import assert_never
 
 import pytest
 
@@ -79,7 +81,6 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     WelcomeFrame,
     WSClientCore,
     WSConfig,
-    limit_reached,
     parse_frame,
     redact,
 )
@@ -176,6 +177,8 @@ class Driver:
                     self.open_count += 1
                 case Close():
                     self.close_count += 1
+                case _:
+                    assert_never(a)
 
     def call(self, method: str, *args, **kwargs):
         result = getattr(self.core, method)(*args, **kwargs)
@@ -223,9 +226,25 @@ class TestConfig:
         with pytest.raises(ValueError, match="backoff"):
             make_config(backoff_initial=10, backoff_max=5)
 
-    def test_invalid_heartbeat_rejected(self):
-        with pytest.raises(ValueError, match="heartbeat_interval"):
-            make_config(heartbeat_interval=0)
+    @pytest.mark.parametrize(
+        "name", ["heartbeat_interval", "heartbeat_timeout", "handshake_timeout"]
+    )
+    def test_timing_must_be_positive(self, name):
+        # A zero timeout fires its timer at once, so a connection never settles.
+        with pytest.raises(ValueError, match=name):
+            make_config(**{name: 0})
+
+    @pytest.mark.parametrize("bad", [0.0, 0.5])
+    def test_backoff_multiplier_below_one_rejected(self, bad):
+        with pytest.raises(ValueError, match="backoff_multiplier"):
+            make_config(backoff_multiplier=bad)
+        assert make_config(backoff_multiplier=1.0).backoff_multiplier == 1.0
+
+    def test_config_is_frozen(self):
+        # What __post_init__ proved must stay proved for the config's whole life.
+        cfg = make_config()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.max_command_queue = 0  # type: ignore[misc]
 
     @pytest.mark.parametrize("name", ["max_command_queue", "max_reconnect_attempts"])
     @pytest.mark.parametrize("bad", [0, -1, 2.5, True, "8", None])
@@ -432,9 +451,15 @@ class TestBackoffAndJitter:
         core.on_socket_error()  # attempt 2
         core.on_backoff_elapsed()
         core.on_socket_open()
-        actions = core.on_socket_error()  # attempt 3 -> exhausted
+        actions = core.on_socket_error()  # attempt 3: the last one the budget allows
+        assert core.state == ConnectionState.BACKOFF
+        assert Timer.BACKOFF in timers_scheduled(actions)
+        core.on_backoff_elapsed()
+        core.on_socket_open()
+        actions = core.on_socket_error()  # a fourth would exceed the budget
         assert core.state == ConnectionState.CLOSED
         assert "reconnect_exhausted" in telemetry_events(actions)
+        assert telemetry_records(actions, "reconnect_exhausted")[0]["attempts"] == 3
 
     def test_unbounded_reconnect_budget_never_exhausts(self):
         core = WSClientCore(make_config(max_reconnect_attempts=UNBOUNDED), rng=random.Random(1))
@@ -966,6 +991,12 @@ class TestTerminalOutcomes:
         rid = driver.call("send_command", {"op": "critical"})
         driver.call("drain")
         driver.call("on_socket_error", "partition")
+        # A budget of 1 buys one reconnect; the command rides along on it.
+        assert core.state == ConnectionState.BACKOFF
+        assert driver.outcomes == []
+        driver.call("on_backoff_elapsed")
+        driver.call("on_socket_open")
+        driver.call("on_socket_error", "partition")
         assert core.state == ConnectionState.CLOSED
         assert driver.outcomes == [Failed(rid, CloseReason.RECONNECT_EXHAUSTED)]
         assert [t["request_id"] for t in driver.telemetry if t["event"] == "command_failed"] == [
@@ -1266,7 +1297,10 @@ class WSClientStateMachine(RuleBasedStateMachine):
         if self.core.state == ConnectionState.CLOSED:
             with pytest.raises(ClientClosedError):
                 self.core.send_command(payload)
-        elif limit_reached(self.core.command_backlog, self.core.config.max_command_queue):
+        elif (
+            self.core.config.max_command_queue is not UNBOUNDED
+            and self.core.command_backlog >= self.core.config.max_command_queue
+        ):
             with pytest.raises(QueueFullError):
                 self.core.send_command(payload)
         else:

@@ -49,7 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old strings as values) instead of four string constants. `WSConfig.max_command_queue`
   and `max_reconnect_attempts` are a `Limit`: a positive int or `UNBOUNDED`, read by one
   `limit_reached`; zero and negative no longer mean unlimited and are rejected, and
-  `max_reconnect_attempts` defaults to `UNBOUNDED` (it was `0`).
+  `max_reconnect_attempts` defaults to `UNBOUNDED` (it was `0`). A budget of N now
+  allows N reconnects (it allowed N-1: the attempt was counted before the budget was
+  read, so `1` meant never reconnect). `WSConfig` is frozen, and it rejects a
+  non-positive `heartbeat_timeout` or `handshake_timeout` and a `backoff_multiplier`
+  below 1, each of which made the next timer fire at once.
 - **Render tools share one implementation of framing, rig and ROP configuration**
   (houdini-laws-etg.arl): `render_viewport` and `render_quad_view` derive the
   camera pivot, distance, orthographic width and reported `bounding_box` from

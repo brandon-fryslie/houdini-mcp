@@ -387,7 +387,8 @@ Action = (
 )
 
 
-@dataclass
+# [LAW:types-are-the-program] Frozen, so what __post_init__ proves stays proven.
+@dataclass(frozen=True)
 class WSConfig:
     """Configuration for :class:`WSClientCore`.
 
@@ -429,10 +430,14 @@ class WSConfig:
             )
         if not self.api_key:
             raise ValueError("api_key is required")
-        if self.heartbeat_interval <= 0:
-            raise ValueError("heartbeat_interval must be positive")
+        for name in ("heartbeat_interval", "heartbeat_timeout", "handshake_timeout"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
         if self.backoff_initial <= 0 or self.backoff_max < self.backoff_initial:
             raise ValueError("invalid backoff configuration")
+        # Below 1 the "exponential growth" shrinks; at 0 every retry is immediate.
+        if self.backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
         if not (0.0 <= self.jitter_ratio < 1.0):
             raise ValueError("jitter_ratio must be in [0, 1)")
 
@@ -506,8 +511,10 @@ class WSClientCore:
         # Request ids (monotonic, never reused within a process lifetime).
         self._next_request_id = 1
         # [LAW:one-source-of-truth] A live request id is in exactly one of these two:
-        # the backlog of command frames not yet on the wire (bounded), or the map of
-        # sent, unacked frames. Nothing else records which ids are live.
+        # the backlog of command frames not yet on the wire, or the map of sent,
+        # unacked frames. Nothing else records which ids are live. max_command_queue
+        # bounds admission through send_command only: a drop requeues every
+        # unacked frame regardless, because each is a live id that owes an outcome.
         self._command_queue: deque[dict[str, Any]] = deque()
         self._pending: dict[int, dict[str, Any]] = {}
 
@@ -710,13 +717,8 @@ class WSClientCore:
             self._command_queue.appendleft(self._pending[rid])
         self._pending.clear()
 
-        # Compute this attempt's delay from the *current* backoff (so the first
-        # retry uses backoff_initial, the next backoff_initial*multiplier, ...),
-        # then advance the backoff and attempt counter for the following retry.
-        delay = self._compute_backoff_delay()
-        self._advance_backoff()
-
-        # Once the reconnect budget is spent, stop trying and close for good.
+        # _backoff_attempt counts the reconnects already scheduled, so it is read
+        # before this one is counted: a budget of N allows N reconnects.
         if limit_reached(self._backoff_attempt, self.config.max_reconnect_attempts):
             return [
                 *self._enter_closed(reason=CloseReason.RECONNECT_EXHAUSTED),
@@ -724,6 +726,12 @@ class WSClientCore:
                     "reconnect_exhausted", reason=reason, attempts=self._backoff_attempt
                 ),
             ]
+
+        # Compute this attempt's delay from the *current* backoff (so the first
+        # retry uses backoff_initial, the next backoff_initial*multiplier, ...),
+        # then advance the backoff and attempt counter for the following retry.
+        delay = self._compute_backoff_delay()
+        self._advance_backoff()
 
         self.state = ConnectionState.BACKOFF
         self._session_id = None
