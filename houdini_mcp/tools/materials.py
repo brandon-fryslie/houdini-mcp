@@ -129,11 +129,12 @@ def assign_material(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a Material SOP write failed) or "error"
         - geometry_path: Path to the geometry node
         - material_path: Path to the assigned material
         - material_sop_path: Path to the Material SOP that was created/modified
         - method: "material_sop" or "shop_materialpath"
+        - updated / failed: each Material SOP write, as {name, value} / {name, reason}
 
     Examples:
         assign_material("/obj/geo1", "/mat/red_metal")
@@ -163,18 +164,19 @@ def assign_material(
         return {"status": "error", "message": f"Material not found: {material_path}"}
 
     # Method 1: Try setting shop_materialpath on the OBJ node directly
-    try:
-        mat_parm = resolve(geo_node, "shop_materialpath")
-    except ParmNotFound:
-        mat_parm = None
-    if mat_parm is not None and not group:
-        write(mat_parm, material_path)
-        return {
-            "status": "success",
-            "geometry_path": geometry_path,
-            "material_path": material_path,
-            "method": "shop_materialpath",
-        }
+    if not group:
+        try:
+            mat_parm = resolve(geo_node, "shop_materialpath")
+        except ParmNotFound:
+            pass
+        else:
+            write(mat_parm, material_path)
+            return {
+                "status": "success",
+                "geometry_path": geometry_path,
+                "material_path": material_path,
+                "method": "shop_materialpath",
+            }
 
     # Method 2: Create/update Material SOP inside the geometry
     # Find the display node to connect to
@@ -208,15 +210,10 @@ def assign_material(
     values = {"shop_materialpath1": material_path}
     if group:
         values["group1"] = group
-    writes = write_all(mat_sop, values)
-    if writes.failed:
-        return {
-            "status": "error",
-            "message": "; ".join(f"{f['name']}: {f['reason']}" for f in writes.failed),
-        }
-
+    # [LAW:no-silent-failure] the SOP exists and is wired whatever the writes
+    # did, so the answer names it and reports each write like every batch tool.
     return {
-        "status": "success",
+        **write_all(mat_sop, values).fields(),
         "geometry_path": geometry_path,
         "material_path": material_path,
         "material_sop_path": mat_sop.path(),

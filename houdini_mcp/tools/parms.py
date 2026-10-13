@@ -1,14 +1,14 @@
 """The one owner of reading and writing a named parameter on a node.
 
-[LAW:one-source-of-truth] Every tool that touches a parameter by name goes
-through here, so how a name resolves to a scalar parm or a tuple, how a Houdini
-value becomes a JSON value, and how a failure is reported are decided once.
+[LAW:one-source-of-truth] How a name resolves to a scalar parm or a tuple,
+how a Houdini value becomes a JSON value, and how a write failure is reported
+are decided here and nowhere else.
 Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
 ``parmTuple("t")`` is the vector, and neither name answers the other call.
 """
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,7 +58,6 @@ class Parm:
     is the ``hou.Parm`` or, when ``is_tuple``, the ``hou.ParmTuple``.
     """
 
-    node_path: str
     name: str
     target: Any
     is_tuple: bool
@@ -71,10 +70,10 @@ def resolve(node: Any, name: str) -> Parm:
     """Find ``name`` on ``node`` as a scalar parm, else as a tuple."""
     parm = node.parm(name)
     if parm is not None:
-        return Parm(node.path(), name, parm, is_tuple=False)
+        return Parm(name, parm, is_tuple=False)
     parm_tuple = node.parmTuple(name)
     if parm_tuple is not None:
-        return Parm(node.path(), name, parm_tuple, is_tuple=True)
+        return Parm(name, parm_tuple, is_tuple=True)
     raise ParmNotFound(node.path(), name)
 
 
@@ -106,9 +105,9 @@ def read_present(hou: Any, node: Any, names: list[str]) -> dict[str, Any]:
     return values
 
 
-def evaluated(hou: Any, node: Any) -> Iterator[tuple[str, Any]]:
-    """Every parm of ``node`` with its JSON value, ``UNEVALUABLE`` where it fails."""
-    for parm in node.parms():
+def evaluated(hou: Any, parms: Iterable[Any]) -> Iterator[tuple[str, Any]]:
+    """Each parm with its JSON value, ``UNEVALUABLE`` where it fails to evaluate."""
+    for parm in parms:
         yield parm.name(), _evaluated_or_marker(hou, parm)
 
 
@@ -156,7 +155,7 @@ def write_all(node: Any, values: Mapping[str, Any]) -> Writes:
         "parameters written node=%s updated=%s failed=%s",
         node.path(),
         [u["name"] for u in updated],
-        [f["name"] for f in failed],
+        failed,
     )
     return Writes(updated=updated, failed=failed)
 

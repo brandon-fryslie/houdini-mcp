@@ -32,7 +32,6 @@ class TestResolve:
         parm = resolve(node_with(radx=2.0), "radx")
         assert parm.is_tuple is False
         assert parm.name == "radx"
-        assert parm.node_path == "/obj/n"
 
     def test_vector_resolves_as_a_tuple(self):
         parm = resolve(node_with(t=[1.0, 2.0, 3.0]), "t")
@@ -89,13 +88,13 @@ class TestEvaluated:
     def test_every_parm_with_its_json_value_or_the_marker(self):
         node = node_with(radx=2.5, file="/a.bgeo")
         node.parm("file").eval = MagicMock(side_effect=RuntimeError("no cook"))
-        assert dict(evaluated(MagicMock(), node)) == {"radx": 2.5, "file": UNEVALUABLE}
+        assert dict(evaluated(MagicMock(), node.parms())) == {"radx": 2.5, "file": UNEVALUABLE}
 
     def test_connection_loss_is_not_an_unevaluable_parm(self, mock_connection):
         node = node_with(radx=2.5)
         node.parm("radx").eval = MagicMock(side_effect=EOFError("stream has been closed"))
         with pytest.raises(EOFError):
-            dict(evaluated(mock_connection, node))
+            dict(evaluated(mock_connection, node.parms()))
 
 
 class TestWriteAll:
@@ -113,7 +112,8 @@ class TestWriteAll:
         assert writes.failed[1]["reason"] == "Parameter not found: nope on /obj/n"
         assert writes.failed[2]["reason"] == "read only"
         assert node._params["radx"] == 3.0
-        assert "updated=['radx'] failed=['t', 'nope', 'bad']" in caplog.text
+        assert "updated=['radx'] failed=[{'name': 't', 'reason': " in caplog.text
+        assert "{'name': 'bad', 'reason': 'read only'}" in caplog.text
 
     def test_nothing_failed_is_success(self):
         writes = write_all(node_with(radx=2.5), {"radx": 1.0})

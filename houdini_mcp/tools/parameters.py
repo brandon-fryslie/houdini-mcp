@@ -183,7 +183,6 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
         hou: The hou module
         node: The node containing the parameter
         parm_template: The parameter template to extract info from
-        json_safe_fn: Function to convert hou values to JSON-safe values
 
     Returns:
         Dict with parameter info, or None if parameter should be skipped

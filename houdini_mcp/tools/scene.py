@@ -146,7 +146,7 @@ def serialize_scene(
         }
 
         if include_params:
-            result["parameters"] = dict(evaluated(hou, node))
+            result["parameters"] = dict(evaluated(hou, node.parms()))
 
         result["children"] = [node_to_dict_recursive(child, depth + 1) for child in node.children()]
 

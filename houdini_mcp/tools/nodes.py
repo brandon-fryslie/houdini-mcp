@@ -179,12 +179,10 @@ def _standard_record(node: Any) -> dict[str, Any]:
 
 def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
     """Evaluated parameter values, at most ``max_params`` of them."""
-    params: dict[str, Any] = {}
-    for i, (name, value) in enumerate(evaluated(hou, node)):
-        if i >= max_params:
-            params["_truncated"] = True
-            break
-        params[name] = value
+    parms = node.parms()
+    params = dict(evaluated(hou, parms[:max_params]))
+    if len(parms) > max_params:
+        params["_truncated"] = True
     return params
 
 

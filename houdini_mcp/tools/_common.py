@@ -431,12 +431,7 @@ def _node_to_dict(
         hou = type("_HouSentinel", (), {})()
 
     if include_params:
-        params: dict[str, Any] = {}
-        for i, (name, value) in enumerate(evaluated(hou, node)):
-            if i >= max_params:
-                break
-            params[name] = value
-        result["parameters"] = params
+        result["parameters"] = dict(evaluated(hou, node.parms()[:max_params]))
 
     # Recursively serialize children
     result["children"] = [

@@ -801,8 +801,10 @@ class TestGetNodeInfo:
         )
 
         assert result["status"] == "success"
-        # Should have truncation indicator
-        assert result["parameters"].get("_truncated") is True
+        assert result["parameters"].pop("_truncated") is True
+        assert result["parameters"] == {f"param{i}": i for i in range(10)}
+        # The cap is applied before evaluation: nothing past it is read.
+        assert not geo1.parm("param10").eval.called
 
     def test_get_node_info_compact_mode(self, mock_connection):
         """Test compact mode returns minimal info."""
@@ -2726,6 +2728,39 @@ class TestMaterialTools:
         assert mat_sop is not None, "expected a material SOP created inside /obj/geo1"
         assert result["material_sop_path"] == mat_sop.path()
         assert mat_sop._params.get("shop_materialpath1") == "/mat/test_mat"
+
+    def test_assign_material_partial_write_still_names_the_sop(self, mock_connection):
+        """A group the Material SOP cannot take is reported, not hidden behind an error."""
+        from houdini_mcp.tools import assign_material
+
+        mock_connection.node("/").createNode("matnet", "mat")
+        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mat_sop = MockHouNode(
+            path="/obj/geo1/material1",
+            name="material1",
+            node_type="material",
+            params={"shop_materialpath1": ""},
+        )
+        mat_sop._display_flag = True
+        mock_connection.add_node(geo)
+        mock_connection.add_node(mat_sop)
+        mock_connection.add_node(
+            MockHouNode(path="/mat/test_mat", name="test_mat", node_type="principledshader")
+        )
+
+        result = assign_material(
+            geometry_path="/obj/geo1",
+            material_path="/mat/test_mat",
+            group="top",
+            host="localhost",
+            port=18811,
+        )
+
+        assert result["status"] == "partial"
+        assert result["material_sop_path"] == "/obj/geo1/material1"
+        assert result["updated"] == [{"name": "shop_materialpath1", "value": "/mat/test_mat"}]
+        assert [f["name"] for f in result["failed"]] == ["group1"]
+        assert mat_sop._params["shop_materialpath1"] == "/mat/test_mat"
 
 
 class TestLayoutTools:
