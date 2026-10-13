@@ -487,8 +487,9 @@ class TestCommandsAndQueues:
         core.send_command({"op": 1})
         core.send_command({"op": 2})  # evicts op0
         assert core.command_backlog == 2
-        connect_core(core)
-        # Only the two most recent survive.
+        # Only the two most recent reach the wire, in order.
+        sent = [f for f in sent_frames(connect_core(core)) if f["type"] == COMMAND]
+        assert [f["payload"]["op"] for f in sent] == [1, 2]
 
     def test_command_queue_reject_policy_raises(self):
         core = WSClientCore(make_config(max_command_queue=1))
@@ -513,15 +514,6 @@ class TestEventBackpressure:
         delivered = [a for a in actions if a.type == ActionType.DELIVER_EVENT]
         assert len(delivered) == 1
         assert delivered[0].event["id"] == "e1"
-
-    def test_event_backpressure_never_blocks(self):
-        # Even with a tiny bound, delivering many events must never raise or
-        # block; excess buffering emits telemetry, the UI thread stays free.
-        core = WSClientCore(make_config(max_event_queue=1))
-        connect_core(core, session_id="s1")
-        for i in range(10):
-            actions = core.on_frame({"type": EVENT, "id": f"e{i}", "session_id": "s1"})
-            assert any(a.type == ActionType.DELIVER_EVENT for a in actions)
 
 
 # --------------------------------------------------------------------------- #
@@ -733,14 +725,14 @@ class TestScenarios:
         # Partition: socket drops before ack. Command must be requeued.
         driver.call("on_socket_error", "partition")
         assert core.state == ConnectionState.BACKOFF
-        assert core.command_backlog >= 1  # requeued for retry
+        assert core.command_backlog == 1  # the one unacked command, requeued
 
         # Heal: reconnect, command re-sent (at-least-once semantics).
         driver.call("on_backoff_elapsed")
         driver.call("on_socket_open")
         driver.call("on_frame", {"type": WELCOME, "session_id": "s2"})
         resent = [f for f in driver.sent if f["type"] == COMMAND and f["request_id"] == rid]
-        assert len(resent) >= 2  # original + retry
+        assert len(resent) == 2  # original + retry
 
         # Finally acked exactly once terminates it.
         driver.call("on_frame", {"type": ACK, "request_id": rid, "session_id": "s2"})
@@ -759,8 +751,8 @@ class TestScenarios:
 
         # Skew: a heartbeat_timeout fires though no ping was sent (stale timer).
         driver.call("on_heartbeat_timeout")
-        # It should be honoured as a liveness failure -> reconnect, never crash.
-        assert core.state in (ConnectionState.BACKOFF, ConnectionState.CONNECTED)
+        # It is honoured as a liveness failure: the link is dead, so reconnect.
+        assert core.state == ConnectionState.BACKOFF
 
         # And a backoff-elapsed firing while already CONNECTED (skewed leftover
         # timer) is ignored, not acted on.
@@ -904,9 +896,14 @@ class WSClientStateMachine(RuleBasedStateMachine):
         assert self.core.state in _VALID_STATES
 
     @invariant()
-    def queues_stay_bounded(self):
+    def command_queue_stays_bounded(self):
         assert self.core.command_backlog <= self.core.config.max_command_queue
-        assert self.core.event_backlog <= self.core.config.max_event_queue
+
+    @invariant()
+    def no_event_is_retained_past_on_frame(self):
+        # Each event is handed to the app inside the on_frame that received it;
+        # a retained event is a leak in a long-lived Houdini session.
+        assert self.core.event_backlog == 0
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):
