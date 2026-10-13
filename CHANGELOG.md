@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Listener reports a dead server as not running** (houdini-laws-etg.qt8):
-  `RemoteListener.status()`, `self_test()` and a repeated `start()` all report
-  `running: False, stale: True` with the endpoint when the held hrpyc server
-  has stopped serving, instead of `running: True`; a stopped listener reports
-  `stale: False`. The shelf's Start Remote and Remote Status show that message.
+  `RemoteListener.status()` and `self_test()` report `running: False, stale:
+  True` with the endpoint when the held hrpyc server has stopped serving,
+  `is_running()` is False, and `start()` replaces it instead of answering
+  `already_running`; a stopped listener reports `stale: False`. The shelf's
+  Start Remote and Remote Status show that message. `self_test()` carries
+  `message` whether or not a server is held.
   The running state is one frozen `RunningListener` record (server, config,
   policy, bound port) instead of four independently nullable fields, and
   `ListenerConfig` and `SecurityPolicy` are frozen.

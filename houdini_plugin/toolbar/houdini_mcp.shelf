@@ -236,7 +236,8 @@ try:
         # and what to do about it.
         hou.ui.displayMessage(
             status["message"],
-            title="Houdini MCP Remote Status"
+            title="Houdini MCP Remote Status",
+            severity=hou.severityType.Warning if status["stale"] else hou.severityType.Message
         )
     else:
         sec = status.get("security", {})
@@ -273,10 +274,8 @@ try:
 
     report = self_test_hrpyc()
 
-    lines = []
+    lines = [report["message"]]
     lines.append("Reachable: %s" % report.get("reachable"))
-    if report.get("stale"):
-        lines.append("STALE: listener reference exists but is not answering.")
     lines.append("Bound endpoints: %s" % ", ".join(report.get("bound_endpoints", []) or ["-"]))
     lines.append("Houdini version: %s" % report.get("houdini_version"))
     lines.append("Plugin version: %s" % report.get("plugin_version"))

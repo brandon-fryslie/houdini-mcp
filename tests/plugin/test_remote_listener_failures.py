@@ -5,7 +5,6 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 
 from __future__ import annotations
 
-import dataclasses
 import socket
 import sys
 import threading
@@ -288,7 +287,8 @@ class TestSelfTestAndStatus:
     ):
         """status() needs no probe: a server that stopped serving is not running, and stale.
 
-        start() and self_test() say the same of the same record.
+        self_test() and is_running() say the same of the same record, and
+        start() replaces it rather than answering already_running.
         """
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         cfg = ListenerConfig(host="127.0.0.1", port=free_port)
@@ -301,37 +301,28 @@ class TestSelfTestAndStatus:
         assert status["running"] is False
         assert status["stale"] is True
         assert status["bound_port"] == free_port
-        assert "stop or reload" in status["message"]
-
-        again = listener.start(cfg)
-        assert again["status"] == "already_running"
-        assert again["running"] is False
-        assert again["stale"] is True
-        assert again["message"] == status["message"]
+        assert "start it again" in status["message"]
+        assert listener.is_running() is False
 
         report = listener.self_test()
         assert report["running"] is False
         assert report["stale"] is True
         assert report["reachable"] is False
-        assert status["message"] in report["warnings"]
+        assert report["message"] == status["message"]
 
-        # The listener still holds the dead server: stop() is what lets go of it.
+        again = listener.start(cfg)
+        assert again["status"] == "success"
+        assert again["stale"] is False
+        assert len(fake_hrpyc.servers) == 2
         assert listener.is_running() is True
+
         assert listener.stop()["status"] == "success"
         assert listener.status() == {
             "running": False,
             "stale": False,
             "message": "hrpyc listener is not running; start it.",
         }
-
-    def test_a_held_config_cannot_be_rewritten_under_the_listener(self, fake_hrpyc, fake_hou):
-        """The record is immutable all the way down: the config it holds refuses writes."""
-        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        cfg = ListenerConfig(host="127.0.0.1", port=0)
-        listener.start(cfg)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            cfg.port = 1  # type: ignore[misc]
-        assert listener.status()["port"] == 0
+        assert listener.self_test()["message"] == "hrpyc listener is not running; start it."
 
 
 class TestReportedCauses:

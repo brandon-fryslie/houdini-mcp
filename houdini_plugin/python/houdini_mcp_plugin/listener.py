@@ -465,9 +465,12 @@ class RunningListener:
             "message": (
                 f"hrpyc listener is running on {self.endpoint}."
                 if serving
-                else f"hrpyc listener on {self.endpoint} stopped serving; stop or reload it."
+                else f"hrpyc listener on {self.endpoint} stopped serving; start it again."
             ),
         }
+
+
+_NOT_RUNNING = "hrpyc listener is not running; start it."
 
 
 class RemoteListener:
@@ -505,12 +508,13 @@ class RemoteListener:
     # -- lifecycle ------------------------------------------------------------
 
     def is_running(self) -> bool:
-        """Whether this listener holds a server: what start() and stop() key on.
+        """Whether this listener holds a serving server.
 
-        A held server that stopped serving is still held; every report says
-        so as ``running: False, stale: True``, and stop() or reload() lets go.
+        A held server that stopped serving is not running: start() replaces
+        it, status() reports it ``stale``, and stop() lets go of it.
         """
-        return self._running is not None
+        held = self._running
+        return held is not None and held.serving
 
     def start(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Start the listener. Idempotent: a second call reports already_running.
@@ -521,8 +525,16 @@ class RemoteListener:
                 :class:`SecurityError` instead of returning an error dict.
         """
         with self._lock:
-            if self._running is not None:
-                return {**self.status(), "status": "already_running"}
+            held = self._running
+            if held is not None and held.serving:
+                return {**held.report(), "status": "already_running"}
+            if held is not None:
+                # [LAW:no-silent-failure] a dead server is replaced, and the
+                # log says so: its close() already ran (that is what cleared
+                # ``active``), so there is nothing left to release.
+                logger.warning(
+                    "hrpyc listener on %s had stopped serving; starting again", held.endpoint
+                )
 
             cfg = config
             policy = resolve_security_policy(cfg)
@@ -646,11 +658,7 @@ class RemoteListener:
         with self._lock:
             held = self._running
             if held is None:
-                return {
-                    "status": "not_running",
-                    "running": False,
-                    "message": "hrpyc listener is not running.",
-                }
+                return {"status": "not_running", "running": False, "message": _NOT_RUNNING}
 
             # [LAW:no-silent-failure] a close() that fails is reported the way
             # start() reports its failures, as the result; the listener still
@@ -697,15 +705,11 @@ class RemoteListener:
 
         ``running`` is True only while the held server is serving; a server
         that died under the listener reports ``running: False, stale: True``
-        with its endpoint, so the reader knows to stop or reload it.
+        with its endpoint, so the reader knows to start it again.
         """
         held = self._running
         if held is None:
-            return {
-                "running": False,
-                "stale": False,
-                "message": "hrpyc listener is not running; start it.",
-            }
+            return {"running": False, "stale": False, "message": _NOT_RUNNING}
         return {**held.report(), **_local_ip_fields()}
 
     def self_test(self) -> dict[str, Any]:
@@ -726,7 +730,8 @@ class RemoteListener:
                 "running": False,
                 "reachable": False,
                 "stale": False,
-                "warnings": ["hrpyc listener is not running."],
+                "message": _NOT_RUNNING,
+                "warnings": [],
                 "guidance": ["Start the listener before running a self-test."],
             }
 
@@ -748,12 +753,9 @@ class RemoteListener:
                 "Listener is exposed to the network without an authentication "
                 "token. Ensure the network is trusted (trusted-network opt-in)."
             )
-        # The held server is in one of three states, each with its own line:
-        # serving and answering (nothing to say), serving but not answering
-        # (the probe's finding), or stopped serving (the report's own message).
-        if report["stale"]:
-            warnings.append(report["message"])
-        elif not reachable:
+        # A server that stopped serving is the report's own message; a server
+        # that serves but did not answer is the probe's finding, and a warning.
+        if report["running"] and not reachable:
             warnings.append(
                 f"hrpyc listener on {held.endpoint} is serving but did not "
                 "answer a connection within 1s."
