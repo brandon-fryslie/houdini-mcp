@@ -1768,9 +1768,6 @@ class TestFindErrorNodes:
         mock_connection.add_node(warn_node)
         warn_node._warnings = ["Parameter 'tx' has expression error"]
 
-        obj_node = mock_connection.node("/obj")
-        obj_node.allSubChildren = lambda: [warn_node]
-
         result = find_error_nodes("/obj", include_warnings=True, host="localhost", port=18811)
 
         assert result["status"] == "success"
@@ -1784,8 +1781,6 @@ class TestFindErrorNodes:
 
         good_node = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(good_node)
-        obj_node = mock_connection.node("/obj")
-        obj_node.allSubChildren = lambda: [good_node]
 
         result = find_error_nodes("/obj", host="localhost", port=18811)
 
@@ -2568,8 +2563,6 @@ class TestMaterialTools:
     def test_create_material_parent_not_found(self, mock_connection):
         """Test error when parent context doesn't exist."""
         from houdini_mcp.tools import create_material
-
-        # Remove /mat from the mock
 
         result = create_material(
             parent_path="/nonexistent",

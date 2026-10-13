@@ -556,6 +556,7 @@ class TestListRenderNodes:
         """Test handling when /out context is not found."""
         from houdini_mcp.tools import list_render_nodes
 
+        assert mock_connection.node("/out") is None
         result = list_render_nodes(host="localhost", port=18811)
         assert result["status"] == "error"
         assert "/out" in result["message"] or "Cannot find" in result["message"]
@@ -629,6 +630,7 @@ class TestCreateRenderNode:
         """Test handling when /out context is not found."""
         from houdini_mcp.tools import create_render_node
 
+        assert mock_connection.node("/out") is None
         result = create_render_node("karma", host="localhost", port=18811)
         assert result["status"] == "error"
         assert "/out" in result["message"] or "Cannot find" in result["message"]
