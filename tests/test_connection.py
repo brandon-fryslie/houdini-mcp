@@ -37,13 +37,6 @@ class TestConnect:
         assert link.hou is mock_hou
         assert link.hou.applicationVersionString() == "20.5.123"
 
-    def test_connect_sets_the_sync_timeout_on_the_link(self, mock_rpyc_with_reset):
-        """A sync request Houdini never answers raises after ``sync_timeout`` instead
-        of hanging the tool; rpyc reads that from the connection's config."""
-        link = connect("localhost", 18811, sync_timeout=7.5)
-
-        assert link.conn._config["sync_request_timeout"] == 7.5
-
     def test_connect_replaces_and_closes_the_previous_link(self, mock_rpyc_with_reset, mock_hou):
         """At most one link is open: a fresh connect closes the one it replaces."""
         first = connect("localhost", 18811)

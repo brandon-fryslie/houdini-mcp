@@ -748,21 +748,18 @@ def check_connection() -> dict[str, Any]:
     Returns connection status, Houdini version, build info, and current hip file.
     Attempts to connect if not already connected.
     """
+    # [LAW:single-enforcer] ensure is the one check: it reconnects when the link is
+    # gone and fails when the live link reaches a different Houdini. [LAW:one-source-of-truth]
+    # ``status`` is ``connected`` in words, whichever Houdini the link reaches; the
+    # failure, if any, is reported beside it rather than overruling it.
     try:
-        # [LAW:single-enforcer] ensure is the one check: it reconnects when the link
-        # is gone and fails when the live link reaches a different Houdini.
         ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
-
-        # Get detailed connection info
         info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        info["status"] = "connected" if info["connected"] else "disconnected"
-        return info
-
     except Exception as e:
         info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        info["status"] = "disconnected"
         info["error"] = str(e)
-        return info
+    info["status"] = "connected" if info["connected"] else "disconnected"
+    return info
 
 
 @mcp.tool()
@@ -1246,9 +1243,8 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
     """
     Manage the Houdini MCP cache system.
 
-    The cache stores frequently-accessed data like node types and parameter
-    schemas to improve performance. Node types are cached on first access
-    and subsequent calls are instant.
+    The cache stores node types, read once per Houdini instance; subsequent
+    calls are instant.
 
     Args:
         action: Cache action to perform:
@@ -1259,7 +1255,7 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
     Returns:
         Dict with cache information including:
         - action: The action that was performed
-        - For "stats": Cache statistics for node_types and parameter_schemas
+        - For "stats": Cache statistics for node_types
         - For "invalidate": Confirmation message
         - For "warmup": Warmup timing and entry counts
 

@@ -59,8 +59,17 @@ def short_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestSharedHandshake:
+    def test_the_sync_request_timeout_is_the_connections_from_the_start(self, tokened_server):
+        """rpyc's classic service makes a root request while connecting; the timeout
+        bounds that one too, so it travels in the connection's config."""
+        conn = handshake.connect("127.0.0.1", tokened_server, token=TOKEN, sync_request_timeout=7.5)
+        try:
+            assert conn._config["sync_request_timeout"] == 7.5
+        finally:
+            conn.close()
+
     def test_tokened_client_connects(self, tokened_server):
-        conn = handshake.connect("127.0.0.1", tokened_server, token=TOKEN)
+        conn = handshake.connect("127.0.0.1", tokened_server, token=TOKEN, sync_request_timeout=5.0)
         try:
             assert conn.modules.os.getpid() == os.getpid()
         finally:
@@ -77,17 +86,21 @@ class TestSharedHandshake:
 
     def test_wrong_token_is_rejected(self, tokened_server):
         with pytest.raises(handshake.HandshakeError, match="closed the connection"):
-            handshake.connect("127.0.0.1", tokened_server, token="hunter3")
+            handshake.connect(
+                "127.0.0.1", tokened_server, token="hunter3", sync_request_timeout=5.0
+            )
 
     def test_token_against_untokened_listener_is_not_acknowledged(
         self, untokened_server, short_handshake
     ):
         # A timeout, not a rejection: retried by connection.connect like any other.
         with pytest.raises(TimeoutError, match="did not acknowledge"):
-            handshake.connect("127.0.0.1", untokened_server, token=TOKEN)
+            handshake.connect("127.0.0.1", untokened_server, token=TOKEN, sync_request_timeout=5.0)
 
     def test_tokenless_client_connects_to_untokened_listener(self, untokened_server):
-        conn = handshake.connect("127.0.0.1", untokened_server, token=None)
+        conn = handshake.connect(
+            "127.0.0.1", untokened_server, token=None, sync_request_timeout=5.0
+        )
         try:
             assert conn.modules.os.getpid() == os.getpid()
         finally:
@@ -98,7 +111,7 @@ class TestSharedHandshake:
         # Framing means the listener reads the whole token the client sent and
         # decides immediately; no timer on either side is involved.
         with pytest.raises(handshake.HandshakeError, match="closed the connection"):
-            handshake.connect("127.0.0.1", tokened_server, token=mistyped)
+            handshake.connect("127.0.0.1", tokened_server, token=mistyped, sync_request_timeout=5.0)
 
     def test_no_token_is_the_empty_exchange(self):
         assert handshake.exchange(None) == (b"", b"")
@@ -216,7 +229,7 @@ class TestMcpServerPresentsToken:
 
         seen: list[tuple[str, int, str | None]] = []
 
-        def fake_connect(host: str, port: int, token: str | None):
+        def fake_connect(host: str, port: int, token: str | None, *, sync_request_timeout: float):
             seen.append((host, port, token))
             return MockRpycConnection(mock_hou)
 
@@ -235,7 +248,9 @@ class TestMcpServerPresentsToken:
     def test_rejection_is_not_retried(self, reset_connection_state, monkeypatch):
         attempts: list[str | None] = []
 
-        def rejecting_connect(host: str, port: int, token: str | None):
+        def rejecting_connect(
+            host: str, port: int, token: str | None, *, sync_request_timeout: float
+        ):
             attempts.append(token)
             raise handshake.HandshakeError("listener rejected the token")
 
@@ -248,7 +263,7 @@ class TestMcpServerPresentsToken:
     def test_no_acknowledgement_is_retried(self, reset_connection_state, monkeypatch):
         attempts: list[str | None] = []
 
-        def silent_connect(host: str, port: int, token: str | None):
+        def silent_connect(host: str, port: int, token: str | None, *, sync_request_timeout: float):
             attempts.append(token)
             raise TimeoutError("listener did not acknowledge the token")
 

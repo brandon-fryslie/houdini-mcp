@@ -147,11 +147,11 @@ def _open_rpyc(host: str, port: int, sync_timeout: float) -> Any:
     logger.info(f"Connecting to Houdini at {host}:{port}")
     # [LAW:one-source-of-truth] the token handshake, and the reading of its
     # token, are houdini_mcp_handshake's; this is the MCP server's client side.
-    conn = handshake.connect(host, port, token=handshake.token_from_env())
-    # A sync request that Houdini never answers (a heavy cook) raises after this
-    # long instead of hanging the tool; rpyc reads the setting from the connection.
-    conn._config["sync_request_timeout"] = sync_timeout
-    return conn
+    # A sync request that Houdini never answers (a heavy cook) raises after
+    # ``sync_timeout`` instead of hanging the tool.
+    return handshake.connect(
+        host, port, token=handshake.token_from_env(), sync_request_timeout=sync_timeout
+    )
 
 
 def _open_in_process(host: str, port: int, sync_timeout: float) -> InProcessConnection:
