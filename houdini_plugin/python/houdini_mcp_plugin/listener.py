@@ -529,12 +529,14 @@ class RemoteListener:
             if held is not None and held.serving:
                 return {**held.report(), "status": "already_running"}
             if held is not None:
-                # [LAW:no-silent-failure] a dead server is replaced, and the
-                # log says so: its close() already ran (that is what cleared
-                # ``active``), so there is nothing left to release.
+                # [LAW:no-silent-failure] a server that stopped serving is let
+                # go of here, whatever the start below does, and the log says
+                # so. Its close() already ran (that is what cleared ``active``),
+                # so nothing is left to release.
                 logger.warning(
-                    "hrpyc listener on %s had stopped serving; starting again", held.endpoint
+                    "hrpyc listener on %s had stopped serving; let go of it", held.endpoint
                 )
+                self._running = None
 
             cfg = config
             policy = resolve_security_policy(cfg)
@@ -586,24 +588,27 @@ class RemoteListener:
                     "message": f"Failed to start hrpyc listener: {exc}",
                 }
 
-            held = RunningListener(server, cfg, policy, bound_port)
-            self._running = held
+            started = RunningListener(server, cfg, policy, bound_port)
+            self._running = started
 
             logger.info(
                 "Started hrpyc listener on %s (exposure=%s, auth=%s)",
-                held.endpoint,
+                started.endpoint,
                 policy.exposure,
                 policy.authenticated,
             )
 
-            return {
-                **self.status(),
-                "status": "success",
-                "message": (
-                    f"hrpyc listener started on {held.endpoint}. "
-                    f"Connect with {held.connection_string}"
-                ),
-            }
+        # Outside the lock: the record is stored, and the local-ip lookup is
+        # I/O no concurrent stop() has to wait on.
+        return {
+            **started.report(),
+            **_local_ip_fields(),
+            "status": "success",
+            "message": (
+                f"hrpyc listener started on {started.endpoint}. "
+                f"Connect with {started.connection_string}"
+            ),
+        }
 
     def _launch_server(
         self, hrpyc: HrpycModule, cfg: ListenerConfig, policy: SecurityPolicy
@@ -658,8 +663,15 @@ class RemoteListener:
         with self._lock:
             held = self._running
             if held is None:
-                return {"status": "not_running", "running": False, "message": _NOT_RUNNING}
+                return {
+                    "status": "not_running",
+                    "running": False,
+                    "message": "hrpyc listener is not running; nothing to stop.",
+                }
 
+            # Read once, before close() clears it: whether this stop() ended a
+            # serving server or let go of one that had already died.
+            was_serving = held.serving
             # [LAW:no-silent-failure] a close() that fails is reported the way
             # start() reports its failures, as the result; the listener still
             # lets go of the server, so the next start() is not answered
@@ -679,11 +691,16 @@ class RemoteListener:
                 }
             finally:
                 self._running = None
-            logger.info("Stopped hrpyc listener (%s)", held.endpoint)
+            logger.info("Stopped hrpyc listener (%s, was_serving=%s)", held.endpoint, was_serving)
             return {
                 "status": "success",
                 "running": False,
-                "message": "hrpyc listener stopped.",
+                "was_serving": was_serving,
+                "message": (
+                    "hrpyc listener stopped."
+                    if was_serving
+                    else f"hrpyc listener on {held.endpoint} had already stopped serving; let go of it."
+                ),
             }
 
     def reload(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:

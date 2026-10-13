@@ -5,6 +5,7 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 
 from __future__ import annotations
 
+import logging
 import socket
 import sys
 import threading
@@ -283,7 +284,7 @@ class TestSelfTestAndStatus:
         assert report["stale"] is True
 
     def test_every_report_agrees_a_dead_server_is_not_running(
-        self, fake_hrpyc, fake_hou, free_port
+        self, fake_hrpyc, fake_hou, free_port, caplog
     ):
         """status() needs no probe: a server that stopped serving is not running, and stale.
 
@@ -310,19 +311,47 @@ class TestSelfTestAndStatus:
         assert report["reachable"] is False
         assert report["message"] == status["message"]
 
-        again = listener.start(cfg)
+        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
+            again = listener.start(cfg)
         assert again["status"] == "success"
         assert again["stale"] is False
         assert len(fake_hrpyc.servers) == 2
         assert listener.is_running() is True
+        assert f"hrpyc listener on 127.0.0.1:{free_port} had stopped serving; let go of it" in (
+            caplog.text
+        )
 
-        assert listener.stop()["status"] == "success"
+        stopped = listener.stop()
+        assert stopped["status"] == "success"
+        assert stopped["was_serving"] is True
+        assert stopped["message"] == "hrpyc listener stopped."
         assert listener.status() == {
             "running": False,
             "stale": False,
             "message": "hrpyc listener is not running; start it.",
         }
         assert listener.self_test()["message"] == "hrpyc listener is not running; start it."
+
+    def test_a_dead_server_is_let_go_of_even_when_the_restart_is_refused(
+        self, fake_hrpyc, fake_hou, free_port, caplog
+    ):
+        """start() lets go of the dead server before it checks the new config."""
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        fake_hrpyc.servers[0].close()
+
+        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
+            refused = listener.start(ListenerConfig(host="0.0.0.0", port=free_port))
+        assert refused["status"] == "error"
+        assert refused["error_type"] == "security"
+        assert "had stopped serving; let go of it" in caplog.text
+        assert "Refusing to start listener" in caplog.text
+        assert listener.status() == {
+            "running": False,
+            "stale": False,
+            "message": "hrpyc listener is not running; start it.",
+        }
+        assert len(fake_hrpyc.servers) == 1
 
 
 class TestReportedCauses:
@@ -418,12 +447,19 @@ class TestReconnect:
         assert result["status"] == "success"
         assert listener.self_test()["reachable"] is True
 
-    def test_stop_clears_stale_state(self, fake_hrpyc, fake_hou, free_port):
+    def test_stop_clears_stale_state(self, fake_hrpyc, fake_hou, free_port, caplog):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
         fake_hrpyc.servers[0].close()
 
-        result = listener.stop()
-        # Stop must succeed even if the server was already dead.
-        assert result["status"] in ("success", "not_running")
+        with caplog.at_level(logging.INFO, logger=listener_module.logger.name):
+            result = listener.stop()
+        # stop() lets go of a dead server and says that is what it did.
+        assert result["status"] == "success"
+        assert result["was_serving"] is False
+        assert result["message"] == (
+            f"hrpyc listener on 127.0.0.1:{free_port} had already stopped serving; let go of it."
+        )
+        assert f"Stopped hrpyc listener (127.0.0.1:{free_port}, was_serving=False)" in caplog.text
         assert listener.is_running() is False
+        assert listener.status()["stale"] is False

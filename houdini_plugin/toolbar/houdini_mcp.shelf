@@ -112,7 +112,6 @@ try:
     from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, get_hrpyc_status, parse_port
 
     if is_hrpyc_running():
-        # Held but stopped serving says so here, with what to do about it.
         hou.ui.displayMessage(
             get_hrpyc_status()["message"],
             title="Houdini MCP Remote"
