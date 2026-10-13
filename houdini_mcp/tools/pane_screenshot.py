@@ -45,9 +45,8 @@ from pathlib import Path
 from typing import Any
 
 from ._common import (
-    HoudiniConnectionError,
     ensure_connected,
-    get_connection,
+    ensure_link,
     handle_connection_errors,
 )
 
@@ -89,20 +88,15 @@ VALID_PANE_TYPES: list[str] = [
 ]
 
 
-def _get_qt_modules() -> tuple[Any, Any, Any]:
-    """Get Qt modules from the live Houdini connection.
+def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
+    """Get Qt modules from the connection to the Houdini ``host:port`` names.
 
     Returns:
         Tuple of (QtWidgets, QtCore, QtGui) module references
-
-    Raises:
-        HoudiniConnectionError: If no Houdini connection is open
     """
     # [LAW:single-enforcer] the connection module owns the connection; it is the
     # same object whether Houdini is remote (rpyc) or this interpreter.
-    conn = get_connection()
-    if conn is None:
-        raise HoudiniConnectionError("No Houdini connection is open")
+    conn = ensure_link(host, port).conn
 
     QtWidgets = conn.modules["PySide2.QtWidgets"]
     QtCore = conn.modules["PySide2.QtCore"]
@@ -332,7 +326,7 @@ def capture_pane_screenshot(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules()
+        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
     except Exception as e:
         return {
             "status": "error",
@@ -529,7 +523,7 @@ def render_node_network(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules()
+        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
     except Exception as e:
         return {
             "status": "error",
@@ -619,7 +613,7 @@ def capture_multiple_panes(
 
     # Get Qt modules from RPyC connection
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules()
+        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
     except Exception as e:
         return {
             "status": "error",

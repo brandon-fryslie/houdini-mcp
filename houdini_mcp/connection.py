@@ -571,6 +571,21 @@ def is_connected() -> bool:
     return _houdini.is_connected()
 
 
+def ensure_link(host: str = "localhost", port: int = 18811) -> Link:
+    """
+    The open ``Link`` to the Houdini ``host:port`` names, connecting or reconnecting if needed.
+
+    [LAW:parse-dont-validate] A ``Link`` is proof the connection reached Houdini:
+    a tool that needs the connection object asks here and gets one that cannot be
+    absent, instead of reading the installed one and guarding against None.
+
+    Raises:
+        HoudiniConnectionError: If unable to establish connection, or if the
+            installed connection reaches a different Houdini than the one named
+    """
+    return _houdini.ensure(host, port)
+
+
 def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
     """
     The ``hou`` of the Houdini ``host:port`` names, connecting or reconnecting if needed.
@@ -585,7 +600,7 @@ def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
         HoudiniConnectionError: If unable to establish connection, or if the
             installed connection reaches a different Houdini than the one named
     """
-    return _houdini.ensure(host, port).hou
+    return ensure_link(host, port).hou
 
 
 def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
@@ -606,7 +621,8 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
     Args:
         host: Houdini server hostname
         port: Houdini RPC port
-        timeout: How long the probe's one RPC call may wait (default: 5.0)
+        timeout: How long each of the probe's sync requests may wait (default: 5.0);
+            the TCP connect and token handshake are bounded by the handshake module
 
     Returns:
         True if Houdini RPC server is reachable, False otherwise.

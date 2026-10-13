@@ -88,6 +88,13 @@ class TestNodeTypeCacheIsTiedToItsInstance:
 
         assert cache.get_categories() == ["Object"]
 
+    def test_invalidate_empties_every_read(self) -> None:
+        cache = NodeTypeCache()
+        cache.get_all_types(_hou_with_types("box"))
+        cache.invalidate()
+
+        assert (cache.filter_types(), cache.get_categories()) == ([], [])
+
     def test_categories_are_not_a_second_lookup(self) -> None:
         cache = NodeTypeCache()
         cache.get_all_types(_hou_with_types("box"))

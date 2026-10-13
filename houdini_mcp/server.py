@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import tools
-from .connection import describe_target, ensure_connected, get_connection_info, is_connected, ping
+from .connection import describe_target, ensure_connected, get_connection_info, ping
 from .tools._common import apply_response_cap
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
@@ -749,10 +749,9 @@ def check_connection() -> dict[str, Any]:
     Attempts to connect if not already connected.
     """
     try:
-        # First try a quick ping
-        if not is_connected():
-            # Try to connect
-            ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
+        # [LAW:single-enforcer] ensure is the one check: it reconnects when the link
+        # is gone and fails when the live link reaches a different Houdini.
+        ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
 
         # Get detailed connection info
         info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)

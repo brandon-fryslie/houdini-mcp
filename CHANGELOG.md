@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state with no `validate` mode and no teardown; `get_connection_info` reports the
   host, port and target actually reached when connected. `use_in_process_houdini()`
   becomes `use_houdini(IN_PROCESS_HOUDINI)`. The sync timeout is set by the rpyc
-  opener, and `ping`'s `timeout` now bounds its one RPC call. The node type cache is
+  opener, and `ping`'s `timeout` now bounds each of its sync requests. The node type cache is
   tied to the `hou` it was read from: a new connection repopulates it on first use,
   and `get_all_types`/`get_categories` drop their unused `host`/`port` arguments.
   Removed as dead: `get_hou`, `quick_health_check`, `_safe_disconnect`, the stub

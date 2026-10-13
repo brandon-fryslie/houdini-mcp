@@ -19,7 +19,7 @@ from ..connection import (
     TransportFailure,
     disconnect,
     ensure_connected,
-    get_connection,
+    ensure_link,
     is_connected,
     safe_execute,
     transport_failure,
@@ -32,8 +32,8 @@ T = TypeVar("T")
 __all__ = [
     # Connection utilities
     "ensure_connected",
+    "ensure_link",
     "is_connected",
-    "get_connection",
     "HoudiniConnectionError",
     "disconnect",
     "safe_execute",

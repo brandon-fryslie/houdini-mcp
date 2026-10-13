@@ -179,9 +179,11 @@ class TestStdioServerSurface:
         fakes = {name: object() for name in ("QtWidgets", "QtCore", "QtGui")}
         for name, module in fakes.items():
             monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
-        ensure_connected("localhost", 18811)
-
-        assert _get_qt_modules() == (fakes["QtWidgets"], fakes["QtCore"], fakes["QtGui"])
+        assert _get_qt_modules("localhost", 18811) == (
+            fakes["QtWidgets"],
+            fakes["QtCore"],
+            fakes["QtGui"],
+        )
 
 
 def _wait_until_stopped(plugin_server: Any, timeout: float = 5.0) -> None:

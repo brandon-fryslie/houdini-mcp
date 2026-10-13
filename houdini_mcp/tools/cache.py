@@ -177,9 +177,6 @@ class NodeTypeCache(BaseCache):
             Every cached type matching both filters; the caller pages it.
         """
         with self._lock:
-            if not self._valid:
-                return []
-
             # Start with category filter
             if category:
                 cat_lower = category.lower()
@@ -204,6 +201,14 @@ class NodeTypeCache(BaseCache):
         """
         with self._lock:
             return self._categories.copy()
+
+    def invalidate(self) -> None:
+        """Forget the types and the ``hou`` they came from; every read is empty until
+        ``get_all_types`` fills the cache again."""
+        with self._lock:
+            self._all_types, self._by_category, self._categories = [], {}, []
+            self._hou = None
+            super().invalidate()
 
     def _populate(self, hou: Any) -> None:
         """
