@@ -20,8 +20,14 @@ The **Houdini MCP** shelf provides:
 | ------------------ | ---------------------------------------------------------------- |
 | **Start Remote**   | Start the hrpyc listener (bind/security from environment)        |
 | **Stop Remote**    | Stop the listener (idempotent)                                   |
-| **Remote Status**  | Show bind host, actual bound port, exposure, auth                |
+| **Remote Status**  | Show bind host, actual bound port, exposure, auth; or that the listener stopped serving |
 | **Remote Self-Test** | Reachability + versions + loopback warning + firewall guidance |
+
+A listener whose server stopped serving under it (the accept loop ended, the
+socket closed) is **stale**: `get_hrpyc_status()` and `self_test_hrpyc()`
+report `running: False, stale: True` with the endpoint, and **Start Remote**
+says the same instead of starting a second one. **Stop Remote** (or
+`reload_hrpyc_server()`) lets go of it; then **Start Remote** works again.
 
 ## Configuration (environment variables)
 

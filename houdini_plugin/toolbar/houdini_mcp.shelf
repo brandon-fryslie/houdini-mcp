@@ -109,11 +109,12 @@ Use this for:
 import hou
 
 try:
-    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, parse_port
+    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, get_hrpyc_status, parse_port
 
     if is_hrpyc_running():
+        # Held but stopped serving says so here, with what to do about it.
         hou.ui.displayMessage(
-            "Remote server (hrpyc) is already running.",
+            get_hrpyc_status()["message"],
             title="Houdini MCP Remote"
         )
     else:
@@ -231,9 +232,10 @@ try:
 
     status = get_hrpyc_status()
     if not status.get("running"):
+        # Not started, or held but stopped serving: the message names which
+        # and what to do about it.
         hou.ui.displayMessage(
-            "Remote listener (hrpyc) is not running.\n\n"
-            "Click 'Start Remote' to enable remote connections.",
+            status["message"],
             title="Houdini MCP Remote Status"
         )
     else:
