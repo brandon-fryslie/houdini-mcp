@@ -379,6 +379,7 @@ def _blocked(
     }
 
 
+@handle_connection_errors("execute_code")
 def execute_code(
     code: str,
     capture_diff: bool = False,
@@ -446,7 +447,6 @@ def execute_code(
     )
 
 
-@handle_connection_errors("execute_code")
 def _execute_with_grant(
     code: str,
     grant: ExecutionGrant,

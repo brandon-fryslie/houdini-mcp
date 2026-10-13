@@ -40,9 +40,11 @@ def parse_code(code: str) -> ast.Module:
     """Parse user code; raises ``SyntaxError`` so the caller can refuse loudly."""
     try:
         return ast.parse(code)
-    except ValueError as exc:
-        # Early 3.11 releases report a null byte as ValueError; it is still
-        # a program the gates cannot read [LAW:no-silent-failure].
+    except (ValueError, RecursionError, MemoryError) as exc:
+        # Early 3.11 releases report a null byte as ValueError, and the parser
+        # reports a program nested past its stack as RecursionError or
+        # MemoryError; each is still a program the gates cannot read
+        # [LAW:no-silent-failure], refused by the one syntax gate.
         raise SyntaxError(str(exc)) from exc
 
 

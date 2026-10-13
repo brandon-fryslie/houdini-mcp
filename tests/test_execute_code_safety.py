@@ -974,6 +974,24 @@ class TestSyntaxGate:
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
 
+    @pytest.mark.parametrize(
+        "code",
+        ["1" + "+1" * 100_000, "-" * 100_000 + "1"],
+        ids=["recursion-error", "memory-error"],
+    )
+    @pytest.mark.parametrize("policy", ["normal", "privileged"])
+    def test_program_too_deep_to_parse_is_a_syntax_refusal(self, mock_connection, code, policy):
+        """The parser gives up with RecursionError or MemoryError on these; the
+        gate reports them as a program it cannot read, under a known policy and
+        under the unknown-policy refusal alike, never as a raised exception."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(code, policy=policy, host="localhost", port=18811)
+        assert result["status"] == "error"
+        assert "traceback" not in result or "SyntaxError" in result["traceback"]
+        expected = "syntax_error" if policy == "normal" else "unknown_policy"
+        assert result["audit"]["blocked_reason"] == expected
+
     def test_null_byte_is_a_parse_failure_without_a_line(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
