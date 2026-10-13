@@ -3,7 +3,7 @@
 import socket
 import threading
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -505,6 +505,48 @@ class TestPing:
 
         assert raised.value.target == "localhost:18811"
         assert "stream closed" in str(raised.value)
+        assert isinstance(raised.value.__cause__, EOFError)
+        assert mock_conn.closed is True
+
+    def test_ping_closes_a_link_it_could_not_prove(self, mock_hou):
+        """A listener that accepts the link but exposes no ``hou`` is not a reachable
+        Houdini, and the socket the probe opened does not outlive the failed proof."""
+        mock_conn = MockRpycConnection(mock_hou)
+        type(mock_conn.modules).hou = PropertyMock(side_effect=EOFError("listener went away"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(HoudiniConnectionError, match="listener went away"):
+                ping("localhost", 18811)
+
+        assert mock_conn.closed is True
+
+    def test_ping_lets_the_reached_houdinis_own_fault_leave_as_itself(self, mock_hou):
+        """A proven link whose Houdini raises while answering is not an unreached
+        Houdini: the fault leaves as itself for the boundary to classify, and the
+        probe's link is still closed."""
+        mock_conn = MockRpycConnection(mock_hou)
+        mock_hou.hipFile.path = MagicMock(side_effect=RuntimeError("hip path unavailable"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(RuntimeError, match="hip path unavailable"):
+                ping("localhost", 18811)
+
+        assert mock_conn.closed is True
+
+    def test_ping_reports_a_link_that_fails_while_answering_as_unanswered(self, mock_hou):
+        """A proven link that drops while answering is the probe's own "no answer",
+        naming the target and the cause, not a loss of the server's connection."""
+        mock_conn = MockRpycConnection(mock_hou)
+        mock_hou.hipFile.path = MagicMock(side_effect=EOFError("stream closed"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(HoudiniConnectionError) as raised:
+                ping("localhost", 18811)
+
+        assert raised.value.target == "localhost:18811"
         assert isinstance(raised.value.__cause__, EOFError)
         assert mock_conn.closed is True
 

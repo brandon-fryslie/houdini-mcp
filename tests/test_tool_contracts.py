@@ -438,6 +438,22 @@ class TestServedFailures:
             assert record["hip_file"] == in_process_houdini.hipFile.path(), probe
         assert set(records["check_connection"]) == set(records["ping_houdini"])
 
+    async def test_a_ping_whose_houdini_cannot_answer_is_the_fault_it_raised(
+        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The probe that opens its own link classifies a fault the same way: what
+        the reached Houdini raises while answering is ``operation_failed`` naming
+        it, never ``connection_unavailable`` with a remedy for reaching Houdini."""
+
+        def cannot_answer() -> str:
+            raise RuntimeError("hou is mid-shutdown")
+
+        monkeypatch.setattr(in_process_houdini.hipFile, "path", cannot_answer)
+        failure = await self.failure_of(client, "ping_houdini", {})
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.exception == "RuntimeError"
+        assert "hou is mid-shutdown" in failure.message
+
     async def test_a_probe_whose_houdini_cannot_answer_is_not_connected(
         self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:

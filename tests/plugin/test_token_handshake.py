@@ -357,7 +357,9 @@ class TestReachingTheListenerIsBounded:
             raise TimeoutError("timed out")
 
         monkeypatch.setattr(SocketStream, "connect", blackholed)
-        with pytest.raises(TimeoutError):
+        with pytest.raises(
+            TimeoutError, match=r"10\.255\.255\.1:18811 did not accept a connection within 0\.3s"
+        ):
             handshake.connect("10.255.255.1", 18811, token=TOKEN, sync_request_timeout=5.0)
 
         assert attempts == [{"timeout": handshake.HANDSHAKE_TIMEOUT, "attempts": 1}]

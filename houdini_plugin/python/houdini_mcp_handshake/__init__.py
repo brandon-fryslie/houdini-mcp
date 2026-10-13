@@ -162,8 +162,9 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
     connect or the acknowledgement takes longer than ``HANDSHAKE_TIMEOUT``.
 
     Reaching the listener - connect, token, acknowledgement - is bounded here,
-    each step by ``HANDSHAKE_TIMEOUT``, and attempted once: retrying is the
-    connection module's one policy, so no attempt hides inside this one.
+    each step by ``HANDSHAKE_TIMEOUT`` once the host is resolved (resolving it
+    is the OS resolver's, under its own bound), and attempted once: retrying is
+    the connection module's one policy, so no attempt hides inside this one.
     ``sync_request_timeout`` bounds every sync request on the connection, the
     root request the classic service makes while connecting included:
     [LAW:no-ambient-temporal-coupling] it is part of the connection from the
@@ -179,7 +180,15 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
     # [LAW:single-enforcer] rpyc's connect would otherwise retry a connect timeout
     # six times with backoff under a 3s deadline of its own: a second retry policy
     # beneath the connection module's, and a bound nobody here owns.
-    stream = SocketStream.connect(host, port, timeout=HANDSHAKE_TIMEOUT, attempts=1)
+    try:
+        stream = SocketStream.connect(host, port, timeout=HANDSHAKE_TIMEOUT, attempts=1)
+    except TimeoutError as exc:
+        # [LAW:no-silent-failure] like the acknowledgement below, the failure says
+        # which step took too long and where, not rpyc's bare "timed out".
+        raise TimeoutError(
+            f"listener at {host}:{port} did not accept a connection within "
+            f"{HANDSHAKE_TIMEOUT}s (the port is firewalled or nothing listens there)"
+        ) from exc
     try:
         # A failed write is a transport error like any other, retried; only the
         # listener closing after it has read the frame is evidence of rejection.

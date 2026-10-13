@@ -582,14 +582,16 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
 
     Returns:
         The Houdini reached, as ``Link.info`` records it: the same record
-        ``check_connection`` reports, naming the target the probe actually used.
-        [LAW:one-source-of-truth] a probe never labels its answer with a host:port
-        the connection did not use; in-process the target is this interpreter.
+        ``check_connection`` reports. [LAW:one-source-of-truth] ``target`` names
+        the Houdini the probe actually reached - in-process, this interpreter,
+        whatever ``host`` and ``port`` the link was opened with.
 
     Raises:
         HoudiniConnectionError: naming the target and the cause, when no Houdini
             answered there. [LAW:no-silent-failure] the cause travels with the
-            failure instead of being logged and collapsed into False.
+            failure instead of being logged and collapsed into False. What the
+            reached Houdini raises while answering is its own failure, and leaves
+            as itself for the tool boundary to classify as it does for every tool.
     """
     target = _houdini.target.describe(host, port)
 
@@ -599,9 +601,10 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
             target=target,
         )
 
+    # [LAW:single-enforcer] opening and proving a link is _open_link's: a probe
+    # that fails to prove its link leaves no socket open, like any other attempt.
     try:
-        conn = _houdini.target.open(host, port, timeout)
-        link = Link(_houdini.target, host, port, conn, conn.modules.hou)
+        link = _open_link(_houdini.target, host, port, timeout)
     except Exception as e:
         raise unanswered(e) from e
     # The probe's link closes like any other: a close that fails is logged, and
@@ -609,6 +612,11 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     try:
         return link.info()
     except Exception as e:
-        raise unanswered(e) from e
+        # [LAW:parse-dont-validate] the installed target says which exceptions are
+        # the link's. Those are the probe's "no answer"; the server's own link is
+        # not torn down for a probe link that failed. The rest are the code's.
+        if _houdini.target.transport_failure(e) is not None:
+            raise unanswered(e) from e
+        raise
     finally:
         link.close()

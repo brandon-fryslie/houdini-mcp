@@ -44,7 +44,7 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
 
     return {
         "status": "success",
-        "hip_file": hip_file if hip_file else "untitled.hip",
+        "hip_file": hip_file,
         "houdini_version": hou.applicationVersionString(),
         "node_count": len(nodes),
         "nodes": nodes,

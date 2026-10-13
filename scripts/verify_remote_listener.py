@@ -60,6 +60,11 @@ def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
+# How long one read of the version or hip file may wait: a live listener answers
+# these at once, so a longer wait is a Houdini too busy to be verified now.
+RPC_TIMEOUT = 10.0
+
+
 def _rpyc_check(host: str, port: int) -> bool:
     """Connect via rpyc.classic and read the Houdini version (read-only)."""
     try:
@@ -74,7 +79,9 @@ def _rpyc_check(host: str, port: int) -> bool:
     # [LAW:one-source-of-truth] the client side of the token handshake, and the
     # reading of HOUDINI_RPC_TOKEN, are the handshake package's, not copies kept here.
     try:
-        conn = handshake.connect(host, port, token=handshake.token_from_env())
+        conn = handshake.connect(
+            host, port, token=handshake.token_from_env(), sync_request_timeout=RPC_TIMEOUT
+        )
         hou = conn.modules.hou
         version = hou.applicationVersionString()
         hip = hou.hipFile.path()

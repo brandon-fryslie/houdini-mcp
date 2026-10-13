@@ -12,11 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Connection probes report the Houdini they reached, under bounds they own**
   (houdini-laws-etg.eig): `ping_houdini` returns the same record as
   `check_connection` (`target`, `houdini_version`, `houdini_build`, `hip_file`),
-  naming the Houdini the probe actually used - in-process, this interpreter -
-  in place of the configured `host` and `port`. The TCP connect to a listener is
-  one attempt bounded by the handshake deadline (5s), instead of rpyc's six
-  backoff attempts under a 3s deadline of its own beneath the connection
-  module's retries. `hip_file` is what Houdini reports; no name is invented for it.
+  whose `target` names the Houdini the probe actually used - in-process, this
+  interpreter, whatever `host` and `port` say. The probe opens and proves its
+  link the way every connection does, closing it on a failed proof, and a fault
+  the reached Houdini raises while answering is its own failure (`operation_failed`
+  in-process), not a connection remedy. The TCP connect to a listener is one
+  attempt bounded by the handshake deadline (5s) and fails naming the step,
+  instead of rpyc's six backoff attempts under a 3s deadline of its own beneath
+  the connection module's retries. `hip_file` is what Houdini reports, from
+  `get_scene_info` too; no name is invented for it.
 
 - **`execute_code` captures only its own program's output** (houdini-laws-etg.og9):
   while a program runs, prints and stderr writes from other threads reach their
