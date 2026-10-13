@@ -227,6 +227,7 @@ Run manual verification:
 ```bash
 python3 << 'EOF'
 from unittest.mock import MagicMock, patch
+from houdini_mcp.connection import connect
 from houdini_mcp.tools import get_parameter_schema
 
 mock_hou = MagicMock()
@@ -249,13 +250,19 @@ mock_parm.eval.return_value = 2.5
 mock_node.parm.return_value = mock_parm
 mock_hou.node.return_value = mock_node
 
-with patch('houdini_mcp.connection._hou', mock_hou), \
-     patch('houdini_mcp.connection._connection', MagicMock()):
-    result = get_parameter_schema("/obj/geo1/sphere1", "radx")
-    print(f"✓ Status: {result['status']}")
-    print(f"✓ Parameter: {result['parameters'][0]['name']}")
-    print(f"✓ Type: {result['parameters'][0]['type']}")
-    print(f"✓ Current value: {result['parameters'][0]['current_value']}")
+# Install mock_hou through the connection's own API: the handshake seam hands
+# out a connection whose ``modules.hou`` is the mock.
+mock_conn = MagicMock(closed=False)
+mock_conn.modules.hou = mock_hou
+with patch('houdini_mcp.connection.handshake') as handshake:
+    handshake.connect.return_value = mock_conn
+    connect()
+
+result = get_parameter_schema("/obj/geo1/sphere1", "radx")
+print(f"✓ Status: {result['status']}")
+print(f"✓ Parameter: {result['parameters'][0]['name']}")
+print(f"✓ Type: {result['parameters'][0]['type']}")
+print(f"✓ Current value: {result['parameters'][0]['current_value']}")
 EOF
 ```
 

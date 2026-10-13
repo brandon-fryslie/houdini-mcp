@@ -357,7 +357,7 @@ def list_node_types(
         result["category"] = category
     else:
         # Get available categories from cache
-        result["categories_available"] = node_type_cache.get_categories(hou)
+        result["categories_available"] = node_type_cache.get_categories()
 
     # Add cache stats for visibility
     cache_stats = node_type_cache.stats

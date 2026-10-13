@@ -1,7 +1,7 @@
 """In-memory caching for expensive Houdini queries.
 
 This module provides caching infrastructure for data that rarely changes
-during a Houdini session, such as node types and parameter schemas.
+during a Houdini session, such as node types.
 
 Key features:
 - TTL (time-to-live) based expiration
@@ -194,18 +194,15 @@ class NodeTypeCache(BaseCache):
 
             return list(source)
 
-    def get_categories(self, hou: Any) -> list[str]:
+    def get_categories(self) -> list[str]:
         """
-        Get list of available node type categories.
+        The categories of the types ``get_all_types`` last read.
 
-        Args:
-            hou: The hou module
-
-        Returns:
-            List of category names
+        [LAW:dataflow-not-control-flow] A read of cached data, like ``filter_types``:
+        ``get_all_types`` is the one place the cache is filled and the one lookup
+        the stats count, so a tool's categories are not a second lookup.
         """
         with self._lock:
-            self.get_all_types(hou)
             return self._categories.copy()
 
     def _populate(self, hou: Any) -> None:

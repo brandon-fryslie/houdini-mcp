@@ -619,12 +619,11 @@ def reset_connection_state() -> Generator[None, None, None]:
     Goes through the connection module's own API: the owner is the one writer of
     connection state, in tests as in production.
     """
-    from houdini_mcp.connection import REMOTE_HOUDINI, disconnect, use_houdini
+    from houdini_mcp.connection import REMOTE_HOUDINI, use_houdini
 
     use_houdini(REMOTE_HOUDINI)
     yield
     use_houdini(REMOTE_HOUDINI)
-    disconnect()
 
 
 @pytest.fixture
@@ -643,15 +642,16 @@ def mock_rpyc_with_reset(
 def connected_to(reset_connection_state: None) -> Callable[[Any], Any]:
     """Connect to any ``hou`` double through the connection module's own API.
 
-    The handshake seam hands out a connection to the double and ``ensure_connected``
-    installs it the way a tool call would; what the test then sees is a tool's view.
+    The handshake seam hands out a connection to the double and ``connect`` installs
+    it, replacing whatever link stood: the ``hou`` returned is the one installed, in
+    a test that connects twice as in one that connects once.
     """
-    from houdini_mcp.connection import ensure_connected
+    from houdini_mcp.connection import connect
 
     def _connect(hou: Any) -> Any:
         with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
             mock_rpyc_module.connect.return_value = MockRpycConnection(hou)
-            ensure_connected("localhost", 18811)
+            connect("localhost", 18811)
         return hou
 
     return _connect

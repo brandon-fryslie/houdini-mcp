@@ -344,10 +344,14 @@ class HoudiniConnection:
         """The link currently installed, open or not."""
         return self._link
 
+    def _live(self) -> Link | None:
+        """The installed link if it is open, else None; a socket-state read, no RPC."""
+        link = self._link
+        return link if link is not None and link.alive else None
+
     def is_connected(self) -> bool:
         """Whether an open link is installed; a socket-state read, no RPC."""
-        link = self._link
-        return link is not None and link.alive
+        return self._live() is not None
 
     def ensure(self, host: str, port: int) -> Link:
         """The open link to the Houdini ``host:port`` names, opening one if there is none.
@@ -404,9 +408,8 @@ class HoudiniConnection:
     def info(self, host: str, port: int) -> dict[str, Any]:
         """Connection state for diagnostics: the Houdini reached when connected, else
         the one a connection to ``host:port`` would reach."""
-        link = self._link
-        connected = link is not None and link.alive
-        if link is not None and connected:
+        link = self._live()
+        if link is not None:
             host, port, target = link.host, link.port, link.name
         else:
             target = self._target.describe(host, port)
@@ -414,13 +417,13 @@ class HoudiniConnection:
             "host": host,
             "port": port,
             "target": target,
-            "connected": connected,
+            "connected": link is not None,
             "houdini_version": None,
             "houdini_build": None,
             "hip_file": None,
         }
 
-        if link is not None and connected:
+        if link is not None:
             try:
                 info["houdini_version"] = link.hou.applicationVersionString()
                 version_tuple = link.hou.applicationVersion()

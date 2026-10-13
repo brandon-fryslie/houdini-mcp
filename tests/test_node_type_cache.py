@@ -84,4 +84,13 @@ class TestNodeTypeCacheIsTiedToItsInstance:
             "Object": other.nodeTypeCategories.return_value["Sop"]
         }
 
-        assert cache.get_categories(other) == ["Object"]
+        cache.get_all_types(other)
+
+        assert cache.get_categories() == ["Object"]
+
+    def test_categories_are_not_a_second_lookup(self) -> None:
+        cache = NodeTypeCache()
+        cache.get_all_types(_hou_with_types("box"))
+        cache.get_categories()
+
+        assert (cache.stats.hits, cache.stats.misses) == (0, 1)
