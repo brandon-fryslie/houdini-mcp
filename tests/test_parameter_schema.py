@@ -1,7 +1,7 @@
 """Tests for the get_parameter_schema function."""
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from tests.conftest import MockHouModule, MockHouNode
 
@@ -93,7 +93,7 @@ def create_mock_hou_with_parm_types():
 class TestGetParameterSchema:
     """Tests for get_parameter_schema function."""
 
-    def test_get_parameter_schema_single_float(self, mock_connection):
+    def test_get_parameter_schema_single_float(self, connected_to):
         """Test getting schema for a single float parameter."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -125,11 +125,8 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=radx_template)
         mock_parm.eval = MagicMock(return_value=2.5)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1", "radx")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1", "radx")
 
         assert result["status"] == "success"
         assert result["node_path"] == "/obj/geo1/sphere1"
@@ -145,7 +142,7 @@ class TestGetParameterSchema:
         assert param["current_value"] == 2.5
         assert param["is_animatable"] is True
 
-    def test_get_parameter_schema_vector(self, mock_connection):
+    def test_get_parameter_schema_vector(self, connected_to):
         """Test getting schema for a vector parameter (translate)."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -175,11 +172,8 @@ class TestGetParameterSchema:
         mock_parm_tuple.parmTemplate = MagicMock(return_value=t_template)
         mock_parm_tuple.eval = MagicMock(return_value=(1.0, 2.0, 3.0))
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1", "t")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1", "t")
 
         assert result["status"] == "success"
         assert result["count"] == 1
@@ -193,7 +187,7 @@ class TestGetParameterSchema:
         assert param["current_value"] == [1.0, 2.0, 3.0]
         assert param["is_animatable"] is True
 
-    def test_get_parameter_schema_menu(self, mock_connection):
+    def test_get_parameter_schema_menu(self, connected_to):
         """Test getting schema for a menu parameter."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -222,11 +216,8 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=type_template)
         mock_parm.eval = MagicMock(return_value=0)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1", "type")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1", "type")
 
         assert result["status"] == "success"
         param = result["parameters"][0]
@@ -241,7 +232,7 @@ class TestGetParameterSchema:
         assert param["menu_items"][1] == {"label": "Mesh", "value": "mesh"}
         assert param["menu_items"][2] == {"label": "Polygon Mesh", "value": "polymesh"}
 
-    def test_get_parameter_schema_all_parameters(self, mock_connection):
+    def test_get_parameter_schema_all_parameters(self, connected_to):
         """Test getting schema for all parameters on a node."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -298,11 +289,8 @@ class TestGetParameterSchema:
                 mock_parm.parmTemplate = MagicMock(return_value=template)
                 mock_parm.eval = MagicMock(return_value=sphere._params.get(template.name()))
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1")
 
         assert result["status"] == "success"
         assert result["count"] == 4
@@ -315,7 +303,7 @@ class TestGetParameterSchema:
         assert "radz" in param_names
         assert "type" in param_names
 
-    def test_get_parameter_schema_max_parms_limit(self, mock_connection):
+    def test_get_parameter_schema_max_parms_limit(self, connected_to):
         """Test that max_parms limits the number of returned parameters."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -340,17 +328,14 @@ class TestGetParameterSchema:
 
         sphere.parmTemplates = MagicMock(return_value=templates)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1", max_parms=5)
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1", max_parms=5)
 
         assert result["status"] == "success"
         assert result["count"] == 5
         assert len(result["parameters"]) == 5
 
-    def test_get_parameter_schema_skip_folders(self, mock_connection):
+    def test_get_parameter_schema_skip_folders(self, connected_to):
         """Test that folder/separator parameters are skipped."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -377,18 +362,15 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=templates[1])
         mock_parm.eval = MagicMock(return_value=1.0)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1")
 
         assert result["status"] == "success"
         # Should only return radx, not folder or separator
         assert result["count"] == 1
         assert result["parameters"][0]["name"] == "radx"
 
-    def test_get_parameter_schema_toggle_parameter(self, mock_connection):
+    def test_get_parameter_schema_toggle_parameter(self, connected_to):
         """Test getting schema for a toggle parameter."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -412,11 +394,8 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=toggle_template)
         mock_parm.eval = MagicMock(return_value=True)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/box1", "consolidatepts")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/box1", "consolidatepts")
 
         assert result["status"] == "success"
         param = result["parameters"][0]
@@ -426,22 +405,19 @@ class TestGetParameterSchema:
         assert param["is_animatable"] is False
         assert param["current_value"] is True
 
-    def test_get_parameter_schema_node_not_found(self, mock_connection):
+    def test_get_parameter_schema_node_not_found(self, connected_to):
         """Test error handling when node doesn't exist."""
         from houdini_mcp.tools import get_parameter_schema
 
         mock_hou = create_mock_hou_with_parm_types()
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/nonexistent")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/nonexistent")
 
         assert result["status"] == "error"
         assert "Node not found" in result["message"]
 
-    def test_get_parameter_schema_parameter_not_found(self, mock_connection):
+    def test_get_parameter_schema_parameter_not_found(self, connected_to):
         """Test error handling when specific parameter doesn't exist."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -452,16 +428,13 @@ class TestGetParameterSchema:
         )
         mock_hou.add_node(sphere)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/sphere1", "nonexistent_param")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1", "nonexistent_param")
 
         assert result["status"] == "error"
         assert "Parameter not found" in result["message"]
 
-    def test_get_parameter_schema_int_parameter(self, mock_connection):
+    def test_get_parameter_schema_int_parameter(self, connected_to):
         """Test getting schema for an integer parameter."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -487,11 +460,8 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=rows_template)
         mock_parm.eval = MagicMock(return_value=10)
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/grid1", "rows")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/grid1", "rows")
 
         assert result["status"] == "success"
         param = result["parameters"][0]
@@ -503,7 +473,7 @@ class TestGetParameterSchema:
         assert param["max"] == 1000
         assert param["is_animatable"] is True
 
-    def test_get_parameter_schema_string_parameter(self, mock_connection):
+    def test_get_parameter_schema_string_parameter(self, connected_to):
         """Test getting schema for a string parameter."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -530,11 +500,8 @@ class TestGetParameterSchema:
         mock_parm.parmTemplate = MagicMock(return_value=file_template)
         mock_parm.eval = MagicMock(return_value="/path/to/geo.bgeo")
 
-        with (
-            patch("houdini_mcp.connection._hou", mock_hou),
-            patch("houdini_mcp.connection._connection", MagicMock()),
-        ):
-            result = get_parameter_schema("/obj/geo1/file1", "file")
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/file1", "file")
 
         assert result["status"] == "success"
         param = result["parameters"][0]

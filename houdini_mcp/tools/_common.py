@@ -21,7 +21,6 @@ from ..connection import (
     ensure_connected,
     get_connection,
     is_connected,
-    quick_health_check,
     safe_execute,
     transport_failure,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "HoudiniConnectionError",
     "disconnect",
     "safe_execute",
-    "quick_health_check",
     "DEFAULT_OPERATION_TIMEOUT",
     # Error handling
     "handle_connection_errors",  # Decorator for consistent error handling

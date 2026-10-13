@@ -521,7 +521,7 @@ uv run python -m houdini_mcp
 ```
 houdini_mcp/
 ├── server.py              # FastMCP server with 43 tool wrappers
-├── connection.py          # RPyC connection with retry/backoff
+├── connection.py          # One owner of the RPyC/in-process link, retry/backoff
 └── tools/                 # Modular tool implementations
     ├── _common.py         # Shared utilities, error handling
     ├── cache.py           # Node type caching with TTL

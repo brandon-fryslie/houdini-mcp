@@ -128,13 +128,13 @@ class NodeTypeCache(BaseCache):
         self._all_types: list[dict[str, str]] = []
         self._by_category: dict[str, list[dict[str, str]]] = {}
         self._categories: list[str] = []
+        # [LAW:one-source-of-truth] the Houdini the cached types were read from. A
+        # ``hou`` is one connection's view of one Houdini instance, so cached data is
+        # tied to the instance by identity: a reconnect hands out a new ``hou``, and the
+        # types it reports are read again rather than served from the old instance.
+        self._hou: Any = None
 
-    def get_all_types(
-        self,
-        hou: Any,
-        host: str = "localhost",
-        port: int = 18811,
-    ) -> list[dict[str, str]]:
+    def get_all_types(self, hou: Any) -> list[dict[str, str]]:
         """
         Get all node types, populating cache if needed.
 
@@ -144,19 +144,18 @@ class NodeTypeCache(BaseCache):
 
         Args:
             hou: The hou module (from ensure_connected)
-            host: Houdini host (for cache key)
-            port: Houdini port (for cache key)
 
         Returns:
             List of all node types with category, name, description
         """
         with self._lock:
-            if self._valid and self._all_types:
+            if self._valid and self._hou is hou and self._all_types:
                 self._record_hit()
                 return self._all_types
 
             self._record_miss()
             self._populate(hou)
+            self._hou = hou
             return self._all_types
 
     def filter_types(
@@ -206,8 +205,7 @@ class NodeTypeCache(BaseCache):
             List of category names
         """
         with self._lock:
-            if not self._valid:
-                self.get_all_types(hou)
+            self.get_all_types(hou)
             return self._categories.copy()
 
     def _populate(self, hou: Any) -> None:
@@ -340,82 +338,14 @@ print(json.dumps(result))
         return all_types, by_category, categories
 
 
-class ParameterSchemaCache(BaseCache):
-    """
-    Cache for parameter schemas.
-
-    Parameter schemas are static per node type - they define what parameters
-    a node type has, their types, ranges, etc. This is expensive to fetch
-    but never changes for a given node type.
-    """
-
-    def __init__(self, ttl: float = 0.0):
-        """
-        Initialize parameter schema cache.
-
-        Args:
-            ttl: Time-to-live in seconds. Default 0 = never expire.
-        """
-        super().__init__("parameter_schemas", ttl)
-        # Key: (category, type_name) -> schema dict
-        self._schemas: dict[tuple[str, str], dict[str, Any]] = {}
-
-    def get_schema(
-        self,
-        hou: Any,
-        node_type_category: str,
-        node_type_name: str,
-    ) -> dict[str, Any] | None:
-        """
-        Get parameter schema for a node type.
-
-        Args:
-            hou: The hou module
-            node_type_category: Node category (e.g., "Sop")
-            node_type_name: Node type name (e.g., "sphere")
-
-        Returns:
-            Schema dict or None if not found
-        """
-        key = (node_type_category.lower(), node_type_name.lower())
-
-        with self._lock:
-            if key in self._schemas:
-                self._record_hit()
-                return self._schemas[key]
-
-            self._record_miss()
-            schema = self._fetch_schema(hou, node_type_category, node_type_name)
-            if schema:
-                self._schemas[key] = schema
-                self._stats.entry_count = len(self._schemas)
-            return schema
-
-    def _fetch_schema(
-        self,
-        hou: Any,
-        node_type_category: str,
-        node_type_name: str,
-    ) -> dict[str, Any] | None:
-        """
-        Fetch parameter schema from Houdini.
-
-        This is called when schema is not in cache.
-        """
-        # Implementation would go here - for now return None
-        # This can be implemented when needed
-        return None
-
-
 # =============================================================================
 # Global Cache Instances
 # =============================================================================
 
-# Global node type cache - shared across all tool calls
+# [LAW:no-shared-mutable-globals] the one node type cache, shared across all tool
+# calls; NodeTypeCache is its owner: every write happens under its lock, and what it
+# holds is tied to the ``hou`` it was read from.
 node_type_cache = NodeTypeCache()
-
-# Global parameter schema cache
-parameter_schema_cache = ParameterSchemaCache()
 
 
 def invalidate_all_caches() -> None:
@@ -426,10 +356,11 @@ def invalidate_all_caches() -> None:
     - Loading a new scene
     - Creating a new scene
     - Plugins are loaded/unloaded
-    - Reconnecting to Houdini
+
+    Reconnecting needs no call: a new connection hands tools a new ``hou``, and the
+    cache repopulates for it on first use.
     """
     node_type_cache.invalidate()
-    parameter_schema_cache.invalidate()
     logger.info("All caches invalidated")
 
 
@@ -449,13 +380,5 @@ def get_cache_stats() -> dict[str, Any]:
             "invalidations": node_type_cache.stats.invalidations,
             "entry_count": node_type_cache.stats.entry_count,
             "last_populate_ms": node_type_cache.stats.last_populate_time_ms,
-        },
-        "parameter_schemas": {
-            "valid": parameter_schema_cache.is_valid(),
-            "hits": parameter_schema_cache.stats.hits,
-            "misses": parameter_schema_cache.stats.misses,
-            "hit_rate": f"{parameter_schema_cache.stats.hit_rate():.1%}",
-            "invalidations": parameter_schema_cache.stats.invalidations,
-            "entry_count": parameter_schema_cache.stats.entry_count,
         },
     }

@@ -3205,11 +3205,11 @@ class TestConnectionErrorHandling:
         assert "cook timed out" in result["message"]
         disconnect.assert_not_called()
 
-    def test_in_process_eof_leaves_the_interpreter_standing(self, monkeypatch):
+    def test_in_process_eof_leaves_the_interpreter_standing(self, reset_connection_state):
         """Under the stdio plugin an EOFError is a truncated file, not a dead link."""
-        import houdini_mcp.connection as conn_module
+        from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
 
-        monkeypatch.setattr(conn_module, "_target", conn_module.IN_PROCESS_HOUDINI)
+        use_houdini(IN_PROCESS_HOUDINI)
         result, disconnect = self._run(EOFError("Ran out of input"), "execute_code")
 
         assert result["status"] == "error"

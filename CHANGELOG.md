@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connection state has one owner** (houdini-laws-etg.bfq): `connection.py`'s
+  module globals (`_connection`, `_hou`, `_target`, `_executor`) are replaced by
+  `HoudiniConnection`, which holds the target and at most one `Link` (target, host,
+  port, connection, `hou`) and writes them only under its lock, so concurrent tool
+  calls that find the link gone share one reconnect. `ensure_connected(host, port)`
+  reaches the Houdini it names or raises `HoudiniConnectionError` naming both the
+  connected and the requested Houdini; it no longer answers a request for one
+  Houdini with a link to another. `connect()` returns the `Link` and closes the link
+  it replaces only after the new one is proven. `is_connected()` is a read of socket
+  state with no `validate` mode and no teardown; `get_connection_info` reports the
+  host, port and target actually reached when connected. `use_in_process_houdini()`
+  becomes `use_houdini(IN_PROCESS_HOUDINI)`. The sync timeout is set by the rpyc
+  opener, and `ping`'s `timeout` now bounds its one RPC call. The node type cache is
+  tied to the `hou` it was read from: a new connection repopulates it on first use,
+  and `get_all_types`/`get_categories` drop their unused `host`/`port` arguments.
+  Removed as dead: `get_hou`, `quick_health_check`, `_safe_disconnect`, the stub
+  `ParameterSchemaCache` and its `parameter_schemas` block in cache stats.
+
 - **Input connections have one record shape** (houdini-laws-etg.7xv): every
   tool that reports a wire reports `{input_index, source_node,
   source_output_index}`, built once by `InputConnection.as_record`.

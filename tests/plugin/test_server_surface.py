@@ -20,12 +20,13 @@ from fastmcp import Client
 import houdini_mcp.connection as conn_module
 from houdini_mcp.connection import (
     IN_PROCESS_HOUDINI,
-    REMOTE_HOUDINI,
     InProcessConnection,
+    describe_target,
+    disconnect,
     ensure_connected,
     get_connection_info,
     ping,
-    use_in_process_houdini,
+    use_houdini,
 )
 
 
@@ -40,8 +41,7 @@ def in_process_houdini(
 
     monkeypatch.setitem(sys.modules, "hou", mock_hou)
     monkeypatch.setattr(conn_module.handshake, "connect", _no_rpyc)
-    monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
-    use_in_process_houdini()
+    use_houdini(IN_PROCESS_HOUDINI)
     yield mock_hou
 
 
@@ -59,8 +59,14 @@ class TestInProcessConnection:
         self, in_process_houdini: Any
     ) -> None:
         ensure_connected("localhost", 18811)
-        conn_module._safe_disconnect()
+        disconnect()
         assert ensure_connected("localhost", 18811) is in_process_houdini
+
+    def test_any_address_names_this_interpreter(self, in_process_houdini: Any) -> None:
+        """In-process there is one Houdini whatever host:port a tool was given, so a
+        call for another address reaches it rather than failing as a mismatch."""
+        assert ensure_connected("localhost", 18811) is in_process_houdini
+        assert ensure_connected("render-farm", 19999) is in_process_houdini
 
     def test_ping_reaches_houdini_without_a_network(self, in_process_houdini: Any) -> None:
         assert ping("some-remote-host", 1) is True
@@ -187,7 +193,6 @@ class TestPluginStartsTheSharedServer:
     def plugin_server(self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any) -> Any:
         from houdini_mcp_plugin import server as plugin_server
 
-        monkeypatch.setattr(conn_module, "_target", REMOTE_HOUDINI)
         # a stdio server has no stop, so each test gets its own instance of the owner
         monkeypatch.setattr(plugin_server, "_stdio", plugin_server.StdioServer())
         return plugin_server
@@ -226,13 +231,13 @@ class TestPluginStartsTheSharedServer:
         runs: list[dict[str, Any]] = []
 
         def fake_serve(**kwargs: Any) -> None:
-            runs.append({"target": conn_module._target, **kwargs})
+            runs.append({"target": describe_target("localhost", 18811), **kwargs})
 
         monkeypatch.setattr(shared_server, "serve", fake_serve)
 
         plugin_server.start_server(use_thread=False)
 
-        assert runs == [{"target": IN_PROCESS_HOUDINI, "transport": "stdio"}]
+        assert runs == [{"target": "this interpreter", "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
 
     def test_failed_foreground_serve_raises_and_is_not_left_running(

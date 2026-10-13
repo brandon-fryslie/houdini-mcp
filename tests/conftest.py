@@ -1,6 +1,6 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -429,15 +429,17 @@ class MockHouNode:
 
 
 class MockRpycConnection:
-    """Mock rpyc connection object."""
+    """Mock rpyc connection object: ``modules``, ``closed``, ``close``, and the
+    ``_config`` rpyc reads its sync timeout from."""
 
     def __init__(self, hou_module: "MockHouModule"):
         self.modules = MagicMock()
         self.modules.hou = hou_module
-        self._closed = False
+        self._config: dict[str, Any] = {}
+        self.closed = False
 
     def close(self) -> None:
-        self._closed = True
+        self.closed = True
 
 
 class MockHouModule:
@@ -611,50 +613,54 @@ def mock_hou() -> MockHouModule:
 
 
 @pytest.fixture
-def mock_connection(mock_hou: MockHouModule) -> Generator[MockHouModule, None, None]:
-    """Patch the connection module to use mock hou."""
-    mock_conn = MockRpycConnection(mock_hou)
-    with (
-        patch("houdini_mcp.connection._hou", mock_hou),
-        patch("houdini_mcp.connection._connection", mock_conn),
-    ):
-        yield mock_hou
-
-
-@pytest.fixture
-def mock_rpyc(mock_hou: MockHouModule) -> Generator[MockHouModule, None, None]:
-    """Patch the handshake connect seam to return a mock connection."""
-    mock_conn = MockRpycConnection(mock_hou)
-
-    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-        mock_rpyc_module.connect.return_value = mock_conn
-        yield mock_hou
-
-
-@pytest.fixture
 def reset_connection_state() -> Generator[None, None, None]:
-    """Reset global connection state before and after test."""
-    import houdini_mcp.connection as conn_module
+    """No connection to Houdini before the test, and none left behind after it.
 
-    # Reset before
-    conn_module._connection = None
-    conn_module._hou = None
+    Goes through the connection module's own API: the owner is the one writer of
+    connection state, in tests as in production.
+    """
+    from houdini_mcp.connection import REMOTE_HOUDINI, disconnect, use_houdini
+
+    use_houdini(REMOTE_HOUDINI)
     yield
-    # Reset after
-    conn_module._connection = None
-    conn_module._hou = None
+    use_houdini(REMOTE_HOUDINI)
+    disconnect()
 
 
 @pytest.fixture
 def mock_rpyc_with_reset(
     mock_hou: MockHouModule, reset_connection_state: None
 ) -> Generator[MockHouModule, None, None]:
-    """Patch the handshake connect seam and reset connection state."""
+    """Patch the handshake connect seam to hand out a connection to ``mock_hou``."""
     mock_conn = MockRpycConnection(mock_hou)
 
     with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
         mock_rpyc_module.connect.return_value = mock_conn
         yield mock_hou
+
+
+@pytest.fixture
+def connected_to(reset_connection_state: None) -> Callable[[Any], Any]:
+    """Connect to any ``hou`` double through the connection module's own API.
+
+    The handshake seam hands out a connection to the double and ``ensure_connected``
+    installs it the way a tool call would; what the test then sees is a tool's view.
+    """
+    from houdini_mcp.connection import ensure_connected
+
+    def _connect(hou: Any) -> Any:
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
+            mock_rpyc_module.connect.return_value = MockRpycConnection(hou)
+            ensure_connected("localhost", 18811)
+        return hou
+
+    return _connect
+
+
+@pytest.fixture
+def mock_connection(mock_hou: MockHouModule, connected_to: Callable[[Any], Any]) -> MockHouModule:
+    """Already connected to ``mock_hou``."""
+    return connected_to(mock_hou)
 
 
 class MockUndoGroupContext:

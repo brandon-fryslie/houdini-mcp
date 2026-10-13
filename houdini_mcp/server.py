@@ -1292,7 +1292,7 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
         try:
             hou = ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
             # Populate node type cache
-            tools.node_type_cache.get_all_types(hou, HOUDINI_HOST, HOUDINI_PORT)
+            tools.node_type_cache.get_all_types(hou)
             elapsed_ms = (time.time() - start) * 1000
             return {
                 "status": "success",
