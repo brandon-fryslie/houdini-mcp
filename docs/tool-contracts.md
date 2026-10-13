@@ -48,15 +48,15 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 
 ```python
 {
-    "worker": {"code_sha256": "...", "timeout": 30, "running_for_seconds": 30.0},
+    "worker": {"operation": "execute_code", "code_sha256": "...", "timeout": 30, "running_for_seconds": 30.0},
     "audit": {"timed_out": True, "code_sha256": "...", ...},
 }
 ```
 
-Until that program ends, every scene-writing tool (including another
-`execute_code` and `get_geo_summary`) returns
-`error_type: "worker_still_running"` naming the same worker; reads, `save_scene`
-and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
+Until that program ends, every scene-writing tool, another `execute_code`, and
+`get_geo_summary` (which reads through a program in the same worker slot) return
+`error_type: "worker_still_running"` naming the same worker; plain reads,
+`save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 
 ## render_viewport
 

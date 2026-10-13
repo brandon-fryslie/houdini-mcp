@@ -211,24 +211,25 @@ All tools return consistent response dictionaries:
 `execute_code` runs the caller's program in a thread the server cannot kill.
 When it times out, the program keeps running with its undo group open, and
 `WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
-ends, every tool whose `TransactionPolicy.writes_scene` is true (see
-`TOOL_POLICIES` in `tools/transactions.py`) is refused at the tool boundary:
+ends, every tool whose `TransactionPolicy.waits_for_worker` is true (see
+`TOOL_POLICIES` in `tools/transactions.py`: the scene writers, and
+`get_geo_summary`, which reads through a program in the same worker slot) is
+refused at the tool boundary:
 
 ```python
 {
     "status": "error",
     "error_type": "worker_still_running",
     "operation": "create_node",
-    "message": "create_node refused: an execute_code program (sha256 ...) is still running ...",
-    "worker": {"code_sha256": "...", "timeout": 30, "running_for_seconds": 41.2},
+    "message": "create_node refused: a program launched by execute_code (sha256 ...) is still running ...",
+    "worker": {"operation": "execute_code", "code_sha256": "...", "timeout": 30, "running_for_seconds": 41.2},
     "recoverable": True,
 }
 ```
 
-`worker.code_sha256` matches `audit.code_sha256` of the timeout response that
-started it. Reads and file writers (`save_scene`, the screenshot tools) proceed.
-`get_geo_summary` runs a program through the same machinery and is refused too,
-naming itself. Recovery: wait for the program to finish; a program that uses
+`worker.operation` is the tool that launched the program and `worker.code_sha256`
+matches `audit.code_sha256` of the timeout response that started it. Plain reads
+and file writers (`save_scene`, the screenshot tools) proceed. Recovery: wait for the program to finish; a program that uses
 `hou` ends when Houdini restarts, one that never touches Houdini ends only with
 the MCP server. Nothing clears the slot while the thread lives, because a cleared
 slot with a live thread would be a lie.

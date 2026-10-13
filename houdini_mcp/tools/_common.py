@@ -103,9 +103,9 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the response ``_tool_error_response``
     builds for it; connection loss is the only failure that tears the connection down.
-    A tool whose policy writes the scene first asks the worker ledger whether
-    caller code is still running against Houdini, and is refused with that
-    worker named when it is.
+    A tool whose policy waits for a worker (it writes the scene, or reads it
+    through a program) first asks the worker ledger whether a program is still
+    running against Houdini, and is refused with that worker named when it is.
 
     Args:
         operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
@@ -125,11 +125,11 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     def decorator(func: ToolFn) -> ToolFn:
         signature = inspect.signature(func)
-        # [LAW:single-enforcer] Whether a tool writes the scene is its policy's
-        # fact; whether a write may run now is the ledger's. This is the one
+        # [LAW:single-enforcer] Whether a tool must wait for a worker is its
+        # policy's fact; whether one is running is the ledger's. This is the one
         # place both are consulted, so no tool can mutate alongside a timed-out
         # worker unseen.
-        writes_scene = TOOL_POLICIES[operation_name].writes_scene
+        waits_for_worker = TOOL_POLICIES[operation_name].waits_for_worker
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
@@ -138,7 +138,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             # becomes an error response.
             signature.bind(*args, **kwargs)
             try:
-                if writes_scene:
+                if waits_for_worker:
                     WORKERS.admit(operation_name)
                 return func(*args, **kwargs)
             except Exception as e:

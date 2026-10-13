@@ -16,11 +16,13 @@ from typing import Any
 class TransactionPolicy(StrEnum):
     """What a tool does to the world, and so what recovering from it takes.
 
-    ``READS_ONLY`` tools need no transaction and may run alongside a program
-    that is still mutating the scene; the two scene-writing values may not.
+    The two reading values need no transaction. ``READS_IN_PROGRAM`` reads
+    through a server-authored program in the one worker slot, so it waits for a
+    running worker as the scene writers do; ``READS_ONLY`` never waits.
     """
 
     READS_ONLY = "reads_only"
+    READS_IN_PROGRAM = "reads_in_program"
     UNDOABLE = "undoable"
     CHECKPOINT_REQUIRED = "checkpoint_required"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
@@ -33,6 +35,16 @@ class TransactionPolicy(StrEnum):
         the scene; file writers (screenshots, save) are not scene writers.
         """
         return self in (TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED)
+
+    @property
+    def waits_for_worker(self) -> bool:
+        """Whether a running execute_code program refuses a tool under this policy."""
+        return self.writes_scene or self is TransactionPolicy.READS_IN_PROGRAM
+
+    @property
+    def needs_transaction(self) -> bool:
+        """Whether a tool under this policy has an effect a transaction can recover."""
+        return self not in (TransactionPolicy.READS_ONLY, TransactionPolicy.READS_IN_PROGRAM)
 
 
 # [LAW:types-are-the-program] Every tool the server exposes is classified here:
@@ -54,9 +66,7 @@ TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "execute_code": TransactionPolicy.CHECKPOINT_REQUIRED,
     "find_error_nodes": TransactionPolicy.READS_ONLY,
     "find_nodes": TransactionPolicy.READS_ONLY,
-    # Runs a server-authored program through execute_code's machinery: it reads
-    # the scene, but a running worker still refuses it (see tools/workers.py).
-    "get_geo_summary": TransactionPolicy.READS_ONLY,
+    "get_geo_summary": TransactionPolicy.READS_IN_PROGRAM,
     "get_houdini_help": TransactionPolicy.READS_ONLY,
     "get_last_scene_diff": TransactionPolicy.READS_ONLY,
     "get_material_info": TransactionPolicy.READS_ONLY,
@@ -91,9 +101,7 @@ TOOL_POLICIES: dict[str, TransactionPolicy] = {
 
 # The tools a transaction can be begun for: everything with an effect to recover.
 MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
-    tool: policy
-    for tool, policy in TOOL_POLICIES.items()
-    if policy is not TransactionPolicy.READS_ONLY
+    tool: policy for tool, policy in TOOL_POLICIES.items() if policy.needs_transaction
 }
 
 
@@ -249,6 +257,10 @@ class TransactionManager:
             TransactionPolicy.EXTERNAL_SIDE_EFFECT: 2,
         }
         resolved = policy or max(policies, key=precedence.__getitem__)
+        if not resolved.needs_transaction:
+            raise ValueError(
+                f"{resolved.value} is a reading policy; a transaction recovers nothing"
+            )
         return SceneTransaction(
             self,
             tools=list(tools),

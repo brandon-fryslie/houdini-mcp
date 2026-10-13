@@ -649,7 +649,8 @@ def _execute_with_grant(
         # closed yet, while the worker can continue mutating afterward. Never
         # touch the undo stack from this state.
         logger.warning(
-            "execute_code exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
+            "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
+            operation,
             timeout,
             detected.code_sha256,
         )

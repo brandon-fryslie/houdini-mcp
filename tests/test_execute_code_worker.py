@@ -35,6 +35,7 @@ class TestWorkerBlocksMutation:
         worker = WORKERS.running()
         assert worker is not None
         assert worker.thread.is_alive()
+        assert result["worker"]["operation"] == "execute_code"
         assert result["worker"]["code_sha256"] == worker.code_sha256
         assert result["worker"]["code_sha256"] == result["audit"]["code_sha256"]
         assert result["worker"]["running_for_seconds"] >= 1
@@ -91,9 +92,11 @@ class TestWorkerBlocksMutation:
         assert result["status"] == "error"
         assert result["error_type"] == "worker_still_running"
         assert result["operation"] == "get_geo_summary"
-        assert result["message"].startswith("get_geo_summary refused")
+        assert result["message"].startswith(
+            "get_geo_summary refused: a program launched by execute_code"
+        )
         [refusal] = [r for r in caplog.records if r.name == "houdini_mcp.tools.workers"]
-        assert refusal.getMessage().startswith("get_geo_summary refused")
+        assert refusal.getMessage().startswith("get_geo_summary refused: execute_code worker")
 
     def test_writes_resume_once_the_worker_ends(self, mock_connection, stalled_program):
         _time_out(stalled_program)
@@ -146,17 +149,23 @@ class TestWorkerLifetime:
 
 
 class TestWorkerLedger:
-    def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self):
+    def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self, caplog):
         ledger = WorkerLedger()
         gate = threading.Event()
         first = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=5)
         try:
-            with pytest.raises(WorkerStillRunning) as refused:
+            with (
+                caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"),
+                pytest.raises(WorkerStillRunning) as refused,
+            ):
                 ledger.launch(
                     gate.wait, operation="get_geo_summary", code_sha256="b" * 64, timeout=5
                 )
             assert refused.value.worker is first
             assert refused.value.operation == "get_geo_summary"
+            assert first.operation == "execute_code"
+            [refusal] = caplog.records
+            assert refusal.getMessage().startswith("get_geo_summary refused: execute_code worker")
             assert ledger.running() is first
         finally:
             gate.set()

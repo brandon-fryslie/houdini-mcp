@@ -26,8 +26,13 @@ logger = logging.getLogger("houdini_mcp.tools.workers")
 
 @dataclass(frozen=True)
 class RunningWorker:
-    """One caller program running in its own thread, undo group open until it ends."""
+    """One program running in its own thread, undo group open until it ends.
 
+    ``operation`` is the tool that launched it: ``execute_code`` for a caller's
+    program, ``get_geo_summary`` for the server's own.
+    """
+
+    operation: str
     code_sha256: str
     timeout: int
     started_at: float
@@ -43,6 +48,7 @@ class RunningWorker:
         causes later describe the same worker through this record.
         """
         return {
+            "operation": self.operation,
             "code_sha256": self.code_sha256,
             "timeout": self.timeout,
             "running_for_seconds": round(self.running_for_seconds(), 3),
@@ -55,7 +61,7 @@ class RunningWorker:
 HOW_A_WORKER_ENDS = (
     "Wait for it to finish, or restart Houdini: a program that uses hou ends when "
     "its connection drops, one that never touches Houdini ends only with the MCP "
-    "server. Tools that only read the scene still work."
+    "server. Tools that read the scene without running a program still work."
 )
 
 
@@ -66,7 +72,8 @@ class WorkerStillRunning(RuntimeError):
         self.operation = operation
         self.worker = worker
         super().__init__(
-            f"{operation} refused: an execute_code program (sha256 {worker.code_sha256[:12]}, "
+            f"{operation} refused: a program launched by {worker.operation} "
+            f"(sha256 {worker.code_sha256[:12]}, "
             f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
             "still running against Houdini with its undo group open, and this call would "
             f"interleave with it. {HOW_A_WORKER_ENDS}"
@@ -117,12 +124,14 @@ class WorkerLedger:
                     with self._lock:
                         self._running = None
                     logger.info(
-                        "execute_code worker finished code_sha256=%s after %.3fs",
+                        "%s worker finished code_sha256=%s after %.3fs",
+                        worker.operation,
                         worker.code_sha256,
                         worker.running_for_seconds(),
                     )
 
             worker = RunningWorker(
+                operation=operation,
                 code_sha256=code_sha256,
                 timeout=timeout,
                 started_at=time.monotonic(),
@@ -136,7 +145,7 @@ class WorkerLedger:
                 # leaving it in the slot would refuse every write until restart.
                 self._running = None
                 raise
-        logger.info("execute_code worker started code_sha256=%s timeout=%ss", code_sha256, timeout)
+        logger.info("%s worker started code_sha256=%s timeout=%ss", operation, code_sha256, timeout)
         return worker
 
     def admit(self, operation: str) -> None:
@@ -149,8 +158,9 @@ class WorkerLedger:
 def _refuse(operation: str, worker: RunningWorker) -> None:
     """The one refusal: logged, then raised, whichever gate found the worker."""
     logger.warning(
-        "%s refused: execute_code worker code_sha256=%s still running after %.3fs (timeout %ss)",
+        "%s refused: %s worker code_sha256=%s still running after %.3fs (timeout %ss)",
         operation,
+        worker.operation,
         worker.code_sha256,
         worker.running_for_seconds(),
         worker.timeout,

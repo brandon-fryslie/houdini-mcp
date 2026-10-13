@@ -58,14 +58,24 @@ def test_every_mutating_tool_has_an_explicit_policy():
 
 
 def test_only_scene_writers_write_the_scene():
-    """File writers and readers may run beside a program still mutating the scene."""
+    """File writers and plain readers may run beside a program still mutating the scene."""
     writers = {tool for tool, policy in TOOL_POLICIES.items() if policy.writes_scene}
     assert writers == EXPECTED_MUTATING_TOOLS - {
         "capture_multiple_panes",
         "capture_pane_screenshot",
         "save_scene",
     }
-    assert TransactionPolicy.READS_ONLY not in MUTATING_TOOL_POLICIES.values()
+    waiting = {tool for tool, policy in TOOL_POLICIES.items() if policy.waits_for_worker}
+    assert waiting == writers | {"get_geo_summary"}
+    assert all(policy.needs_transaction for policy in MUTATING_TOOL_POLICIES.values())
+
+
+def test_begin_refuses_a_reading_policy(mock_connection, tmp_path):
+    """A transaction under a reading policy would checkpoint nothing and undo nothing."""
+    with pytest.raises(ValueError, match="reading policy"):
+        manager(mock_connection, tmp_path, ["before"]).begin(
+            ["create_node"], policy=TransactionPolicy.READS_ONLY
+        )
 
 
 def test_failed_multistep_transaction_closes_group_then_undoes(mock_connection, tmp_path):
