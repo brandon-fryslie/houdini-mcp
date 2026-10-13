@@ -1319,28 +1319,26 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_summarization_status() -> dict[str, Any]:
+async def get_summarization_status() -> dict[str, Any]:
     """
-    Get AI summarization configuration and status.
+    Get AI summarization configuration and check the endpoint it would use.
 
-    Returns current summarization settings including:
-    - Whether summarization is enabled
-    - Which model is being used
-    - Proxy URL
-    - Token thresholds for automatic summarization
-
-    Use this to verify AI summarization is properly configured
-    before using summarize=True on other tools.
+    Asks the configured endpoint for the configured model, so one call tells
+    you whether summarize=True on other tools can work and, if not, what to fix.
 
     Returns:
-        Dict with summarization configuration including:
+        Dict with:
         - enabled: Whether AI summarization is active
         - model: Claude model used for summarization
-        - proxy_url: URL of the Claude API proxy
         - auto_threshold_tokens: Token count that triggers auto-summarization
         - target_summary_tokens: Target size for generated summaries
+        - endpoint: {"ok": true, "base_url", "model_lifecycle"} when the model
+          was found, else {"ok": false, "cause", "message"} where cause is one
+          of no_credentials, rejected_credentials, unknown_model, unreachable,
+          api_error. Credentials come from ANTHROPIC_API_KEY (or an
+          `ant auth login` profile); ANTHROPIC_BASE_URL points at a proxy.
     """
-    return tools.get_summarization_status()
+    return await tools.get_summarization_status()
 
 
 @mcp.tool()

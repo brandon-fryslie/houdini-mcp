@@ -30,9 +30,10 @@ dependencies = [
     # For get_houdini_help web scraping
     "requests>=2.34",
     "beautifulsoup4>=4.15",
-    # Imported directly (tools/summarization.py, server.py); not left to fastmcp's transitive set
-    "httpx>=0.28",
+    # Imported directly (server.py); not left to fastmcp's transitive set
     "starlette>=1.7",
+    # tools/summarization.py calls Claude through the official SDK
+    "anthropic>=1",
 ]
 
 [dependency-groups]

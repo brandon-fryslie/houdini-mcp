@@ -268,7 +268,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `get_houdini_help` | Get help for node types |
 | `summarize_response` | AI-summarize large responses |
 | `estimate_tokens` | Estimate token count |
-| `get_summarization_status` | Get summarization config |
+| `get_summarization_status` | Get summarization config and check the endpoint can serve the model |
 
 ### Infrastructure (`_common.py`, `cache.py`)
 - **Error handling**: `@handle_connection_errors` decorator

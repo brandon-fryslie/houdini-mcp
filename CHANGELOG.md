@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `CLAUDE_PROXY_URL` and the hand-rolled HTTP call behind AI summarization
+  (houdini-tuneup-ef3.ktv). Summarization goes through the official
+  `anthropic` SDK, so the endpoint is `ANTHROPIC_BASE_URL` and credentials are
+  `ANTHROPIC_API_KEY` or an `ant auth login` profile, as for any Anthropic
+  client. `get_summarization_status` no longer returns `proxy_url`. `httpx` is
+  no longer a direct dependency; nothing imported it once that call went.
+
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
   (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
   `available_types`.
@@ -61,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the render instead of being silently left out of the frame; a ROP missing a
   parm the renderer table names fails the render naming the parm. Each render
   logs what it framed and what it set on the ROP.
+
+- **AI summarization targets the public Anthropic API and a current model**
+  (houdini-tuneup-ef3.ktv): the default model is `claude-haiku-5-5` in place of
+  the retired `claude-3-5-haiku-latest`, and the default endpoint is
+  `api.anthropic.com` in place of the upstream org's `localhost:8082` proxy.
+  `get_summarization_status` now asks the endpoint for the configured model and
+  returns the answer under `endpoint`: `{"ok": true, "base_url",
+  "model_lifecycle"}`, or `{"ok": false, "cause", "message"}` where `cause` is
+  one of `no_credentials`, `rejected_credentials`, `unknown_model`,
+  `unreachable`, `api_error`. A failed summarization call is logged with the
+  same cause.
+
 - **Inbound ws_client frames are parsed into typed frames gated by state and session**
   (houdini-laws-etg.qhj): `parse_frame` is the one boundary between the wire and
   `WSClientCore`. It turns a decoded frame into `WelcomeFrame`, `PongFrame`,

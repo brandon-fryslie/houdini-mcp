@@ -4,7 +4,10 @@ This module provides server-side AI summarization using Claude to compress
 large responses into high-signal, actionable summaries. This reduces token
 usage for client AIs while preserving key information.
 
-Uses the Claude API proxy at localhost:8082 for efficient small-model inference.
+Requests go through the official ``anthropic`` SDK, so credentials and the
+endpoint are configured the way every Anthropic client is configured:
+``ANTHROPIC_API_KEY`` (or an ``ant auth login`` profile) and, to point at a
+proxy, ``ANTHROPIC_BASE_URL``.
 """
 
 import json
@@ -12,19 +15,52 @@ import logging
 import os
 from typing import Any
 
-import httpx
+import anthropic
+from anthropic import AsyncAnthropic
 
 logger = logging.getLogger("houdini_mcp.summarization")
 
 # Configuration
-CLAUDE_PROXY_URL = os.getenv("CLAUDE_PROXY_URL", "http://localhost:8082")
-SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL", "claude-3-5-haiku-latest")
+SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL", "claude-haiku-5-5")
 SUMMARIZATION_ENABLED = os.getenv("SUMMARIZATION_ENABLED", "true").lower() == "true"
 
 # Thresholds for automatic summarization (in estimated tokens)
 AUTO_SUMMARIZE_THRESHOLD = int(os.getenv("AUTO_SUMMARIZE_THRESHOLD", "5000"))
 # Target summary size
 TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
+
+REQUEST_TIMEOUT_SECONDS = 30.0
+
+
+# [LAW:effects-at-boundaries] The one place an SDK client is built. Tests replace this
+# with a client whose transport is a fake, so the request the SDK puts on the wire is
+# what gets asserted.
+def anthropic_client() -> AsyncAnthropic:
+    """Build the SDK client the summarizer talks through."""
+    return AsyncAnthropic(timeout=REQUEST_TIMEOUT_SECONDS)
+
+
+# The SDK reports "no credential resolved" as a TypeError at request time
+# (anthropic/_client.py, _validate_headers), outside its own exception tree; a
+# profile it cannot load is a CredentialsError at construction.
+SUMMARIZER_ERRORS = (anthropic.AnthropicError, TypeError)
+
+
+def failure_cause(exc: BaseException) -> str:
+    """Name what a user has to fix, from the exception the SDK raised.
+
+    One of: ``no_credentials``, ``rejected_credentials``, ``unknown_model``,
+    ``unreachable``, ``api_error``.
+    """
+    if isinstance(exc, (TypeError, anthropic.CredentialsError)):
+        return "no_credentials"
+    if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return "rejected_credentials"
+    if isinstance(exc, anthropic.NotFoundError):
+        return "unknown_model"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "unreachable"
+    return "api_error"
 
 
 def estimate_tokens(data: Any) -> int:
@@ -229,63 +265,68 @@ Summary:"""
 
 
 async def _call_claude(prompt: str) -> str | None:
-    """Call Claude API via proxy for summarization.
+    """Ask the configured model for a summary.
 
     Args:
         prompt: The prompt to send
 
     Returns:
-        Claude's response text, or None on error
+        The model's text, or None when summarization is off or the call failed.
+        A failure is logged with its cause (see ``failure_cause``).
     """
     if not SUMMARIZATION_ENABLED:
         logger.debug("Summarization disabled, skipping Claude call")
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLAUDE_PROXY_URL}/v1/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
-                json={
-                    "model": SUMMARIZATION_MODEL,
-                    "max_tokens": TARGET_SUMMARY_TOKENS * 2,  # Allow some buffer
-                    "messages": [{"role": "user", "content": prompt}],
-                },
+        async with anthropic_client() as client:
+            message = await client.messages.create(
+                model=SUMMARIZATION_MODEL,
+                max_tokens=TARGET_SUMMARY_TOKENS * 2,  # Allow some buffer
+                # A short summary of structured data: spend the model's effort on the
+                # text, not on deliberation.
+                output_config={"effort": "low"},
+                messages=[{"role": "user", "content": prompt}],
             )
-
-            if response.status_code != 200:
-                logger.warning(f"Claude API error: {response.status_code} - {response.text[:200]}")
-                return None
-
-            result = response.json()
-
-            # Extract text from response
-            if "content" in result and len(result["content"]) > 0:
-                return result["content"][0].get("text", "")
-
-            return None
-
-    except httpx.TimeoutException:
-        logger.warning("Claude API timeout during summarization")
-        return None
-    except Exception as e:
-        logger.warning(f"Claude API error: {e}")
+    except SUMMARIZER_ERRORS as exc:
+        logger.warning("Summarization failed (%s): %s", failure_cause(exc), exc)
         return None
 
+    return "".join(block.text for block in message.content if block.type == "text")
 
-def get_summarization_status() -> dict[str, Any]:
-    """Get current summarization configuration status.
+
+async def probe_endpoint() -> dict[str, Any]:
+    """Ask the endpoint for the configured model.
+
+    One request establishes that credentials resolve and are accepted, the
+    endpoint answers, and the model exists; its lifecycle shows a deprecated
+    model before it retires.
 
     Returns:
-        Dict with configuration and health status
+        ``{"ok": True, "base_url": ..., "model_lifecycle": ...}`` or
+        ``{"ok": False, "cause": ..., "message": ...}`` with a ``failure_cause``.
+    """
+    try:
+        async with anthropic_client() as client:
+            base_url = str(client.base_url)
+            info = await client.models.retrieve(SUMMARIZATION_MODEL)
+    except SUMMARIZER_ERRORS as exc:
+        return {"ok": False, "cause": failure_cause(exc), "message": str(exc)}
+
+    return {"ok": True, "base_url": base_url, "model_lifecycle": info.lifecycle}
+
+
+async def get_summarization_status() -> dict[str, Any]:
+    """Get current summarization configuration and a live check of the endpoint.
+
+    Returns:
+        Dict with configuration and the result of ``probe_endpoint`` under
+        ``endpoint``.
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,
         "model": SUMMARIZATION_MODEL,
-        "proxy_url": CLAUDE_PROXY_URL,
         "auto_threshold_tokens": AUTO_SUMMARIZE_THRESHOLD,
         "target_summary_tokens": TARGET_SUMMARY_TOKENS,
+        "endpoint": await probe_endpoint(),
     }
