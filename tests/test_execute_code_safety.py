@@ -537,13 +537,14 @@ class TestAuditFields:
 
 
 class TestTimeoutRollback:
-    def test_timeout_never_undoes_while_worker_group_is_open(self, mock_connection):
+    def test_timeout_never_undoes_while_worker_group_is_open(
+        self, mock_connection, stalled_program
+    ):
         """Undoing an open group can revert the previous human action."""
         from houdini_mcp.tools import execute_code
 
-        code = "import time\nwhile True:\n    time.sleep(0.05)\n"
         before = mock_connection.undos.performed_undos
-        result = execute_code(code, timeout=1, host="localhost", port=18811)
+        result = execute_code(stalled_program, timeout=1, host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result.get("timeout") == 1
@@ -592,16 +593,17 @@ class TestTimeoutRollback:
         assert result["status"] == "success"
         assert mock_connection.undos.closed_groups, "expected a named undo group"
 
-    def test_fail_closed_when_no_undo_primitive(self, monkeypatch, mock_connection):
+    def test_fail_closed_when_no_undo_primitive(
+        self, monkeypatch, mock_connection, stalled_program
+    ):
         """If Houdini exposes no usable undo primitive, timeout must fail closed."""
         from houdini_mcp.tools import execute_code
 
         # Remove undo capability to simulate an environment without rollback.
         monkeypatch.delattr(mock_connection, "undos", raising=False)
 
-        code = "import time\nwhile True:\n    time.sleep(0.05)\n"
         result = execute_code(
-            code,
+            stalled_program,
             timeout=1,
             allow_dangerous=True,
             host="localhost",

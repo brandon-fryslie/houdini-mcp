@@ -32,13 +32,15 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
   is alive its undo group is still open, so calling ``performUndo()`` could
   undo the previous human action rather than this run. The tool therefore does
   not touch the undo stack on timeout and reports scene consistency as unknown.
+  The worker stays recorded in :data:`~houdini_mcp.tools.workers.WORKERS`
+  until its thread ends, and every scene-writing tool is refused, naming it,
+  for as long as it is.
 """
 
 import builtins
 import hashlib
 import logging
 import os
-import threading
 import traceback
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
@@ -60,6 +62,7 @@ from .code_policy import (
     _detect_non_inspection_code,
     parse_code,
 )
+from .workers import WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
 
@@ -480,6 +483,7 @@ def _execute_with_grant(
     # refusal: the grant decides what each finding means, and every audit and
     # log line reports all of it, whatever stopped the code.
     detected = DetectedPatterns.scan(code)
+    code_sha256 = hashlib.sha256(code.encode("utf-8", "replace")).hexdigest()
 
     # --- Syntax gate: a program the gates cannot read is a program that does not run
     if detected.syntax_error is not None:
@@ -571,7 +575,7 @@ def _execute_with_grant(
             grant.source,
             detected.dangerous,
             detected.heavy_geometry,
-            hashlib.sha256(code.encode("utf-8", "replace")).hexdigest(),
+            code_sha256,
         )
 
     # --- Connect and prepare execution --------------------------------------
@@ -615,49 +619,44 @@ def _execute_with_grant(
             exec_traceback,
         )
 
-    # Daemon thread: if it times out we cannot kill it, but it must not keep the
-    # process alive. The undo-group rollback keeps the scene consistent.
-    exec_thread = threading.Thread(target=run_code, daemon=True)
-    exec_thread.start()
-    exec_thread.join(timeout=timeout)
+    # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
+    # starts the thread, the thread clears the slot as it ends, and every
+    # scene-writing tool asks it first. A timeout leaves the slot occupied.
+    worker = WORKERS.launch(run_code, code_sha256=code_sha256, timeout=timeout)
+    worker.thread.join(timeout=timeout)
 
-    if exec_thread.is_alive():
+    if worker.is_alive():
         # The worker is still inside the undo-group context. Calling performUndo
         # now can undo the PREVIOUS human action because this run's group has not
         # closed yet, while the worker can continue mutating afterward. Never
-        # touch the undo stack from this state; report unknown consistency and let
-        # a higher-level transaction/session supervisor quarantine further writes.
+        # touch the undo stack from this state.
         logger.warning(
-            "execute_code exceeded timeout of %ss; worker still running, undo not attempted",
+            "execute_code exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
             timeout,
+            code_sha256,
         )
-        rollback_attempted = False
-        rollback_succeeded: bool | None = False
-        rollback_error: str | None = None
-        thread_still_running = True
-        warning = (
-            "Execution timed out while its background thread and undo group are still active. "
-            "No undo was attempted because doing so could undo a previous human action. "
-            "Scene consistency is unknown; verify state or restart Houdini before further edits."
-        )
-
-        result: dict[str, Any] = {
+        return {
             "status": "error",
             "message": f"Execution timeout: code did not complete within {timeout} seconds",
             "policy": grant.policy,
             "stdout": stdout_capture.getvalue()[:max_stdout_size],
             "stderr": stderr_capture.getvalue()[:max_stderr_size],
             "timeout": timeout,
-            "warning": warning,
+            "warning": (
+                "Execution timed out while its background thread and undo group are still active. "
+                "No undo was attempted because doing so could undo a previous human action. "
+                "Every tool that writes the scene is refused until this worker finishes; "
+                "reads still work. Verify state or restart Houdini before further edits."
+            ),
+            "worker": worker.describe(),
             "rollback": {
-                "attempted": rollback_attempted,
-                "succeeded": rollback_succeeded,
-                "error": rollback_error,
+                "attempted": False,
+                "succeeded": False,
+                "error": None,
                 # True whenever we hit this branch: the thread was still running
-                # at the moment we decided to roll back, and we have no way to
-                # confirm it has stopped since. A rollback "succeeded" result
-                # never implies this flips to False.
-                "thread_still_running": thread_still_running,
+                # at the moment we decided not to roll back, and we have no way to
+                # confirm it has stopped since.
+                "thread_still_running": True,
                 "scene_consistency": "unknown",
             },
             "audit": _build_audit(
@@ -665,11 +664,10 @@ def _execute_with_grant(
                 grant=grant,
                 detected=detected,
                 timed_out=True,
-                rollback_attempted=rollback_attempted,
-                rollback_succeeded=rollback_succeeded,
+                rollback_attempted=False,
+                rollback_succeeded=False,
             ),
         }
-        return result
 
     audit = _build_audit(code=code, grant=grant, detected=detected)
 

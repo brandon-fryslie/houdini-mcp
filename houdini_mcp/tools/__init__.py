@@ -79,8 +79,14 @@ from .transactions import (
     TransactionRecord,
 )
 from .wiring import connect_nodes, disconnect_node_input, reorder_inputs, set_node_flags
+from .workers import WORKERS, RunningWorker, WorkerLedger, WorkerStillRunning
 
 __all__ = [
+    # Running execute_code worker
+    "WORKERS",
+    "RunningWorker",
+    "WorkerLedger",
+    "WorkerStillRunning",
     # Transaction management
     "MUTATING_TOOL_POLICIES",
     "TransactionConflict",

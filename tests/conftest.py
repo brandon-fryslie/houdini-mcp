@@ -1072,3 +1072,26 @@ def raised_inside_houdini(exc: BaseException) -> BaseException:
         instantiate_custom_exceptions=False,
         instantiate_oldstyle_exceptions=False,
     )
+
+
+@pytest.fixture
+def stalled_program(mock_connection: MockHouModule) -> Generator[str, None, None]:
+    """A program that runs until this fixture releases it.
+
+    execute_code cannot kill a timed-out program, so a test that times one out
+    must hand it a way to end: the program waits on a gate hung off the fake
+    hou, and teardown opens the gate and waits for the worker to leave the
+    ledger. A program that loops forever would stall every later writing test.
+    """
+    import threading
+
+    from houdini_mcp.tools.workers import WORKERS
+
+    gate = threading.Event()
+    mock_connection.stall_gate = gate
+    yield "hou.stall_gate.wait()"
+    gate.set()
+    worker = WORKERS.running()
+    if worker is not None:
+        worker.thread.join(5)
+    assert WORKERS.running() is None, "stalled program did not release its worker"

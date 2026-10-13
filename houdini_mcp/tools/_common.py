@@ -25,6 +25,8 @@ from ..connection import (
     transport_failure,
 )
 from .hscript import HscriptBatch
+from .transactions import MUTATING_TOOL_POLICIES
+from .workers import WORKERS, WorkerStillRunning
 
 T = TypeVar("T")
 
@@ -97,13 +99,17 @@ ToolFn = TypeVar("ToolFn", bound=Callable[..., Any])
 
 def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
-    Decorator that wraps tool functions with consistent error handling.
+    The tool boundary: every tool call enters and leaves through this wrapper.
 
     Every exception the tool raises becomes the response ``_tool_error_response``
     builds for it; connection loss is the only failure that tears the connection down.
+    A tool the mutating registry classifies as a writer first asks the worker
+    ledger whether caller code is still running against Houdini, and is refused
+    with that worker named when it is.
 
     Args:
-        operation_name: Name of the operation (used in error messages)
+        operation_name: Name of the operation (used in error messages and to
+            classify the tool against ``MUTATING_TOOL_POLICIES``)
 
     Returns:
         Decorated function with error handling
@@ -118,6 +124,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     def decorator(func: ToolFn) -> ToolFn:
         signature = inspect.signature(func)
+        # [LAW:single-enforcer] Which tools write the scene is the registry's fact;
+        # whether a write may run now is the ledger's. This is the one place both
+        # are consulted, so no tool can mutate alongside a timed-out worker unseen.
+        writes_scene = operation_name in MUTATING_TOOL_POLICIES
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
@@ -126,6 +136,8 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             # becomes an error response.
             signature.bind(*args, **kwargs)
             try:
+                if writes_scene:
+                    WORKERS.admit(operation_name)
                 return func(*args, **kwargs)
             except Exception as e:
                 return _tool_error_response(e, operation_name)
@@ -146,6 +158,15 @@ def _tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
     """
     if isinstance(e, HoudiniConnectionError):
         return {"status": "error", "message": str(e)}
+    if isinstance(e, WorkerStillRunning):
+        return {
+            "status": "error",
+            "error_type": "worker_still_running",
+            "message": str(e),
+            "operation": operation,
+            "worker": e.worker.describe(),
+            "recoverable": True,
+        }
     failure = transport_failure(e)
     if failure is not None:
         return _handle_connection_error(failure, operation)

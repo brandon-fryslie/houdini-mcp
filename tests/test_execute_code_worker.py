@@ -1,0 +1,134 @@
+"""A timed-out execute_code worker is owned state that blocks further mutation.
+
+(houdini-laws-etg.7kc) While the caller's program is still running against
+Houdini, every tool that writes the scene is refused and told which worker
+holds it; reads proceed; the moment the worker ends, writes resume.
+"""
+
+import logging
+import threading
+
+import pytest
+
+from houdini_mcp.tools import create_node, execute_code, get_scene_info
+from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
+
+
+def _child_names(mock_connection) -> list[str]:
+    return [child.name() for child in mock_connection.node("/obj").children()]
+
+
+def _time_out(stalled_program: str, **kwargs):
+    result = execute_code(stalled_program, timeout=1, host="localhost", port=18811, **kwargs)
+    assert result["status"] == "error"
+    assert result["audit"]["timed_out"] is True
+    return result
+
+
+class TestWorkerBlocksMutation:
+    def test_timeout_leaves_the_worker_recorded(self, mock_connection, stalled_program):
+        result = _time_out(stalled_program)
+
+        worker = WORKERS.running()
+        assert worker is not None
+        assert worker.is_alive()
+        assert result["worker"]["code_sha256"] == worker.code_sha256
+        assert result["worker"]["code_sha256"] == result["audit"]["code_sha256"]
+        assert result["worker"]["running_for_seconds"] >= 1
+        assert result["worker"]["timeout"] == 1
+        assert "refused until this worker finishes" in result["warning"]
+
+    def test_writing_tool_is_refused_and_writes_nothing(self, mock_connection, stalled_program):
+        _time_out(stalled_program)
+
+        result = create_node("geo", "/obj", name="late", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "worker_still_running"
+        assert result["operation"] == "create_node"
+        assert result["recoverable"] is True
+        assert result["worker"]["code_sha256"] == WORKERS.running().code_sha256
+        assert "create_node refused" in result["message"]
+        assert "late" not in _child_names(mock_connection)
+
+    def test_second_program_is_refused_the_same_way(self, mock_connection, stalled_program):
+        _time_out(stalled_program)
+
+        result = execute_code("print('me too')", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "worker_still_running"
+        assert result["operation"] == "execute_code"
+
+    def test_reads_still_work(self, mock_connection, stalled_program):
+        _time_out(stalled_program)
+
+        assert get_scene_info(host="localhost", port=18811)["status"] == "success"
+
+    def test_writes_resume_once_the_worker_ends(self, mock_connection, stalled_program):
+        _time_out(stalled_program)
+        worker = WORKERS.running()
+
+        mock_connection.stall_gate.set()
+        worker.thread.join(5)
+
+        assert WORKERS.running() is None
+        result = create_node("geo", "/obj", name="after", host="localhost", port=18811)
+        assert result["status"] == "success"
+        assert "after" in _child_names(mock_connection)
+
+    def test_refusal_is_logged_with_the_tool_and_the_worker(
+        self, mock_connection, stalled_program, caplog
+    ):
+        _time_out(stalled_program)
+        sha = WORKERS.running().code_sha256
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.workers"):
+            create_node("geo", "/obj", name="late", host="localhost", port=18811)
+
+        refusals = [
+            r
+            for r in caplog.records
+            if r.name == "houdini_mcp.tools.workers" and r.levelno == logging.WARNING
+        ]
+        assert len(refusals) == 1
+        assert "create_node refused" in refusals[0].getMessage()
+        assert sha in refusals[0].getMessage()
+
+
+class TestWorkerLifetime:
+    def test_completed_program_releases_the_slot(self, mock_connection, caplog):
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.workers"):
+            result = execute_code("print('done')", host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        assert WORKERS.running() is None
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(m.startswith("execute_code worker started") for m in messages)
+        assert any(m.startswith("execute_code worker finished") for m in messages)
+
+    def test_failing_program_releases_the_slot(self, mock_connection):
+        result = execute_code("raise ValueError('boom')", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert "boom" in result["message"]
+        assert WORKERS.running() is None
+
+
+class TestWorkerLedger:
+    def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self):
+        ledger = WorkerLedger()
+        gate = threading.Event()
+        first = ledger.launch(gate.wait, code_sha256="a" * 64, timeout=5)
+        try:
+            with pytest.raises(WorkerStillRunning) as refused:
+                ledger.launch(gate.wait, code_sha256="b" * 64, timeout=5)
+            assert refused.value.worker is first
+            assert ledger.running() is first
+        finally:
+            gate.set()
+            first.thread.join(5)
+        assert ledger.running() is None
+
+    def test_admit_passes_when_idle(self):
+        WorkerLedger().admit("create_node")
