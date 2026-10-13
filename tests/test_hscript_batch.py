@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from houdini_mcp.connection import get_connection
 from houdini_mcp.tools.cache import NodeTypeCache
 from houdini_mcp.tools.hscript import HscriptBatch
 from tests.conftest import MockHouModule
@@ -64,16 +65,15 @@ class TestHscriptBatch:
 
 
 class TestNodeTypeCacheReadsThroughTheProxy:
-    def test_population_sends_no_program_over_the_connection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_population_sends_no_program_over_the_connection(self, connected_to: Any) -> None:
         # The two roads the old fill took to a connection: the proxy's own
-        # ``____conn__`` and the module-level connection every
-        # ``get_connection`` returns. Both lead to this mock.
+        # ``____conn__`` and the installed connection ``get_connection`` returns.
+        # Both lead to this one, which records any program sent over it.
         hou: Any = MockHouModule()
-        connection = MagicMock()
+        connected_to(hou)
+        connection = get_connection()
+        connection.execute = MagicMock()
         hou.____conn__ = connection
-        monkeypatch.setattr("houdini_mcp.connection._connection", connection)
 
         cache = NodeTypeCache()
         types = cache.get_all_types(hou)
