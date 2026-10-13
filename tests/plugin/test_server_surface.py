@@ -107,8 +107,7 @@ class TestStdioServerSurface:
     async def test_delete_node_has_the_servers_contract(self, in_process_houdini: Any) -> None:
         from houdini_mcp.server import mcp
 
-        geo = in_process_houdini.node("/obj").createNode("geo", "geo1")
-        in_process_houdini.add_node(geo)
+        in_process_houdini.node("/obj").createNode("geo", "geo1")
 
         async with Client(mcp) as client:
             result = await client.call_tool("delete_node", {"node_path": "/obj/geo1"})
@@ -117,7 +116,7 @@ class TestStdioServerSurface:
         assert payload["status"] == "success"
         assert payload["deleted_path"] == "/obj/geo1"
         assert "deleted_node" not in payload
-        assert geo._destroyed is True
+        assert in_process_houdini.node("/obj/geo1") is None
 
     async def test_execute_code_keeps_its_rails(self, in_process_houdini: Any) -> None:
         from houdini_mcp.server import mcp
