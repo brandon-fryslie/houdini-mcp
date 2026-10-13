@@ -89,7 +89,7 @@ render_viewport(look_at="/obj/geo1")
 |-----------|------|-------------|---------|
 | `camera_position` | `list[float]` (3 elements) | [x, y, z] world position | Auto-calculated |
 | `camera_rotation` | `list[float]` (3 elements) | [rx, ry, rz] degrees | [-30, 45, 0] |
-| `look_at` | `str` | Node path to center on | None |
+| `look_at` | `str` | Node path whose geometry to frame instead of the scene's; an unknown path is an error | None |
 | `resolution` | `list[int]` (2 elements) | [width, height] pixels | [512, 512] |
 | `renderer` | `str` | "opengl" or "karma" | "opengl" |
 | `output_format` | `str` | "png", "jpg", or "exr" | "png" |

@@ -5,10 +5,13 @@ and capturing images for AI analysis.
 """
 
 import base64
+import contextlib
 import logging
 import math
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from ..connection import transport_failure
@@ -22,8 +25,39 @@ from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
 
-# A renderer name is the ROP type that renders it.
-_RENDERERS = frozenset({"opengl", "karma"})
+Vec3 = tuple[float, float, float]
+
+# [LAW:one-type-per-behavior] a renderer is the ROP type of its name and the
+# parms that ROP takes its resolution and engine through. The table is the
+# whole difference between renderers; everything else about a render is the same.
+_RENDERERS: dict[str, Callable[[int, int, str], dict[str, Any]]] = {
+    "opengl": lambda width, height, _engine: {"tres": True, "res1": width, "res2": height},
+    "karma": lambda width, height, engine: {
+        "resolutionx": width,
+        "resolutiony": height,
+        "engine": engine,
+    },
+}
+# The caller's name for a Karma engine, and the ROP's.
+_KARMA_ENGINES = {"cpu": "cpu", "gpu": "xpu"}
+
+# How a camera frames a box: it stands back far enough for the padded box to fill
+# the field of view, never closer than the minimum, and an orthographic view
+# opens to the padded width.
+_FOV_DEGREES = 45.0
+_PADDING = 1.2
+_MIN_DISTANCE = 5.0
+_UNFRAMED_SIZE = 10.0
+
+_DEFAULT_RESOLUTION = [512, 512]
+_ISOMETRIC: Vec3 = (-30.0, 45.0, 0.0)
+
+# The three axis-aligned views of a quad render, by camera rotation.
+_QUAD_VIEWS: tuple[tuple[str, Vec3], ...] = (
+    ("front", (0.0, 0.0, 0.0)),
+    ("left", (0.0, -90.0, 0.0)),
+    ("top", (-90.0, 0.0, 0.0)),
+)
 
 
 def _get_remote_modules(host: str, port: int):
@@ -97,6 +131,240 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
             raise first
 
 
+# =============================================================================
+# Framing
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class Framing:
+    """What a render looks at: the world-space box around the framed geometry, or nothing.
+
+    [LAW:one-source-of-truth] every number the camera rig needs - where its
+    pivot sits, how far back the camera stands, how wide an orthographic view
+    opens, what box the caller is told about - derives from the one box here,
+    so no two render tools can frame the same scene differently.
+    """
+
+    bounds: tuple[Vec3, Vec3] | None
+    """World-space min and max of the framed geometry; None when nothing was framed."""
+
+    @property
+    def center(self) -> Vec3:
+        if self.bounds is None:
+            return (0.0, 0.0, 0.0)
+        lo, hi = self.bounds
+        return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+
+    @property
+    def size(self) -> float:
+        """The box's longest side; an unframed render is sized as if ten units across."""
+        if self.bounds is None:
+            return _UNFRAMED_SIZE
+        lo, hi = self.bounds
+        return max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+
+    @property
+    def distance(self) -> float:
+        """How far back from the center a perspective camera stands to see the whole box."""
+        fit = (self.size * _PADDING / 2) / math.tan(math.radians(_FOV_DEGREES / 2))
+        return max(_MIN_DISTANCE, fit + self.size / 2)
+
+    @property
+    def ortho_width(self) -> float:
+        return self.size * _PADDING
+
+    def report(self) -> dict[str, Any] | None:
+        """The box as the caller sees it; None when there is none to report."""
+        if self.bounds is None:
+            return None
+        lo, hi = self.bounds
+        return {"min": list(lo), "max": list(hi), "center": list(self.center), "size": self.size}
+
+
+def _displayed_geometry(obj_context: Any) -> list[Any]:
+    """The /obj nodes a viewport shows: geometry and subnets with the display flag on."""
+    return [
+        node
+        for node in obj_context.children()
+        if node.type().name() in ("geo", "subnet") and node.isDisplayFlagSet()
+    ]
+
+
+def _world_corners(hou: Any, node: Any) -> list[Vec3]:
+    """The eight corners of the box around a node's displayed geometry, in world space.
+
+    A node that shows no geometry - no display SOP, or one with nothing cooked -
+    has no corners and contributes nothing to a framing.
+    """
+    display = node.displayNode()
+    geometry = display.geometry() if display is not None else None
+    box = geometry.boundingBox() if geometry is not None else None
+    if box is None:
+        return []
+    transform = node.worldTransform()
+    lo, hi = box.minvec(), box.maxvec()
+    corners: list[Vec3] = []
+    for x in (lo[0], hi[0]):
+        for y in (lo[1], hi[1]):
+            for z in (lo[2], hi[2]):
+                world = hou.Vector4(x, y, z, 1.0) * transform
+                corners.append((world[0], world[1], world[2]))
+    return corners
+
+
+def _framing(hou: Any, nodes: Sequence[Any]) -> Framing:
+    """Frame the geometry the nodes display, together, in world space."""
+    corners = [corner for node in nodes for corner in _world_corners(hou, node)]
+    if not corners:
+        return Framing(bounds=None)
+    lo = (min(c[0] for c in corners), min(c[1] for c in corners), min(c[2] for c in corners))
+    hi = (max(c[0] for c in corners), max(c[1] for c in corners), max(c[2] for c in corners))
+    return Framing(bounds=(lo, hi))
+
+
+# =============================================================================
+# Rig and ROP
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """Everything a render needs that is not a node, resolved before any node exists."""
+
+    hou: Any
+    obj: Any
+    out: Any
+    width: int
+    height: int
+    rop_type: str
+    rop_settings: dict[str, Any]
+    remote_os: Any
+    remote_tempfile: Any
+
+
+def _prepare(
+    resolution: list[int] | None, renderer: str, karma_engine: str, host: str, port: int
+) -> _Prepared | dict[str, Any]:
+    """Check every input and resolve every context a render needs; the error is the result.
+
+    [LAW:no-ambient-temporal-coupling] a bad input creates nothing: resolution,
+    renderer, engine, both contexts and the link are all settled here, before
+    the first temporary node is made.
+    """
+    hou = ensure_connected(host, port)
+    if resolution is None:
+        resolution = _DEFAULT_RESOLUTION
+    if error := validate_resolution(resolution):
+        return error
+    width, height = resolution[0], resolution[1]
+    obj = hou.node("/obj")
+    if obj is None:
+        return {"status": "error", "message": "Cannot find /obj context"}
+    rop_type = renderer.lower()
+    if rop_type not in _RENDERERS:
+        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+    engine = _KARMA_ENGINES.get(karma_engine.lower())
+    if engine is None:
+        return {"status": "error", "message": f"Unknown karma_engine: {karma_engine}"}
+    out = hou.node("/out")
+    if out is None:
+        return {"status": "error", "message": "Cannot find /out context"}
+    remote_os, remote_tempfile = _get_remote_modules(host, port)
+    return _Prepared(
+        hou=hou,
+        obj=obj,
+        out=out,
+        width=width,
+        height=height,
+        rop_type=rop_type,
+        rop_settings=_RENDERERS[rop_type](width, height, engine),
+        remote_os=remote_os,
+        remote_tempfile=remote_tempfile,
+    )
+
+
+@dataclass(frozen=True)
+class _Rig:
+    """A camera on a pivot.
+
+    The pivot sits at the framed center and turns to each view; the camera hangs
+    off it at an offset, so turning the pivot swings the camera around what it
+    frames while the camera's own transform stays a plain offset.
+    """
+
+    pivot: Any
+    camera: Any
+
+
+def _build_rig(
+    create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str, framing: Framing
+) -> _Rig:
+    pivot = create(prepared.obj, "null", f"{prefix}cam_center")
+    pivot.parmTuple("t").set(list(framing.center))
+    camera = create(prepared.obj, "cam", f"{prefix}render_cam")
+    camera.setFirstInput(pivot)
+    camera.parm("resx").set(prepared.width)
+    camera.parm("resy").set(prepared.height)
+    return _Rig(pivot=pivot, camera=camera)
+
+
+def _aim(
+    rig: _Rig,
+    rotation: Sequence[float],
+    offset: Sequence[float],
+    orthographic: bool,
+    framing: Framing,
+) -> None:
+    """Turn the rig to a view: the pivot to the rotation, the camera to its offset.
+
+    [LAW:dataflow-not-control-flow] both projections are configured every time;
+    the projection parm alone decides which one renders.
+    """
+    rig.pivot.parmTuple("r").set(list(rotation))
+    rig.camera.parmTuple("t").set(list(offset))
+    rig.camera.parm("projection").set(1 if orthographic else 0)
+    rig.camera.parm("orthowidth").set(framing.ortho_width)
+
+
+def _build_rop(
+    create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str, rig: _Rig
+) -> Any:
+    """The ROP that renders the rig's camera at the prepared resolution, current frame only."""
+    rop = create(prepared.out, prepared.rop_type, f"{prefix}{prepared.rop_type}_rop")
+    settings = {"camera": rig.camera.path(), "trange": 0, **prepared.rop_settings}
+    for name, value in settings.items():
+        rop.parm(name).set(value)
+    return rop
+
+
+def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
+    """Render the ROP into a fresh file on Houdini's machine and bring the image back base64-encoded.
+
+    The file does not outlive the call. A render that leaves it empty produced
+    no image, and says so.
+    """
+    remote_os, remote_tempfile = prepared.remote_os, prepared.remote_tempfile
+    fd, output_path = remote_tempfile.mkstemp(suffix=f".{output_format}")
+    remote_os.close(fd)
+    try:
+        rop.parm("picture").set(output_path)
+        rop.render()
+        with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
+            image = f.read()
+        if not image:
+            raise RuntimeError("Render completed but produced no image")
+        return base64.b64encode(image).decode("utf-8")
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            remote_os.remove(output_path)
+
+
+# =============================================================================
+# Render tools
+# =============================================================================
+
+
 @handle_connection_errors("render_viewport")
 def render_viewport(
     camera_position: list[float] | None = None,
@@ -122,7 +390,7 @@ def render_viewport(
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
-        look_at: Node path to look at (centers camera on this node's geometry)
+        look_at: Node path to look at (frames this node's geometry instead of the scene's)
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -136,7 +404,7 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - bounding_box: Scene bounding box if auto_frame was used
+        - bounding_box: The world-space box that was framed, when geometry was
 
     Example:
         render_viewport()  # Auto-frame scene with isometric view
@@ -145,226 +413,40 @@ def render_viewport(
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
-    hou = ensure_connected(host, port)
+    prepared = _prepare(resolution, renderer, karma_engine, host, port)
+    if isinstance(prepared, dict):
+        return prepared
 
-    # Set defaults
-    if resolution is None:
-        resolution = [512, 512]
-    if camera_rotation is None:
-        camera_rotation = [-30.0, 45.0, 0.0]  # Isometric view
-
-    # Validate resolution
-    if error := validate_resolution(resolution):
-        return error
-    width, height = resolution[0], resolution[1]
-
-    # Get /obj context
-    obj_context = hou.node("/obj")
-    if obj_context is None:
-        return {"status": "error", "message": "Cannot find /obj context"}
-
-    # Calculate bounding box of visible geometry if auto_frame
-    bbox_info = None
-    bbox_center = [0.0, 0.0, 0.0]
-    bbox_size = 10.0  # Default size
-
-    if auto_frame:
-        # Find all displayed geometry nodes
-        displayed_geo = []
-        for node in obj_context.children():
-            try:
-                node_type = node.type().name()
-                if node_type in ["geo", "subnet"] and node.isDisplayFlagSet():
-                    displayed_geo.append(node)
-            except Exception:
-                continue
-
-        # Calculate collective bounding box
-        if displayed_geo:
-            min_bounds = [float("inf")] * 3
-            max_bounds = [float("-inf")] * 3
-
-            for node in displayed_geo:
-                try:
-                    display_node = node.displayNode()
-                    if display_node is None:
-                        continue
-                    geo = display_node.geometry()
-                    if geo is None:
-                        continue
-                    bbox = geo.boundingBox()
-                    if bbox is None:
-                        continue
-
-                    # Get node's world transform
-                    transform = node.worldTransform()
-
-                    # Transform bounding box corners
-                    for x in [bbox.minvec()[0], bbox.maxvec()[0]]:
-                        for y in [bbox.minvec()[1], bbox.maxvec()[1]]:
-                            for z in [bbox.minvec()[2], bbox.maxvec()[2]]:
-                                point = hou.Vector4(x, y, z, 1.0)
-                                transformed = point * transform
-                                min_bounds[0] = min(min_bounds[0], transformed[0])
-                                min_bounds[1] = min(min_bounds[1], transformed[1])
-                                min_bounds[2] = min(min_bounds[2], transformed[2])
-                                max_bounds[0] = max(max_bounds[0], transformed[0])
-                                max_bounds[1] = max(max_bounds[1], transformed[1])
-                                max_bounds[2] = max(max_bounds[2], transformed[2])
-                except Exception as e:
-                    logger.debug(f"Error getting bbox for {node.path()}: {e}")
-                    continue
-
-            if min_bounds[0] != float("inf"):
-                bbox_center = [
-                    (min_bounds[0] + max_bounds[0]) / 2,
-                    (min_bounds[1] + max_bounds[1]) / 2,
-                    (min_bounds[2] + max_bounds[2]) / 2,
-                ]
-                bbox_size = max(
-                    max_bounds[0] - min_bounds[0],
-                    max_bounds[1] - min_bounds[1],
-                    max_bounds[2] - min_bounds[2],
-                )
-                bbox_info = {
-                    "min": min_bounds,
-                    "max": max_bounds,
-                    "center": bbox_center,
-                    "size": bbox_size,
-                }
-
-    # Override center if look_at is specified
-    if look_at:
-        target_node = hou.node(look_at)
-        if target_node:
-            try:
-                # Try to get geometry center
-                display_node = (
-                    target_node.displayNode() if hasattr(target_node, "displayNode") else None
-                )
-                if display_node:
-                    geo = display_node.geometry()
-                    if geo:
-                        bbox = geo.boundingBox()
-                        if bbox:
-                            bbox_center = list(bbox.center())
-                            bbox_size = max(bbox.sizevec())
-            except Exception:
-                # Fall back to node transform
-                try:
-                    bbox_center = [
-                        target_node.parm("tx").eval() if target_node.parm("tx") else 0,
-                        target_node.parm("ty").eval() if target_node.parm("ty") else 0,
-                        target_node.parm("tz").eval() if target_node.parm("tz") else 0,
-                    ]
-                except Exception:
-                    pass
-
-    # [LAW:no-ambient-temporal-coupling] the renderer, /out and the link are
-    # resolved before a single node exists: a bad renderer creates nothing.
-    rop_type = renderer.lower()
-    if rop_type not in _RENDERERS:
-        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
-    out_context = hou.node("/out")
-    if out_context is None:
-        return {"status": "error", "message": "Cannot find /out context"}
-    # Get remote modules for file operations on the Houdini machine
-    remote_os, remote_tempfile = _get_remote_modules(host, port)
+    # What to frame: the node asked for, else what the viewport shows, else nothing.
+    if look_at is not None:
+        target = prepared.hou.node(look_at)
+        if target is None:
+            return {"status": "error", "message": f"look_at node not found: {look_at}"}
+        framed = [target]
+    elif auto_frame:
+        framed = _displayed_geometry(prepared.obj)
+    else:
+        framed = []
+    framing = _framing(prepared.hou, framed)
+    rotation = _ISOMETRIC if camera_rotation is None else camera_rotation
+    offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
 
     with _temporary_nodes() as create:
-        # Camera null (rotation pivot) at bbox center, camera as its child
-        null = create(obj_context, "null", "_mcp_cam_center")
-        null.parmTuple("t").set(bbox_center)
-        null.parmTuple("r").set(camera_rotation)
+        rig = _build_rig(create, prepared, "_mcp_", framing)
+        rop = _build_rop(create, prepared, "_mcp_", rig)
+        _aim(rig, rotation, offset, orthographic, framing)
+        image = _render_picture(rop, prepared, output_format)
 
-        camera = create(obj_context, "cam", "_mcp_render_cam")
-        camera.setFirstInput(null)
-
-        # Calculate camera distance to frame geometry
-        # Using FOV and bbox size
-        fov_degrees = 45.0  # Default FOV
-        padding = 1.2  # 20% padding
-        distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
-        distance = max(5.0, distance + bbox_size / 2)  # Ensure minimum distance
-
-        # Position camera along Z axis (it will be rotated by null)
-        if camera_position:
-            camera.parmTuple("t").set(camera_position)
-        else:
-            camera.parmTuple("t").set([0, 0, distance])
-
-        # Set resolution
-        camera.parm("resx").set(width)
-        camera.parm("resy").set(height)
-
-        # Set projection type
-        if orthographic:
-            camera.parm("projection").set(1)  # Orthographic
-            # Set ortho width to frame geometry
-            camera.parm("orthowidth").set(bbox_size * padding)
-        else:
-            camera.parm("projection").set(0)  # Perspective
-
-        # Create temp file for output ON THE REMOTE MACHINE
-        suffix = f".{output_format}"
-        fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
-        remote_os.close(fd)
-
-        try:
-            rop = create(out_context, rop_type, f"_mcp_{rop_type}_rop")
-            if rop_type == "opengl":
-                rop.parm("camera").set(camera.path())
-                rop.parm("picture").set(output_path)
-                if rop.parm("tres"):
-                    rop.parm("tres").set(True)
-                if rop.parm("res1"):
-                    rop.parm("res1").set(width)
-                if rop.parm("res2"):
-                    rop.parm("res2").set(height)
-                if rop.parm("trange"):
-                    rop.parm("trange").set(0)  # Current frame only
-                rop.render()
-            else:
-                rop.parm("camera").set(camera.path())
-                rop.parm("picture").set(output_path)
-                if rop.parm("resolutionx"):
-                    rop.parm("resolutionx").set(width)
-                if rop.parm("resolutiony"):
-                    rop.parm("resolutiony").set(height)
-                if rop.parm("trange"):
-                    rop.parm("trange").set(0)
-                # Set Karma engine (CPU or GPU/XPU)
-                if rop.parm("engine"):
-                    engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
-                    rop.parm("engine").set(engine_value)
-                rop.render()
-
-            # Read rendered image from REMOTE MACHINE and encode as base64
-            if remote_os.path.exists(output_path):
-                with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
-                    image_data = f.read()
-                image_base64 = base64.b64encode(image_data).decode("utf-8")
-
-                result: dict[str, Any] = {
-                    "status": "success",
-                    "image_base64": image_base64,
-                    "format": output_format,
-                    "resolution": [width, height],
-                    "renderer": renderer,
-                }
-                if bbox_info:
-                    result["bounding_box"] = bbox_info
-                return result
-            else:
-                return {"status": "error", "message": "Render completed but output file not found"}
-
-        finally:
-            # Clean up temp file on remote machine
-            if remote_os.path.exists(output_path):
-                try:
-                    remote_os.remove(output_path)
-                except Exception:
-                    pass
+    result: dict[str, Any] = {
+        "status": "success",
+        "image_base64": image,
+        "format": output_format,
+        "resolution": [prepared.width, prepared.height],
+        "renderer": renderer,
+    }
+    if (box := framing.report()) is not None:
+        result["bounding_box"] = box
+    return result
 
 
 @handle_connection_errors("render_quad_view")
@@ -406,7 +488,7 @@ def render_quad_view(
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
-        - bounding_box: Scene bounding box info
+        - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
         - total_render_time_ms: Total time for all renders
 
@@ -417,254 +499,50 @@ def render_quad_view(
         render_quad_view(include_perspective=False)  # Only 3 orthographic views
         render_quad_view(renderer="karma", karma_engine="gpu")  # Fast GPU renders
     """
-    import time
-
     start_time = time.time()
 
-    hou = ensure_connected(host, port)
+    prepared = _prepare(resolution, renderer, karma_engine, host, port)
+    if isinstance(prepared, dict):
+        return prepared
 
-    # Set defaults
-    if resolution is None:
-        resolution = [512, 512]
-
-    # Validate resolution
-    if error := validate_resolution(resolution):
-        return error
-    width, height = resolution[0], resolution[1]
-
-    # [LAW:no-ambient-temporal-coupling] the renderer, /out and the link are
-    # resolved before a single node exists: a bad renderer creates nothing.
-    rop_type = renderer.lower()
-    if rop_type not in _RENDERERS:
-        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
-    out_context = hou.node("/out")
-    if out_context is None:
-        return {"status": "error", "message": "Cannot find /out context"}
-    # Get remote modules for file operations on the Houdini machine
-    remote_os, remote_tempfile = _get_remote_modules(host, port)
-
-    # Define the 4 canonical views
-    # Using rotations that match standard 3D viewport conventions
-    views_config = [
-        {"name": "front", "rotation": [0.0, 0.0, 0.0], "ortho": orthographic},
-        {"name": "left", "rotation": [0.0, -90.0, 0.0], "ortho": orthographic},
-        {"name": "top", "rotation": [-90.0, 0.0, 0.0], "ortho": orthographic},
-    ]
-
+    views = [(name, rotation, orthographic) for name, rotation in _QUAD_VIEWS]
     if include_perspective:
-        # Isometric-like perspective view
-        views_config.append({"name": "perspective", "rotation": [-30.0, 45.0, 0.0], "ortho": False})
+        views.append(("perspective", _ISOMETRIC, False))
 
-    # Get /obj context
-    obj_context = hou.node("/obj")
-    if obj_context is None:
-        return {"status": "error", "message": "Cannot find /obj context"}
-
-    # Calculate bounding box of visible geometry (do this ONCE for all views)
-    bbox_info = None
-    bbox_center = [0.0, 0.0, 0.0]
-    bbox_size = 10.0  # Default size
-
-    # Find all displayed geometry nodes
-    displayed_geo = []
-    for node in obj_context.children():
-        try:
-            node_type = node.type().name()
-            if node_type in ["geo", "subnet"] and node.isDisplayFlagSet():
-                displayed_geo.append(node)
-        except Exception:
-            continue
-
-    # Calculate collective bounding box
-    if displayed_geo:
-        min_bounds = [float("inf")] * 3
-        max_bounds = [float("-inf")] * 3
-
-        for node in displayed_geo:
-            try:
-                display_node = node.displayNode()
-                if display_node is None:
-                    continue
-                geo = display_node.geometry()
-                if geo is None:
-                    continue
-                bbox = geo.boundingBox()
-                if bbox is None:
-                    continue
-
-                # Get node's world transform
-                transform = node.worldTransform()
-
-                # Transform bounding box corners
-                for x in [bbox.minvec()[0], bbox.maxvec()[0]]:
-                    for y in [bbox.minvec()[1], bbox.maxvec()[1]]:
-                        for z in [bbox.minvec()[2], bbox.maxvec()[2]]:
-                            point = hou.Vector4(x, y, z, 1.0)
-                            transformed = point * transform
-                            min_bounds[0] = min(min_bounds[0], transformed[0])
-                            min_bounds[1] = min(min_bounds[1], transformed[1])
-                            min_bounds[2] = min(min_bounds[2], transformed[2])
-                            max_bounds[0] = max(max_bounds[0], transformed[0])
-                            max_bounds[1] = max(max_bounds[1], transformed[1])
-                            max_bounds[2] = max(max_bounds[2], transformed[2])
-            except Exception as e:
-                logger.debug(f"Error getting bbox for {node.path()}: {e}")
-                continue
-
-        if min_bounds[0] != float("inf"):
-            bbox_center = [
-                (min_bounds[0] + max_bounds[0]) / 2,
-                (min_bounds[1] + max_bounds[1]) / 2,
-                (min_bounds[2] + max_bounds[2]) / 2,
-            ]
-            bbox_size = max(
-                max_bounds[0] - min_bounds[0],
-                max_bounds[1] - min_bounds[1],
-                max_bounds[2] - min_bounds[2],
-            )
-            bbox_info = {
-                "min": min_bounds,
-                "max": max_bounds,
-                "center": bbox_center,
-                "size": bbox_size,
-            }
+    framing = _framing(prepared.hou, _displayed_geometry(prepared.obj))
+    offset = (0.0, 0.0, framing.distance)
+    view_results: list[dict[str, Any]] = []
 
     with _temporary_nodes() as create:
-        # Camera rig (null + camera) at bbox center, reused for all views
-        null = create(obj_context, "null", "_mcp_quad_cam_center")
-        null.parmTuple("t").set(bbox_center)
-
-        camera = create(obj_context, "cam", "_mcp_quad_render_cam")
-        camera.setFirstInput(null)
-
-        # Set camera resolution
-        camera.parm("resx").set(width)
-        camera.parm("resy").set(height)
-
-        # Calculate camera distance to frame geometry
-        fov_degrees = 45.0
-        padding = 1.2  # 20% padding
-        distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
-        distance = max(5.0, distance + bbox_size / 2)
-
-        rop = create(out_context, rop_type, f"_mcp_quad_{rop_type}_rop")
-
-        # Render each view
-        view_results = []
-
-        for view_config in views_config:
-            view_name = view_config["name"]
-            rotation = view_config["rotation"]
-            is_ortho = view_config["ortho"]
-
+        rig = _build_rig(create, prepared, "_mcp_quad_", framing)
+        rop = _build_rop(create, prepared, "_mcp_quad_", rig)
+        for name, rotation, is_ortho in views:
+            view: dict[str, Any] = {"name": name, "rotation": list(rotation)}
             try:
-                # Set null rotation for this view
-                null.parmTuple("r").set(rotation)
-
-                # Position camera along Z axis
-                camera.parmTuple("t").set([0, 0, distance])
-
-                # Set projection type
-                if is_ortho:
-                    camera.parm("projection").set(1)  # Orthographic
-                    camera.parm("orthowidth").set(bbox_size * padding)
-                else:
-                    camera.parm("projection").set(0)  # Perspective
-
-                # Create temp file for output ON THE REMOTE MACHINE
-                suffix = f".{output_format}"
-                fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
-                remote_os.close(fd)
-
-                try:
-                    # Configure and render
-                    if rop_type == "opengl":
-                        rop.parm("camera").set(camera.path())
-                        rop.parm("picture").set(output_path)
-                        if rop.parm("tres"):
-                            rop.parm("tres").set(True)
-                        if rop.parm("res1"):
-                            rop.parm("res1").set(width)
-                        if rop.parm("res2"):
-                            rop.parm("res2").set(height)
-                        if rop.parm("trange"):
-                            rop.parm("trange").set(0)
-                        rop.render()
-                    else:
-                        rop.parm("camera").set(camera.path())
-                        rop.parm("picture").set(output_path)
-                        if rop.parm("resolutionx"):
-                            rop.parm("resolutionx").set(width)
-                        if rop.parm("resolutiony"):
-                            rop.parm("resolutiony").set(height)
-                        if rop.parm("trange"):
-                            rop.parm("trange").set(0)
-                        # Set Karma engine (CPU or GPU/XPU)
-                        if rop.parm("engine"):
-                            engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
-                            rop.parm("engine").set(engine_value)
-                        rop.render()
-
-                    # Read and encode image from REMOTE MACHINE
-                    if remote_os.path.exists(output_path):
-                        with remote_os.fdopen(
-                            remote_os.open(output_path, remote_os.O_RDONLY), "rb"
-                        ) as f:
-                            image_data = f.read()
-                        image_base64 = base64.b64encode(image_data).decode("utf-8")
-
-                        view_results.append(
-                            {
-                                "name": view_name,
-                                "rotation": rotation,
-                                "image_base64": image_base64,
-                                "format": output_format,
-                                "resolution": [width, height],
-                                "orthographic": is_ortho,
-                            }
-                        )
-                    else:
-                        view_results.append(
-                            {
-                                "name": view_name,
-                                "rotation": rotation,
-                                "error": "Render completed but output file not found",
-                            }
-                        )
-
-                finally:
-                    # Clean up temp file on remote machine
-                    if remote_os.path.exists(output_path):
-                        try:
-                            remote_os.remove(output_path)
-                        except Exception:
-                            pass
-
+                _aim(rig, rotation, offset, is_ortho, framing)
+                image = _render_picture(rop, prepared, output_format)
             except Exception as e:
                 # [LAW:no-silent-failure] a dead link is not a view's failure
                 if transport_failure(e):
                     raise
-                view_results.append(
-                    {
-                        "name": view_name,
-                        "rotation": rotation,
-                        "error": str(e),
-                    }
+                view["error"] = str(e)
+            else:
+                view.update(
+                    image_base64=image,
+                    format=output_format,
+                    resolution=[prepared.width, prepared.height],
+                    orthographic=is_ortho,
                 )
+            view_results.append(view)
 
-    # Calculate total render time
-    total_time_ms = (time.time() - start_time) * 1000
-
-    result = {
+    result: dict[str, Any] = {
         "status": "success",
         "views": view_results,
         "renderer": renderer,
-        "total_render_time_ms": round(total_time_ms, 1),
+        "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
     }
-
-    if bbox_info:
-        result["bounding_box"] = bbox_info
-
+    if (box := framing.report()) is not None:
+        result["bounding_box"] = box
     return result
 
 

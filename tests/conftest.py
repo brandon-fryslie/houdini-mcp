@@ -111,8 +111,16 @@ _TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
         "projection": 0,
         "orthowidth": 1.0,
     },
-    "opengl": {"camera": "", "picture": ""},
-    "karma": {"camera": "", "picture": ""},
+    # Each ROP's resolution and frame-range parms carry the names the real ROP uses.
+    "opengl": {"camera": "", "picture": "", "tres": False, "res1": 0, "res2": 0, "trange": 0},
+    "karma": {
+        "camera": "",
+        "picture": "",
+        "resolutionx": 0,
+        "resolutiony": 0,
+        "engine": "cpu",
+        "trange": 0,
+    },
 }
 
 
@@ -373,6 +381,12 @@ class MockHouNode:
     def isDisplayFlagSet(self) -> bool:
         return self._display_flag
 
+    def worldTransform(self) -> "MockMatrix4":
+        """The node's world transform: its own translate, as hou.ObjNode.worldTransform."""
+        return MockMatrix4(
+            (self._params["tx"], self._params["ty"], self._params["tz"]),
+        )
+
     def isRenderFlagSet(self) -> bool:
         return self._render_flag
 
@@ -560,6 +574,7 @@ class MockHouModule:
         # Houdini types
         self.Color = MockColor
         self.Vector2 = MockVector2
+        self.Vector4 = MockVector4
         self.Node = MockHouNode
         self.SubnetIndirectInput = MockSubnetIndirectInput
 
@@ -901,6 +916,34 @@ class MockColor:
 
     def __repr__(self) -> str:
         return f"<MockColor {self._rgb}>"
+
+
+class MockMatrix4:
+    """Mock hou.Matrix4: a translation, which is all the fake scene's nodes carry."""
+
+    def __init__(self, translate: tuple[float, float, float]):
+        self._translate = (float(translate[0]), float(translate[1]), float(translate[2]))
+
+    def translate(self) -> tuple[float, float, float]:
+        return self._translate
+
+
+class MockVector4:
+    """Mock hou.Vector4: a homogeneous point, so ``point * matrix`` lands it in world space."""
+
+    def __init__(self, x: float, y: float, z: float, w: float = 1.0):
+        self._v = (float(x), float(y), float(z), float(w))
+
+    def __getitem__(self, index: int) -> float:
+        return self._v[index]
+
+    def __mul__(self, matrix: MockMatrix4) -> "MockVector4":
+        tx, ty, tz = matrix.translate()
+        x, y, z, w = self._v
+        return MockVector4(x + tx * w, y + ty * w, z + tz * w, w)
+
+    def __repr__(self) -> str:
+        return f"MockVector4{self._v}"
 
 
 class MockVector2:
