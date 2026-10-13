@@ -7,6 +7,10 @@ Key insight: Every attribute access on an RPyC proxy is a separate RPC call.
 By using hscript commands, we can fetch hundreds of node properties in a single
 round-trip, achieving 100-800x speedups on large scenes.
 
+hscript is a command language, not Python: this module runs no program.
+[LAW:single-enforcer] Every Python program executed in Houdini enters through
+the gate in ``code.py``; nothing here can carry one around it.
+
 Usage:
     from houdini_mcp.tools.hscript import HscriptBatch
 
@@ -20,6 +24,7 @@ Usage:
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp.tools.hscript")
@@ -33,39 +38,19 @@ class HscriptBatch:
     that minimize RPC round-trips.
     """
 
-    def __init__(self, hou: Any, conn: Any | None = None):
+    def __init__(self, hou: Any):
         """
-        Initialize with the hou module.
+        Bind to a hou module that offers hscript.
 
         Args:
             hou: The Houdini hou module (real or mock)
-            conn: Optional RPyC connection. If not provided, attempts to get
-                  from hou.____conn__ or via get_connection().
+
+        Raises:
+            AttributeError: If hou has no ``hscript`` (a mock without it).
         """
-        self.hou = hou
-        self._has_hscript = hasattr(hou, "hscript")
-        # RPyC connection for true remote execution (avoids per-attribute RPC)
-        # Priority: explicit conn > hou.____conn__ > get_connection()
-        if conn is not None:
-            self._conn = conn
-        elif hasattr(hou, "____conn__"):
-            self._conn = hou.____conn__
-        else:
-            # Try to get connection from connection manager
-            try:
-                from ._common import get_connection
-
-                self._conn = get_connection()
-            except ImportError:
-                self._conn = None
-
-    def is_available(self) -> bool:
-        """Check if hscript commands are available."""
-        return self._has_hscript
-
-    def has_remote_exec(self) -> bool:
-        """Check if remote Python execution is available."""
-        return self._conn is not None
+        # [LAW:parse-dont-validate] hscript is resolved once here; a hou without
+        # it cannot produce a batch, so no method below asks again.
+        self._hscript: Callable[[str], tuple[str, str]] = hou.hscript
 
     def run(self, command: str) -> tuple[str, str]:
         """
@@ -76,13 +61,8 @@ class HscriptBatch:
 
         Returns:
             Tuple of (stdout, stderr)
-
-        Raises:
-            RuntimeError: If hscript is not available
         """
-        if not self._has_hscript:
-            raise RuntimeError("hscript not available (mock environment?)")
-        return self.hou.hscript(command)
+        return self._hscript(command)
 
     # =========================================================================
     # Node Enumeration
@@ -101,9 +81,6 @@ class HscriptBatch:
         Returns:
             List of all node paths under the root
         """
-        if not self._has_hscript:
-            return []
-
         result, _ = self.run(f"opls -R {root_path}")
         if not result:
             return []
@@ -130,9 +107,6 @@ class HscriptBatch:
         Returns:
             List of child node names (not full paths)
         """
-        if not self._has_hscript:
-            return []
-
         result, _ = self.run(f"opls {parent_path}")
         if not result:
             return []
@@ -155,7 +129,7 @@ class HscriptBatch:
         Returns:
             Dict mapping path -> type name
         """
-        if not self._has_hscript or not paths:
+        if not paths:
             return {}
 
         # For efficiency, we use optype on the parent with wildcard
@@ -200,9 +174,6 @@ class HscriptBatch:
         Returns:
             Node type string or None if not found
         """
-        if not self._has_hscript:
-            return None
-
         output, _ = self.run(f"optype {path}")
         if not output:
             return None
@@ -260,9 +231,6 @@ class HscriptBatch:
         Returns:
             List of root-level node dicts, each with nested children
         """
-        if not self._has_hscript:
-            return []
-
         result, _ = self.run(f"opls -R {root_path}")
         if not result:
             return []
@@ -316,337 +284,3 @@ class HscriptBatch:
 
         root_children = children_by_parent.get(root_path, [])
         return [build_tree(path) for path in root_children]
-
-    # =========================================================================
-    # Parameters (Batch)
-    # =========================================================================
-
-    def get_parameter_values(self, node_path: str, parm_names: list[str]) -> dict[str, Any]:
-        """
-        Get multiple parameter values in a single RPC call.
-
-        Uses Python exec on Houdini side to batch parameter evaluation.
-
-        Args:
-            node_path: Path to the node
-            parm_names: List of parameter names to fetch
-
-        Returns:
-            Dict mapping parameter name -> value
-        """
-        if not parm_names:
-            return {}
-
-        # Build Python code to execute on Houdini side
-        parm_list = ", ".join(f'"{p}"' for p in parm_names)
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = {{}}
-if node:
-    for name in [{parm_list}]:
-        try:
-            parm = node.parm(name)
-            if parm:
-                val = parm.eval()
-                # Convert hou types to JSON-safe
-                if hasattr(val, '__iter__') and not isinstance(val, str):
-                    val = list(val)
-                result[name] = val
-        except:
-            pass
-print(json.dumps(result))
-"""
-        try:
-            # Use Python exec for complex parameter fetching
-            import json
-
-            output = self._exec_python(code)
-            if output:
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Batch parameter fetch failed: {e}")
-
-        return {}
-
-    def get_all_parameters(self, node_path: str) -> dict[str, Any]:
-        """
-        Get all parameter values for a node in a single RPC call.
-
-        Args:
-            node_path: Path to the node
-
-        Returns:
-            Dict mapping parameter name -> value
-        """
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = {{}}
-if node:
-    for parm in node.parms():
-        try:
-            name = parm.name()
-            val = parm.eval()
-            # Convert hou types to JSON-safe
-            if hasattr(val, '__iter__') and not isinstance(val, str):
-                val = list(val)
-            elif hasattr(val, 'name'):  # EnumValue
-                val = val.name()
-            result[name] = val
-        except:
-            pass
-print(json.dumps(result))
-"""
-        try:
-            import json
-
-            output = self._exec_python(code)
-            if output:
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Get all parameters failed: {e}")
-
-        return {}
-
-    def get_geo_counts(self, node_path: str) -> dict[str, int]:
-        """
-        Get geometry point/prim/vertex counts in a single call.
-
-        Args:
-            node_path: Path to a SOP node
-
-        Returns:
-            Dict with point_count, prim_count, vertex_count
-        """
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = {{"point_count": 0, "prim_count": 0, "vertex_count": 0}}
-if node:
-    try:
-        geo = node.geometry()
-        if geo:
-            result["point_count"] = len(geo.points())
-            result["prim_count"] = len(geo.prims())
-            result["vertex_count"] = len(geo.vertices()) if hasattr(geo, 'vertices') else 0
-    except:
-        pass
-print(json.dumps(result))
-"""
-        try:
-            import json
-
-            output = self._exec_python(code)
-            if output:
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Get geo counts failed: {e}")
-
-        return {"point_count": 0, "prim_count": 0, "vertex_count": 0}
-
-    def get_bounding_box(self, node_path: str) -> dict[str, list[float]] | None:
-        """
-        Get geometry bounding box.
-
-        Args:
-            node_path: Path to a SOP node
-
-        Returns:
-            Dict with min, max, size, center vectors or None
-        """
-        code = f"""
-import json
-node = hou.node("{node_path}")
-result = None
-if node:
-    try:
-        geo = node.geometry()
-        if geo:
-            bbox = geo.boundingBox()
-            min_v = bbox.minvec()
-            max_v = bbox.maxvec()
-            size = bbox.sizevec()
-            center = bbox.center()
-            result = {{
-                "min": [min_v[0], min_v[1], min_v[2]],
-                "max": [max_v[0], max_v[1], max_v[2]],
-                "size": [size[0], size[1], size[2]],
-                "center": [center[0], center[1], center[2]]
-            }}
-    except:
-        pass
-print(json.dumps(result))
-"""
-        try:
-            import json
-
-            output = self._exec_python(code)
-            if output and output.strip() != "null":
-                return json.loads(output.strip())
-        except Exception as e:
-            logger.debug(f"Get bounding box failed: {e}")
-
-        return None
-
-    # =========================================================================
-    # Value Conversion (Type Introspection)
-    # =========================================================================
-
-    def convert_hou_values(self, values: dict[str, Any]) -> dict[str, Any]:
-        """
-        Convert hou values to JSON-safe types on Houdini side.
-
-        This avoids multiple isinstance() RPC calls by doing all
-        type introspection in a single exec.
-
-        Args:
-            values: Dict of names to hou values (as proxy objects)
-
-        Returns:
-            Dict with JSON-safe values
-        """
-        # Build code to convert on Houdini side
-        # This is complex because we need to pass the values somehow
-        # For now, this is a placeholder - real implementation would
-        # need to serialize values differently
-        return values
-
-    # =========================================================================
-    # Internal Helpers
-    # =========================================================================
-
-    def _exec_python_remote(self, code: str, result_var: str = "_batch_result") -> str:
-        """
-        Execute Python code on Houdini side using true remote execution.
-
-        This uses RPyC's conn.execute() which runs code entirely on the
-        Houdini side, avoiding per-attribute RPC overhead.
-
-        Args:
-            code: Python code to execute. Must set result_var with the result.
-            result_var: Name of variable to retrieve from remote namespace.
-
-        Returns:
-            Value of result_var from remote namespace (as string).
-        """
-        if self._conn is None:
-            logger.debug("No RPyC connection available for remote exec")
-            return ""
-
-        try:
-            # Execute code on the remote Houdini side
-            # The code runs in Houdini's Python environment
-            self._conn.execute(code)
-
-            # Retrieve the result from remote namespace
-            result = self._conn.namespace.get(result_var, "")
-            return str(result) if result else ""
-
-        except Exception as e:
-            logger.debug(f"_exec_python_remote failed: {e}")
-            return ""
-
-    def _exec_python(self, code: str) -> str:
-        """
-        Execute Python code and return result.
-
-        Prefers true remote execution via RPyC conn.execute() for performance.
-        Falls back to local exec with hou proxy if remote unavailable.
-
-        Args:
-            code: Python code that prints JSON result.
-
-        Returns:
-            stdout from execution (the printed JSON).
-        """
-        # Prefer true remote execution (much faster)
-        if self._conn is not None:
-            # Wrap code to store result in a variable we can retrieve
-            # The code should use print() - we'll capture that
-            wrapped = f"""
-import hou
-import json
-import sys
-import io
-_stdout = io.StringIO()
-_old_stdout = sys.stdout
-sys.stdout = _stdout
-try:
-{self._indent_code(code)}
-finally:
-    sys.stdout = _old_stdout
-_batch_result = _stdout.getvalue()
-"""
-            return self._exec_python_remote(wrapped)
-
-        # Fallback: local exec with hou proxy (slower, per-attribute RPC)
-        try:
-            import io
-            import sys
-
-            stdout_capture = io.StringIO()
-            old_stdout = sys.stdout
-            sys.stdout = stdout_capture
-            try:
-                exec_globals = {"hou": self.hou}
-                exec(code, exec_globals)
-            finally:
-                sys.stdout = old_stdout
-            return stdout_capture.getvalue()
-
-        except Exception as e:
-            logger.debug(f"_exec_python fallback failed: {e}")
-            return ""
-
-    def _indent_code(self, code: str, spaces: int = 4) -> str:
-        """Indent code block for embedding in wrapper."""
-        indent = " " * spaces
-        lines = code.strip().split("\n")
-        return "\n".join(indent + line for line in lines)
-
-
-# =============================================================================
-# Convenience Functions
-# =============================================================================
-
-
-def get_batch(hou: Any) -> HscriptBatch:
-    """
-    Get an HscriptBatch instance.
-
-    Args:
-        hou: The hou module
-
-    Returns:
-        HscriptBatch instance
-    """
-    return HscriptBatch(hou)
-
-
-def fast_list_paths(hou: Any, root_path: str = "/obj") -> list[str]:
-    """
-    Convenience function to list all paths under a root.
-
-    Args:
-        hou: The hou module
-        root_path: Root path to enumerate
-
-    Returns:
-        List of all node paths
-    """
-    return HscriptBatch(hou).list_all_paths(root_path)
-
-
-def fast_get_scene_tree(hou: Any, root_path: str = "/obj") -> list[dict[str, Any]]:
-    """
-    Convenience function to get scene tree.
-
-    Args:
-        hou: The hou module
-        root_path: Root path to enumerate
-
-    Returns:
-        Hierarchical scene tree
-    """
-    return HscriptBatch(hou).get_scene_tree(root_path)
