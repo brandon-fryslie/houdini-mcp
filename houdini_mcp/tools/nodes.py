@@ -340,8 +340,8 @@ def list_node_types(
         Use cursor for pagination through large result sets.
 
     Performance:
-        - First call: ~200-500ms (populates cache using batch fetch)
-        - Subsequent calls: <1ms (filters from cache)
+        - First call walks every node type through the hou proxy to fill the cache
+        - Subsequent calls filter from the cache
     """
     hou = ensure_connected(host, port)
     request = parse_page_request(limit=limit, cursor=cursor)

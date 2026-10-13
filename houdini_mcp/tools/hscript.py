@@ -23,11 +23,8 @@ Usage:
     info = batch.get_nodes_info("/obj")  # Full info for all children
 """
 
-import logging
 from collections.abc import Callable
 from typing import Any
-
-logger = logging.getLogger("houdini_mcp.tools.hscript")
 
 
 class HscriptBatch:

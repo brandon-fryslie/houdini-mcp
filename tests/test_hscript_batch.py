@@ -68,14 +68,11 @@ class TestHscriptBatch:
 
 
 class TestNodeTypeCacheReadsThroughTheProxy:
-    def test_population_sends_no_program_over_the_connection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_population_sends_no_program_over_the_connection(self) -> None:
         hou: Any = MockHouModule()
         connection = MagicMock()
         connection.execute.side_effect = AssertionError("a cache fill executed a program")
         hou.____conn__ = connection
-        monkeypatch.setattr("houdini_mcp.connection.get_connection", lambda: connection)
 
         cache = NodeTypeCache()
         types = cache.get_all_types(hou)
