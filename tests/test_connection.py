@@ -77,6 +77,27 @@ class TestConnect:
         assert "Non-retryable" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, HandshakeError)
 
+    def test_a_link_that_fails_validation_is_closed_and_not_installed(
+        self, reset_connection_state, mock_hou
+    ):
+        """Houdini answers the socket but not the version call: the attempt is retried,
+        the half-open link is closed, and nothing is left behind for is_connected()."""
+        from tests.conftest import MockRpycConnection
+
+        busy = MockRpycConnection(mock_hou)
+        busy.modules = MagicMock()
+        busy.modules.hou.applicationVersionString.side_effect = TimeoutError("sync request")
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = busy
+            with pytest.raises(HoudiniConnectionError):
+                connect("localhost", 18811, max_retries=2, retry_delay=0.01)
+
+        assert mock_rpyc.connect.call_count == 2
+        assert busy._closed is True
+        assert is_connected() is False
+        assert get_connection() is None
+
     @pytest.mark.parametrize(
         "exc",
         [
@@ -557,6 +578,20 @@ class TestSafeExecute:
         assert result.error_type == "TimeoutError"
         assert get_connection() is not None
 
+    def test_rpyc_sync_timeout_is_connection_loss_not_our_deadline(self, mock_connection):
+        """rpyc's sync_request_timeout fires inside the operation as a bare TimeoutError:
+        the link stopped answering, so it is torn down rather than reported as our own
+        deadline, which only a future that never settles can be."""
+
+        def stalled():
+            raise TimeoutError("result expired")
+
+        result = safe_execute(stalled, timeout=5.0, operation_name="stalled")
+
+        assert result.timed_out is False
+        assert result.connection_lost is True
+        assert get_connection() is None
+
     def test_link_failure_is_connection_loss_and_tears_down(self, mock_connection):
         def read():
             raise EOFError("stream has been closed")
@@ -583,3 +618,30 @@ class TestSafeExecute:
         assert result.timed_out is True
         assert result.connection_lost is False
         assert result.error_type == "timeout"
+
+
+class TestExecuteWithTimeout:
+    """execute_with_timeout owns one deadline; a TimeoutError the operation raised is not it."""
+
+    def test_timeout_raised_by_the_operation_propagates_as_itself(self):
+        from houdini_mcp.connection import HoudiniOperationTimeout, execute_with_timeout
+
+        def cook():
+            raise TimeoutError("cook timed out")
+
+        with pytest.raises(TimeoutError) as exc_info:
+            execute_with_timeout(cook, timeout=5.0)
+        assert not isinstance(exc_info.value, HoudiniOperationTimeout)
+        assert "cook timed out" in str(exc_info.value)
+
+    def test_our_deadline_is_houdini_operation_timeout(self):
+        import threading
+
+        from houdini_mcp.connection import HoudiniOperationTimeout, execute_with_timeout
+
+        release = threading.Event()
+        try:
+            with pytest.raises(HoudiniOperationTimeout):
+                execute_with_timeout(release.wait, 5.0, timeout=0.05)
+        finally:
+            release.set()

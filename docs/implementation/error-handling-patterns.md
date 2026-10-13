@@ -57,7 +57,7 @@ the render tools that need their own `try` block):
 | Tier | Exception | Handling |
 |------|-----------|----------|
 | 1 | `HoudiniConnectionError` | Simple error response with message |
-| 2 | A `TransportFailure` (see below) | Disconnect, then `_handle_connection_error()` |
+| 2 | A `TransportFailure` (see below) | `_handle_connection_error()`: disconnects, then builds the response |
 | 3 | Anything else | Log + error response with traceback; the connection stays up |
 
 ### 2. `transport_failure()` - the one place connection loss is decided
@@ -78,7 +78,7 @@ Only a failure of the link itself is connection loss. `transport_failure(exc)` r
 - In-process (`IN_PROCESS_HOUDINI`, the plugin's stdio server) there is no link to lose,
   so nothing is a transport failure.
 
-Opening the link is classified separately (`HoudiniTarget.open_failure`): before a
+Opening the link is a retry decision, not a proof (`HoudiniTarget.open_is_retryable`): before a
 connection exists only the socket layer can raise an `OSError`, so at connect time the
 whole family - unreachable network, unresolved host, refused or denied socket, a
 stalled handshake - is retried. A rejected token raises `HandshakeError` and is not.

@@ -51,13 +51,12 @@ _TRANSPORT_EXCEPTIONS = (EOFError, ConnectionError, TimeoutError)
 class TransportFailure:
     """Proof that an exception came from the link to Houdini, not from code Houdini ran.
 
-    Only the installed ``HoudiniTarget`` produces one: through ``transport_failure``
-    when a link in use fails, or through ``connect`` when one cannot be opened.
-    Holding it is what entitles a caller to tear the connection down and report
-    connection loss.
+    Only ``transport_failure`` produces one, and only the installed ``HoudiniTarget``
+    decides. Holding it is what entitles a caller to tear the connection down and
+    report connection loss.
     """
 
-    exc: OSError | EOFError
+    exc: EOFError | ConnectionError | TimeoutError
 
 
 def _raised_inside_houdini(exc: BaseException) -> bool:
@@ -72,19 +71,22 @@ def _rpyc_transport_failure(exc: BaseException) -> TransportFailure | None:
     return None
 
 
-def _rpyc_open_failure(exc: BaseException) -> TransportFailure | None:
+def _rpyc_open_is_retryable(exc: BaseException) -> bool:
     # [LAW:types-are-the-program] Before the link exists nothing but the socket layer
     # can raise an OSError - unreachable network, unresolved host, refused or denied
     # socket, a handshake that stalls - so at open time the whole family is the
     # link's and worth a retry. A rejected token is HandshakeError, which is not one.
-    if isinstance(exc, (OSError, EOFError)) and not _raised_inside_houdini(exc):
-        return TransportFailure(exc)
-    return None
+    return isinstance(exc, (OSError, EOFError)) and not _raised_inside_houdini(exc)
 
 
 def _no_transport(exc: BaseException) -> None:
     # In-process there is no link to fail: every exception is the code's own.
     return None
+
+
+def _never_retry(exc: BaseException) -> bool:
+    # In-process, opening is importing hou; a second import will not go differently.
+    return False
 
 
 def transport_failure(exc: BaseException) -> TransportFailure | None:
@@ -175,7 +177,7 @@ class HoudiniTarget(NamedTuple):
     open: Callable[[str, int], Any]
     describe: Callable[[str, int], str]
     remedy: str
-    open_failure: Callable[[BaseException], TransportFailure | None]
+    open_is_retryable: Callable[[BaseException], bool]
     transport_failure: Callable[[BaseException], TransportFailure | None]
 
 
@@ -186,14 +188,14 @@ REMOTE_HOUDINI = HoudiniTarget(
     "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
     "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
     "(a listener that rejects this client's stream looks like one that is not running).",
-    _rpyc_open_failure,
+    _rpyc_open_is_retryable,
     _rpyc_transport_failure,
 )
 IN_PROCESS_HOUDINI = HoudiniTarget(
     _open_in_process,
     lambda _host, _port: "this interpreter",
     "This interpreter must be Houdini's own (hython or a Houdini session) with 'hou' importable.",
-    _no_transport,
+    _never_retry,
     _no_transport,
 )
 
@@ -302,25 +304,32 @@ def _do_connect(
     """
     global _connection, _hou
 
-    _connection = _target.open(host, port)
+    conn = _target.open(host, port)
+    # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
+    # proved it reaches Houdini; a link that fails validation is closed, so a failed
+    # attempt leaves neither an open socket nor a half-connected state behind.
+    try:
+        # Set sync_request_timeout on the connection after establishing it
+        # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
+        if hasattr(conn, "_config"):
+            conn._config["sync_request_timeout"] = sync_timeout
 
-    # Set sync_request_timeout on the connection after establishing it
-    # This prevents hangs when Houdini is busy (e.g., cooking heavy geometry)
-    if hasattr(_connection, "_config"):
-        _connection._config["sync_request_timeout"] = sync_timeout
+        hou = conn.modules.hou
 
-    _hou = _connection.modules.hou
+        # Validate connection by checking Houdini version
+        version = hou.applicationVersionString()
+        logger.info(f"Connected to Houdini version: {version}")
 
-    # Validate connection by checking Houdini version
-    version = _hou.applicationVersionString()
-    logger.info(f"Connected to Houdini version: {version}")
+        # Additional validation - ensure we can access common nodes
+        obj_node = hou.node("/obj")
+        if obj_node is None:
+            logger.warning("Connected but /obj node not accessible - unusual state")
+    except BaseException:
+        conn.close()
+        raise
 
-    # Additional validation - ensure we can access common nodes
-    obj_node = _hou.node("/obj")
-    if obj_node is None:
-        logger.warning("Connected but /obj node not accessible - unusual state")
-
-    return _connection, _hou
+    _connection, _hou = conn, hou
+    return conn, hou
 
 
 def connect(
@@ -359,7 +368,7 @@ def connect(
             return _do_connect(host, port, sync_timeout)
 
         except Exception as e:
-            if _target.open_failure(e) is None:
+            if not _target.open_is_retryable(e):
                 raise HoudiniConnectionError(
                     f"Non-retryable error connecting to Houdini at "
                     f"{_target.describe(host, port)}: {e}"
@@ -612,6 +621,21 @@ def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
     return _executor
 
 
+def _finished_within(future: concurrent.futures.Future[Any], timeout: float) -> bool:
+    """Whether ``future`` settled before our own deadline; if not, it is cancelled.
+
+    [LAW:types-are-the-program] [LAW:single-enforcer] The deadline is a fact about the
+    future, not an exception type: since 3.11 ``concurrent.futures.TimeoutError`` *is*
+    ``TimeoutError``, so catching it would also claim a TimeoutError the operation
+    itself raised. An rpyc call already running cannot be cancelled; the cancel is
+    for work still queued.
+    """
+    done = future in concurrent.futures.wait([future], timeout=timeout).done
+    if not done:
+        future.cancel()
+    return done
+
+
 def safe_execute(
     func: Callable[..., Any],
     *args: Any,
@@ -637,16 +661,9 @@ def safe_execute(
     Returns:
         SafeExecutionResult with success/failure info
     """
-    executor = _get_executor()
-
-    future = executor.submit(func, *args, **kwargs)
-    # [LAW:types-are-the-program] Our own deadline is a fact about the future, not an
-    # exception type: since 3.11 concurrent.futures.TimeoutError *is* TimeoutError, so
-    # catching it would also claim a TimeoutError the tool itself raised.
-    if future not in concurrent.futures.wait([future], timeout=timeout).done:
+    future = _get_executor().submit(func, *args, **kwargs)
+    if not _finished_within(future, timeout):
         logger.error(f"Operation '{operation_name}' timed out after {timeout}s")
-        # Cancel the future if possible (though RPyC calls may not be cancellable)
-        future.cancel()
         # Clean up the potentially broken connection
         _safe_disconnect()
         return SafeExecutionResult(
@@ -711,14 +728,10 @@ def execute_with_timeout(
         HoudiniOperationTimeout: If the operation times out
         Various exceptions: If the operation fails for other reasons
     """
-    executor = _get_executor()
-
-    try:
-        future = executor.submit(func, *args, **kwargs)
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError as exc:
-        future.cancel()
-        raise HoudiniOperationTimeout(f"Operation timed out after {timeout} seconds") from exc
+    future = _get_executor().submit(func, *args, **kwargs)
+    if not _finished_within(future, timeout):
+        raise HoudiniOperationTimeout(f"Operation timed out after {timeout} seconds")
+    return future.result()
 
 
 def quick_health_check(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bool:
