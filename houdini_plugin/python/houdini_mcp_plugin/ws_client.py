@@ -89,7 +89,7 @@ class ActionType(enum.Enum):
     SCHEDULE_TIMER = "schedule_timer"  # (re)arm a named timer after Action.delay seconds
     CANCEL_TIMER = "cancel_timer"  # cancel a named timer
     DELIVER_EVENT = "deliver_event"  # hand an inbound application event to the app
-    DELIVER_ACK = "deliver_ack"  # hand a command ack to the app
+    DELIVER_OUTCOME = "deliver_outcome"  # hand a request's terminal outcome to the app
     TELEMETRY = "telemetry"  # structured, secret-redacted telemetry record
 
 
@@ -98,6 +98,53 @@ TIMER_HEARTBEAT = "heartbeat"
 TIMER_HEARTBEAT_TIMEOUT = "heartbeat_timeout"
 TIMER_HANDSHAKE_TIMEOUT = "handshake_timeout"
 TIMER_BACKOFF = "backoff"
+# The timers a live socket may hold; closing for good also kills the backoff timer.
+CONNECTION_TIMERS = (TIMER_HEARTBEAT, TIMER_HEARTBEAT_TIMEOUT, TIMER_HANDSHAKE_TIMEOUT)
+ALL_TIMERS = (*CONNECTION_TIMERS, TIMER_BACKOFF)
+
+
+@dataclass(frozen=True)
+class Acked:
+    """The gateway acknowledged the command; ``frame`` is the ack it sent."""
+
+    request_id: int
+    frame: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Cancelled:
+    """The app withdrew the command and will not be told what became of it.
+
+    ``sent`` is False for a command still queued: it was never sent and did
+    not run. It is True for one already on the wire, which may still run on
+    the gateway; the client sends a best-effort ``cancel`` frame and ignores
+    any ack that follows, as a cancelled task's result is discarded.
+    """
+
+    request_id: int
+    sent: bool
+
+
+class CloseReason(enum.Enum):
+    """Why the client closed for good, failing every command still live."""
+
+    STOPPED = "stopped"  # the app called stop()
+    RECONNECT_EXHAUSTED = "reconnect_exhausted"  # the reconnect attempt budget ran out
+    FATAL_ERROR = "fatal_error"  # the gateway sent a fatal error frame
+
+
+@dataclass(frozen=True)
+class Failed:
+    """The client closed for good with the command still unacked."""
+
+    request_id: int
+    reason: CloseReason
+
+
+# [LAW:types-are-the-program] A request id's end is one of these, each carrying only
+# what its variant can know. The app that waits on an id waits for a DELIVER_OUTCOME
+# action holding one of them, and the core emits exactly one per allocated id.
+RequestOutcome = Acked | Cancelled | Failed
 
 
 @dataclass(frozen=True)
@@ -109,6 +156,7 @@ class Action:
     timer: str | None = None
     delay: float | None = None
     event: dict[str, Any] | None = None
+    outcome: RequestOutcome | None = None
     telemetry: dict[str, Any] | None = None
 
 
@@ -179,7 +227,11 @@ def redact(value: Any) -> Any:
 
 
 class QueueFullError(Exception):
-    """Raised when a bounded queue rejects work under a ``reject`` policy."""
+    """Raised when the bounded command queue has no room for a new command."""
+
+
+class ClientClosedError(Exception):
+    """Raised when a command is submitted to a client that has closed for good."""
 
 
 class StaleSessionError(Exception):
@@ -200,6 +252,13 @@ class WSClientCore:
     ``on_*`` calls (e.g. via a single-consumer queue) gets a fully deterministic,
     UI-safe engine. Nothing here can wedge the Houdini UI thread because nothing
     here waits.
+
+    Request lifecycle: :meth:`send_command` either raises or returns an id that
+    is now *live* (queued, then pending once sent). A live id leaves the core in
+    exactly one way, :meth:`_settle`, which emits the ``DELIVER_OUTCOME`` action
+    the app waits on. So every id ever returned ends in exactly one outcome:
+    acked by the gateway, cancelled by the app, or failed when the client
+    closes for good.
     """
 
     def __init__(self, config: WSConfig, *, rng: random.Random | None = None) -> None:
@@ -219,14 +278,13 @@ class WSClientCore:
 
         # Request ids (monotonic, never reused within a process lifetime).
         self._next_request_id = 1
-        # request_id -> command frame (pending, unacked). Bounded by config.
-        self._pending: dict[int, dict[str, Any]] = {}
-        # Outbound command backlog while disconnected/handshaking (bounded).
+        # [LAW:one-source-of-truth] A live request id is in exactly one of these two:
+        # the backlog of command frames not yet on the wire (bounded), or the map of
+        # sent, unacked frames. Nothing else records which ids are live.
         self._command_queue: deque[dict[str, Any]] = deque()
+        self._pending: dict[int, dict[str, Any]] = {}
         # Inbound event backlog if the app cannot keep up (bounded).
         self._event_queue: deque[dict[str, Any]] = deque()
-        # Cancellations requested for request ids not yet acked.
-        self._cancelled: set[int] = set()
 
     # ------------------------------------------------------------------ helpers
 
@@ -267,6 +325,51 @@ class WSClientCore:
         self._next_request_id += 1
         return rid
 
+    def _live_request_ids(self) -> list[int]:
+        queued = [frame["request_id"] for frame in self._command_queue]
+        return sorted(queued + list(self._pending))
+
+    def _settle(self, outcome: RequestOutcome) -> Action:
+        """Retire a live request id with its one terminal outcome.
+
+        [LAW:single-enforcer] This is the only code that removes an id from the
+        live set (the queue and the pending map together; flushing and requeuing
+        only move ids between the two), so an id cannot leave the core without
+        the DELIVER_OUTCOME action the app is waiting on.
+        """
+
+        rid = outcome.request_id
+        self._command_queue = deque(f for f in self._command_queue if f["request_id"] != rid)
+        self._pending.pop(rid, None)
+        return Action(ActionType.DELIVER_OUTCOME, outcome=outcome)
+
+    def _enter_closed(self, *, reason: CloseReason) -> list[Action]:
+        """Enter terminal CLOSED: every live request fails, every timer dies.
+
+        [LAW:one-source-of-truth] stop, reconnect exhaustion and a fatal gateway
+        error all close through here, so none can strand a request.
+        """
+
+        self.state = ConnectionState.CLOSED
+        actions: list[Action] = []
+        for rid in self._live_request_ids():
+            actions.append(self._settle(Failed(rid, reason)))
+            actions.append(self._telemetry("command_failed", request_id=rid, reason=reason.value))
+        actions.extend(self._close_socket(ALL_TIMERS))
+        return actions
+
+    def _close_socket(self, timers: tuple[str, ...]) -> list[Action]:
+        """Cancel ``timers`` and close the socket: the teardown shared by backoff and closing for good.
+
+        [LAW:one-source-of-truth] The two paths once kept their own copies of
+        this list and drifted; which timers die is the only thing that differs.
+        """
+
+        return [
+            *(Action(ActionType.CANCEL_TIMER, timer=t) for t in timers),
+            Action(ActionType.CLOSE),
+        ]
+
     # ------------------------------------------------------------- public state
 
     @property
@@ -296,8 +399,14 @@ class WSClientCore:
     # ------------------------------------------------------------- lifecycle in
 
     def start(self) -> list[Action]:
-        """Begin connecting. Idempotent while already active."""
+        """Begin connecting. Idempotent while already active.
 
+        Raises :class:`ClientClosedError` once the client has closed for good:
+        CLOSED is terminal, and a new connection is a new core.
+        """
+
+        if self.state == ConnectionState.CLOSED:
+            raise ClientClosedError("client is closed; a new connection needs a new core")
         if self.state in (
             ConnectionState.CONNECTING,
             ConnectionState.HANDSHAKING,
@@ -309,22 +418,18 @@ class WSClientCore:
         return self._begin_connect()
 
     def stop(self) -> list[Action]:
-        """Gracefully stop; enter terminal CLOSED state. Sends ``bye`` if open."""
+        """Gracefully stop; enter terminal CLOSED state. Sends ``bye`` if open.
 
+        Idempotent once closed: a second stop changes nothing and emits nothing.
+        """
+
+        if self.state == ConnectionState.CLOSED:
+            return []
         actions: list[Action] = []
         if self.state == ConnectionState.CONNECTED:
             actions.append(Action(ActionType.SEND, frame={"type": BYE}))
-        actions.extend(
-            [
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_BACKOFF),
-                Action(ActionType.CLOSE),
-            ]
-        )
         prev = self.state
-        self.state = ConnectionState.CLOSED
+        actions.extend(self._enter_closed(reason=CloseReason.STOPPED))
         actions.append(self._telemetry("stopped", previous=prev.value))
         return actions
 
@@ -388,11 +493,10 @@ class WSClientCore:
         return self._enter_backoff(reason=reason or "socket_closed")
 
     def _enter_backoff(self, *, reason: str) -> list[Action]:
-        # Requeue any unacked, non-cancelled commands so they are retried after
-        # reconnect (documented at-least-once delivery for commands).
+        # Requeue every unacked command so it is retried after reconnect
+        # (documented at-least-once delivery for commands). The ids stay live.
         for rid in sorted(self._pending):
-            if rid not in self._cancelled:
-                self._command_queue.appendleft(self._pending[rid])
+            self._command_queue.appendleft(self._pending[rid])
         self._pending.clear()
 
         # Compute this attempt's delay from the *current* backoff (so the first
@@ -407,9 +511,8 @@ class WSClientCore:
             self.config.max_reconnect_attempts
             and self._backoff_attempt >= self.config.max_reconnect_attempts
         ):
-            self.state = ConnectionState.CLOSED
             return [
-                Action(ActionType.CLOSE),
+                *self._enter_closed(reason=CloseReason.RECONNECT_EXHAUSTED),
                 self._telemetry(
                     "reconnect_exhausted", reason=reason, attempts=self._backoff_attempt
                 ),
@@ -419,10 +522,7 @@ class WSClientCore:
         self._session_id = None
         self._awaiting_pong = False
         return [
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT),
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
-            Action(ActionType.CLOSE),
+            *self._close_socket(CONNECTION_TIMERS),
             Action(ActionType.SCHEDULE_TIMER, timer=TIMER_BACKOFF, delay=delay),
             self._telemetry(
                 "backoff_scheduled", reason=reason, delay=delay, attempt=self._backoff_attempt
@@ -453,6 +553,10 @@ class WSClientCore:
         """
 
         ftype = frame.get("type")
+        if self.state == ConnectionState.CLOSED:
+            # The socket is being closed and every live id has its outcome;
+            # a frame the driver still had buffered has nothing left to act on.
+            return [self._telemetry("ignored_frame", frame_type=ftype)]
         handler = {
             WELCOME: self._on_welcome,
             PONG: self._on_pong,
@@ -465,16 +569,16 @@ class WSClientCore:
         return handler(frame)
 
     def _validate_session(self, frame: dict[str, Any]) -> bool:
-        """Return True if the frame's session id matches the active session.
+        """Return True unless the frame belongs to a session other than the active one.
 
-        Frames without a session id are accepted (session-agnostic). Frames
-        carrying a *different* session id are stale and must be rejected.
+        Frames without a session id are accepted (session-agnostic), and so is
+        every frame while no session is established yet: before ``welcome``
+        there is nothing for a frame to be stale against, and a fatal rejection
+        of the ``hello`` must reach the client whatever session id it carries.
         """
 
         sid = frame.get("session_id")
-        if sid is None:
-            return True
-        return bool(sid == self._session_id)
+        return sid is None or self._session_id is None or bool(sid == self._session_id)
 
     def _on_welcome(self, frame: dict[str, Any]) -> list[Action]:
         if self.state != ConnectionState.HANDSHAKING:
@@ -551,26 +655,24 @@ class WSClientCore:
             return self._reject_stale(frame)
         rid = frame.get("request_id")
         if rid not in self._pending:
-            # Duplicate / unknown ack: ignore (already terminated or never sent).
+            # Duplicate / unknown ack: ignore (already settled or never sent).
             return [self._telemetry("ignored_ack", request_id=rid)]
-        self._pending.pop(rid, None)
-        self._cancelled.discard(rid)
         return [
-            Action(ActionType.DELIVER_ACK, event=frame),
+            # A copy: the outcome the app holds must not change under it when
+            # the driver reuses its receive buffer.
+            self._settle(Acked(rid, dict(frame))),
             self._telemetry("command_acked", request_id=rid),
         ]
 
     def _on_error(self, frame: dict[str, Any]) -> list[Action]:
+        if not self._validate_session(frame):
+            return self._reject_stale(frame)
         fatal = bool(frame.get("fatal"))
         code = frame.get("code")
         if fatal:
             prev = self.state
-            self.state = ConnectionState.CLOSED
             return [
-                Action(ActionType.CLOSE),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-                Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
+                *self._enter_closed(reason=CloseReason.FATAL_ERROR),
                 self._telemetry("fatal_error", code=code, previous=prev.value),
             ]
         return [self._telemetry("gateway_error", code=code)]
@@ -619,56 +721,56 @@ class WSClientCore:
 
     # ----------------------------------------------------------------- commands
 
-    def send_command(self, payload: dict[str, Any], *, reject_on_full: bool = False) -> int:
+    def send_command(self, payload: dict[str, Any]) -> int:
         """Enqueue an application command; returns its monotonic ``request id``.
 
         Non-blocking by contract: this method only allocates an id, appends to a
         bounded queue, and (if connected) the caller then invokes
         :meth:`drain` / receives actions. It never performs I/O.
 
-        Backpressure: when the command queue is full, the default policy drops
-        the OLDEST queued (not-yet-sent) command to make room. If
-        ``reject_on_full`` is True, raises :class:`QueueFullError` instead.
+        The returned id is live and will reach exactly one DELIVER_OUTCOME.
+        When the command cannot become live, no id is allocated and the caller
+        hears why: :class:`ClientClosedError` once the client has closed for
+        good, :class:`QueueFullError` when the bounded queue has no room.
         """
 
-        rid = self._allocate_request_id()
-        frame = {"type": COMMAND, "request_id": rid, "payload": payload}
+        # [LAW:no-silent-failure] Backpressure pushes back on the producer at the
+        # call site rather than discarding an earlier command behind its back.
+        if self.state == ConnectionState.CLOSED:
+            raise ClientClosedError("client is closed; no further commands can be sent")
         if (
             self.config.max_command_queue > 0
             and len(self._command_queue) >= self.config.max_command_queue
         ):
-            if reject_on_full:
-                raise QueueFullError(
-                    f"command queue full ({self.config.max_command_queue}); rejected request {rid}"
-                )
-            self._command_queue.popleft()
-        self._command_queue.append(frame)
+            raise QueueFullError(f"command queue full ({self.config.max_command_queue})")
+        rid = self._allocate_request_id()
+        self._command_queue.append({"type": COMMAND, "request_id": rid, "payload": payload})
         return rid
 
     def cancel_command(self, request_id: int) -> list[Action]:
-        """Request cancellation of a command by request id.
+        """Cancel a live command: its outcome is ``Cancelled``, delivered now.
 
-        If the command is still queued (never sent) it is dropped locally. If it
-        was already sent (pending ack) a ``cancel`` frame is sent to the gateway.
-        Idempotent and safe for unknown ids.
+        A command still queued is simply never sent. One already on the wire
+        also gets a best-effort ``cancel`` frame to the gateway; any ack that
+        still arrives for it is ignored, since the id has already been settled.
+        An id that is not live (unknown, or already settled) changes nothing.
         """
 
-        # Remove from the not-yet-sent queue if present.
-        remaining = deque(f for f in self._command_queue if f.get("request_id") != request_id)
-        was_queued = len(remaining) != len(self._command_queue)
-        self._command_queue = remaining
+        if request_id not in self._live_request_ids():
+            return [self._telemetry("cancel_ignored", request_id=request_id)]
 
-        self._cancelled.add(request_id)
-
+        # Pending frames exist only while CONNECTED (flush runs from welcome
+        # and a guarded drain; backoff and close empty the map), so a pending
+        # id is one the gateway holds, and the cancel frame can go out now.
+        sent = request_id in self._pending
         actions: list[Action] = []
-        if request_id in self._pending and self.state == ConnectionState.CONNECTED:
+        if sent:
             cancel = {"type": CANCEL, "request_id": request_id}
             if self._session_id is not None:
                 cancel["session_id"] = self._session_id
             actions.append(Action(ActionType.SEND, frame=cancel))
-        actions.append(
-            self._telemetry("command_cancelled", request_id=request_id, was_queued=was_queued)
-        )
+        actions.append(self._settle(Cancelled(request_id, sent=sent)))
+        actions.append(self._telemetry("command_cancelled", request_id=request_id, sent=sent))
         return actions
 
     def drain(self) -> list[Action]:
@@ -683,10 +785,6 @@ class WSClientCore:
         while self._command_queue:
             frame = self._command_queue.popleft()
             rid = frame["request_id"]
-            if rid in self._cancelled:
-                # Dropped before it ever hit the wire.
-                self._cancelled.discard(rid)
-                continue
             self._pending[rid] = frame
             out = dict(frame)
             if self._session_id is not None:

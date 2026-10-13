@@ -20,6 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every ws_client request id reaches exactly one terminal outcome**
+  (houdini-laws-etg.jyr): `WSClientCore.send_command` returns an id that is live until
+  the core emits one `DELIVER_OUTCOME` action for it, carrying `Acked` (with the ack
+  frame), `Cancelled` or `Failed` (with a `CloseReason`). `stop()`, reconnect
+  exhaustion and a fatal gateway error all close through one path that fails every
+  queued and pending request and emits a `command_failed` telemetry record per id. A
+  full command queue now raises `QueueFullError` before allocating an id instead of
+  silently evicting the oldest queued command; `reject_on_full` is gone with the
+  eviction. CLOSED is terminal: `send_command` and `start` raise `ClientClosedError`
+  after it, a second `stop()` is a no-op, and any frame arriving after close is
+  ignored. A fatal error frame from a stale session is rejected like any other stale
+  frame instead of closing the client; before `welcome` no session exists to be stale
+  against, so a fatal rejection of the `hello` closes the client whatever session id it
+  carries. `cancel_command` withdraws the command and
+  settles the id at once with `Cancelled(sent=...)`: a queued command (`sent=False`) is
+  never sent, an in-flight one (`sent=True`) still gets a `cancel` frame and may still
+  run on the gateway, and a later ack for it is ignored. It no longer records unknown
+  ids, which used to drop a command that was later allocated that id. `DELIVER_ACK` is
+  replaced by `DELIVER_OUTCOME`, and the outcome types and both exceptions are exported
+  from `houdini_mcp_plugin`.
+
 - **Connection failure has one definition each of classification, retry and error**
   (houdini-laws-etg.c3b): the in-use failure set is the one union `TransportException`,
   which is both the check `transport_failure()` runs and the type of the proof it

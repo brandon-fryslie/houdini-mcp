@@ -9,6 +9,7 @@ state transitions and emitted actions, covering:
 * heartbeat ping/pong + heartbeat-timeout driven reconnect
 * request ids, bounded command/event queues + backpressure
 * cancellation (queued and in-flight)
+* every request id reaches exactly one terminal outcome (acked, cancelled, failed)
 * TLS verification config invariants
 * reconnect exponential backoff with capped, deterministic seeded jitter
 * stale-session rejection
@@ -50,10 +51,16 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     PING,
     PONG,
     WELCOME,
+    Acked,
     Action,
     ActionType,
+    Cancelled,
+    ClientClosedError,
+    CloseReason,
     ConnectionState,
+    Failed,
     QueueFullError,
+    RequestOutcome,
     WSClientCore,
     WSConfig,
     redact,
@@ -99,6 +106,18 @@ def timers_scheduled(actions: list[Action]) -> list[str]:
     return [a.timer for a in actions if a.type == ActionType.SCHEDULE_TIMER]
 
 
+def outcomes_of(actions: list[Action]) -> list[RequestOutcome]:
+    return [a.outcome for a in actions if a.type == ActionType.DELIVER_OUTCOME and a.outcome]
+
+
+def telemetry_records(actions: list[Action], event: str) -> list[dict]:
+    return [
+        a.telemetry
+        for a in actions
+        if a.type == ActionType.TELEMETRY and a.telemetry["event"] == event
+    ]
+
+
 def connect_core(core: WSClientCore, *, session_id="s1", capabilities=("events",)):
     """Drive a core from DISCONNECTED to CONNECTED deterministically."""
     core.start()
@@ -111,7 +130,7 @@ def connect_core(core: WSClientCore, *, session_id="s1", capabilities=("events",
 class Driver:
     """Minimal deterministic in-memory driver that replays core actions.
 
-    It records sent frames, telemetry, delivered events/acks, and pending timers.
+    It records sent frames, telemetry, delivered events/outcomes, and pending timers.
     Timers are fired manually by tests (no real time passes), which is exactly
     what makes the whole engine deterministic and UI-safe.
     """
@@ -121,7 +140,7 @@ class Driver:
         self.sent: list[dict] = []
         self.telemetry: list[dict] = []
         self.events: list[dict] = []
-        self.acks: list[dict] = []
+        self.outcomes: list[RequestOutcome] = []
         self.timers: dict[str, float] = {}
         self.open_count = 0
         self.close_count = 0
@@ -134,8 +153,8 @@ class Driver:
                 self.telemetry.append(a.telemetry)
             elif a.type == ActionType.DELIVER_EVENT and a.event is not None:
                 self.events.append(a.event)
-            elif a.type == ActionType.DELIVER_ACK and a.event is not None:
-                self.acks.append(a.event)
+            elif a.type == ActionType.DELIVER_OUTCOME and a.outcome is not None:
+                self.outcomes.append(a.outcome)
             elif a.type == ActionType.SCHEDULE_TIMER and a.timer is not None:
                 self.timers[a.timer] = a.delay
             elif a.type == ActionType.CANCEL_TIMER and a.timer is not None:
@@ -457,7 +476,7 @@ class TestHeartbeat:
 
 class TestCommandsAndQueues:
     def test_request_ids_are_monotonic_and_unique(self):
-        core = WSClientCore(make_config())
+        core = WSClientCore(make_config(max_command_queue=0))
         ids = [core.send_command({"op": i}) for i in range(5)]
         assert ids == sorted(ids)
         assert len(set(ids)) == len(ids)
@@ -477,25 +496,42 @@ class TestCommandsAndQueues:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
+        ack = {"type": ACK, "request_id": rid, "session_id": "s1"}
+        actions = core.on_frame(ack)
         assert rid not in core.pending_request_ids
-        assert any(a.type == ActionType.DELIVER_ACK for a in actions)
+        assert outcomes_of(actions) == [Acked(rid, ack)]
 
-    def test_command_queue_backpressure_drops_oldest_by_default(self):
+    def test_command_queue_full_rejects_without_allocating_an_id(self):
         core = WSClientCore(make_config(max_command_queue=2))
-        core.send_command({"op": 0})
-        core.send_command({"op": 1})
-        core.send_command({"op": 2})  # evicts op0
-        assert core.command_backlog == 2
-        # Only the two most recent reach the wire, in order.
-        sent = [f for f in sent_frames(connect_core(core)) if f["type"] == COMMAND]
-        assert [f["payload"]["op"] for f in sent] == [1, 2]
-
-    def test_command_queue_reject_policy_raises(self):
-        core = WSClientCore(make_config(max_command_queue=1))
-        core.send_command({"op": 0})
+        r0 = core.send_command({"op": 0})
+        r1 = core.send_command({"op": 1})
         with pytest.raises(QueueFullError):
-            core.send_command({"op": 1}, reject_on_full=True)
+            core.send_command({"op": 2})
+        # The queued commands are untouched and the rejection consumed no id.
+        assert core.command_backlog == 2
+        sent = [f for f in sent_frames(connect_core(core)) if f["type"] == COMMAND]
+        assert [f["request_id"] for f in sent] == [r0, r1]
+        assert core.send_command({"op": 3}) == r1 + 1
+
+    def test_send_command_after_close_raises(self):
+        core = WSClientCore(make_config())
+        core.stop()
+        with pytest.raises(ClientClosedError):
+            core.send_command({"op": "x"})
+
+    def test_start_after_close_raises(self):
+        core = WSClientCore(make_config())
+        connect_core(core)
+        core.stop()
+        with pytest.raises(ClientClosedError):
+            core.start()
+        assert core.state == ConnectionState.CLOSED
+
+    def test_stop_is_idempotent_once_closed(self):
+        core = WSClientCore(make_config())
+        connect_core(core)
+        core.stop()
+        assert core.stop() == []
 
     def test_send_command_is_nonblocking_and_returns_immediately(self):
         # Contract: send_command performs no I/O; it must not require a
@@ -522,15 +558,25 @@ class TestEventBackpressure:
 
 
 class TestCancellation:
-    def test_cancel_queued_command_drops_it_before_send(self):
+    def test_cancel_queued_command_settles_it_before_send(self):
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
-        core.cancel_command(rid)
+        actions = core.cancel_command(rid)
+        assert outcomes_of(actions) == [Cancelled(rid, sent=False)]
+        assert telemetry_records(actions, "command_cancelled") == [
+            {
+                "event": "command_cancelled",
+                "state": "disconnected",
+                "request_id": rid,
+                "sent": False,
+            }
+        ]
+        assert core.command_backlog == 0
         actions = connect_core(core)
         sent = [f for f in sent_frames(actions) if f["type"] == COMMAND]
         assert rid not in {f["request_id"] for f in sent}
 
-    def test_cancel_inflight_command_sends_cancel_frame(self):
+    def test_cancel_inflight_command_settles_it_and_sends_cancel_frame(self):
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
@@ -539,20 +585,46 @@ class TestCancellation:
         cancels = [f for f in sent_frames(actions) if f["type"] == CANCEL]
         assert cancels and cancels[0]["request_id"] == rid
         assert cancels[0]["session_id"] == "s1"
+        assert outcomes_of(actions) == [Cancelled(rid, sent=True)]
+        assert telemetry_records(actions, "command_cancelled") == [
+            {
+                "event": "command_cancelled",
+                "state": "connected",
+                "request_id": rid,
+                "sent": True,
+            }
+        ]
+        assert rid not in core.pending_request_ids
+        # A late ack for the cancelled command cannot produce a second outcome.
+        late = core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
+        assert outcomes_of(late) == []
+        assert "ignored_ack" in telemetry_events(late)
 
     def test_cancel_unknown_id_is_safe_noop(self):
         core = WSClientCore(make_config())
         connect_core(core)
         actions = core.cancel_command(9999)
         assert not [f for f in sent_frames(actions) if f["type"] == CANCEL]
+        assert outcomes_of(actions) == []
+        assert "cancel_ignored" in telemetry_events(actions)
+
+    def test_cancel_of_a_future_id_does_not_poison_it(self):
+        # Cancelling an id before it is allocated must not drop the command that
+        # later receives that id.
+        core = WSClientCore(make_config())
+        core.cancel_command(1)
+        rid = core.send_command({"op": "x"})
+        assert rid == 1
+        sent = [f for f in sent_frames(connect_core(core)) if f["type"] == COMMAND]
+        assert [f["request_id"] for f in sent] == [rid]
 
     def test_cancel_is_idempotent(self):
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
         core.cancel_command(rid)
-        # Second cancel must not error.
-        core.cancel_command(rid)
+        # Second cancel is a no-op: the id already has its one outcome.
+        assert outcomes_of(core.cancel_command(rid)) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -573,7 +645,7 @@ class TestStaleSessionAndOrdering:
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="current")
         actions = core.on_frame({"type": ACK, "request_id": rid, "session_id": "OLD"})
-        assert not any(a.type == ActionType.DELIVER_ACK for a in actions)
+        assert outcomes_of(actions) == []
         assert rid in core.pending_request_ids  # not terminated by stale ack
 
     def test_session_agnostic_frame_accepted(self):
@@ -633,12 +705,162 @@ class TestErrors:
         assert core.state == ConnectionState.CLOSED
         assert "fatal_error" in telemetry_events(actions)
 
+    def test_fatal_error_from_a_stale_session_is_rejected(self):
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        connect_core(core, session_id="s1")
+        actions = core.on_frame(
+            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "OLD"}
+        )
+        assert core.state == ConnectionState.CONNECTED
+        assert outcomes_of(actions) == []
+        assert core.pending_request_ids == (rid,)
+        assert "stale_session_rejected" in telemetry_events(actions)
+
+    def test_fatal_error_after_close_is_ignored(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        core.stop()
+        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        assert actions == [
+            Action(
+                ActionType.TELEMETRY,
+                telemetry={"event": "ignored_frame", "state": "closed", "frame_type": ERROR},
+            )
+        ]
+
+    def test_fatal_error_during_handshake_closes_whatever_session_it_names(self):
+        # The gateway rejecting the hello may carry the session id it assigned;
+        # before welcome there is no session for the frame to be stale against.
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        core.start()
+        core.on_socket_open()
+        actions = core.on_frame(
+            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "assigned"}
+        )
+        assert core.state == ConnectionState.CLOSED
+        assert outcomes_of(actions) == [Failed(rid, CloseReason.FATAL_ERROR)]
+
     def test_nonfatal_error_stays_connected(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         actions = core.on_frame({"type": ERROR, "code": "rate_limited", "fatal": False})
         assert core.state == ConnectionState.CONNECTED
         assert "gateway_error" in telemetry_events(actions)
+
+
+# --------------------------------------------------------------------------- #
+# Terminal outcomes: closing for good fails every live request, exactly once
+# --------------------------------------------------------------------------- #
+
+
+def _one_pending_one_queued(core: WSClientCore) -> tuple[int, int]:
+    """Connect, send one command onto the wire, then queue a second, undrained one."""
+    connect_core(core, session_id="s1")
+    pending = core.send_command({"op": "sent"})
+    core.drain()
+    queued = core.send_command({"op": "queued"})
+    assert core.pending_request_ids == (pending,)
+    assert core.command_backlog == 1
+    return pending, queued
+
+
+class TestTerminalOutcomes:
+    def test_stop_fails_every_live_request(self):
+        core = WSClientCore(make_config())
+        pending, queued = _one_pending_one_queued(core)
+        actions = core.stop()
+        assert outcomes_of(actions) == [
+            Failed(pending, CloseReason.STOPPED),
+            Failed(queued, CloseReason.STOPPED),
+        ]
+        # Every failed id is on the telemetry record with the reason it failed for.
+        assert telemetry_records(actions, "command_failed") == [
+            {
+                "event": "command_failed",
+                "state": "closed",
+                "request_id": pending,
+                "reason": "stopped",
+            },
+            {
+                "event": "command_failed",
+                "state": "closed",
+                "request_id": queued,
+                "reason": "stopped",
+            },
+        ]
+        assert core.pending_request_ids == ()
+        assert core.command_backlog == 0
+
+    def test_fatal_error_fails_every_live_request_with_its_code(self):
+        core = WSClientCore(make_config())
+        pending, queued = _one_pending_one_queued(core)
+        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        assert outcomes_of(actions) == [
+            Failed(pending, CloseReason.FATAL_ERROR),
+            Failed(queued, CloseReason.FATAL_ERROR),
+        ]
+        assert [t["reason"] for t in telemetry_records(actions, "command_failed")] == [
+            "fatal_error",
+            "fatal_error",
+        ]
+        # The gateway's code lives on the fatal_error record, not on the outcome.
+        assert telemetry_records(actions, "fatal_error")[0]["code"] == "auth_failed"
+        assert core.pending_request_ids == ()
+        assert core.command_backlog == 0
+
+    def test_reconnect_exhaustion_fails_the_requeued_commands(self):
+        core = WSClientCore(make_config(max_reconnect_attempts=1), rng=random.Random(1))
+        driver = Driver(core)
+        driver.call("start")
+        driver.call("on_socket_open")
+        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        rid = driver.call("send_command", {"op": "critical"})
+        driver.call("drain")
+        driver.call("on_socket_error", "partition")
+        assert core.state == ConnectionState.CLOSED
+        assert driver.outcomes == [Failed(rid, CloseReason.RECONNECT_EXHAUSTED)]
+        assert [t["request_id"] for t in driver.telemetry if t["event"] == "command_failed"] == [
+            rid
+        ]
+        assert core.command_backlog == 0
+
+    def test_closing_cancels_every_timer(self):
+        core = WSClientCore(make_config())
+        driver = Driver(core)
+        driver.call("start")
+        driver.call("on_socket_open")
+        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_heartbeat_tick")
+        assert driver.timers
+        driver.call("on_frame", {"type": ERROR, "code": "auth_failed", "fatal": True})
+        assert driver.timers == {}
+
+    def test_ack_after_close_yields_no_second_outcome(self):
+        core = WSClientCore(make_config())
+        pending, _ = _one_pending_one_queued(core)
+        core.stop()
+        late = core.on_frame({"type": ACK, "request_id": pending, "session_id": "s1"})
+        assert outcomes_of(late) == []
+        assert "ignored_frame" in telemetry_events(late)
+
+    def test_event_after_close_is_not_delivered(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        core.stop()
+        late = core.on_frame({"type": EVENT, "id": 7, "session_id": "s1"})
+        assert not [a for a in late if a.type == ActionType.DELIVER_EVENT]
+        assert "ignored_frame" in telemetry_events(late)
+
+    def test_acked_outcome_does_not_alias_the_drivers_frame(self):
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        connect_core(core, session_id="s1")
+        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": 1}
+        (outcome,) = outcomes_of(core.on_frame(buffer))
+        buffer["result"] = 2
+        assert isinstance(outcome, Acked) and outcome.frame["result"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -834,66 +1056,123 @@ class WSClientStateMachine(RuleBasedStateMachine):
             make_config(max_command_queue=8, max_event_queue=8), rng=random.Random(0)
         )
         self._sent_secret = "super-secret-key"
+        # Every id send_command returned, and every id an outcome was delivered for.
+        self.allocated: list[int] = []
+        self.settled: list[int] = []
+
+    def _run(self, actions: list[Action]) -> None:
+        self.settled.extend(o.request_id for o in outcomes_of(actions))
 
     @rule()
     def start(self):
-        self.core.start()
+        if self.core.state == ConnectionState.CLOSED:
+            with pytest.raises(ClientClosedError):
+                self.core.start()
+        else:
+            self._run(self.core.start())
 
     @rule()
     def socket_open(self):
-        self.core.on_socket_open()
+        self._run(self.core.on_socket_open())
 
     @rule(reason=st.sampled_from(["reset", "partition", "restart"]))
     def socket_error(self, reason):
-        self.core.on_socket_error(reason)
+        self._run(self.core.on_socket_error(reason))
 
     @rule()
     def backoff_elapsed(self):
-        self.core.on_backoff_elapsed()
+        self._run(self.core.on_backoff_elapsed())
 
     @rule()
     def handshake_timeout(self):
-        self.core.on_handshake_timeout()
+        self._run(self.core.on_handshake_timeout())
 
     @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
     def welcome(self, sid):
         frame = {"type": WELCOME}
         if sid is not None:
             frame["session_id"] = sid
-        self.core.on_frame(frame)
+        self._run(self.core.on_frame(frame))
 
     @rule()
     def heartbeat_tick(self):
-        self.core.on_heartbeat_tick()
+        self._run(self.core.on_heartbeat_tick())
 
     @rule()
     def heartbeat_timeout(self):
-        self.core.on_heartbeat_timeout()
+        self._run(self.core.on_heartbeat_timeout())
 
     @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]), eid=st.integers(min_value=0, max_value=5))
     def event(self, sid, eid):
         frame = {"type": EVENT, "id": eid}
         if sid is not None:
             frame["session_id"] = sid
-        self.core.on_frame(frame)
+        self._run(self.core.on_frame(frame))
 
     @rule(payload=st.dictionaries(st.text(max_size=3), st.integers(), max_size=2))
     def send_command(self, payload):
-        self.core.send_command(payload)
+        # The contract: a submission either raises or returns a live id.
+        if self.core.state == ConnectionState.CLOSED:
+            with pytest.raises(ClientClosedError):
+                self.core.send_command(payload)
+        elif self.core.command_backlog >= self.core.config.max_command_queue:
+            with pytest.raises(QueueFullError):
+                self.core.send_command(payload)
+        else:
+            self.allocated.append(self.core.send_command(payload))
 
     @rule()
     @precondition(lambda self: self.core.pending_request_ids)
     def cancel_pending(self):
         rid = self.core.pending_request_ids[0]
-        self.core.cancel_command(rid)
+        self._run(self.core.cancel_command(rid))
+
+    @rule()
+    @precondition(lambda self: self.core.command_backlog > 0)
+    def cancel_queued(self):
+        # The newest allocated id that is neither pending nor settled is in the queue.
+        rid = next(
+            r
+            for r in reversed(self.allocated)
+            if r not in self.core.pending_request_ids and r not in self.settled
+        )
+        self._run(self.core.cancel_command(rid))
+
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
+    @precondition(lambda self: self.core.pending_request_ids)
+    def ack_pending(self, sid):
+        frame = {"type": ACK, "request_id": self.core.pending_request_ids[-1]}
+        if sid is not None:
+            frame["session_id"] = sid
+        self._run(self.core.on_frame(frame))
 
     @rule()
     def drain(self):
-        self.core.drain()
+        self._run(self.core.drain())
+
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
+    def fatal_error(self, sid):
+        frame: dict = {"type": ERROR, "code": "auth_failed", "fatal": True}
+        if sid is not None:
+            frame["session_id"] = sid
+        self._run(self.core.on_frame(frame))
+
+    def teardown(self):
+        # Closing for good settles whatever is still live; after that every id
+        # ever returned has exactly one outcome.
+        self._run(self.core.stop())
+        assert sorted(self.settled) == sorted(self.allocated)
 
     @invariant()
     def state_is_valid(self):
         assert self.core.state in _VALID_STATES
+
+    @invariant()
+    def every_allocated_id_is_live_or_settled_once(self):
+        assert len(self.settled) == len(set(self.settled))
+        assert set(self.settled) <= set(self.allocated)
+        live = len(self.core.pending_request_ids) + self.core.command_backlog
+        assert len(self.allocated) == len(self.settled) + live
 
     @invariant()
     def command_queue_stays_bounded(self):
