@@ -465,7 +465,7 @@ def connect(
     Args:
         host: Houdini server hostname (default: localhost)
         port: Houdini RPC port (default: 18811)
-        max_retries: Maximum number of connection attempts (default: 3)
+        max_retries: Number of connection attempts, at least 1 (default: 3)
         retry_delay: Initial delay between retries in seconds (default: 1.0)
         sync_timeout: Timeout for synchronous RPC calls in seconds (default: 30)
         jitter: If True, add random jitter to delays (default: True)
@@ -475,6 +475,7 @@ def connect(
 
     Raises:
         HoudiniConnectionError: If connection fails after all retries
+        ValueError: If ``max_retries`` is below 1
     """
     return _houdini.connect(host, port, max_retries, retry_delay, sync_timeout, jitter)
 
