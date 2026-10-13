@@ -139,16 +139,16 @@ All tools properly exposed via FastMCP with comprehensive docstrings.
 ## Edge Cases Handled
 
 ### Locked HDAs:
-Both `list_children()` and `find_nodes()` use try/except blocks around node iteration to gracefully handle locked HDAs that don't allow child access. Warnings are logged but execution continues.
+`list_children()` tolerates one failure: a parent (a locked HDA) refusing to list its children, which is logged and skipped. An error raised while building a child's record is not caught; it reaches the tool's error boundary and fails the call, so a wire that cannot be read is reported rather than dropped with its siblings.
 
 ### Deep Hierarchies:
 - `list_children()` respects `max_depth` parameter (default: 10)
 - `find_nodes()` recursively searches but returns one page of `limit` results
 
 ### Input Connection Details:
-- Uses `node.inputConnectors()` to get accurate output indices
-- Falls back to index 0 if inputConnectors() not available
-- Handles None inputs correctly
+- Derived once, in `houdini_mcp/tools/connections.py`, from `node.inputConnections()`
+- The source output index is the one Houdini reports; an unreadable record is an error
+- Unconnected inputs have no record and so are not listed
 
 ### Memory Safety:
 - Both new tools have configurable max limits (max_nodes, limit)
@@ -169,7 +169,7 @@ Both `list_children()` and `find_nodes()` use try/except blocks around node iter
    - Updated `get_node_info()` tool decorator
 
 3. **tests/conftest.py**
-   - Added `inputConnectors()` method to MockHouNode (10 lines)
+   - `MockHouNode.inputConnections()` returns `MockNodeConnection` records in HOM's shape
 
 4. **tests/test_tools.py**
    - Added 17 new tests
@@ -210,12 +210,9 @@ With connection information including source_node, input_index, and source_outpu
 
 ### Connection Info Extraction:
 ```python
-# Uses inputConnectors() for detailed info
-connectors = node.inputConnectors()
-# Returns tuples like: [(input_idx, output_idx), ...]
-
-# Fallback to basic inputs() if needed
-inputs = node.inputs()  # Returns list of connected nodes or None
+# houdini_mcp/tools/connections.py: one hou.NodeConnection per connected input
+for conn in node.inputConnections():
+    conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex()
 ```
 
 ### Pattern Matching Strategy:
@@ -262,10 +259,9 @@ def collect_children(node, depth=0):
 
 ## Known Limitations
 
-1. **inputConnectors() Compatibility:**
-   - Some Houdini node types may not support inputConnectors()
-   - Fallback to output_index=0 in such cases
-   - This is acceptable as most common cases use output 0
+1. **Connection records:**
+   - A node whose `inputConnections()` cannot be read fails the tool call
+   - No output index is guessed: a wrong one rewires the network silently
 
 2. **Pattern Matching:**
    - Case-insensitive matching always applied

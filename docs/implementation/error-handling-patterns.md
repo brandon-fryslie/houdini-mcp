@@ -260,8 +260,17 @@ def execute_code(
     host: str = "localhost",
     port: int = 18811,
 ) -> Dict[str, Any]:
-    # Check for dangerous patterns BEFORE connecting
-    dangerous = _detect_dangerous_code(code)
+    # Parse once; a program the gates cannot read is a program that does not run
+    try:
+        tree = parse_code(code)
+    except SyntaxError as exc:
+        return {
+            "status": "error",
+            "message": f"Code does not parse: {exc.msg} (line {exc.lineno})",
+        }
+
+    # Judge the parsed program BEFORE connecting
+    dangerous = _detect_dangerous_code(tree)
     if dangerous:
         return {
             "status": "error",

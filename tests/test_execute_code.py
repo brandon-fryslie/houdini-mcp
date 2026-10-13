@@ -8,52 +8,52 @@ class TestDetectDangerousCode:
 
     def test_detect_hou_exit(self):
         """Test detection of hou.exit() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = "hou.exit()"
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) == 1
         assert "hou.exit()" in result[0]
 
     def test_detect_os_remove(self):
         """Test detection of os.remove() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = "os.remove('/path/to/file')"
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("file deletion" in r.lower() or "os.remove" in r for r in result)
 
     def test_detect_subprocess(self):
         """Test detection of subprocess calls."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = "subprocess.run(['ls', '-la'])"
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("subprocess" in r.lower() or "shell" in r.lower() for r in result)
 
     def test_detect_hipfile_clear(self):
         """Test detection of hou.hipFile.clear() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = "hou.hipFile.clear()"
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("clear" in r.lower() or "wipe" in r.lower() for r in result)
 
     def test_detect_open_write_mode(self):
         """Test detection of open() with write mode."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = "open('/path/to/file', 'w')"
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("write" in r.lower() or "file" in r.lower() for r in result)
 
     def test_safe_code_no_detection(self):
         """Test that safe code returns empty list."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = """
 node = hou.node('/obj')
@@ -61,19 +61,19 @@ geo = node.createNode('geo', 'my_geo')
 sphere = geo.createNode('sphere')
 print(sphere.path())
 """
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert result == []
 
     def test_multiple_dangerous_patterns(self):
         """Test detection of multiple dangerous patterns."""
-        from houdini_mcp.tools import _detect_dangerous_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         code = """
 hou.exit()
 os.remove('/tmp/file')
 subprocess.call(['rm', '-rf', '/'])
 """
-        result = _detect_dangerous_code(code)
+        result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 3
 
 
@@ -81,14 +81,16 @@ class TestDetectHeavyGeometryCode:
     """Tests for the _detect_heavy_geometry_code helper."""
 
     def test_detect_node_geometry(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
 
-        result = _detect_heavy_geometry_code("geo = hou.node('/obj/geo1/out').geometry()")
+        result = _detect_heavy_geometry_code(
+            parse_code("geo = hou.node('/obj/geo1/out').geometry()")
+        )
         assert len(result) == 1
         assert "node.geometry" in result[0]
 
     def test_detect_geometry_iteration(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
 
         code = """
 geo = node.geometry()
@@ -97,13 +99,13 @@ for prim in geo.prims():
 for point in geo.points():
     pass
 """
-        result = _detect_heavy_geometry_code(code)
+        result = _detect_heavy_geometry_code(parse_code(code))
         assert len(result) >= 3
 
     def test_safe_parameter_code_no_detection(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
 
-        result = _detect_heavy_geometry_code("hou.node('/obj/geo1').parm('tx').set(1)")
+        result = _detect_heavy_geometry_code(parse_code("hou.node('/obj/geo1').parm('tx').set(1)"))
         assert result == []
 
 
