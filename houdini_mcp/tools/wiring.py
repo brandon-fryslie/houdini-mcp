@@ -11,7 +11,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
-from .connections import input_connections, input_span
+from .connections import InputConnection, input_connections, input_span
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
@@ -72,23 +72,23 @@ def connect_nodes(
         # Continue if category check fails - let Houdini validate
 
     # setInput replaces whatever wire is at the input; say which one.
-    for existing in input_connections(dst_node):
-        if existing.input_index == dst_input_index:
-            logger.info(
-                f"Disconnecting existing connection from {existing.source.path()} "
-                f"to {dst_path}[{dst_input_index}]"
-            )
+    replaced = next(
+        (c for c in input_connections(dst_node) if c.input_index == dst_input_index), None
+    )
+    if replaced is not None:
+        logger.info(
+            f"Disconnecting existing connection from {replaced.source.path()} "
+            f"to {dst_path}[{dst_input_index}]"
+        )
 
-    # Make the connection
-    dst_node.setInput(dst_input_index, src_node, src_output_index)
+    wire = InputConnection(dst_input_index, src_node, src_output_index)
+    dst_node.setInput(wire.input_index, wire.source, wire.output_index)
 
     return {
         "status": "success",
         "message": f"Connected {src_path} -> {dst_path}",
-        "source_node": src_path,
-        "destination_node": dst_path,
-        "source_output_index": src_output_index,
-        "destination_input_index": dst_input_index,
+        "node_path": dst_path,
+        "connection": wire.as_record(),
     }
 
 
@@ -116,40 +116,37 @@ def disconnect_node_input(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    # Check if input exists and is connected
-    inputs = node.inputs()
-    if inputs is None:
-        inputs = []
-
-    if input_index >= len(inputs):
+    # The wires and the input span both come from Houdini's connection records:
+    # inputs() looks through a subnet's indirect input to None, which would cut
+    # that wire and call it absent. [LAW:one-source-of-truth]
+    connections = input_connections(node)
+    span = input_span(connections)
+    if input_index not in span:
         return {
             "status": "error",
-            "message": f"Input index {input_index} out of range for node {node_path} (has {len(inputs)} inputs)",
+            "message": f"Input index {input_index} out of range for node {node_path} (has {len(span)} inputs)",
         }
 
-    # The wire itself, from Houdini's connection records: inputs() looks through a
-    # subnet's indirect input to None, which would cut the wire and call it absent.
-    existing = next((c for c in input_connections(node) if c.input_index == input_index), None)
+    existing = next((c for c in connections if c.input_index == input_index), None)
 
-    # Disconnect the input
     node.setInput(input_index, None)
 
-    result: dict[str, Any] = {
+    # ``disconnected`` is the wire that was cut, as every tool reports a wire, or
+    # None when the input was already unwired.
+    if existing is None:
+        message = f"Input {input_index} on {node_path} was already disconnected"
+    else:
+        message = (
+            f"Disconnected input {input_index} on {node_path} "
+            f"(was connected to {existing.source.path()})"
+        )
+    return {
         "status": "success",
+        "message": message,
         "node_path": node_path,
         "input_index": input_index,
-        "was_connected": existing is not None,
+        "disconnected": None if existing is None else existing.as_record(),
     }
-
-    if existing is not None:
-        result["message"] = (
-            f"Disconnected input {input_index} on {node_path} (was connected to {existing.source.path()})"
-        )
-        result["previous_source"] = existing.source.path()
-    else:
-        result["message"] = f"Input {input_index} on {node_path} was already disconnected"
-
-    return result
 
 
 @handle_connection_errors("set_node_flags")
@@ -292,19 +289,14 @@ def reorder_inputs(
     # known, so a failed write leaves every wire attached somewhere, and the
     # ascending order holds for nodes whose inputs compact when one is cleared
     # (a merge) as well as for nodes that keep the gap.
+    # Each reconnection is the wire at its new input, as every tool reports a
+    # wire, plus the input it came from.
     rewired = sorted(connections, key=lambda conn: new_position[conn.input_index])
     reconnection_info: list[dict[str, Any]] = []
     for conn in rewired:
-        new_idx = new_position[conn.input_index]
-        node.setInput(new_idx, conn.source, conn.output_index)
-        reconnection_info.append(
-            {
-                "new_input_index": new_idx,
-                "old_input_index": conn.input_index,
-                "source_node": conn.source.path(),
-                "source_output_index": conn.output_index,
-            }
-        )
+        moved = InputConnection(new_position[conn.input_index], conn.source, conn.output_index)
+        node.setInput(moved.input_index, moved.source, moved.output_index)
+        reconnection_info.append({**moved.as_record(), "previous_input_index": conn.input_index})
     for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
         node.setInput(idx, None)
 

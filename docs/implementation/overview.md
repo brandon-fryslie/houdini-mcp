@@ -74,9 +74,9 @@ Returned as:
 {
   "inputs": [
     {
-      "index": 0,
+      "input_index": 0,
       "source_node": "/obj/geo1/grid",
-      "output_index": 0
+      "source_output_index": 0
     }
   ]
 }

@@ -169,7 +169,7 @@ class TestAugmentExistingScene:
         # 1. Disconnect noise from grid
         disconnect_result = disconnect_node_input(noise_path, 0)
         assert disconnect_result["status"] == "success"
-        assert disconnect_result["was_connected"]
+        assert disconnect_result["disconnected"]["source_node"] == grid_path
 
         # 2. Connect grid → mountain
         connect_nodes(grid_path, mountain_path)

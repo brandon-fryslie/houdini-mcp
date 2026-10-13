@@ -388,7 +388,7 @@ def list_children(
         - path: Full node path
         - name: Node name
         - type: Node type
-        - inputs: Array of input connections with source_node and output_index (omitted if compact=True)
+        - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
         - outputs: Array of output node paths (omitted if compact=True)
 
     Example:

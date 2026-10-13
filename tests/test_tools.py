@@ -1359,9 +1359,11 @@ class TestListChildren:
         assert noise_info["path"] == "/obj/geo1/noise1"
         assert noise_info["type"] == "noise"
         assert len(noise_info["inputs"]) == 1
-        assert noise_info["inputs"][0]["index"] == 0
-        assert noise_info["inputs"][0]["source_node"] == "/obj/geo1/grid1"
-        assert noise_info["inputs"][0]["output_index"] == 0
+        assert noise_info["inputs"][0] == {
+            "input_index": 0,
+            "source_node": "/obj/geo1/grid1",
+            "source_output_index": 0,
+        }
         assert noise_info["outputs"] == []
 
     def test_list_children_recursive(self, mock_connection):
@@ -1953,10 +1955,12 @@ class TestConnectNodes:
         )
 
         assert result["status"] == "success"
-        assert result["source_node"] == "/obj/geo1/grid1"
-        assert result["destination_node"] == "/obj/geo1/noise1"
-        assert result["source_output_index"] == 0
-        assert result["destination_input_index"] == 0
+        assert result["node_path"] == "/obj/geo1/noise1"
+        assert result["connection"] == {
+            "input_index": 0,
+            "source_node": "/obj/geo1/grid1",
+            "source_output_index": 0,
+        }
 
         # Verify connection was made
         assert noise._inputs[0] == grid
@@ -2086,22 +2090,28 @@ class TestDisconnectNodeInput:
         result = disconnect_node_input("/obj/geo1/noise1", 0, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["was_connected"] is True
-        assert result["previous_source"] == "/obj/geo1/grid1"
+        assert result["disconnected"] == {
+            "input_index": 0,
+            "source_node": "/obj/geo1/grid1",
+            "source_output_index": 0,
+        }
         assert noise._inputs[0] is None
 
     def test_disconnect_node_input_already_disconnected(self, mock_connection):
-        """Test disconnecting an already disconnected input."""
+        """An unwired input inside the wired span (HOM drops trailing ones) is a
+        success that cut nothing."""
         from houdini_mcp.tools import disconnect_node_input
 
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
-        noise._inputs = [None]
-        mock_connection.add_node(noise)
+        grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
+        merge = MockHouNode(path="/obj/geo1/merge1", name="merge1", node_type="merge")
+        mock_connection.add_node(grid)
+        mock_connection.add_node(merge)
+        merge.setInput(1, grid)
 
-        result = disconnect_node_input("/obj/geo1/noise1", 0, host="localhost", port=18811)
+        result = disconnect_node_input("/obj/geo1/merge1", 0, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["was_connected"] is False
+        assert result["disconnected"] is None
         assert "already disconnected" in result["message"]
 
     def test_disconnect_node_input_node_not_found(self, mock_connection):

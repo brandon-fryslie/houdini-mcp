@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Input connections have one record shape** (houdini-laws-etg.7xv): every
+  tool that reports a wire reports `{input_index, source_node,
+  source_output_index}`, built once by `InputConnection.as_record`.
+  `list_children` full-mode `inputs` entries rename `index` → `input_index` and
+  `output_index` → `source_output_index`. `connect_nodes` returns `node_path`
+  and the wire it made as `connection`, replacing `source_node`,
+  `destination_node`, `source_output_index` and `destination_input_index`.
+  `disconnect_node_input` returns the wire it cut as `disconnected` (or `None`
+  when the input was already unwired), replacing `was_connected` and
+  `previous_source`; its range check reads the wired span from the same
+  connection records instead of `inputs()`. Each `reorder_inputs` reconnection
+  is the wire at its new input plus `previous_input_index`, replacing
+  `new_input_index` / `old_input_index`.
+
 ### Fixed
 
 - **Input connections report the real source output; reorder_inputs preserves

@@ -24,6 +24,20 @@ class InputConnection:
     source: Any
     output_index: int
 
+    def as_record(self) -> dict[str, Any]:
+        """The wire as every tool reports it.
+
+        [LAW:one-source-of-truth] ``get_node_info``, ``list_children``,
+        ``connect_nodes``, ``disconnect_node_input`` and ``reorder_inputs`` all emit
+        this shape and nothing else names these fields, so an agent learns one record
+        and can hand any of them back to ``connect_nodes`` as is.
+        """
+        return {
+            "input_index": self.input_index,
+            "source_node": self.source.path(),
+            "source_output_index": self.output_index,
+        }
+
 
 class InputConnectionsUnreadable(RuntimeError):
     """Houdini could not report a node's input connections; the message names the node."""

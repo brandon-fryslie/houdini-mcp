@@ -51,7 +51,7 @@ class TestWiringIntegration:
         # First, disconnect noise's input
         result = disconnect_node_input("/obj/geo1/noise1", 0, "localhost", 18811)
         assert result["status"] == "success"
-        assert result["was_connected"] is True
+        assert result["disconnected"]["source_node"] == "/obj/geo1/grid1"
         assert noise._inputs[0] is None
 
         # Connect grid → mountain
@@ -256,14 +256,16 @@ class TestWiringIntegration:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        # Edge case 1: Disconnect already disconnected input
+        # Edge case 1: Disconnect an unwired input ahead of a wired one
         noise = geo1.createNode("noise", "noise1")
-        noise._inputs = [None]
+        noise_feed = geo1.createNode("box", "box0")
         mock_connection.add_node(noise)
+        mock_connection.add_node(noise_feed)
+        noise.setInput(1, noise_feed)
 
         result = disconnect_node_input("/obj/geo1/noise1", 0, "localhost", 18811)
         assert result["status"] == "success"
-        assert result["was_connected"] is False
+        assert result["disconnected"] is None
 
         # Edge case 2: Reorder with gaps (some None inputs)
         merge = geo1.createNode("merge", "merge1")

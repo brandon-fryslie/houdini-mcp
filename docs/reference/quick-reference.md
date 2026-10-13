@@ -36,9 +36,9 @@ list_children("/obj/geo1", recursive=True, max_depth=3)
       "type": "noise",
       "inputs": [
         {
-          "index": 0,
+          "input_index": 0,
           "source_node": "/obj/geo1/grid1",
-          "output_index": 0
+          "source_output_index": 0
         }
       ],
       "outputs": []
