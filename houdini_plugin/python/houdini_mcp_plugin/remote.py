@@ -16,6 +16,8 @@ Security: binds to ``127.0.0.1`` by default. Non-loopback binds (via
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .listener import ListenerConfig, RemoteListener
 
 # [LAW:no-shared-mutable-globals] A Houdini process runs one hrpyc listener, and
@@ -33,9 +35,7 @@ def _config_from_env(port: int | None) -> ListenerConfig:
             (see :meth:`ListenerConfig.from_env`); nothing is started.
     """
     cfg = ListenerConfig.from_env()
-    if port is not None:
-        cfg.port = port
-    return cfg
+    return cfg if port is None else replace(cfg, port=port)
 
 
 def start_hrpyc_server(port: int | None = None) -> dict:
