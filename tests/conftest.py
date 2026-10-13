@@ -141,8 +141,11 @@ class MockHouNode:
         self._network_box_counter = 0
         # Recorded layoutChildren invocations: (horizontal_spacing, vertical_spacing)
         self.layout_calls: list[tuple[float, float]] = []
-        # A subnet's indirect inputs, numbered 1..4 as Houdini names them.
-        self._indirect_inputs = tuple(MockSubnetIndirectInput(self, n) for n in range(1, 5))
+        # A subnet's indirect inputs, numbered 1..4 as Houdini names them; any
+        # other node has none.
+        self._indirect_inputs = tuple(
+            MockSubnetIndirectInput(self, n) for n in range(1, 5) if node_type == "subnet"
+        )
         for child in children or []:
             self.attach(child)
 
@@ -165,14 +168,18 @@ class MockHouNode:
         child._parent = self
         self._children.append(child)
 
-    def node(self, relative_path: str) -> "MockHouNode | None":
-        """hou.Node.node: walk a path from this node; None when any segment is missing."""
-        current: MockHouNode | None = self
-        for name in [segment for segment in relative_path.split("/") if segment]:
+    def node(self, path: str) -> "MockHouNode | None":
+        """hou.Node.node: walk a path from this node, or from the root when it is
+        absolute; None when any segment is missing."""
+        current: MockHouNode | None = self.root() if path.startswith("/") else self
+        for name in [segment for segment in path.split("/") if segment]:
             current = next((c for c in current._children if c.name() == name), None)
             if current is None:
                 return None
         return current
+
+    def root(self) -> "MockHouNode":
+        return self if self._parent is None else self._parent.root()
 
     def path(self) -> str:
         return self._path
@@ -338,6 +345,8 @@ class MockHouNode:
             raise RuntimeError(f"{self.path()!r} is not in a scene")
         for node in [self, *self.allSubChildren()]:
             node._disconnect()
+        for box in self._parent._network_boxes:
+            box._nodes = [n for n in box._nodes if n is not self]
         self._parent._children.remove(self)
         self._parent = None
 
@@ -552,8 +561,14 @@ class MockHouModule:
         return self._version_tuple
 
     def node(self, path: str) -> MockHouNode | None:
-        """hou.node: an absolute path walked from the root; the fake has no pwd for a relative one."""
-        return self._root.node(path) if path.startswith("/") else None
+        """hou.node: an absolute path walked from the root.
+
+        Houdini resolves a relative path against hou.pwd(); the fake has no pwd,
+        so a relative path is a question it cannot answer and it says so.
+        """
+        if not path.startswith("/"):
+            raise ValueError(f"the fake hou has no pwd; {path!r} must be absolute")
+        return self._root.node(path)
 
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
         """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
@@ -825,6 +840,9 @@ class MockNetworkBox:
     def addNode(self, node: "MockHouNode") -> None:
         if node not in self._nodes:
             self._nodes.append(node)
+
+    def nodes(self) -> tuple["MockHouNode", ...]:
+        return tuple(self._nodes)
 
     def fitAroundContents(self) -> None:
         """Resize to fit contained nodes."""

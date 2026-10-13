@@ -57,8 +57,10 @@ def test_root_is_slash_and_node_takes_only_absolute_paths(mock_hou: MockHouModul
     assert mock_hou.node("/").path() == "/"
     assert obj.parent() is mock_hou.node("/")
     assert mock_hou.node("/").createNode("mat", "mat").path() == "/mat"
-    assert mock_hou.node("obj") is None
-    assert mock_hou.item("1") is None
+    with pytest.raises(ValueError, match="no pwd"):
+        mock_hou.node("obj")
+    with pytest.raises(ValueError, match="no pwd"):
+        mock_hou.item("1")
 
 
 def test_node_walks_a_relative_path_from_a_node(mock_hou: MockHouModule) -> None:
@@ -67,6 +69,27 @@ def test_node_walks_a_relative_path_from_a_node(mock_hou: MockHouModule) -> None
 
     assert obj.node("geo1/sphere1") is sphere
     assert obj.node("missing") is None
+    assert sphere.node("/obj/geo1") is sphere.parent()
+
+
+def test_only_a_subnet_has_indirect_inputs(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+    subnet = geo.createNode("subnet", "subnet1")
+
+    assert mock_hou.item("/obj/geo1/subnet1/1") is subnet.indirectInputs()[0]
+    assert mock_hou.item("/obj/geo1/1") is None
+    assert mock_hou.item("/1") is None
+
+
+def test_destroyed_node_leaves_its_network_box(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    netbox = geo.createNetworkBox("netbox1")
+    netbox.addNode(box)
+
+    box.destroy()
+
+    assert netbox.nodes() == ()
 
 
 def test_add_node_places_a_prebuilt_node_under_the_parent_its_path_names(
