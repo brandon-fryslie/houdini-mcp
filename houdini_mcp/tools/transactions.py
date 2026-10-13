@@ -84,11 +84,12 @@ TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "manage_cache": TransactionPolicy.READS_ONLY,
     "new_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
     "ping_houdini": TransactionPolicy.READS_ONLY,
-    # Render tools leave the scene as they found it; what they do outside the
-    # scene is write and read back image files on the Houdini machine.
-    "render_quad_view": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
+    # Render tools add a camera rig and a ROP to the scene for the duration of
+    # the call and remove them before returning, so they must not run beside a
+    # program mutating the scene; this is the policy that waits for one.
+    "render_quad_view": TransactionPolicy.CHECKPOINT_REQUIRED,
     "render_node_network": TransactionPolicy.READS_ONLY,
-    "render_viewport": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
+    "render_viewport": TransactionPolicy.CHECKPOINT_REQUIRED,
     "reorder_inputs": TransactionPolicy.UNDOABLE,
     "save_scene": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "serialize_scene": TransactionPolicy.READS_ONLY,
