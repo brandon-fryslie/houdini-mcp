@@ -57,13 +57,18 @@ discriminated on `kind`; each kind fixes its own `retry`:
 | Exception raised in the tool | `kind` | `retry` | Also carries |
 |------|-----------|----------|------|
 | `HoudiniConnectionError` | `connection_unavailable` | `start_houdini` | `target`: the Houdini that was wanted |
+| `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
 | A `TransportFailure` (see below) that is not a timeout | `connection_lost` | `call_again` | `exception`; the link is torn down first |
 | A `TransportFailure` that is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
 | `TimedOut` (a program or request exceeded its bound on an intact link) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
-| Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error |
+| Anything else | `operation_failed` | `none` | `exception`, `traceback` |
+
+A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
+its cause, and the cause is what `failure_for` classifies: a torn link wrapped that
+way is still `connection_lost`, and still tears the connection down.
 
 Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`
 or `TimedOut` with the fields their caller needs, and `node_at(hou, path, what)`
@@ -176,6 +181,7 @@ All tools return consistent response dictionaries:
 {
     "status": "error",
     "kind": "connection_unavailable"
+    | "connection_mismatch"
     | "connection_lost"
     | "timeout"
     | "invalid_input"

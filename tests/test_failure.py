@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from houdini_mcp.connection import HoudiniConnectionError
+from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch
 from houdini_mcp.tools._common import (
     FAILURE,
     InvalidInput,
@@ -28,6 +28,7 @@ from tests.conftest import raised_inside_houdini
 
 KINDS = {
     "connection_unavailable",
+    "connection_mismatch",
     "connection_lost",
     "timeout",
     "invalid_input",
@@ -62,6 +63,11 @@ class TestEveryFailureIsOneArm:
                 HoudiniConnectionError("down", target="farm:1"),
                 "connection_unavailable",
                 "start_houdini",
+            ),
+            (
+                HoudiniTargetMismatch("elsewhere", requested="localhost:18811", connected="farm:1"),
+                "connection_mismatch",
+                "none",
             ),
             (EOFError("stream closed"), "connection_lost", "call_again"),
             (TimeoutError("no answer"), "timeout", "call_again"),
@@ -100,11 +106,60 @@ class TestEveryFailureIsOneArm:
             failing(OperationFailed("x", kind="invalid_input"))
         with pytest.raises(ValidationError):
             failing(OperationFailed("x", status="success"))
+        with pytest.raises(ValidationError):
+            failing(OperationFailed("x", retry="call_again"))
+        with pytest.raises(TypeError):
+            failing(OperationFailed("x", operation="other"))
+        with pytest.raises(TypeError):
+            failing(InvalidInput("x", message="other"))
 
     def test_unavailable_names_the_target(self) -> None:
         result = arm(failing(HoudiniConnectionError("down", target="farm:19999")))
         assert result.target == "farm:19999"
         assert result.message == "down"
+
+    def test_a_mismatch_names_both_houdinis_and_is_not_start_houdini(self) -> None:
+        """Houdini is up and linked, just not the one asked for: the client is
+        told which one this server holds, and not to start another."""
+        result = arm(
+            failing(
+                HoudiniTargetMismatch("elsewhere", requested="localhost:18811", connected="farm:1")
+            )
+        )
+        assert (result.target, result.connected) == ("localhost:18811", "farm:1")
+        assert result.retry == "none"
+
+    def test_a_tool_error_wrapping_a_lost_link_is_the_lost_link(self) -> None:
+        """A body that wrote ``raise OperationFailed(...) from e`` around a torn link
+        stated its cause; the link's failure outranks the label and tears down."""
+
+        @handle_connection_errors("list_visible_panes")
+        def tool() -> dict[str, Any]:
+            try:
+                raise EOFError("stream closed")
+            except EOFError as e:
+                raise OperationFailed("Failed to enumerate panes", hint="x") from e
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = arm(tool())
+
+        assert (result.kind, result.retry) == ("connection_lost", "call_again")
+        assert result.exception == "EOFError"
+        disconnect.assert_called_once()
+
+    def test_a_tool_error_wrapping_houdinis_own_raise_keeps_its_label(self) -> None:
+        @handle_connection_errors("list_visible_panes")
+        def tool() -> dict[str, Any]:
+            try:
+                raise raised_inside_houdini(EOFError("a file Houdini's code read"))
+            except EOFError as e:
+                raise OperationFailed("Failed to enumerate panes") from e
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = arm(tool())
+
+        assert result.kind == "operation_failed"
+        disconnect.assert_not_called()
 
     def test_a_transport_timeout_resets_the_connection_and_says_so(self) -> None:
         @handle_connection_errors("render_viewport")
@@ -147,11 +202,11 @@ class TestEveryFailureIsOneArm:
     ) -> None:
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
             failing(InvalidInput("Node not found: /obj/x"), operation="get_node_info")
-        events = [r for r in caplog.records if r.getMessage().startswith("get_node_info failed")]
-        assert len(events) == 1
-        assert events[0].getMessage() == (
-            "get_node_info failed (invalid_input): Node not found: /obj/x"
-        )
+            failing(KeyError("stdout"), operation="get_node_info")
+        assert [r.getMessage() for r in caplog.records] == [
+            "get_node_info failed (invalid_input): Node not found: /obj/x",
+            "get_node_info failed (operation_failed): 'stdout'",
+        ]
 
 
 class TestNodeAt:

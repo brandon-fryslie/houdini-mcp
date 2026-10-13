@@ -10,6 +10,7 @@ import pytest
 from houdini_mcp.connection import (
     IN_PROCESS_HOUDINI,
     HoudiniConnectionError,
+    HoudiniTargetMismatch,
     TransportFailure,
     connect,
     disconnect,
@@ -339,11 +340,13 @@ class TestEnsureConnected:
     def test_ensure_connected_reaches_the_houdini_it_names_or_fails(self, mock_connection):
         """A live link to one Houdini is not an answer to a call naming another: the
         call fails naming both, and the link it did not ask for is left standing."""
-        with pytest.raises(HoudiniConnectionError) as exc_info:
+        with pytest.raises(HoudiniTargetMismatch) as exc_info:
             ensure_connected("render-farm", 19999)
 
-        assert "localhost:18811" in str(exc_info.value)
-        assert "render-farm:19999" in str(exc_info.value)
+        assert (exc_info.value.requested, exc_info.value.connected) == (
+            "render-farm:19999",
+            "localhost:18811",
+        )
         assert is_connected() is True
         assert ensure_connected("localhost", 18811) is mock_connection
 
@@ -430,14 +433,13 @@ class TestGetConnectionInfo:
         assert info["port"] == 18811
         assert info["houdini_version"] is None
 
-    def test_get_connection_info_handles_error(self, mock_connection):
-        """Test get_connection_info handles errors gracefully."""
+    def test_get_connection_info_raises_when_the_link_cannot_answer(self, mock_connection):
+        """A link that cannot report its version is a failure, not a success
+        carrying an ``error`` field; the tool boundary classifies the raise."""
         mock_connection.applicationVersionString = MagicMock(side_effect=Exception("Error"))
 
-        info = get_connection_info("localhost", 18811)
-
-        assert info["connected"] is True
-        assert "error" in info
+        with pytest.raises(Exception, match="Error"):
+            get_connection_info("localhost", 18811)
 
     def test_get_connection_info_reports_the_houdini_reached_not_the_one_asked_about(
         self, reset_connection_state

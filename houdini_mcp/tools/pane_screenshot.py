@@ -568,8 +568,11 @@ def capture_multiple_panes(
         success_count += 1
         results[pane_type_name] = result
 
+    # [LAW:dataflow-not-control-flow] the call succeeds by reporting every pane;
+    # each slot is a capture or the failure arm for that pane, so the aggregate
+    # has one shape whether none, some or all of the captures worked.
     return {
-        "status": "success" if success_count > 0 else "error",
+        "status": "success",
         "success_count": success_count,
         "total_requested": len(pane_types),
         "results": results,

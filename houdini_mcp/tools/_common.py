@@ -17,6 +17,7 @@ from pydantic import Field
 
 from ..connection import (
     HoudiniConnectionError,
+    HoudiniTargetMismatch,
     disconnect,
     ensure_connected,
     ensure_link,
@@ -46,6 +47,7 @@ __all__ = [
     "ensure_link",
     "is_connected",
     "HoudiniConnectionError",
+    "HoudiniTargetMismatch",
     "disconnect",
     # Error handling: the boundary, the one result type, and what a tool body raises
     "handle_connection_errors",

@@ -20,7 +20,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from ..connection import HoudiniConnectionError, disconnect, transport_failure
+from ..connection import (
+    HoudiniConnectionError,
+    HoudiniTargetMismatch,
+    disconnect,
+    transport_failure,
+)
 from .workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.tools")
@@ -31,6 +36,7 @@ __all__ = [
     "FailureKind",
     "Retry",
     "ConnectionUnavailableFailure",
+    "ConnectionMismatchFailure",
     "ConnectionLostFailure",
     "TimeoutFailure",
     "InvalidInputFailure",
@@ -46,6 +52,7 @@ __all__ = [
 
 FailureKind = Literal[
     "connection_unavailable",
+    "connection_mismatch",
     "connection_lost",
     "timeout",
     "invalid_input",
@@ -83,6 +90,21 @@ class ConnectionUnavailableFailure(_Failure):
     retry: Literal["start_houdini"] = "start_houdini"
     target: str
     """The Houdini the call wanted, as its target names it."""
+
+
+class ConnectionMismatchFailure(_Failure):
+    """The live link reaches a different Houdini than the call named.
+
+    Houdini is up, so no retry helps: this server holds one connection and must
+    be disconnected before it can target another.
+    """
+
+    kind: Literal["connection_mismatch"] = "connection_mismatch"
+    retry: Literal["none"] = "none"
+    target: str
+    """The Houdini the call wanted."""
+    connected: str
+    """The Houdini the link reaches."""
 
 
 class ConnectionLostFailure(_Failure):
@@ -130,6 +152,7 @@ class WorkerBusyFailure(_Failure):
 
 ToolFailure = Annotated[
     ConnectionUnavailableFailure
+    | ConnectionMismatchFailure
     | ConnectionLostFailure
     | TimeoutFailure
     | InvalidInputFailure
@@ -152,7 +175,9 @@ class ToolError(Exception):
 
     [LAW:parse-dont-validate] Subclasses name the kind; the enforcer never has to
     guess it from a message. Fields are splatted beside the declared ones, so a
-    field spelled like a declared one is a programming error pydantic refuses.
+    field spelled like a declared one is a programming error that is refused
+    loudly: Python for ``operation`` and ``message`` (passed twice), pydantic for
+    ``kind``, ``status`` and ``retry`` (a literal the arm fixes).
     """
 
     arm: type[_Failure]
@@ -198,16 +223,22 @@ def failure_for(e: Exception, operation: str) -> _Failure:
     """The one arm an exception raised during ``operation`` becomes.
 
     [LAW:single-enforcer] Connection loss is whatever ``transport_failure`` says
-    it is, and it is the only failure that tears the connection down. Everything
-    else reaches the caller as its own kind with the connection left standing.
+    it is, and it is the only failure that tears the connection down. A tool body
+    that wrapped an exception in a ``ToolError`` with ``from`` stated its cause,
+    and the link's failure outranks the body's label: the cause is what is
+    classified. Everything else reaches the caller as its own kind with the
+    connection left standing.
     """
     if isinstance(e, HoudiniConnectionError):
         return ConnectionUnavailableFailure(operation=operation, message=str(e), target=e.target)
+    if isinstance(e, HoudiniTargetMismatch):
+        return ConnectionMismatchFailure(
+            operation=operation, message=str(e), target=e.requested, connected=e.connected
+        )
     if isinstance(e, WorkerStillRunning):
         return WorkerBusyFailure(operation=operation, message=str(e), worker=e.worker.describe())
-    if isinstance(e, ToolError):
-        return e.failure(operation)
-    lost = transport_failure(e)
+    cause = e.__cause__ if isinstance(e, ToolError) and e.__cause__ is not None else e
+    lost = transport_failure(cause)
     if lost is not None:
         # Clean up the broken connection so the next call can reconnect.
         disconnect()
@@ -233,9 +264,10 @@ def failure_for(e: Exception, operation: str) -> _Failure:
             ),
             **exception,
         )
+    if isinstance(e, ToolError):
+        return e.failure(operation)
     # [LAW:no-silent-failure] an exception nobody classified is a bug; the
-    # traceback goes to the caller and the log so it can be found.
-    logger.error(f"Error during {operation}: {type(e).__name__}: {e}")
+    # traceback goes to the caller so it can be found.
     unclassified: dict[str, Any] = {
         "exception": type(e).__name__,
         "traceback": "".join(traceback.format_exception(e)),

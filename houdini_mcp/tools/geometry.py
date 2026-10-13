@@ -17,6 +17,13 @@ from ._common import (
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
+# [LAW:one-source-of-truth] the kinds the analysis program can name, and the
+# exception each becomes on this side of the link.
+_PROGRAM_FAILURE: dict[str, type[InvalidInput] | type[OperationFailed]] = {
+    "invalid_input": InvalidInput,
+    "operation_failed": OperationFailed,
+}
+
 
 @handle_connection_errors("get_geo_summary")
 def get_geo_summary(
@@ -94,7 +101,7 @@ result = {{"status": "success", "node_path": node_path}}
 # Get node
 node = hou.node(node_path)
 if node is None:
-    result = {{"status": "error", "message": f"Node not found: {{node_path}}"}}
+    result = {{"status": "error", "kind": "invalid_input", "message": f"Node not found: {{node_path}}"}}
 else:
     # Check cook state
     cook_state = "unknown"
@@ -108,16 +115,20 @@ else:
         pass
     result["cook_state"] = cook_state
 
-    # Get geometry
-    geo = None
+    # Get geometry. A node with no geometry() is the caller's path to fix; a cook
+    # that raises or yields nothing is Houdini's. The program says which.
     try:
         geo = node.geometry()
-    except:
-        pass
-
-    if geo is None:
-        result = {{"status": "error", "message": f"Node {{node_path}} has no geometry"}}
+    except AttributeError:
+        geo, failure = None, ("invalid_input", "it is not a geometry node")
+    except Exception as e:
+        geo, failure = None, ("operation_failed", f"{{type(e).__name__}}: {{e}}")
     else:
+        failure = None if geo is not None else ("operation_failed", "geometry() returned None")
+    if failure is not None:
+        result = {{"status": "error", "kind": failure[0], "message": f"Node {{node_path}} has no geometry: {{failure[1]}}"}}
+
+    if geo is not None:
         # Counts - these are fast native calls
         result["point_count"] = geo.intrinsicValue("pointcount")
         result["primitive_count"] = geo.intrinsicValue("primitivecount")
@@ -245,8 +256,9 @@ print(json.dumps(result))
         result = json.loads(stdout)
     except json.JSONDecodeError as e:
         raise OperationFailed(f"Failed to parse geometry data: {e}", raw_output=stdout[:500]) from e
-    # The program's own refusals (no node there, no geometry) are the caller's
-    # input to fix; they cross back into the one failure type here.
+    # The program names the kind of its own failure (no node there is the
+    # caller's path; a cook that yields no geometry is Houdini's), and that kind
+    # crosses back into the one failure type here.
     if result["status"] == "error":
-        raise InvalidInput(result["message"], path=node_path)
+        raise _PROGRAM_FAILURE[result["kind"]](result["message"], path=node_path)
     return _add_response_metadata(result, apply_cap=not _defer_cap)
