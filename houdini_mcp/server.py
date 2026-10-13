@@ -483,8 +483,9 @@ def render_viewport(
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
-        look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
-            an unknown path, or a node with no geometry to frame, is an error
+        look_at: Path of an object or SOP to frame instead of the scene; one with no
+            geometry is framed where it stands. An unknown path, or a node outside any
+            object, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"

@@ -9,6 +9,8 @@ outputs feeds it. ``inputs()`` alone cannot say that, and nothing here guesses i
 from dataclasses import dataclass
 from typing import Any
 
+from ._common import node_category
+
 
 @dataclass(frozen=True)
 class InputConnection:
@@ -86,7 +88,7 @@ def source_category(hou: Any, source: Any) -> str:
     """The node category a wire source belongs to: a node's own type category, or
     for a subnet indirect input, the category of the subnet's children it feeds."""
     if isinstance(source, hou.Node):
-        return str(source.type().category().name())
+        return node_category(source)
     return str(source.parent().childTypeCategory().name())
 
 

@@ -249,8 +249,10 @@ class MockHouNode:
             mock_category.name.return_value = "Sop"
         elif self._node_type in ["dopnet", "pyrosolver"]:
             mock_category.name.return_value = "Dop"
-        elif self._node_type in ["out", "opengl", "karma"]:
+        elif self._node_type in ["opengl", "karma"]:
             mock_category.name.return_value = "Driver"
+        elif self._node_type in ["root", "obj", "out"]:
+            mock_category.name.return_value = "Manager"
         else:
             mock_category.name.return_value = "Sop"  # Default to Sop
 
@@ -264,9 +266,14 @@ class MockHouNode:
         return self._indirect_inputs
 
     def childTypeCategory(self) -> MagicMock:
-        """The category of this network's children; one category per double, so
-        it is the node's own."""
-        return self.type().category()
+        """The category of this network's children: SOPs inside a geo, objects under
+        /obj, ROPs under /out; any other network holds its own kind."""
+        contained = {"geo": "Sop", "obj": "Object", "out": "Driver"}.get(self._node_type)
+        if contained is None:
+            return self.type().category()
+        category = MagicMock()
+        category.name.return_value = contained
+        return category
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -488,12 +495,13 @@ class MockHouNode:
         return self._parent
 
     def displayNode(self) -> Optional["MockHouNode"]:
-        """Return the display node (node with display flag set, or last child)."""
-        # Find child with display flag set
+        """The SOP inside this object whose display flag is set, as hou.ObjNode.displayNode:
+        None for an object whose children are not SOPs, and for one with no children."""
+        if self.childTypeCategory().name() != "Sop":
+            return None
         for child in self._children:
             if child._display_flag:
                 return child
-        # Fallback to last child if any
         if self._children:
             return self._children[-1]
         return None
@@ -933,6 +941,9 @@ class MockMatrix4:
         self._translate = (float(translate[0]), float(translate[1]), float(translate[2]))
 
     def translate(self) -> tuple[float, float, float]:
+        return self._translate
+
+    def extractTranslates(self) -> tuple[float, float, float]:
         return self._translate
 
 

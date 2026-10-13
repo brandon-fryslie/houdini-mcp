@@ -1282,20 +1282,79 @@ class TestRenderFraming:
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
         assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
 
-    @pytest.mark.parametrize("path", ["/obj/user_cam", "/obj/bare_geo", "/out"])
-    def test_look_at_a_node_with_nothing_to_frame_is_an_error(
+    @pytest.mark.parametrize("path", ["/out", "/out/stray_box"])
+    def test_look_at_a_node_outside_any_object_is_an_error(
         self, frames: list[dict[str, Any]], framed_scene: Any, path: str
     ) -> None:
-        """A camera, a geo with no SOPs and a node of a kind that has no geometry alike."""
+        """A ROP network, and a SOP that stands in no object, have no place in the world."""
         from houdini_mcp.tools import render_viewport
 
-        framed_scene.node("/obj").createNode("cam", "user_cam")
-        framed_scene.node("/obj").createNode("geo", "bare_geo")
+        framed_scene.node("/out").createNode("box", "stray_box")
 
         result = render_viewport(look_at=path, host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert path in result["message"]
+        assert result["message"] == f"look_at must name an object or a SOP: {path}"
+        assert frames == []
+
+    @pytest.mark.parametrize("name", ["user_cam", "bare_geo", "pivot"])
+    def test_look_at_an_object_with_nothing_to_show_frames_where_it_stands(
+        self, frames: list[dict[str, Any]], framed_scene: Any, name: str
+    ) -> None:
+        """A camera, a geo with no SOPs and a null are framed at their position, ten across."""
+        from houdini_mcp.tools import render_viewport
+
+        obj = framed_scene.node("/obj")
+        obj.createNode("cam", "user_cam").parm("tx").set(7.0)
+        obj.createNode("geo", "bare_geo").parm("tx").set(7.0)
+        obj.createNode("null", "pivot").parm("tx").set(7.0)
+
+        result = render_viewport(look_at=f"/obj/{name}", host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == {
+            "min": [7.0, 0.0, 0.0],
+            "max": [7.0, 0.0, 0.0],
+            "center": [7.0, 0.0, 0.0],
+            "size": 0.0,
+        }
+        assert frames[0]["pivot_t"] == (7.0, 0.0, 0.0)
+        assert frames[0]["orthowidth"] == pytest.approx(12.0)
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_sop_that_did_not_cook_is_left_out_with_a_warning(
+        self,
+        frames: list[dict[str, Any]],
+        framed_scene: Any,
+        caplog: pytest.LogCaptureFixture,
+        tool: str,
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        broken = framed_scene.node("/obj").createNode("geo", "broken")
+        broken.parm("tx").set(1000.0)
+        broken.createNode("file", "file1")
+
+        with caplog.at_level("WARNING", logger="houdini_mcp.tools.rendering"):
+            result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+        assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+            "Not framed: /obj/broken/file1 has no geometry (its SOP did not cook)"
+        ]
+
+    @pytest.mark.parametrize("name", ["camera_position", "camera_rotation"])
+    @pytest.mark.parametrize("value", [[], [1.0, 2.0], ["1", "2", "3"]])
+    def test_a_camera_vector_that_is_not_three_numbers_is_an_error(
+        self, frames: list[dict[str, Any]], name: str, value: list[Any]
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(**{name: value}, host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert result["message"] == f"{name} must be [x, y, z], got {value!r}"
         assert frames == []
 
     def test_look_at_a_sop_inside_a_sop_subnet_is_placed_by_its_object(
@@ -1361,19 +1420,27 @@ class TestRenderFraming:
         assert len(leaked) == 1 and "held open" in leaked[0]
 
     def test_quad_view_with_no_view_rendered_is_an_error(
-        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+        self,
+        frames: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from houdini_mcp.tools import render_quad_view
         from tests.conftest import MockHouNode
 
         monkeypatch.setattr(MockHouNode, "render", lambda _self: None, raising=False)
 
-        result = render_quad_view(host="localhost", port=18811)
+        with caplog.at_level("ERROR", logger="houdini_mcp.tools.rendering"):
+            result = render_quad_view(host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["message"].startswith("No view rendered: front: ")
         assert [v["name"] for v in result["views"]] == ["front", "left", "top", "perspective"]
         assert all("error" in v for v in result["views"])
+        failed = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+        assert [m.split(":")[0] for m in failed] == [
+            f"Quad view {name} failed" for name in ("front", "left", "top", "perspective")
+        ]
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_displayed_object_subnet_is_framed_by_what_it_displays(
@@ -1441,6 +1508,9 @@ class TestRenderFraming:
         assert len(rop) == 1
         assert f"/out/{self.PREFIX[tool]}opengl_rop" in rop[0]
         assert "'tres': True" in rop[0] and "'res1': 512" in rop[0]
+        rendered = [m for m in messages if m.startswith("Rendered quad view ")]
+        expected = ["front", "left", "top", "perspective"] if tool == "render_quad_view" else []
+        assert rendered == [f"Rendered quad view {name}" for name in expected]
 
     def test_auto_frame_off_frames_nothing(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_viewport

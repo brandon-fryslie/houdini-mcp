@@ -18,6 +18,7 @@ from ._common import (
     ensure_connected,
     ensure_link,
     handle_connection_errors,
+    node_category,
     validate_resolution,
 )
 from .parms import read_present, write_all
@@ -198,61 +199,47 @@ class _Shape:
     """The hou.Matrix4 from the geometry's space to world space."""
 
 
-def _category(node: Any) -> str:
-    return str(node.type().category().name())
-
-
-def _placing_object(sop: Any) -> Any:
-    """The object whose transform places a SOP's geometry: the nearest Object ancestor."""
-    node = sop.parent()
-    while _category(node) != "Object":
+def _object_of(node: Any) -> Any | None:
+    """The object a node stands in the world as: itself, or the nearest Object ancestor
+    of a SOP; None for a node outside any object, such as a ROP or a LOP's SOP."""
+    while node is not None and node_category(node) != "Object":
         node = node.parent()
     return node
 
 
-def _shapes(node: Any) -> list[_Shape] | None:
-    """What a node puts in the world, and where; None for a kind of node that puts nothing.
+def _shapes(node: Any, anchor: Any) -> list[_Shape]:
+    """What a node puts in the world, and where; ``anchor`` is its ``_object_of``.
 
     [LAW:one-type-per-behavior] the kinds of node that carry geometry, told
-    apart once by category: a SOP is its own geometry placed by its object; an
-    object is what it displays - a SOP's geometry placed by the object itself,
-    or, for an object that contains objects, whatever its displayed children
-    place. A node of any other category - a ROP, a shader - has no shape, and
-    says so as None rather than as an empty list, so a caller that asked to
-    frame one can tell the difference.
+    apart once: a SOP is its own geometry placed by its object; an object is
+    what it displays - a SOP's geometry placed by the object itself, or, for an
+    object whose children are objects, whatever its displayed children place.
+    An object that displays nothing has no shape.
     """
-    category = _category(node)
-    if category == "Sop":
+    if node_category(node) == "Sop":
+        return [
+            _Shape(source=node.path(), geometry=node.geometry(), transform=anchor.worldTransform())
+        ]
+    display = node.displayNode()
+    if display is not None and node_category(display) == "Sop":
         return [
             _Shape(
-                source=node.path(),
-                geometry=node.geometry(),
-                transform=_placing_object(node).worldTransform(),
+                source=display.path(), geometry=display.geometry(), transform=node.worldTransform()
             )
         ]
-    if category == "Object":
-        display = node.displayNode()
-        if display is None:
-            return []
-        if _category(display) == "Sop":
-            return [
-                _Shape(
-                    source=display.path(),
-                    geometry=display.geometry(),
-                    transform=node.worldTransform(),
-                )
-            ]
+    if str(node.childTypeCategory().name()) == "Object":
         return _displayed_shapes(node)
-    return None
+    return []
 
 
 def _displayed_shapes(network: Any) -> list[_Shape]:
-    """The shapes of the children a network shows: display flag on, and of a kind that has one."""
-    shapes: list[_Shape] = []
-    for child in network.children():
-        if child.isDisplayFlagSet():
-            shapes.extend(_shapes(child) or [])
-    return shapes
+    """The shapes of the objects a network shows: display flag on."""
+    return [
+        shape
+        for child in network.children()
+        if child.isDisplayFlagSet()
+        for shape in _shapes(child, child)
+    ]
 
 
 def _world_corners(hou: Any, shape: _Shape) -> list[Vec3]:
@@ -262,6 +249,8 @@ def _world_corners(hou: Any, shape: _Shape) -> list[Vec3]:
     contributes no corners to a framing.
     """
     if shape.geometry is None:
+        # [LAW:no-silent-failure] a SOP that did not cook is named, not just left out
+        logger.warning("Not framed: %s has no geometry (its SOP did not cook)", shape.source)
         return []
     box = shape.geometry.boundingBox()
     if not box.isValid():
@@ -292,6 +281,14 @@ def _framing(hou: Any, shapes: Sequence[_Shape]) -> Framing:
         framing.distance,
         framing.ortho_width,
     )
+    return framing
+
+
+def _framing_at(obj: Any) -> Framing:
+    """Frame an object's world position: a box of no extent, opened to the unframed size."""
+    position = tuple(obj.worldTransform().extractTranslates())
+    framing = Framing(bounds=(position, position))
+    logger.info("Framed %s at %s: distance=%.3f", obj.path(), position, framing.distance)
     return framing
 
 
@@ -404,7 +401,7 @@ def _build_rop(
 ) -> Any:
     """The ROP that renders the rig's camera at the prepared resolution, current frame only."""
     rop = create(prepared.out, prepared.rop_type, f"{prefix}{prepared.rop_type}_rop")
-    settings = {"camera": rig.camera.path(), "trange": 0, **prepared.rop_settings}
+    settings = {"camera": rig.camera.path(), "picture": "", "trange": 0, **prepared.rop_settings}
     for name, value in settings.items():
         parm = rop.parm(name)
         if parm is None:
@@ -414,6 +411,13 @@ def _build_rop(
         parm.set(value)
     logger.info("Render ROP %s: %s", rop.path(), settings)
     return rop
+
+
+def _vec3_error(name: str, value: Sequence[float]) -> dict[str, Any] | None:
+    """The error for a camera vector that is not three numbers; None when it is."""
+    if len(value) == 3 and all(isinstance(v, int | float) for v in value):
+        return None
+    return {"status": "error", "message": f"{name} must be [x, y, z], got {list(value)!r}"}
 
 
 def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
@@ -476,8 +480,9 @@ def render_viewport(
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
-        look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
-            an unknown path, or a node with no geometry to frame, is an error
+        look_at: Path of an object or SOP to frame instead of the scene; one with no
+            geometry is framed where it stands. An unknown path, or a node outside any
+            object, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -501,6 +506,12 @@ def render_viewport(
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
+    for name, vector in (
+        ("camera_position", camera_position),
+        ("camera_rotation", camera_rotation),
+    ):
+        if vector is not None and (error := _vec3_error(name, vector)):
+            return error
     prepared = _prepare(resolution, renderer, karma_engine, host, port)
     if isinstance(prepared, dict):
         return prepared
@@ -510,19 +521,20 @@ def render_viewport(
         target = prepared.hou.node(look_at)
         if target is None:
             return {"status": "error", "message": f"Node not found: {look_at}"}
-        shapes = _shapes(target)
-        if shapes is None:
+        anchor = _object_of(target)
+        if anchor is None:
             return {
                 "status": "error",
-                "message": f"look_at must name a geometry node (an object or a SOP): {look_at}",
+                "message": f"look_at must name an object or a SOP: {look_at}",
             }
+        framing = _framing(prepared.hou, _shapes(target, anchor))
+        if framing.bounds is None:
+            # A node with nothing to show is framed where it stands.
+            framing = _framing_at(anchor)
     elif auto_frame:
-        shapes = _displayed_shapes(prepared.obj)
+        framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
     else:
-        shapes = []
-    framing = _framing(prepared.hou, shapes)
-    if look_at is not None and framing.bounds is None:
-        return {"status": "error", "message": f"look_at node has no geometry to frame: {look_at}"}
+        framing = Framing(bounds=None)
     rotation = _ISOMETRIC if camera_rotation is None else camera_rotation
     offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
 

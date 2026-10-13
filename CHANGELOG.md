@@ -44,8 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rig, and configure the ROP from one per-renderer parm table, instead of each
   carrying its own copy. `look_at` now frames the named node's geometry in
   world space, the same way the scene is framed, and reports that box as
-  `bounding_box`; it accepts any object or SOP, and a path that names no node,
-  or a node with no geometry to frame, is an error instead of being ignored. A
+  `bounding_box`; it accepts any object or SOP, frames one with no geometry
+  where it stands, and a path that names no node, or a node outside any object,
+  is an error instead of being ignored. A SOP that did not cook is left out of
+  the frame with a warning naming it. `camera_position` and `camera_rotation`
+  that are not three numbers are an error before anything is created. A
   displayed object that contains objects, such as an object subnet, is framed
   by what it displays. A single point is framed as if ten units across instead
   of opening an orthographic view to nothing. `render_quad_view` reports
