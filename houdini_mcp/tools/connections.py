@@ -70,6 +70,26 @@ def input_connections(node: Any) -> list[InputConnection]:
     )
 
 
+def wire_source(hou: Any, path: str) -> Any | None:
+    """What a wire can be drawn from at ``path``: a ``hou.Node`` or a
+    ``hou.SubnetIndirectInput``, the two items ``setInput`` accepts.
+
+    [LAW:parse-dont-validate] ``hou.item`` also resolves network boxes, sticky
+    notes and dots; none is a source, so they resolve to None here exactly as an
+    empty path does, and nothing downstream re-asks what kind of item it holds.
+    """
+    item = hou.item(path)
+    return item if isinstance(item, (hou.Node, hou.SubnetIndirectInput)) else None
+
+
+def source_category(hou: Any, source: Any) -> str:
+    """The node category a wire source belongs to: a node's own type category, or
+    for a subnet indirect input, the category of the subnet's children it feeds."""
+    if isinstance(source, hou.Node):
+        return str(source.type().category().name())
+    return str(source.parent().childTypeCategory().name())
+
+
 def wire_at(connections: list[InputConnection], input_index: int) -> InputConnection | None:
     """The wire into ``input_index``, or None when that input is unwired."""
     return next((conn for conn in connections if conn.input_index == input_index), None)

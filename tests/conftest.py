@@ -28,6 +28,9 @@ class MockSubnetIndirectInput:
     def path(self) -> str:
         return f"{self._subnet.path()}/{self._number}"
 
+    def parent(self) -> "MockHouNode":
+        return self._subnet
+
 
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
@@ -168,6 +171,11 @@ class MockHouNode:
 
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
         return self._indirect_inputs
+
+    def childTypeCategory(self) -> MagicMock:
+        """The category of this network's children; one category per double, so
+        it is the node's own."""
+        return self.type().category()
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -466,6 +474,8 @@ class MockHouModule:
         # Houdini types
         self.Color = MockColor
         self.Vector2 = MockVector2
+        self.Node = MockHouNode
+        self.SubnetIndirectInput = MockSubnetIndirectInput
 
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
@@ -486,9 +496,9 @@ class MockHouModule:
             return node
         parent_path, _, name = path.rpartition("/")
         parent = self._nodes.get(parent_path)
-        if parent is None or not name.isdigit():
+        if parent is None:
             return None
-        return parent.indirectInputs()[int(name) - 1]
+        return next((i for i in parent.indirectInputs() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, Any]:
         """Return mock node type categories with sufficient types for testing limits."""

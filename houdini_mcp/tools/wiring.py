@@ -11,7 +11,14 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
-from .connections import InputConnection, input_connections, input_span, wire_at
+from .connections import (
+    InputConnection,
+    input_connections,
+    input_span,
+    source_category,
+    wire_at,
+    wire_source,
+)
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
@@ -38,7 +45,8 @@ def connect_nodes(
         src_output_index: Output index on source node (default: 0)
 
     Returns:
-        Dict with connection result.
+        status, node_path, and connection: the wire as Houdini holds it after the
+        write, {input_index, source_node, source_output_index}.
 
     Example:
         connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1")  # Connect grid -> noise
@@ -46,11 +54,14 @@ def connect_nodes(
     """
     hou = ensure_connected(host, port)
 
-    # hou.item() resolves a node path and a subnet indirect input's path alike, so
-    # the source_node of any reported wire can be handed back here as is.
-    src_node = hou.item(src_path)
+    # A reported wire's source_node may name a subnet indirect input; it goes back
+    # here as is.
+    src_node = wire_source(hou, src_path)
     if src_node is None:
-        return {"status": "error", "message": f"Source node not found: {src_path}"}
+        return {
+            "status": "error",
+            "message": f"Source node not found: {src_path} (no node or subnet indirect input there)",
+        }
 
     dst_node = hou.node(dst_path)
     if dst_node is None:
@@ -59,8 +70,8 @@ def connect_nodes(
     # Validate compatible node types
     # Get category name (e.g., "Sop", "Object", "Dop")
     try:
-        src_category = src_node.type().category().name()
-        dst_category = dst_node.type().category().name()
+        src_category = source_category(hou, src_node)
+        dst_category = source_category(hou, dst_node)
 
         if src_category != dst_category:
             return {
@@ -95,7 +106,7 @@ def connect_nodes(
     return {
         "status": "success",
         "message": f"Connected {src_path} -> {dst_path}",
-        "node_path": dst_path,
+        "node_path": dst_node.path(),
         "connection": wire.as_record(),
     }
 
@@ -112,7 +123,9 @@ def disconnect_node_input(
         input_index: Input index to disconnect (default: 0)
 
     Returns:
-        Dict with disconnection result.
+        status, node_path, input_index, and disconnected: the wire that was cut,
+        {input_index, source_node, source_output_index}, or None when the input
+        was already unwired.
 
     Example:
         disconnect_node_input("/obj/geo1/noise1")  # Disconnect first input
@@ -132,7 +145,8 @@ def disconnect_node_input(
     if input_index not in span:
         return {
             "status": "error",
-            "message": f"Input index {input_index} out of range for node {node_path} (has {len(span)} inputs)",
+            "message": f"Input index {input_index} out of range for node {node_path}: "
+            f"nothing is wired at or beyond it ({len(span)} inputs wired or gapped)",
         }
 
     existing = wire_at(connections, input_index)
@@ -151,7 +165,7 @@ def disconnect_node_input(
     return {
         "status": "success",
         "message": message,
-        "node_path": node_path,
+        "node_path": node.path(),
         "input_index": input_index,
         "disconnected": None if existing is None else existing.as_record(),
     }
@@ -259,7 +273,9 @@ def reorder_inputs(
         new_order: List specifying new input order (e.g., [1, 0, 2] to swap first two)
 
     Returns:
-        Dict with reordering result.
+        status, node_path, new_order, and reconnections: one record per wire at its
+        new input, {input_index, source_node, source_output_index}, plus
+        previous_input_index.
 
     Example:
         # Swap first two inputs on a merge node
@@ -313,7 +329,7 @@ def reorder_inputs(
     return {
         "status": "success",
         "message": f"Reordered inputs on {node_path}",
-        "node_path": node_path,
+        "node_path": node.path(),
         "new_order": new_order,
         "reconnections": reconnection_info,
         "reconnection_count": len(reconnection_info),

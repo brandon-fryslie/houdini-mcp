@@ -170,22 +170,25 @@ class TestSubnetIndirectInputs:
         merge.setInput(1, box, 0)
         return merge
 
-    def test_a_cut_indirect_input_wire_goes_back_as_reported(self, merge):
+    def test_a_cut_indirect_input_wire_goes_back_as_reported(self, merge, caplog):
         """The record names the indirect input by its path, and connect_nodes
-        resolves that path, so the round trip holds for this source too."""
+        resolves that path and reads its category from the subnet, so the round
+        trip holds for this source too and takes no error-swallowing path."""
         from houdini_mcp.tools import connect_nodes, disconnect_node_input
 
         cut = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
-        made = connect_nodes(
-            cut["disconnected"]["source_node"],
-            "/obj/subnet1/merge1",
-            cut["disconnected"]["input_index"],
-            cut["disconnected"]["source_output_index"],
-            host="localhost",
-            port=18811,
-        )
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.wiring"):
+            made = connect_nodes(
+                cut["disconnected"]["source_node"],
+                "/obj/subnet1/merge1",
+                cut["disconnected"]["input_index"],
+                cut["disconnected"]["source_output_index"],
+                host="localhost",
+                port=18811,
+            )
 
         assert made["status"] == "success"
+        assert caplog.records == []
         assert made["connection"] == cut["disconnected"]
         assert _wires(merge) == [(0, "/obj/subnet1/1", 0), (1, "/obj/subnet1/box1", 0)]
 
