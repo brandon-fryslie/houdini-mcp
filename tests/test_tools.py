@@ -2099,16 +2099,17 @@ class TestDisconnectNodeInput:
 
     def test_disconnect_node_input_already_disconnected(self, mock_connection):
         """An unwired input inside the wired span (HOM drops trailing ones) is a
-        success that cut nothing."""
+        success that cut nothing. A two-input SOP wired only at input 1 is a node
+        that really holds that gap; a merge compacts it away."""
         from houdini_mcp.tools import disconnect_node_input
 
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        merge = MockHouNode(path="/obj/geo1/merge1", name="merge1", node_type="merge")
+        copy = MockHouNode(path="/obj/geo1/copy1", name="copy1", node_type="copytopoints")
         mock_connection.add_node(grid)
-        mock_connection.add_node(merge)
-        merge.setInput(1, grid)
+        mock_connection.add_node(copy)
+        copy.setInput(1, grid)
 
-        result = disconnect_node_input("/obj/geo1/merge1", 0, host="localhost", port=18811)
+        result = disconnect_node_input("/obj/geo1/copy1", 0, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["disconnected"] is None

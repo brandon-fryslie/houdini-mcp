@@ -790,7 +790,9 @@ def connect_nodes(
         src_output_index: Output index on source node (default: 0)
 
     Returns:
-        Dict with connection result including validation and connection details.
+        Dict with status, node_path, and connection: the wire as Houdini holds it after
+        the write, as {input_index, source_node, source_output_index}. The same record
+        shape every wiring and introspection tool reports.
 
     Examples:
         connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1")
@@ -811,7 +813,9 @@ def disconnect_node_input(node_path: str, input_index: int = 0) -> dict[str, Any
         input_index: Input index to disconnect (default: 0)
 
     Returns:
-        Dict with disconnection result including previous connection info if applicable.
+        Dict with status, node_path, input_index, and disconnected: the wire that was
+        cut as {input_index, source_node, source_output_index}, or None when the input
+        was already unwired. source_node can be handed back to connect_nodes.
 
     Examples:
         disconnect_node_input("/obj/geo1/noise1")  # Disconnect first input
@@ -865,7 +869,9 @@ def reorder_inputs(node_path: str, new_order: list[int]) -> dict[str, Any]:
         new_order: Permutation of the input indices (e.g., [1, 0, 2] on a 3-input node)
 
     Returns:
-        Dict with reordering result including reconnection details.
+        Dict with status, node_path, new_order, and reconnections: one record per wire at
+        its new input, {input_index, source_node, source_output_index}, plus
+        previous_input_index.
 
     Examples:
         reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two of four inputs

@@ -70,6 +70,11 @@ def input_connections(node: Any) -> list[InputConnection]:
     )
 
 
+def wire_at(connections: list[InputConnection], input_index: int) -> InputConnection | None:
+    """The wire into ``input_index``, or None when that input is unwired."""
+    return next((conn for conn in connections if conn.input_index == input_index), None)
+
+
 def input_span(connections: list[InputConnection]) -> range:
     """The input indices 0..last wired input: the positions a reorder permutes and the
     length of a node's ``inputs`` list, with a gap for every unwired index inside it."""

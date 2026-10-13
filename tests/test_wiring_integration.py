@@ -256,14 +256,15 @@ class TestWiringIntegration:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        # Edge case 1: Disconnect an unwired input ahead of a wired one
-        noise = geo1.createNode("noise", "noise1")
-        noise_feed = geo1.createNode("box", "box0")
-        mock_connection.add_node(noise)
-        mock_connection.add_node(noise_feed)
-        noise.setInput(1, noise_feed)
+        # Edge case 1: Disconnect an unwired input ahead of a wired one, on a
+        # two-input SOP that really holds the gap
+        copy = geo1.createNode("copytopoints", "copy1")
+        copy_feed = geo1.createNode("box", "box0")
+        mock_connection.add_node(copy)
+        mock_connection.add_node(copy_feed)
+        copy.setInput(1, copy_feed)
 
-        result = disconnect_node_input("/obj/geo1/noise1", 0, "localhost", 18811)
+        result = disconnect_node_input("/obj/geo1/copy1", 0, "localhost", 18811)
         assert result["status"] == "success"
         assert result["disconnected"] is None
 

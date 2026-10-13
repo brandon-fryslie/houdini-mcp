@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `previous_source`; its range check reads the wired span from the same
   connection records instead of `inputs()`. Each `reorder_inputs` reconnection
   is the wire at its new input plus `previous_input_index`, replacing
-  `new_input_index` / `old_input_index`.
+  `new_input_index` / `old_input_index`. `connect_nodes` reads `connection`
+  back from Houdini after the write and resolves `src_path` with `hou.item`,
+  so a record naming a subnet indirect input (`/obj/subnet1/1`) goes back as
+  reported.
 
 ### Fixed
 

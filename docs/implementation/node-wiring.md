@@ -292,7 +292,7 @@ set_node_flags("/obj/geo1/noise1", display=True, render=True)
 
 ## 🔍 Edge Cases Discovered & Handled
 
-1. **Disconnecting already-disconnected input**
+1. **Disconnecting an unwired input inside the wired span**
    - Returns success with `disconnected: None`
    - Message indicates it was already disconnected
 

@@ -11,7 +11,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
-from .connections import InputConnection, input_connections, input_span
+from .connections import InputConnection, input_connections, input_span, wire_at
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
@@ -46,8 +46,9 @@ def connect_nodes(
     """
     hou = ensure_connected(host, port)
 
-    # Get both nodes
-    src_node = hou.node(src_path)
+    # hou.item() resolves a node path and a subnet indirect input's path alike, so
+    # the source_node of any reported wire can be handed back here as is.
+    src_node = hou.item(src_path)
     if src_node is None:
         return {"status": "error", "message": f"Source node not found: {src_path}"}
 
@@ -72,17 +73,24 @@ def connect_nodes(
         # Continue if category check fails - let Houdini validate
 
     # setInput replaces whatever wire is at the input; say which one.
-    replaced = next(
-        (c for c in input_connections(dst_node) if c.input_index == dst_input_index), None
-    )
+    replaced = wire_at(input_connections(dst_node), dst_input_index)
     if replaced is not None:
         logger.info(
             f"Disconnecting existing connection from {replaced.source.path()} "
             f"to {dst_path}[{dst_input_index}]"
         )
 
-    wire = InputConnection(dst_input_index, src_node, src_output_index)
-    dst_node.setInput(wire.input_index, wire.source, wire.output_index)
+    dst_node.setInput(dst_input_index, src_node, src_output_index)
+
+    # The wire is reported as Houdini holds it after the write, not as it was asked
+    # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
+    wire = wire_at(input_connections(dst_node), dst_input_index)
+    if wire is None:
+        return {
+            "status": "error",
+            "message": f"Houdini reports no wire at {dst_path}[{dst_input_index}] "
+            f"after connecting {src_path}",
+        }
 
     return {
         "status": "success",
@@ -127,7 +135,7 @@ def disconnect_node_input(
             "message": f"Input index {input_index} out of range for node {node_path} (has {len(span)} inputs)",
         }
 
-    existing = next((c for c in connections if c.input_index == input_index), None)
+    existing = wire_at(connections, input_index)
 
     node.setInput(input_index, None)
 
