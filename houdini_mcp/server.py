@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target, ensure_connected, get_connection_info, ping
-from .tools._common import apply_response_cap
+from .tools._common import Resolution, apply_response_cap
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
 
@@ -466,7 +466,7 @@ def render_viewport(
     camera_position: list[float] | None = None,
     camera_rotation: list[float] | None = None,
     look_at: str | None = None,
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -525,7 +525,7 @@ def render_viewport(
 
 @mcp.tool()
 def render_quad_view(
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,

@@ -27,7 +27,7 @@ from typing import Any
 import jsonschema
 import pytest
 from fastmcp import Client
-from mcp_types import Tool
+from mcp.types import Tool
 
 from houdini_mcp.server import mcp
 from houdini_mcp.tools.code import VALID_POLICIES
@@ -125,6 +125,8 @@ class TestServedSchemas:
         assert accepts(tool, {"resolution": None})
         assert not accepts(tool, {"resolution": "512x512"})
         assert not accepts(tool, {"resolution": [512.5, 512]})
+        assert not accepts(tool, {"resolution": [512]})
+        assert not accepts(tool, {"resolution": [512, 512, 512]})
 
     def test_render_quad_view_parameters(self, served: dict[str, Tool]) -> None:
         tool = served["render_quad_view"]
@@ -163,22 +165,27 @@ class DocumentedCall:
 
 
 def python_blocks(markdown: str) -> Iterator[tuple[str, str]]:
-    """Each fenced python block with the heading it sits under."""
+    """Each fenced python block with the heading it sits under.
+
+    Every fence is consumed whole, whatever its language, so a ``#`` comment
+    inside a bash or json block is never read as a heading.
+    """
     heading = ""
     for match in re.finditer(
-        r"^(#+[^\n]*)|```python\n(.*?)```", markdown, re.MULTILINE | re.DOTALL
+        r"^(#+[^\n]*)|```(\w*)[^\n]*\n(.*?)```", markdown, re.MULTILINE | re.DOTALL
     ):
         if match.group(1) is not None:
             heading = match.group(1)
-        else:
-            yield heading, match.group(2)
+        elif match.group(2) == "python":
+            yield heading, match.group(3)
 
 
 def documented_calls(markdown: str, served: dict[str, Tool]) -> list[DocumentedCall]:
     """Every call to a served tool in the doc's python blocks, arguments evaluated.
 
-    Positional arguments are matched to the schema's properties in order; a
-    property order is the one a client sees, so the doc can rely on it too.
+    An MCP call is a JSON object of literal arguments, so that is the only call
+    shape an example may take: keywords, each a literal. Anything else fails
+    the parse loudly under the heading it sits beneath [LAW:no-silent-failure].
     """
     calls = []
     for heading, block in python_blocks(markdown):
@@ -187,11 +194,12 @@ def documented_calls(markdown: str, served: dict[str, Tool]) -> list[DocumentedC
                 continue
             if node.func.id not in served:
                 continue
-            properties = served[node.func.id].input_schema["properties"]
-            arguments = dict(
-                zip(properties, (ast.literal_eval(a) for a in node.args), strict=False)
-            )
-            arguments.update({kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg})
+            if node.args or any(kw.arg is None for kw in node.keywords):
+                pytest.fail(f"{heading}: {node.func.id} must be called with keywords only")
+            try:
+                arguments = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords}
+            except ValueError as exc:
+                pytest.fail(f"{heading}: {node.func.id} arguments must be literals: {exc}")
             calls.append(
                 DocumentedCall(
                     tool=node.func.id,
@@ -208,7 +216,7 @@ class TestDocumentedExamples:
 
     @pytest.fixture
     def calls(self, served: dict[str, Tool]) -> list[DocumentedCall]:
-        calls = documented_calls(CONTRACTS_DOC.read_text(), served)
+        calls = documented_calls(CONTRACTS_DOC.read_text(encoding="utf-8"), served)
         # [LAW:verifiable-goals] a doc with no examples of a kind cannot make either test pass.
         assert any(call.correct for call in calls)
         assert any(not call.correct for call in calls)
@@ -227,13 +235,19 @@ class TestDocumentedExamples:
     async def test_correct_examples_are_accepted(
         self, in_process_houdini: Any, served: dict[str, Tool], calls: list[DocumentedCall]
     ) -> None:
-        for call in calls:
-            if call.correct:
-                assert await self.accepted_by_server(served, call), call
+        refused = [
+            call
+            for call in calls
+            if call.correct and not await self.accepted_by_server(served, call)
+        ]
+        assert refused == []
 
     async def test_wrong_examples_are_refused(
         self, in_process_houdini: Any, served: dict[str, Tool], calls: list[DocumentedCall]
     ) -> None:
-        for call in calls:
-            if not call.correct:
-                assert not await self.accepted_by_server(served, call), call
+        accepted = [
+            call
+            for call in calls
+            if not call.correct and await self.accepted_by_server(served, call)
+        ]
+        assert accepted == []

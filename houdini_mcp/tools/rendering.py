@@ -15,6 +15,7 @@ from typing import Any
 
 from ..connection import transport_failure
 from ._common import (
+    Resolution,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
@@ -49,7 +50,7 @@ _PADDING = 1.2
 _MIN_DISTANCE = 5.0
 _UNFRAMED_SIZE = 10.0
 
-_DEFAULT_RESOLUTION = [512, 512]
+_DEFAULT_RESOLUTION: Resolution = (512, 512)
 _ISOMETRIC: Vec3 = (-30.0, 45.0, 0.0)
 
 # The three axis-aligned views of a quad render, by camera rotation.
@@ -315,7 +316,7 @@ class _Prepared:
 
 
 def _prepare(
-    resolution: list[int] | None, renderer: str, karma_engine: str, host: str, port: int
+    resolution: Resolution | None, renderer: str, karma_engine: str, host: str, port: int
 ) -> _Prepared | dict[str, Any]:
     """Check every input and resolve every context a render needs; the error is the result.
 
@@ -462,7 +463,7 @@ def render_viewport(
     camera_position: list[float] | None = None,
     camera_rotation: list[float] | None = None,
     look_at: str | None = None,
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -560,7 +561,7 @@ def render_viewport(
 
 @handle_connection_errors("render_quad_view")
 def render_quad_view(
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,

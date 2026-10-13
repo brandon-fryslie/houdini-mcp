@@ -73,6 +73,7 @@ __all__ = [
     # Logging
     "logger",
     # Validation helpers
+    "Resolution",
     "validate_resolution",
 ]
 
@@ -228,8 +229,14 @@ def node_category(node: Any) -> str:
     return str(node.type().category().name())
 
 
+# [LAW:types-are-the-program] a pair, so the served schema refuses `[512]` and
+# `[1, 2, 3]` on the wire instead of the render crashing on the second index.
+Resolution = tuple[int, int]
+"""(width, height) in pixels."""
+
+
 def validate_resolution(
-    resolution: list[int],
+    resolution: Resolution,
     min_size: int = 64,
     max_size: int = 4096,
 ) -> dict[str, Any] | None:

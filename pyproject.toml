@@ -42,6 +42,8 @@ dev = [
     "pytest-asyncio>=1.4",
     # Contract tests validate documented calls against the served input schemas
     "jsonschema>=4.26",
+    # mcp.types.Tool is what the contract tests read; declared, not left to fastmcp's transitive set
+    "mcp>=2.3",
     # Property-based / stateful tests (outbound WSS state-machine core,
     # execute_code safety-rail evasion fuzzing).
     "hypothesis>=6.169",
