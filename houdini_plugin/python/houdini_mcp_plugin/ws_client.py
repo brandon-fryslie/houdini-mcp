@@ -86,6 +86,14 @@ class ConnectionState(enum.Enum):
     CLOSED = "closed"  # terminal; will not reconnect (fatal/auth error or stop)
 
 
+# The states in which the driver holds a socket on the core's behalf. A drop
+# reported from any other state is stale (the core already ordered the close)
+# and is ignored rather than charged against the reconnect budget.
+SOCKET_STATES = frozenset(
+    {ConnectionState.CONNECTING, ConnectionState.HANDSHAKING, ConnectionState.CONNECTED}
+)
+
+
 class Timer(enum.Enum):
     """The timers the state machine arms; the driver keeps one slot per member."""
 
@@ -699,15 +707,15 @@ class WSClientCore:
     def on_socket_error(self, reason: str = "") -> list[Action]:
         """Driver reports the socket failed / dropped. Schedule reconnect."""
 
-        if self.state == ConnectionState.CLOSED:
-            return []
+        if self.state not in SOCKET_STATES:
+            return [self._telemetry("ignored_socket_error")]
         return self._enter_backoff(reason=reason or "socket_error")
 
     def on_socket_closed(self, reason: str = "") -> list[Action]:
         """Driver reports the socket closed unexpectedly. Treat like an error."""
 
-        if self.state == ConnectionState.CLOSED:
-            return []
+        if self.state not in SOCKET_STATES:
+            return [self._telemetry("ignored_socket_closed")]
         return self._enter_backoff(reason=reason or "socket_closed")
 
     def _enter_backoff(self, *, reason: str) -> list[Action]:

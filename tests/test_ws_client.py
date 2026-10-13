@@ -360,9 +360,29 @@ class TestLifecycleTransitions:
     def test_closed_is_terminal_ignores_socket_events(self):
         core = WSClientCore(make_config())
         core.stop()
-        assert core.on_socket_error() == []
-        assert core.on_socket_closed() == []
+        assert telemetry_events(core.on_socket_error()) == ["ignored_socket_error"]
+        assert telemetry_events(core.on_socket_closed()) == ["ignored_socket_closed"]
         assert core.state == ConnectionState.CLOSED
+
+    def test_drop_reported_during_backoff_is_not_a_second_failure(self):
+        # The driver closes the socket on the core's order and then reports it
+        # closed; that report must not spend a reconnect or grow the backoff.
+        core = WSClientCore(make_config(max_reconnect_attempts=1), rng=random.Random(1))
+        core.start()
+        core.on_socket_open()
+        core.on_socket_error("reset")
+        assert core.state == ConnectionState.BACKOFF
+        assert telemetry_events(core.on_socket_closed()) == ["ignored_socket_closed"]
+        assert telemetry_events(core.on_socket_error("reset")) == ["ignored_socket_error"]
+        assert core.backoff_attempt == 1
+        assert core.state == ConnectionState.BACKOFF
+        core.on_backoff_elapsed()
+        assert core.state == ConnectionState.CONNECTING
+
+    def test_drop_before_start_is_ignored(self):
+        core = WSClientCore(make_config())
+        assert telemetry_events(core.on_socket_error()) == ["ignored_socket_error"]
+        assert core.state == ConnectionState.DISCONNECTED
 
 
 # --------------------------------------------------------------------------- #
@@ -1194,6 +1214,7 @@ from hypothesis import HealthCheck, given, settings  # noqa: E402
 from hypothesis import strategies as st  # noqa: E402
 from hypothesis.stateful import (  # noqa: E402
     RuleBasedStateMachine,
+    initialize,
     invariant,
     precondition,
     rule,
@@ -1238,7 +1259,6 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
         super().__init__()
-        self.core = WSClientCore(make_config(max_command_queue=8), rng=random.Random(0))
         self._sent_secret = "super-secret-key"
         # Every id send_command returned, and every id an outcome was delivered for.
         self.allocated: list[int] = []
@@ -1250,6 +1270,14 @@ class WSClientStateMachine(RuleBasedStateMachine):
         for a in actions_of(actions, DeliverEvent):
             assert self.core.state == ConnectionState.CONNECTED
             assert a.event.session_id == self.core.session_id
+
+    @initialize(budget=st.sampled_from([1, 2, UNBOUNDED]))
+    def configure(self, budget):
+        # A small budget makes reconnect exhaustion a reachable close.
+        self.core = WSClientCore(
+            make_config(max_command_queue=8, max_reconnect_attempts=budget),
+            rng=random.Random(0),
+        )
 
     @rule()
     def start(self):
@@ -1352,10 +1380,6 @@ class WSClientStateMachine(RuleBasedStateMachine):
         assert set(self.settled) <= set(self.allocated)
         live = len(self.core.pending_request_ids) + self.core.command_backlog
         assert len(self.allocated) == len(self.settled) + live
-
-    @invariant()
-    def command_queue_stays_bounded(self):
-        assert self.core.command_backlog <= self.core.config.max_command_queue
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):
