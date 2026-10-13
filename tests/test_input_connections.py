@@ -23,8 +23,7 @@ def _merge_fed_from_split_output_1(mock_connection):
     geo1 = MockHouNode(
         path="/obj/geo1", name="geo1", node_type="geo", children=[grid, split, box, merge]
     )
-    for node in (geo1, grid, split, box, merge):
-        mock_connection.add_node(node)
+    mock_connection.add_node(geo1)
     merge.setInput(0, grid, 0)
     merge.setInput(1, split, 1)
     merge.setInput(2, box, 0)
@@ -116,8 +115,7 @@ class TestUnreadableWireIsAnError:
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
         merge = _NodeWithUnreadableWires(path="/obj/geo1/merge1", name="merge1", node_type="merge")
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[grid, merge])
-        for node in (geo1, grid, merge):
-            mock_connection.add_node(node)
+        mock_connection.add_node(geo1)
         merge.setInput(0, grid, 0)
         return merge
 
@@ -161,11 +159,11 @@ class TestSubnetIndirectInputs:
     @pytest.fixture
     def merge(self, mock_connection) -> MockHouNode:
         subnet = MockHouNode(path="/obj/subnet1", name="subnet1", node_type="subnet")
+        mock_connection.add_node(subnet)
         box = MockHouNode(path="/obj/subnet1/box1", name="box1", node_type="box")
+        mock_connection.add_node(box)
         merge = MockHouNode(path="/obj/subnet1/merge1", name="merge1", node_type="merge")
-        subnet._children = [box, merge]
-        for node in (subnet, box, merge):
-            mock_connection.add_node(node)
+        mock_connection.add_node(merge)
         merge.setInput(0, subnet.indirectInputs()[0], 0)
         merge.setInput(1, box, 0)
         return merge
@@ -339,11 +337,13 @@ class TestReorderNeverUnplugsAWireWithoutItsReplacement:
     ):
         from houdini_mcp.tools import reorder_inputs
 
+        mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
+        mock_connection.add_node(grid)
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
+        mock_connection.add_node(sphere)
         merge = MockHouNode(path="/obj/geo1/merge1", name="merge1", node_type="merge")
-        for node in (grid, sphere, merge):
-            mock_connection.add_node(node)
+        mock_connection.add_node(merge)
         merge.setInput(0, grid, 0)
         merge.setInput(2, sphere, 1)
         calls: list[tuple] = []

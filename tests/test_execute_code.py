@@ -377,11 +377,9 @@ geo = obj.createNode('geo', 'test_geo')
             port=18811,
         )
         assert result["status"] == "success"
-        assert "scene_changes" in result
-        # The mock should have created a node
-        scene_changes = result["scene_changes"]
-        # Check if added_nodes is present (might be empty with mocks)
-        assert "added_nodes" in scene_changes or "modified" in str(scene_changes).lower()
+        added = result["scene_changes"]["added_nodes"]
+        assert [n["path"] for n in added] == ["/obj/test_geo"]
+        assert mock_connection.node("/obj/test_geo") is not None
 
 
 class TestExecuteCodeTimeout:

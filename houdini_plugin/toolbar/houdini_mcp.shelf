@@ -109,11 +109,11 @@ Use this for:
 import hou
 
 try:
-    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, parse_port
+    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, get_hrpyc_status, parse_port
 
     if is_hrpyc_running():
         hou.ui.displayMessage(
-            "Remote server (hrpyc) is already running.",
+            get_hrpyc_status()["message"],
             title="Houdini MCP Remote"
         )
     else:
@@ -188,27 +188,16 @@ Stop the hrpyc server for remote connections.
 import hou
 
 try:
-    from houdini_mcp_plugin import stop_hrpyc_server, is_hrpyc_running
-    
-    if not is_hrpyc_running():
-        hou.ui.displayMessage(
-            "Remote server (hrpyc) is not running.",
-            title="Houdini MCP Remote"
-        )
-    else:
-        status = stop_hrpyc_server()
-        
-        if status["status"] == "success":
-            hou.ui.displayMessage(
-                "Remote server stopped.",
-                title="Houdini MCP Remote"
-            )
-        else:
-            hou.ui.displayMessage(
-                f"Failed to stop remote server:\n{status['message']}",
-                title="Houdini MCP Remote",
-                severity=hou.severityType.Warning
-            )
+    from houdini_mcp_plugin import stop_hrpyc_server
+
+    # stop() is idempotent and lets go of a server that stopped serving too;
+    # its result says which of not_running, success or error happened.
+    status = stop_hrpyc_server()
+    hou.ui.displayMessage(
+        status["message"],
+        title="Houdini MCP Remote",
+        severity=hou.severityType.Warning if status["status"] == "error" else hou.severityType.Message
+    )
 except ImportError as e:
     hou.ui.displayMessage(
         f"Failed to import houdini_mcp_plugin:\n{e}",
@@ -231,10 +220,12 @@ try:
 
     status = get_hrpyc_status()
     if not status.get("running"):
+        # Not started, or held but stopped serving: the message names which
+        # and what to do about it.
         hou.ui.displayMessage(
-            "Remote listener (hrpyc) is not running.\n\n"
-            "Click 'Start Remote' to enable remote connections.",
-            title="Houdini MCP Remote Status"
+            status["message"],
+            title="Houdini MCP Remote Status",
+            severity=hou.severityType.Warning if status["stale"] else hou.severityType.Message
         )
     else:
         sec = status.get("security", {})
@@ -271,10 +262,8 @@ try:
 
     report = self_test_hrpyc()
 
-    lines = []
+    lines = [report["message"]]
     lines.append("Reachable: %s" % report.get("reachable"))
-    if report.get("stale"):
-        lines.append("STALE: listener reference exists but is not answering.")
     lines.append("Bound endpoints: %s" % ", ".join(report.get("bound_endpoints", []) or ["-"]))
     lines.append("Houdini version: %s" % report.get("houdini_version"))
     lines.append("Plugin version: %s" % report.get("plugin_version"))

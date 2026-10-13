@@ -3,7 +3,7 @@
 This module implements the "remote mode" listener that lets an external MCP
 server (for example the Docker-based gateway) connect to a running Houdini
 session over RPyC. It is the testable core behind the shelf tools and the
-backwards-compatible functions in :mod:`houdini_mcp_plugin.remote`.
+module-level facade in :mod:`houdini_mcp_plugin.remote`.
 
 Design goals (bead houdini-mcp-00p):
 
@@ -16,9 +16,10 @@ Design goals (bead houdini-mcp-00p):
   ``0.0.0.0`` (or any non-loopback address). Wildcard/remote binds require an
   explicit trusted-network opt-in or an authentication token.
 
-The module is fully unit-testable: the ``hrpyc`` module and the ``hou`` module
-are injected, so tests use light-weight fakes and never need a real Houdini.
-:class:`HrpycModule` and :class:`HrpycServer` declare what is injected.
+The module is fully unit-testable: :class:`RemoteListener` takes the ``hrpyc``
+and ``hou`` modules, resolving Houdini's own on first use when none are given,
+so tests pass light-weight fakes and never need a real Houdini.
+:class:`HrpycModule` and :class:`HrpycServer` declare what it takes from them.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ __all__ = [
     "SecurityPolicy",
     "SecurityError",
     "RemoteListener",
+    "RunningListener",
     "detect_local_ip",
     "parse_flag",
     "parse_host",
@@ -195,7 +197,7 @@ class HrpycModule(Protocol):
     ) -> HrpycServer: ...
 
 
-@dataclass
+@dataclass(frozen=True)
 class ListenerConfig:
     """Configuration for the remote hrpyc listener.
 
@@ -237,7 +239,7 @@ class ListenerConfig:
         return cls(host=host, port=port, trusted_network=trusted, token=token_from_env())
 
 
-@dataclass
+@dataclass(frozen=True)
 class SecurityPolicy:
     """Result of evaluating a :class:`ListenerConfig` against the policy."""
 
@@ -406,20 +408,85 @@ def firewall_guidance(host: str, port: int) -> list[str]:
     return guidance
 
 
+@dataclass(frozen=True)
+class RunningListener:
+    """The server a :class:`RemoteListener` holds, with what it was started from.
+
+    [LAW:types-are-the-program] a listener either holds one of these or
+    nothing: the server, the config it was bound from, the policy that admitted
+    the bind and the port the kernel handed out exist together or not at all,
+    so no reader checks them one by one and no reader can see a half-cleared
+    stop(). The record is immutable; the one thing about it that moves is
+    ``serving``, which the server itself owns.
+    """
+
+    server: HrpycServer
+    config: ListenerConfig
+    policy: SecurityPolicy
+    bound_port: int
+
+    @property
+    def serving(self) -> bool:
+        """Whether the held server still accepts connections.
+
+        [LAW:one-source-of-truth] rpyc's ``active`` is cleared by ``close()``,
+        including the one the accept loop runs when it ends, so a serve thread
+        that died shows here without a probe.
+        """
+        return self.server.active
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self.config.host}:{self.bound_port}"
+
+    @property
+    def connection_string(self) -> str:
+        return f"HOUDINI_HOST={self.config.host} HOUDINI_PORT={self.bound_port}"
+
+    def report(self) -> dict[str, Any]:
+        """The fields every report on a held server carries.
+
+        [LAW:one-source-of-truth] ``running`` means held and serving, and
+        ``stale`` is its complement, in every report: start(), status() and
+        self_test() all read it from here, so a server that died under the
+        listener is reported the same way whichever one is asked.
+        """
+        serving = self.serving
+        return {
+            "running": serving,
+            "stale": not serving,
+            "host": self.config.host,
+            "port": self.config.port,
+            "bound_port": self.bound_port,
+            "loopback_only": self.policy.loopback_only,
+            "authenticated": self.policy.authenticated,
+            "security": self.policy.as_dict(),
+            "connection_string": self.connection_string,
+            "message": (
+                f"hrpyc listener is running on {self.endpoint}."
+                if serving
+                else f"hrpyc listener on {self.endpoint} stopped serving; start it again."
+            ),
+        }
+
+
+_NOT_RUNNING = "hrpyc listener is not running; start it."
+
+
 class RemoteListener:
     """Manages a single hrpyc ``ThreadedServer`` with a safe, testable API.
 
-    ``hrpyc`` and ``hou`` are injected so the class can be exercised with fakes.
-    In Houdini they default to the real modules (resolved lazily on use).
+    ``hrpyc`` and ``hou`` may be supplied so the class can be exercised with
+    fakes; in Houdini they default to the real modules, resolved on first use.
     """
 
     def __init__(self, hrpyc: HrpycModule | None = None, hou: Any = None) -> None:
         self._hrpyc = hrpyc
         self._hou = hou
-        self._server: HrpycServer | None = None
-        self._config: ListenerConfig | None = None
-        self._policy: SecurityPolicy | None = None
-        self._bound_port: int | None = None
+        # One reference, swapped whole by start() and stop() under the lock.
+        # Readers take it once: a record they hold is complete whatever a
+        # concurrent stop() does to the attribute afterwards.
+        self._running: RunningListener | None = None
         self._lock = threading.RLock()
 
     # -- dependency resolution ------------------------------------------------
@@ -441,7 +508,13 @@ class RemoteListener:
     # -- lifecycle ------------------------------------------------------------
 
     def is_running(self) -> bool:
-        return self._server is not None
+        """Whether this listener holds a serving server.
+
+        A held server that stopped serving is not running: start() replaces
+        it, status() reports it ``stale``, and stop() lets go of it.
+        """
+        held = self._running
+        return held is not None and held.serving
 
     def start(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Start the listener. Idempotent: a second call reports already_running.
@@ -452,18 +525,18 @@ class RemoteListener:
                 :class:`SecurityError` instead of returning an error dict.
         """
         with self._lock:
-            if self._server is not None:
-                assert self._config is not None
-                return {
-                    "status": "already_running",
-                    "running": True,
-                    "host": self._config.host,
-                    "port": self._config.port,
-                    "bound_port": self._bound_port,
-                    "message": (
-                        f"hrpyc listener already running on {self._config.host}:{self._bound_port}"
-                    ),
-                }
+            held = self._running
+            if held is not None and held.serving:
+                return {**held.report(), "status": "already_running"}
+            if held is not None:
+                # [LAW:no-silent-failure] a server that stopped serving is let
+                # go of here, whatever the start below does, and the log says
+                # so. Its close() already ran (that is what cleared ``active``),
+                # so nothing is left to release.
+                logger.warning(
+                    "hrpyc listener on %s had stopped serving; let go of it", held.endpoint
+                )
+                self._running = None
 
             cfg = config
             policy = resolve_security_policy(cfg)
@@ -515,29 +588,27 @@ class RemoteListener:
                     "message": f"Failed to start hrpyc listener: {exc}",
                 }
 
-            # _server is the running discriminator that the unlocked status() and
-            # self_test() read, so it is assigned last. [LAW:no-ambient-temporal-coupling]
-            # exception: the structural fix (one running-state record) is houdini-laws-etg.qt8.
-            self._config = cfg
-            self._policy = policy
-            self._bound_port = bound_port
-            self._server = server
+            started = RunningListener(server, cfg, policy, bound_port)
+            self._running = started
 
             logger.info(
-                "Started hrpyc listener on %s:%s (exposure=%s, auth=%s)",
-                cfg.host,
-                bound_port,
+                "Started hrpyc listener on %s (exposure=%s, auth=%s)",
+                started.endpoint,
                 policy.exposure,
                 policy.authenticated,
             )
 
-            result = self.status()
-            result["status"] = "success"
-            result["message"] = (
-                f"hrpyc listener started on {cfg.host}:{bound_port}. "
-                f"Connect with HOUDINI_HOST={cfg.host} HOUDINI_PORT={bound_port}"
-            )
-            return result
+        # Outside the lock: the record is stored, and the local-ip lookup is
+        # I/O no concurrent stop() has to wait on.
+        return {
+            **started.report(),
+            **_local_ip_fields(),
+            "status": "success",
+            "message": (
+                f"hrpyc listener started on {started.endpoint}. "
+                f"Connect with {started.connection_string}"
+            ),
+        }
 
     def _launch_server(
         self, hrpyc: HrpycModule, cfg: ListenerConfig, policy: SecurityPolicy
@@ -590,42 +661,46 @@ class RemoteListener:
     def stop(self) -> dict[str, Any]:
         """Stop the listener. Idempotent and tolerant of an already-dead server."""
         with self._lock:
-            if self._server is None:
+            held = self._running
+            if held is None:
                 return {
                     "status": "not_running",
                     "running": False,
-                    "message": "hrpyc listener is not running.",
+                    "message": "hrpyc listener is not running; nothing to stop.",
                 }
 
-            host = self._config.host if self._config else DEFAULT_HOST
-            port = self._bound_port
+            # Read once, before close() clears it: whether this stop() ended a
+            # serving server or let go of one that had already died.
+            was_serving = held.serving
             # [LAW:no-silent-failure] a close() that fails is reported the way
             # start() reports its failures, as the result; the listener still
             # lets go of the server, so the next start() is not answered
             # already_running by a server that is no longer anyone's.
             try:
-                self._server.close()
+                held.server.close()
             except Exception as exc:  # noqa: BLE001 - reported as the result, as start() does
-                logger.warning("hrpyc listener (%s:%s) did not close cleanly: %s", host, port, exc)
+                logger.warning("hrpyc listener (%s) did not close cleanly: %s", held.endpoint, exc)
                 return {
                     "status": "error",
                     "error_type": "close",
                     "running": False,
                     "message": (
                         f"hrpyc listener dropped its server, whose close() failed: {exc}. "
-                        f"Port {port} may stay bound until Houdini exits."
+                        f"Port {held.bound_port} may stay bound until Houdini exits."
                     ),
                 }
             finally:
-                self._server = None
-                self._config = None
-                self._policy = None
-                self._bound_port = None
-            logger.info("Stopped hrpyc listener (%s:%s)", host, port)
+                self._running = None
+            logger.info("Stopped hrpyc listener (%s, was_serving=%s)", held.endpoint, was_serving)
             return {
                 "status": "success",
                 "running": False,
-                "message": "hrpyc listener stopped.",
+                "was_serving": was_serving,
+                "message": (
+                    "hrpyc listener stopped."
+                    if was_serving
+                    else f"hrpyc listener on {held.endpoint} had already stopped serving; let go of it."
+                ),
             }
 
     def reload(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
@@ -643,77 +718,64 @@ class RemoteListener:
     # -- introspection --------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
-        """Return current listener status (no reachability probe)."""
-        if self._server is None or self._config is None or self._policy is None:
-            return {
-                "running": False,
-                "message": "hrpyc listener is not running.",
-            }
-        policy = self._policy
-        return {
-            "running": True,
-            "host": self._config.host,
-            "port": self._config.port,
-            "bound_port": self._bound_port,
-            **_local_ip_fields(),
-            "loopback_only": policy.loopback_only,
-            "authenticated": policy.authenticated,
-            "security": policy.as_dict(),
-            "connection_string": (
-                f"HOUDINI_HOST={self._config.host} HOUDINI_PORT={self._bound_port}"
-            ),
-            "message": "hrpyc listener is running.",
-        }
+        """Return current listener status (no reachability probe).
+
+        ``running`` is True only while the held server is serving; a server
+        that died under the listener reports ``running: False, stale: True``
+        with its endpoint, so the reader knows to start it again.
+        """
+        held = self._running
+        if held is None:
+            return {"running": False, "stale": False, "message": _NOT_RUNNING}
+        return {**held.report(), **_local_ip_fields()}
 
     def self_test(self) -> dict[str, Any]:
         """Run a reachability + capability self-test.
 
         Reports:
         - reachability of the bound endpoint,
-        - whether the listener is stale (referenced but not reachable),
+        - whether the listener is stale (held but no longer serving),
         - Houdini / plugin / protocol versions,
         - loopback-only warning + firewall guidance,
         - the actual bound endpoints.
         """
         from . import __version__ as plugin_version
 
-        # One snapshot of the running state, taken under the lock a concurrent
-        # stop() clears it under; the probe below runs on the snapshot, unlocked.
-        with self._lock:
-            server = self._server
-            cfg = self._config
-            policy = self._policy
-            bound_port = self._bound_port
-        if server is None or cfg is None or policy is None or bound_port is None:
+        held = self._running
+        if held is None:
             return {
                 "running": False,
                 "reachable": False,
                 "stale": False,
-                "warnings": ["hrpyc listener is not running."],
+                "message": _NOT_RUNNING,
+                "warnings": [],
                 "guidance": ["Start the listener before running a self-test."],
             }
 
-        # A server that reports closed is stale whatever a lingering accept()
-        # window would tell the probe.
-        reachable = server.active and _probe_reachable(cfg.host, bound_port, timeout=1.0)
-        # Stale = we still hold a server reference, but it is no longer serving.
-        stale = not reachable
+        report = held.report()
+        # A server that reports closed is unreachable whatever a lingering
+        # accept() window would tell the probe.
+        reachable = report["running"] and _probe_reachable(
+            held.config.host, held.bound_port, timeout=1.0
+        )
 
         warnings: list[str] = []
-        if policy.loopback_only:
+        if held.policy.loopback_only:
             warnings.append(
                 "Listener is bound to loopback (127.0.0.1) only. Remote clients "
                 "cannot connect; only processes on this machine can reach it."
             )
-        if not policy.loopback_only and not policy.authenticated:
+        if not held.policy.loopback_only and not held.policy.authenticated:
             warnings.append(
                 "Listener is exposed to the network without an authentication "
                 "token. Ensure the network is trusted (trusted-network opt-in)."
             )
-        if stale:
+        # A server that stopped serving is the report's own message; a server
+        # that serves but did not answer is the probe's finding, and a warning.
+        if report["running"] and not reachable:
             warnings.append(
-                f"Listener object exists but {cfg.host}:{bound_port} is not "
-                "answering. The underlying server may have died (stale listener)."
+                f"hrpyc listener on {held.endpoint} is serving but did not "
+                "answer a connection within 1s."
             )
 
         # [LAW:no-silent-failure] a Houdini that cannot be asked its version, a
@@ -730,30 +792,24 @@ class RemoteListener:
         ip_fields = _local_ip_fields()
         if ip_fields["local_ip_error"] is not None:
             warnings.append(ip_fields["local_ip_error"])
-        bound_endpoints = [f"{cfg.host}:{bound_port}"]
+        bound_endpoints = [held.endpoint]
         # The machine's IPv4 address reaches an IPv4 wildcard bind and nothing
         # else that is reported here: a specific bind is reachable only where
         # it is bound, and detect_local_ip() knows nothing of an IPv6 socket.
-        if ip_fields["local_ip"] is not None and cfg.host == IPV4_WILDCARD_HOST:
-            bound_endpoints.append(f"{ip_fields['local_ip']}:{bound_port} (via {cfg.host})")
+        if ip_fields["local_ip"] is not None and held.config.host == IPV4_WILDCARD_HOST:
+            bound_endpoints.append(
+                f"{ip_fields['local_ip']}:{held.bound_port} (via {held.config.host})"
+            )
 
         return {
-            "running": True,
+            **report,
             "reachable": reachable,
-            "stale": stale,
-            "host": cfg.host,
-            "port": cfg.port,
-            "bound_port": bound_port,
             "bound_endpoints": bound_endpoints,
             **ip_fields,
-            "loopback_only": policy.loopback_only,
-            "authenticated": policy.authenticated,
-            "security": policy.as_dict(),
             "houdini_version": houdini_version,
             "houdini_version_tuple": houdini_version_tuple,
             "plugin_version": plugin_version,
             "protocol": "rpyc/hrpyc SlaveService (classic)",
-            "connection_string": (f"HOUDINI_HOST={cfg.host} HOUDINI_PORT={bound_port}"),
             "warnings": warnings,
-            "guidance": firewall_guidance(cfg.host, bound_port),
+            "guidance": firewall_guidance(held.config.host, held.bound_port),
         }

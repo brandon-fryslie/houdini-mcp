@@ -30,7 +30,9 @@ import hmac
 import logging
 import os
 import struct
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp_handshake")
@@ -49,8 +51,9 @@ ACK = b"\x06"
 _FRAME = struct.Struct("!H")
 MAX_TOKEN_BYTES = 0xFFFF
 
-# Bound on either side waiting for the other's handshake bytes. A peer that
-# connects and never completes the exchange is a rejection, not a held thread.
+# How long either side gives the other to complete its whole part of the
+# exchange, counted from the moment it starts reading. A peer that connects
+# and never completes it is a rejection, not a held thread.
 HANDSHAKE_TIMEOUT = 5.0
 
 
@@ -87,33 +90,67 @@ def exchange(token: str | None) -> tuple[bytes, bytes]:
     return _FRAME.pack(len(secret)) + secret, ACK
 
 
-def _recv_exactly(sock: Any, length: int) -> bytes:
-    """Read exactly ``length`` bytes within ``HANDSHAKE_TIMEOUT``.
+@contextmanager
+def _handshake_reader(sock: Any) -> Iterator[Callable[[int], bytes]]:
+    """A reader of exactly-N bytes from ``sock``, every read under one deadline:
+    ``HANDSHAKE_TIMEOUT`` from the moment the reader is made.
+
+    [LAW:no-ambient-temporal-coupling] the deadline is an instant fixed before
+    the first read, so a peer cannot extend its stay by feeding bytes one at a
+    time; each ``recv`` waits at most what is left. The reader is the only thing
+    that touches the socket's timeout, and the socket leaves the block with the
+    timeout it came in with, so rpyc's protocol runs with the settings it
+    expects.
 
     [LAW:no-silent-failure] a peer that closes early raises ``EOFError`` and one
-    that stalls raises ``TimeoutError``; a short read is never returned as data.
-    The socket's own timeout is restored afterwards, so rpyc's protocol runs
-    with the settings it expects.
+    that runs out the deadline raises ``TimeoutError``; a short read is never
+    returned as data.
     """
-    previous = sock.gettimeout()
-    sock.settimeout(HANDSHAKE_TIMEOUT)
-    try:
-        received = b""
+    deadline = time.monotonic() + HANDSHAKE_TIMEOUT
+
+    def read(length: int) -> bytes:
+        received = bytearray()
+
+        def expired() -> TimeoutError:
+            return TimeoutError(
+                f"peer did not complete the handshake within {HANDSHAKE_TIMEOUT}s "
+                f"({len(received)} of {length} bytes arrived)"
+            )
+
         while len(received) < length:
-            chunk = sock.recv(length - len(received))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise expired()
+            sock.settimeout(remaining)
+            try:
+                chunk = sock.recv(length - len(received))
+            except TimeoutError as exc:
+                # A recv armed with what was left and still waiting is the
+                # deadline; the cause stays chained for the transport's own
+                # ETIMEDOUT, which arrives as the same type.
+                raise expired() from exc
             if not chunk:
                 raise EOFError("peer closed the connection during the handshake")
             received += chunk
-        return received
+        return bytes(received)
+
+    previous = sock.gettimeout()
+    try:
+        yield read
     finally:
         sock.settimeout(previous)
 
 
 def _recv_framed(sock: Any) -> bytes:
-    """Read one length-prefixed token as the client framed it, prefix included."""
-    header = _recv_exactly(sock, _FRAME.size)
-    (length,) = _FRAME.unpack(header)
-    return header + _recv_exactly(sock, length)
+    """Read one length-prefixed token as the client framed it, prefix included.
+
+    The prefix and the token share one deadline: announcing a long token buys
+    the client no more time to send it.
+    """
+    with _handshake_reader(sock) as read:
+        header = read(_FRAME.size)
+        (length,) = _FRAME.unpack(header)
+        return header + read(length)
 
 
 def connect(host: str, port: int, token: str | None, *, sync_request_timeout: float) -> Any:
@@ -142,7 +179,8 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
         # listener closing after it has read the frame is evidence of rejection.
         stream.write(sent)
         try:
-            _recv_exactly(stream.sock, len(expected))
+            with _handshake_reader(stream.sock) as read:
+                read(len(expected))
         except EOFError as exc:
             raise HandshakeError(
                 f"listener at {host}:{port} closed the connection on the token "

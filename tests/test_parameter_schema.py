@@ -101,6 +101,7 @@ class TestGetParameterSchema:
         mock_hou = create_mock_hou_with_parm_types()
 
         # Create a sphere node with radx parameter
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1", name="sphere1", node_type="sphere", params={"radx": 2.5}
         )
@@ -194,6 +195,7 @@ class TestGetParameterSchema:
         mock_hou = create_mock_hou_with_parm_types()
 
         # Create a sphere node with type menu parameter
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1", name="sphere1", node_type="sphere", params={"type": 0}
         )
@@ -239,6 +241,7 @@ class TestGetParameterSchema:
         mock_hou = create_mock_hou_with_parm_types()
 
         # Create a node with multiple parameters
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1",
             name="sphere1",
@@ -310,6 +313,7 @@ class TestGetParameterSchema:
         mock_hou = create_mock_hou_with_parm_types()
 
         # Create a node with many parameters
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1",
             name="sphere1",
@@ -341,6 +345,7 @@ class TestGetParameterSchema:
 
         mock_hou = create_mock_hou_with_parm_types()
 
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1", name="sphere1", node_type="sphere", params={"radx": 1.0}
         )
@@ -376,6 +381,7 @@ class TestGetParameterSchema:
 
         mock_hou = create_mock_hou_with_parm_types()
 
+        mock_hou.node("/obj").createNode("geo", "geo1")
         node = MockHouNode(
             path="/obj/geo1/box1", name="box1", node_type="box", params={"consolidatepts": True}
         )
@@ -423,6 +429,7 @@ class TestGetParameterSchema:
 
         mock_hou = create_mock_hou_with_parm_types()
 
+        mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
             path="/obj/geo1/sphere1", name="sphere1", node_type="sphere", params={"radx": 1.0}
         )
@@ -440,6 +447,7 @@ class TestGetParameterSchema:
 
         mock_hou = create_mock_hou_with_parm_types()
 
+        mock_hou.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(
             path="/obj/geo1/grid1", name="grid1", node_type="grid", params={"rows": 10}
         )
@@ -479,6 +487,7 @@ class TestGetParameterSchema:
 
         mock_hou = create_mock_hou_with_parm_types()
 
+        mock_hou.node("/obj").createNode("geo", "geo1")
         node = MockHouNode(
             path="/obj/geo1/file1",
             name="file1",

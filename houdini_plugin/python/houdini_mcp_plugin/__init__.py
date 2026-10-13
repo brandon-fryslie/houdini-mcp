@@ -21,6 +21,7 @@ from .listener import (
     DEFAULT_PORT,
     ListenerConfig,
     RemoteListener,
+    RunningListener,
     SecurityError,
     detect_local_ip,
     parse_flag,
@@ -71,6 +72,7 @@ __all__ = [
     "self_test_hrpyc",
     # remote listener primitives
     "RemoteListener",
+    "RunningListener",
     "ListenerConfig",
     "SecurityError",
     "resolve_security_policy",
