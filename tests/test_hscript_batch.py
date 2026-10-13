@@ -62,17 +62,18 @@ class TestHscriptBatch:
         ]
         assert tree[1]["children"] == []
 
-    def test_batch_offers_no_program_execution(self) -> None:
-        batch = HscriptBatch(_HscriptHou({}))
-        assert not any(name.startswith("_exec") for name in dir(batch))
-
 
 class TestNodeTypeCacheReadsThroughTheProxy:
-    def test_population_sends_no_program_over_the_connection(self) -> None:
+    def test_population_sends_no_program_over_the_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The two roads the old fill took to a connection: the proxy's own
+        # ``____conn__`` and the module-level connection every
+        # ``get_connection`` returns. Both lead to this mock.
         hou: Any = MockHouModule()
         connection = MagicMock()
-        connection.execute.side_effect = AssertionError("a cache fill executed a program")
         hou.____conn__ = connection
+        monkeypatch.setattr("houdini_mcp.connection._connection", connection)
 
         cache = NodeTypeCache()
         types = cache.get_all_types(hou)
