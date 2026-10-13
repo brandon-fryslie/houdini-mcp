@@ -164,6 +164,8 @@ class TestStartStop:
         assert result["port"] == free_port
         # actual bound endpoint reported (not just requested)
         assert result["bound_port"] == free_port
+        # The shelf reads these off start()'s result: it is status()'s record.
+        assert {"local_ip", "local_ip_error", "security", "message"} <= result.keys()
         assert listener.is_running() is True
 
     def test_start_is_idempotent(self, fake_hrpyc, fake_hou, free_port):
