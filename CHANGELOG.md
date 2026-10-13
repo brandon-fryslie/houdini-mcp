@@ -63,13 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in its thread with its undo group open, and until now any later tool wrote
   the scene alongside it. `WorkerLedger` (`tools/workers.py`) is the one owner
   of "a program is still running against this Houdini": `execute_code` starts
-  its thread through it and the thread clears the slot as it ends. Every tool
-  the mutating registry (`MUTATING_TOOL_POLICIES`) classifies as a writer,
-  `execute_code` included, is refused at the tool boundary while the slot is
-  held, with `error_type: "worker_still_running"`, the `operation`, and a
-  `worker` block (`code_sha256`, `timeout`, `running_for_seconds`); reads
-  proceed. The timeout response carries the same `worker` block and its
-  warning says writes are refused until the worker finishes.
+  its thread through it and the thread clears the slot once the program and
+  its undo group have ended. `TOOL_POLICIES` (`tools/transactions.py`) now
+  classifies every tool, readers included, and the tool boundary looks a
+  tool's name up at import, so an unclassified tool cannot exist. Every tool
+  whose policy writes the scene (`execute_code` and `get_geometry_summary`
+  included) is refused while the slot is held, with
+  `error_type: "worker_still_running"`, the `operation`, and a `worker` block
+  (`code_sha256`, `timeout`, `running_for_seconds`); reads, `save_scene` and
+  the screenshot tools proceed. The timeout response carries the same
+  `worker` block and its warning says writes are refused until the worker
+  finishes.
 
 - **The token handshake's bound is a deadline, not an idle timeout**
   (houdini-laws-etg.ml7): `HANDSHAKE_TIMEOUT` is counted once, from the moment

@@ -9,6 +9,7 @@ import pytest
 
 from houdini_mcp.tools.transactions import (
     MUTATING_TOOL_POLICIES,
+    TOOL_POLICIES,
     TransactionConflict,
     TransactionManager,
     TransactionPolicy,
@@ -54,6 +55,17 @@ def manager(mock_connection, tmp_path: Path, revision):
 def test_every_mutating_tool_has_an_explicit_policy():
     assert set(MUTATING_TOOL_POLICIES) == EXPECTED_MUTATING_TOOLS
     assert all(isinstance(policy, TransactionPolicy) for policy in MUTATING_TOOL_POLICIES.values())
+
+
+def test_only_scene_writers_write_the_scene():
+    """File writers and readers may run beside a program still mutating the scene."""
+    writers = {tool for tool, policy in TOOL_POLICIES.items() if policy.writes_scene}
+    assert writers == EXPECTED_MUTATING_TOOLS - {
+        "capture_multiple_panes",
+        "capture_pane_screenshot",
+        "save_scene",
+    }
+    assert TransactionPolicy.READS_ONLY not in MUTATING_TOOL_POLICIES.values()
 
 
 def test_failed_multistep_transaction_closes_group_then_undoes(mock_connection, tmp_path):

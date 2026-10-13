@@ -390,6 +390,7 @@ class TestTrustedInternalGeometryCapability:
         result = _execute_with_grant(
             "print(hou.node('/obj').geometry())",
             grant,
+            operation="get_geometry_summary",
             capture_diff=False,
             max_stdout_size=1000,
             max_stderr_size=1000,
@@ -506,7 +507,11 @@ class TestAuditFields:
         grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.code"):
             result = _execute_with_grant(
-                "hou.node('/obj/geo1').geometry()", grant, host="localhost", port=18811
+                "hou.node('/obj/geo1').geometry()",
+                grant,
+                operation="get_geometry_summary",
+                host="localhost",
+                port=18811,
             )
         assert result["status"] == "success"
         assert result["audit"]["source"] == "trusted"

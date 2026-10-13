@@ -198,13 +198,37 @@ All tools return consistent response dictionaries:
     "status": "error",
     "message": "Human-readable error description",
     # Optional fields:
-    "error_type": "connection_error" | "validation_error" | ...,
+    "error_type": "connection_error" | "validation_error" | "worker_still_running" | ...,
     "exception": "ExceptionClassName",
     "operation": "tool_name",
     "recoverable": True | False,
     "traceback": "...",  # Only for unexpected errors
 }
 ```
+
+### `worker_still_running`
+
+`execute_code` runs the caller's program in a thread the server cannot kill.
+When it times out, the program keeps running with its undo group open, and
+`WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
+ends, every tool whose `TransactionPolicy.writes_scene` is true (see
+`TOOL_POLICIES` in `tools/transactions.py`) is refused at the tool boundary:
+
+```python
+{
+    "status": "error",
+    "error_type": "worker_still_running",
+    "operation": "create_node",
+    "message": "create_node refused: an execute_code program (sha256 ...) is still running ...",
+    "worker": {"code_sha256": "...", "timeout": 30, "running_for_seconds": 41.2},
+    "recoverable": True,
+}
+```
+
+`worker.code_sha256` matches `audit.code_sha256` of the timeout response that
+started it. Reads and file writers (`save_scene`, the screenshot tools) proceed.
+`get_geometry_summary` runs a program through the same machinery and is refused
+too, naming itself. Recovery: wait for the program to finish or restart Houdini.
 
 ## Validation Helpers
 

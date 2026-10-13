@@ -2,7 +2,8 @@
 
 (houdini-laws-etg.7kc) While the caller's program is still running against
 Houdini, every tool that writes the scene is refused and told which worker
-holds it; reads proceed; the moment the worker ends, writes resume.
+holds it; reads and file writers proceed; the moment the worker ends, writes
+resume.
 """
 
 import logging
@@ -11,6 +12,8 @@ import threading
 import pytest
 
 from houdini_mcp.tools import create_node, execute_code, get_scene_info
+from houdini_mcp.tools._common import handle_connection_errors
+from houdini_mcp.tools.geometry import get_geo_summary as get_geometry_summary
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
 
 
@@ -31,7 +34,7 @@ class TestWorkerBlocksMutation:
 
         worker = WORKERS.running()
         assert worker is not None
-        assert worker.is_alive()
+        assert worker.thread.is_alive()
         assert result["worker"]["code_sha256"] == worker.code_sha256
         assert result["worker"]["code_sha256"] == result["audit"]["code_sha256"]
         assert result["worker"]["running_for_seconds"] >= 1
@@ -64,6 +67,27 @@ class TestWorkerBlocksMutation:
         _time_out(stalled_program)
 
         assert get_scene_info(host="localhost", port=18811)["status"] == "success"
+
+    def test_file_writers_are_not_scene_writers(self, mock_connection, stalled_program):
+        """A screenshot is how a caller verifies the scene the warning tells it to verify."""
+        _time_out(stalled_program)
+
+        @handle_connection_errors("capture_pane_screenshot")
+        def screenshot():
+            return {"status": "success"}
+
+        assert screenshot()["status"] == "success"
+
+    def test_program_running_read_is_refused_naming_itself(self, mock_connection, stalled_program):
+        """get_geometry_summary runs a program in an undo group, so one worker refuses it."""
+        _time_out(stalled_program)
+
+        result = get_geometry_summary("/obj/geo1", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "worker_still_running"
+        assert result["operation"] == "get_geometry_summary"
+        assert result["message"].startswith("get_geometry_summary refused")
 
     def test_writes_resume_once_the_worker_ends(self, mock_connection, stalled_program):
         _time_out(stalled_program)
@@ -119,11 +143,14 @@ class TestWorkerLedger:
     def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self):
         ledger = WorkerLedger()
         gate = threading.Event()
-        first = ledger.launch(gate.wait, code_sha256="a" * 64, timeout=5)
+        first = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=5)
         try:
             with pytest.raises(WorkerStillRunning) as refused:
-                ledger.launch(gate.wait, code_sha256="b" * 64, timeout=5)
+                ledger.launch(
+                    gate.wait, operation="get_geometry_summary", code_sha256="b" * 64, timeout=5
+                )
             assert refused.value.worker is first
+            assert refused.value.operation == "get_geometry_summary"
             assert ledger.running() is first
         finally:
             gate.set()
@@ -132,3 +159,17 @@ class TestWorkerLedger:
 
     def test_admit_passes_when_idle(self):
         WorkerLedger().admit("create_node")
+
+    def test_a_thread_that_fails_to_start_holds_no_slot(self, monkeypatch):
+        ledger = WorkerLedger()
+
+        def cannot_start(self):
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(threading.Thread, "start", cannot_start)
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            ledger.launch(lambda: None, operation="execute_code", code_sha256="a" * 64, timeout=5)
+
+        assert ledger.running() is None
+        monkeypatch.undo()
+        ledger.admit("create_node")

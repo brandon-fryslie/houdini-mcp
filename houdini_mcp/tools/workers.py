@@ -33,9 +33,6 @@ class RunningWorker:
     started_at: float
     thread: threading.Thread
 
-    def is_alive(self) -> bool:
-        return self.thread.is_alive()
-
     def running_for_seconds(self) -> float:
         return time.monotonic() - self.started_at
 
@@ -62,7 +59,8 @@ class WorkerStillRunning(RuntimeError):
             f"{operation} refused: an execute_code program (sha256 {worker.code_sha256[:12]}, "
             f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
             "still running against Houdini with its undo group open. Writing now would "
-            "interleave with it. Wait for it to finish or restart Houdini; reads still work."
+            "interleave with it. Wait for it to finish or restart Houdini; tools that only "
+            "read the scene still work."
         )
 
 
@@ -70,9 +68,10 @@ class WorkerLedger:
     """Owns the one slot a running worker occupies.
 
     [LAW:no-shared-mutable-globals] Invariants: at most one worker exists; the
-    slot is filled before the thread starts and cleared by the thread itself as
-    its last act, so :meth:`running` is ``None`` exactly when no caller code is
-    executing against Houdini.
+    slot is filled before the thread starts and cleared by the thread itself
+    once the program and its undo group have ended, so :meth:`running` is
+    ``None`` exactly when no caller code is executing against Houdini. Callers
+    ask the ledger, never the thread: the thread outlives the slot by a log line.
     """
 
     def __init__(self) -> None:
@@ -84,17 +83,23 @@ class WorkerLedger:
             return self._running
 
     def launch(
-        self, target: Callable[[], None], *, code_sha256: str, timeout: int
+        self,
+        target: Callable[[], None],
+        *,
+        operation: str,
+        code_sha256: str,
+        timeout: int,
     ) -> RunningWorker:
         """Start ``target`` on a daemon thread and record it as the running worker.
 
         Daemon, because a timed-out program must not keep the process alive.
-        Raises :class:`WorkerStillRunning` rather than ever holding two workers:
-        overwriting the slot would lose the first one's existence.
+        Raises :class:`WorkerStillRunning` naming ``operation`` rather than ever
+        holding two workers: overwriting the slot would lose the first one's
+        existence.
         """
         with self._lock:
             if self._running is not None:
-                raise WorkerStillRunning("execute_code", self._running)
+                raise WorkerStillRunning(operation, self._running)
 
             def run() -> None:
                 try:
@@ -115,7 +120,13 @@ class WorkerLedger:
                 thread=threading.Thread(target=run, daemon=True, name="houdini-mcp-execute-code"),
             )
             self._running = worker
-            worker.thread.start()
+            try:
+                worker.thread.start()
+            except BaseException:
+                # [LAW:no-silent-failure] A thread that never ran holds nothing;
+                # leaving it in the slot would refuse every write until restart.
+                self._running = None
+                raise
         logger.info("execute_code worker started code_sha256=%s timeout=%ss", code_sha256, timeout)
         return worker
 

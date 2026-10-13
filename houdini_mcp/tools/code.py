@@ -185,6 +185,7 @@ class DetectedPatterns:
     nothing else, because nothing else could be read [LAW:parse-dont-validate].
     """
 
+    code_sha256: str
     mutation: list[str]
     dangerous: list[str]
     heavy_geometry: list[str]
@@ -193,13 +194,22 @@ class DetectedPatterns:
 
     @classmethod
     def scan(cls, code: str) -> "DetectedPatterns":
+        # [LAW:one-source-of-truth] The program's identity is computed here once;
+        # the audit, the worker ledger and every refusal name it from this field.
+        code_sha256 = hashlib.sha256(code.encode("utf-8", "replace")).hexdigest()
         try:
             tree = parse_code(code)
         except SyntaxError as exc:
             return cls(
-                mutation=[], dangerous=[], heavy_geometry=[], import_hou=False, syntax_error=exc
+                code_sha256=code_sha256,
+                mutation=[],
+                dangerous=[],
+                heavy_geometry=[],
+                import_hou=False,
+                syntax_error=exc,
             )
         return cls(
+            code_sha256=code_sha256,
             mutation=_detect_non_inspection_code(tree),
             dangerous=_detect_dangerous_code(tree),
             heavy_geometry=_detect_heavy_geometry_code(tree),
@@ -348,7 +358,7 @@ def _build_audit(
         "rollback_succeeded": rollback_succeeded,
         "blocked_reason": blocked_reason,
         "code_length": len(code),
-        "code_sha256": hashlib.sha256(code.encode("utf-8", "replace")).hexdigest(),
+        "code_sha256": detected.code_sha256,
     }
 
 
@@ -440,6 +450,7 @@ def execute_code(
     return _execute_with_grant(
         code,
         grant,
+        operation="execute_code",
         capture_diff=capture_diff,
         max_stdout_size=max_stdout_size,
         max_stderr_size=max_stderr_size,
@@ -454,6 +465,7 @@ def _execute_with_grant(
     code: str,
     grant: ExecutionGrant,
     *,
+    operation: str,
     capture_diff: bool = False,
     max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
     max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
@@ -466,6 +478,7 @@ def _execute_with_grant(
 
     ``execute_code`` is the public door; a server-side tool that generated the
     program itself may enter here with :meth:`ExecutionGrant.trusted_heavy_geometry`.
+    ``operation`` is the tool the caller invoked, so a refusal names it.
     """
     global _before_scene, _after_scene
 
@@ -483,7 +496,6 @@ def _execute_with_grant(
     # refusal: the grant decides what each finding means, and every audit and
     # log line reports all of it, whatever stopped the code.
     detected = DetectedPatterns.scan(code)
-    code_sha256 = hashlib.sha256(code.encode("utf-8", "replace")).hexdigest()
 
     # --- Syntax gate: a program the gates cannot read is a program that does not run
     if detected.syntax_error is not None:
@@ -575,7 +587,7 @@ def _execute_with_grant(
             grant.source,
             detected.dangerous,
             detected.heavy_geometry,
-            code_sha256,
+            detected.code_sha256,
         )
 
     # --- Connect and prepare execution --------------------------------------
@@ -620,12 +632,18 @@ def _execute_with_grant(
         )
 
     # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
-    # starts the thread, the thread clears the slot as it ends, and every
-    # scene-writing tool asks it first. A timeout leaves the slot occupied.
-    worker = WORKERS.launch(run_code, code_sha256=code_sha256, timeout=timeout)
+    # starts the thread, the thread clears the slot once the program and its
+    # undo group have ended, and every scene-writing tool asks it first. A
+    # timeout leaves the slot occupied.
+    worker = WORKERS.launch(
+        run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
+    )
     worker.thread.join(timeout=timeout)
 
-    if worker.is_alive():
+    # [LAW:one-source-of-truth] The ledger, not thread liveness, says whether the
+    # program is still running: the slot clears after the undo group closes, so
+    # a program that ended as the join expired is reported as complete.
+    if WORKERS.running() is worker:
         # The worker is still inside the undo-group context. Calling performUndo
         # now can undo the PREVIOUS human action because this run's group has not
         # closed yet, while the worker can continue mutating afterward. Never
@@ -633,7 +651,7 @@ def _execute_with_grant(
         logger.warning(
             "execute_code exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
             timeout,
-            code_sha256,
+            detected.code_sha256,
         )
         return {
             "status": "error",
@@ -646,7 +664,8 @@ def _execute_with_grant(
                 "Execution timed out while its background thread and undo group are still active. "
                 "No undo was attempted because doing so could undo a previous human action. "
                 "Every tool that writes the scene is refused until this worker finishes; "
-                "reads still work. Verify state or restart Houdini before further edits."
+                "tools that only read the scene still work. Verify state or restart Houdini "
+                "before further edits."
             ),
             "worker": worker.describe(),
             "rollback": {

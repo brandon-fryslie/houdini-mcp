@@ -25,7 +25,7 @@ from ..connection import (
     transport_failure,
 )
 from .hscript import HscriptBatch
-from .transactions import MUTATING_TOOL_POLICIES
+from .transactions import TOOL_POLICIES
 from .workers import WORKERS, WorkerStillRunning
 
 T = TypeVar("T")
@@ -103,13 +103,14 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the response ``_tool_error_response``
     builds for it; connection loss is the only failure that tears the connection down.
-    A tool the mutating registry classifies as a writer first asks the worker
-    ledger whether caller code is still running against Houdini, and is refused
-    with that worker named when it is.
+    A tool whose policy writes the scene first asks the worker ledger whether
+    caller code is still running against Houdini, and is refused with that
+    worker named when it is.
 
     Args:
-        operation_name: Name of the operation (used in error messages and to
-            classify the tool against ``MUTATING_TOOL_POLICIES``)
+        operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
+            unclassified tool fails here, at import) and names the operation
+            in error responses.
 
     Returns:
         Decorated function with error handling
@@ -124,10 +125,11 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     def decorator(func: ToolFn) -> ToolFn:
         signature = inspect.signature(func)
-        # [LAW:single-enforcer] Which tools write the scene is the registry's fact;
-        # whether a write may run now is the ledger's. This is the one place both
-        # are consulted, so no tool can mutate alongside a timed-out worker unseen.
-        writes_scene = operation_name in MUTATING_TOOL_POLICIES
+        # [LAW:single-enforcer] Whether a tool writes the scene is its policy's
+        # fact; whether a write may run now is the ledger's. This is the one
+        # place both are consulted, so no tool can mutate alongside a timed-out
+        # worker unseen.
+        writes_scene = TOOL_POLICIES[operation_name].writes_scene
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
