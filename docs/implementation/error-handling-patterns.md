@@ -227,8 +227,11 @@ ends, every tool whose `TransactionPolicy.writes_scene` is true (see
 
 `worker.code_sha256` matches `audit.code_sha256` of the timeout response that
 started it. Reads and file writers (`save_scene`, the screenshot tools) proceed.
-`get_geometry_summary` runs a program through the same machinery and is refused
-too, naming itself. Recovery: wait for the program to finish or restart Houdini.
+`get_geo_summary` runs a program through the same machinery and is refused too,
+naming itself. Recovery: wait for the program to finish; a program that uses
+`hou` ends when Houdini restarts, one that never touches Houdini ends only with
+the MCP server. Nothing clears the slot while the thread lives, because a cleared
+slot with a live thread would be a lie.
 
 ## Validation Helpers
 

@@ -62,7 +62,7 @@ from .code_policy import (
     _detect_non_inspection_code,
     parse_code,
 )
-from .workers import WORKERS
+from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
 
@@ -663,9 +663,9 @@ def _execute_with_grant(
             "warning": (
                 "Execution timed out while its background thread and undo group are still active. "
                 "No undo was attempted because doing so could undo a previous human action. "
-                "Every tool that writes the scene is refused until this worker finishes; "
-                "tools that only read the scene still work. Verify state or restart Houdini "
-                "before further edits."
+                "Every tool that writes the scene is refused until this worker finishes. "
+                f"{HOW_A_WORKER_ENDS} Scene consistency is unknown: verify state before "
+                "further edits."
             ),
             "worker": worker.describe(),
             "rollback": {

@@ -35,13 +35,15 @@ class TransactionPolicy(StrEnum):
         return self in (TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED)
 
 
-# [LAW:types-are-the-program] Every tool the server exposes is classified here,
-# and the tool boundary looks its name up at decoration time, so a tool with no
-# policy cannot be imported, let alone run.
+# [LAW:types-are-the-program] Every tool the server exposes is classified here:
+# the tool boundary looks a decorated tool's name up at decoration time, so one
+# with no policy cannot be imported, and tests/plugin/test_server_surface.py
+# holds the served tool names equal to these keys.
 TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "assign_material": TransactionPolicy.UNDOABLE,
     "capture_multiple_panes": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "capture_pane_screenshot": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
+    "check_connection": TransactionPolicy.READS_ONLY,
     "connect_nodes": TransactionPolicy.UNDOABLE,
     "create_material": TransactionPolicy.UNDOABLE,
     "create_network_box": TransactionPolicy.UNDOABLE,
@@ -54,19 +56,24 @@ TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "find_nodes": TransactionPolicy.READS_ONLY,
     # Runs a server-authored program through execute_code's machinery: it reads
     # the scene, but a running worker still refuses it (see tools/workers.py).
-    "get_geometry_summary": TransactionPolicy.READS_ONLY,
+    "get_geo_summary": TransactionPolicy.READS_ONLY,
+    "get_houdini_help": TransactionPolicy.READS_ONLY,
+    "get_last_scene_diff": TransactionPolicy.READS_ONLY,
     "get_material_info": TransactionPolicy.READS_ONLY,
     "get_node_info": TransactionPolicy.READS_ONLY,
     "get_parameter_schema": TransactionPolicy.READS_ONLY,
     "get_render_settings": TransactionPolicy.READS_ONLY,
     "get_scene_info": TransactionPolicy.READS_ONLY,
+    "get_summarization_status": TransactionPolicy.READS_ONLY,
     "layout_children": TransactionPolicy.UNDOABLE,
     "list_children": TransactionPolicy.READS_ONLY,
     "list_node_types": TransactionPolicy.READS_ONLY,
     "list_render_nodes": TransactionPolicy.READS_ONLY,
     "list_visible_panes": TransactionPolicy.READS_ONLY,
     "load_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "manage_cache": TransactionPolicy.READS_ONLY,
     "new_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "ping_houdini": TransactionPolicy.READS_ONLY,
     # Render tools write files and create temporary scene nodes; checkpointing
     # covers the scene component while side_effects records the output files.
     "render_quad_view": TransactionPolicy.CHECKPOINT_REQUIRED,

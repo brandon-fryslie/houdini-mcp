@@ -13,7 +13,7 @@ import pytest
 
 from houdini_mcp.tools import create_node, execute_code, get_scene_info
 from houdini_mcp.tools._common import handle_connection_errors
-from houdini_mcp.tools.geometry import get_geo_summary as get_geometry_summary
+from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
 
 
@@ -40,6 +40,7 @@ class TestWorkerBlocksMutation:
         assert result["worker"]["running_for_seconds"] >= 1
         assert result["worker"]["timeout"] == 1
         assert "refused until this worker finishes" in result["warning"]
+        assert "ends only with the MCP server" in result["warning"]
 
     def test_writing_tool_is_refused_and_writes_nothing(self, mock_connection, stalled_program):
         _time_out(stalled_program)
@@ -78,16 +79,21 @@ class TestWorkerBlocksMutation:
 
         assert screenshot()["status"] == "success"
 
-    def test_program_running_read_is_refused_naming_itself(self, mock_connection, stalled_program):
-        """get_geometry_summary runs a program in an undo group, so one worker refuses it."""
+    def test_program_running_read_is_refused_naming_itself(
+        self, mock_connection, stalled_program, caplog
+    ):
+        """get_geo_summary runs a program in an undo group, so one worker refuses it."""
         _time_out(stalled_program)
 
-        result = get_geometry_summary("/obj/geo1", host="localhost", port=18811)
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"):
+            result = get_geo_summary("/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["error_type"] == "worker_still_running"
-        assert result["operation"] == "get_geometry_summary"
-        assert result["message"].startswith("get_geometry_summary refused")
+        assert result["operation"] == "get_geo_summary"
+        assert result["message"].startswith("get_geo_summary refused")
+        [refusal] = [r for r in caplog.records if r.name == "houdini_mcp.tools.workers"]
+        assert refusal.getMessage().startswith("get_geo_summary refused")
 
     def test_writes_resume_once_the_worker_ends(self, mock_connection, stalled_program):
         _time_out(stalled_program)
@@ -147,10 +153,10 @@ class TestWorkerLedger:
         try:
             with pytest.raises(WorkerStillRunning) as refused:
                 ledger.launch(
-                    gate.wait, operation="get_geometry_summary", code_sha256="b" * 64, timeout=5
+                    gate.wait, operation="get_geo_summary", code_sha256="b" * 64, timeout=5
                 )
             assert refused.value.worker is first
-            assert refused.value.operation == "get_geometry_summary"
+            assert refused.value.operation == "get_geo_summary"
             assert ledger.running() is first
         finally:
             gate.set()

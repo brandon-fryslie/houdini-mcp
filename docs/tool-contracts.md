@@ -54,7 +54,7 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 ```
 
 Until that program ends, every scene-writing tool (including another
-`execute_code` and `get_geometry_summary`) returns
+`execute_code` and `get_geo_summary`) returns
 `error_type: "worker_still_running"` naming the same worker; reads, `save_scene`
 and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 

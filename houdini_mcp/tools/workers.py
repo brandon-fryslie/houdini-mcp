@@ -49,8 +49,18 @@ class RunningWorker:
         }
 
 
+# How a running worker ends, told the same way in the timeout warning and in
+# every refusal: Python cannot stop the thread, so only the program's own end,
+# or the loss of the Houdini it talks to, releases the slot.
+HOW_A_WORKER_ENDS = (
+    "Wait for it to finish, or restart Houdini: a program that uses hou ends when "
+    "its connection drops, one that never touches Houdini ends only with the MCP "
+    "server. Tools that only read the scene still work."
+)
+
+
 class WorkerStillRunning(RuntimeError):
-    """A call that would write the scene was refused because a worker still holds it."""
+    """A call that needs the scene to itself was refused because a worker still holds it."""
 
     def __init__(self, operation: str, worker: RunningWorker) -> None:
         self.operation = operation
@@ -58,9 +68,8 @@ class WorkerStillRunning(RuntimeError):
         super().__init__(
             f"{operation} refused: an execute_code program (sha256 {worker.code_sha256[:12]}, "
             f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
-            "still running against Houdini with its undo group open. Writing now would "
-            "interleave with it. Wait for it to finish or restart Houdini; tools that only "
-            "read the scene still work."
+            "still running against Houdini with its undo group open, and this call would "
+            f"interleave with it. {HOW_A_WORKER_ENDS}"
         )
 
 
@@ -99,7 +108,7 @@ class WorkerLedger:
         """
         with self._lock:
             if self._running is not None:
-                raise WorkerStillRunning(operation, self._running)
+                _refuse(operation, self._running)
 
             def run() -> None:
                 try:
@@ -134,14 +143,19 @@ class WorkerLedger:
         """Let ``operation`` write the scene, or refuse by raising :class:`WorkerStillRunning`."""
         worker = self.running()
         if worker is not None:
-            logger.warning(
-                "%s refused: execute_code worker code_sha256=%s still running after %.3fs (timeout %ss)",
-                operation,
-                worker.code_sha256,
-                worker.running_for_seconds(),
-                worker.timeout,
-            )
-            raise WorkerStillRunning(operation, worker)
+            _refuse(operation, worker)
+
+
+def _refuse(operation: str, worker: RunningWorker) -> None:
+    """The one refusal: logged, then raised, whichever gate found the worker."""
+    logger.warning(
+        "%s refused: execute_code worker code_sha256=%s still running after %.3fs (timeout %ss)",
+        operation,
+        worker.code_sha256,
+        worker.running_for_seconds(),
+        worker.timeout,
+    )
+    raise WorkerStillRunning(operation, worker)
 
 
 # The process has one Houdini and therefore one ledger.

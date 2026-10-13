@@ -390,7 +390,7 @@ class TestTrustedInternalGeometryCapability:
         result = _execute_with_grant(
             "print(hou.node('/obj').geometry())",
             grant,
-            operation="get_geometry_summary",
+            operation="get_geo_summary",
             capture_diff=False,
             max_stdout_size=1000,
             max_stderr_size=1000,
@@ -509,7 +509,7 @@ class TestAuditFields:
             result = _execute_with_grant(
                 "hou.node('/obj/geo1').geometry()",
                 grant,
-                operation="get_geometry_summary",
+                operation="get_geo_summary",
                 host="localhost",
                 port=18811,
             )
