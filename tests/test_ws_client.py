@@ -56,6 +56,7 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     ActionType,
     Cancelled,
     ClientClosedError,
+    CloseReason,
     ConnectionState,
     Failed,
     QueueFullError,
@@ -107,6 +108,14 @@ def timers_scheduled(actions: list[Action]) -> list[str]:
 
 def outcomes_of(actions: list[Action]) -> list[RequestOutcome]:
     return [a.outcome for a in actions if a.type == ActionType.DELIVER_OUTCOME and a.outcome]
+
+
+def telemetry_records(actions: list[Action], event: str) -> list[dict]:
+    return [
+        a.telemetry
+        for a in actions
+        if a.type == ActionType.TELEMETRY and a.telemetry["event"] == event
+    ]
 
 
 def connect_core(core: WSClientCore, *, session_id="s1", capabilities=("events",)):
@@ -538,7 +547,16 @@ class TestCancellation:
     def test_cancel_queued_command_settles_it_before_send(self):
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
-        assert outcomes_of(core.cancel_command(rid)) == [Cancelled(rid)]
+        actions = core.cancel_command(rid)
+        assert outcomes_of(actions) == [Cancelled(rid)]
+        assert telemetry_records(actions, "command_cancelled") == [
+            {
+                "event": "command_cancelled",
+                "state": "disconnected",
+                "request_id": rid,
+                "cancel_sent": False,
+            }
+        ]
         assert core.command_backlog == 0
         actions = connect_core(core)
         sent = [f for f in sent_frames(actions) if f["type"] == COMMAND]
@@ -554,6 +572,14 @@ class TestCancellation:
         assert cancels and cancels[0]["request_id"] == rid
         assert cancels[0]["session_id"] == "s1"
         assert outcomes_of(actions) == [Cancelled(rid)]
+        assert telemetry_records(actions, "command_cancelled") == [
+            {
+                "event": "command_cancelled",
+                "state": "connected",
+                "request_id": rid,
+                "cancel_sent": True,
+            }
+        ]
         assert rid not in core.pending_request_ids
         # A late ack for the cancelled command cannot produce a second outcome.
         late = core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
@@ -694,7 +720,25 @@ class TestTerminalOutcomes:
         core = WSClientCore(make_config())
         pending, queued = _one_pending_one_queued(core)
         actions = core.stop()
-        assert outcomes_of(actions) == [Failed(pending, "stopped"), Failed(queued, "stopped")]
+        assert outcomes_of(actions) == [
+            Failed(pending, CloseReason.STOPPED),
+            Failed(queued, CloseReason.STOPPED),
+        ]
+        # Every failed id is on the telemetry record with the reason it failed for.
+        assert telemetry_records(actions, "command_failed") == [
+            {
+                "event": "command_failed",
+                "state": "connected",
+                "request_id": pending,
+                "reason": "stopped",
+            },
+            {
+                "event": "command_failed",
+                "state": "connected",
+                "request_id": queued,
+                "reason": "stopped",
+            },
+        ]
         assert core.pending_request_ids == ()
         assert core.command_backlog == 0
 
@@ -703,9 +747,15 @@ class TestTerminalOutcomes:
         pending, queued = _one_pending_one_queued(core)
         actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
         assert outcomes_of(actions) == [
-            Failed(pending, "fatal_error:auth_failed"),
-            Failed(queued, "fatal_error:auth_failed"),
+            Failed(pending, CloseReason.FATAL_ERROR),
+            Failed(queued, CloseReason.FATAL_ERROR),
         ]
+        assert [t["reason"] for t in telemetry_records(actions, "command_failed")] == [
+            "fatal_error",
+            "fatal_error",
+        ]
+        # The gateway's code lives on the fatal_error record, not on the outcome.
+        assert telemetry_records(actions, "fatal_error")[0]["code"] == "auth_failed"
         assert core.pending_request_ids == ()
         assert core.command_backlog == 0
 
@@ -719,7 +769,10 @@ class TestTerminalOutcomes:
         driver.call("drain")
         driver.call("on_socket_error", "partition")
         assert core.state == ConnectionState.CLOSED
-        assert driver.outcomes == [Failed(rid, "reconnect_exhausted")]
+        assert driver.outcomes == [Failed(rid, CloseReason.RECONNECT_EXHAUSTED)]
+        assert [t["request_id"] for t in driver.telemetry if t["event"] == "command_failed"] == [
+            rid
+        ]
         assert core.command_backlog == 0
 
     def test_closing_cancels_every_timer(self):

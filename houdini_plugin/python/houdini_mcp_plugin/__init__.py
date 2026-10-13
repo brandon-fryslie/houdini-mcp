@@ -39,10 +39,16 @@ from .remote import (
 )
 from .server import AlreadyServing, is_server_running, start_server
 from .ws_client import (
+    Acked,
     Action,
     ActionType,
+    Cancelled,
+    ClientClosedError,
+    CloseReason,
     ConnectionState,
+    Failed,
     QueueFullError,
+    RequestOutcome,
     StaleSessionError,
     WSClientCore,
     WSConfig,
@@ -56,7 +62,13 @@ __all__ = [
     "ConnectionState",
     "Action",
     "ActionType",
+    "RequestOutcome",
+    "Acked",
+    "Cancelled",
+    "Failed",
+    "CloseReason",
     "QueueFullError",
+    "ClientClosedError",
     "StaleSessionError",
     "redact",
     # stdio mode (MCP server in Houdini)

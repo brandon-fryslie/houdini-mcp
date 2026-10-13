@@ -110,9 +110,22 @@ class Acked:
 
 @dataclass(frozen=True)
 class Cancelled:
-    """The app cancelled the command before any ack arrived."""
+    """The app withdrew the command and will not be told what became of it.
+
+    A command still queued was never sent. One already on the wire may still
+    run on the gateway; the client sends a best-effort ``cancel`` frame and
+    ignores any ack that follows, as a cancelled task's result is discarded.
+    """
 
     request_id: int
+
+
+class CloseReason(enum.Enum):
+    """Why the client closed for good, failing every command still live."""
+
+    STOPPED = "stopped"  # the app called stop()
+    RECONNECT_EXHAUSTED = "reconnect_exhausted"  # the reconnect attempt budget ran out
+    FATAL_ERROR = "fatal_error"  # the gateway sent a fatal error frame
 
 
 @dataclass(frozen=True)
@@ -120,7 +133,7 @@ class Failed:
     """The client closed for good with the command still unacked."""
 
     request_id: int
-    reason: str
+    reason: CloseReason
 
 
 # [LAW:types-are-the-program] A request id's end is one of these, each carrying only
@@ -315,8 +328,9 @@ class WSClientCore:
         """Retire a live request id with its one terminal outcome.
 
         [LAW:single-enforcer] This is the only code that removes an id from the
-        queue or the pending map, so an id cannot leave the core without the
-        DELIVER_OUTCOME action the app is waiting on.
+        live set (the queue and the pending map together; flushing and requeuing
+        only move ids between the two), so an id cannot leave the core without
+        the DELIVER_OUTCOME action the app is waiting on.
         """
 
         rid = outcome.request_id
@@ -324,14 +338,17 @@ class WSClientCore:
         self._pending.pop(rid, None)
         return Action(ActionType.DELIVER_OUTCOME, outcome=outcome)
 
-    def _enter_closed(self, *, reason: str) -> list[Action]:
+    def _enter_closed(self, *, reason: CloseReason) -> list[Action]:
         """Enter terminal CLOSED: every live request fails, every timer dies.
 
         [LAW:one-source-of-truth] stop, reconnect exhaustion and a fatal gateway
         error all close through here, so none can strand a request.
         """
 
-        actions = [self._settle(Failed(rid, reason)) for rid in self._live_request_ids()]
+        actions: list[Action] = []
+        for rid in self._live_request_ids():
+            actions.append(self._settle(Failed(rid, reason)))
+            actions.append(self._telemetry("command_failed", request_id=rid, reason=reason.value))
         self.state = ConnectionState.CLOSED
         actions.extend(
             [
@@ -392,7 +409,7 @@ class WSClientCore:
         if self.state == ConnectionState.CONNECTED:
             actions.append(Action(ActionType.SEND, frame={"type": BYE}))
         prev = self.state
-        actions.extend(self._enter_closed(reason="stopped"))
+        actions.extend(self._enter_closed(reason=CloseReason.STOPPED))
         actions.append(self._telemetry("stopped", previous=prev.value))
         return actions
 
@@ -475,7 +492,7 @@ class WSClientCore:
             and self._backoff_attempt >= self.config.max_reconnect_attempts
         ):
             return [
-                *self._enter_closed(reason="reconnect_exhausted"),
+                *self._enter_closed(reason=CloseReason.RECONNECT_EXHAUSTED),
                 self._telemetry(
                     "reconnect_exhausted", reason=reason, attempts=self._backoff_attempt
                 ),
@@ -630,7 +647,7 @@ class WSClientCore:
         if fatal:
             prev = self.state
             return [
-                *self._enter_closed(reason=f"fatal_error:{code}"),
+                *self._enter_closed(reason=CloseReason.FATAL_ERROR),
                 self._telemetry("fatal_error", code=code, previous=prev.value),
             ]
         return [self._telemetry("gateway_error", code=code)]
@@ -717,16 +734,18 @@ class WSClientCore:
         if request_id not in self._live_request_ids():
             return [self._telemetry("cancel_ignored", request_id=request_id)]
 
-        in_flight = request_id in self._pending
+        # A cancel frame reaches the gateway only for a command it has already
+        # been sent; a queued one is simply never sent.
+        cancel_sent = request_id in self._pending and self.state == ConnectionState.CONNECTED
         actions: list[Action] = []
-        if in_flight and self.state == ConnectionState.CONNECTED:
+        if cancel_sent:
             cancel = {"type": CANCEL, "request_id": request_id}
             if self._session_id is not None:
                 cancel["session_id"] = self._session_id
             actions.append(Action(ActionType.SEND, frame=cancel))
         actions.append(self._settle(Cancelled(request_id)))
         actions.append(
-            self._telemetry("command_cancelled", request_id=request_id, in_flight=in_flight)
+            self._telemetry("command_cancelled", request_id=request_id, cancel_sent=cancel_sent)
         )
         return actions
 
