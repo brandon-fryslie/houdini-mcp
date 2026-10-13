@@ -32,7 +32,9 @@ DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - redu
 # ConnectionError ever crosses the channel. Not OSError: that admits
 # FileNotFoundError and PermissionError, which are the tool's errors, not the link's.
 # [LAW:one-source-of-truth] The same union is the ``isinstance`` check and the type of
-# the proof it yields, so the two cannot disagree.
+# the proof it yields, so the two cannot disagree. [LAW:single-enforcer] It is not an
+# ``except`` target: the only way to know a failure is the link's is
+# ``transport_failure()``, which also rules out one Houdini's own code raised.
 TransportException = EOFError | TimeoutError
 
 
@@ -264,6 +266,10 @@ def _open_link_with_retries(
     Backoff with jitter keeps clients that lost Houdini at the same moment from
     reconnecting in lockstep.
     """
+    # [LAW:parse-dont-validate] [LAW:no-silent-failure] Fewer than one attempt would
+    # report a link that was never tried as unreachable.
+    if max_retries < 1:
+        raise ValueError(f"max_retries must be at least 1, got {max_retries}")
     last_error: Exception | None = None
     current_delay = retry_delay
 

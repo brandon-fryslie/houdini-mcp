@@ -38,7 +38,7 @@ This document describes the error handling patterns used throughout the Houdini 
 
 ### 1. `@handle_connection_errors` Decorator
 
-**Location:** `houdini_mcp/tools/_common.py:82-124`
+**Location:** `handle_connection_errors` in `houdini_mcp/tools/_common.py`
 
 The primary error handling mechanism. Wraps tool functions with a three-tier error pattern:
 
@@ -125,9 +125,11 @@ which `connect()` and `ensure_connected()` both go through. Whether an open-time
 failure is worth another attempt is the installed `HoudiniTarget`'s decision
 (`open_is_retryable`): over rpyc any socket-layer `OSError`/`EOFError` is, a rejected
 token is not, and in-process nothing is. The delay starts at `retry_delay` (1.0s),
-doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s), and carries up to 10%
-jitter so clients that lost Houdini together do not reconnect in lockstep. After
-`max_retries` (3) attempts it raises `HoudiniConnectionError` with the last error.
+doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s), and then carries up to
+10% jitter on top of the capped value so clients that lost Houdini together do not
+reconnect in lockstep, even once they are all at the cap. After `max_retries` (3)
+attempts it raises `HoudiniConnectionError` with the last error; `max_retries` below 1
+is rejected with `ValueError`.
 
 #### `ensure_connected()` Function
 

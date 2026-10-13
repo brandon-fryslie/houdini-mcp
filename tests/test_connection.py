@@ -173,6 +173,13 @@ class TestConnect:
         assert "Failed to connect" in str(exc_info.value)
         assert "after 2 attempts" in str(exc_info.value)
 
+    def test_connect_rejects_fewer_than_one_attempt(self, reset_connection_state):
+        """Zero attempts is refused outright, never reported as an unreachable Houdini."""
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            with pytest.raises(ValueError, match="at least 1"):
+                connect("localhost", 18811, max_retries=0, retry_delay=0.01)
+            mock_rpyc.connect.assert_not_called()
+
     def test_connect_exponential_backoff(self, reset_connection_state, mock_hou):
         """Test that retry delay doubles each attempt (exponential backoff)."""
         import time
