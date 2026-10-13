@@ -173,14 +173,7 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "is_rendered": node.isRenderFlagSet() if hasattr(node, "isRenderFlagSet") else None,
     }
 
-    info["input_connections"] = [
-        {
-            "input_index": conn.input_index,
-            "source_node": conn.source.path(),
-            "source_output_index": conn.output_index,
-        }
-        for conn in connections
-    ]
+    info["input_connections"] = [conn.as_record() for conn in connections]
     return info
 
 
@@ -476,14 +469,7 @@ def list_children(
                     "path": child.path(),
                     "name": child.name(),
                     "type": child.type().name(),
-                    "inputs": [
-                        {
-                            "index": conn.input_index,
-                            "source_node": conn.source.path(),
-                            "output_index": conn.output_index,
-                        }
-                        for conn in input_connections(child)
-                    ],
+                    "inputs": [conn.as_record() for conn in input_connections(child)],
                     "outputs": [out.path() for out in child.outputs()],
                 }
 

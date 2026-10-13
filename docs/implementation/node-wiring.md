@@ -45,11 +45,22 @@ Successfully implemented 4 new node wiring tools for the Houdini MCP Server.
 - ✅ Returns error if incompatible types (e.g., SOP→DOP)
 - ✅ Auto-disconnects existing connection on input
 - ✅ Uses `node.setInput(dst_input_index, src_node, src_output_index)`
+- ✅ Returns the wire it made as a connection record (see "One connection record" below)
 
 **Example:**
 ```python
 connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1")  # Connect grid → noise
 connect_nodes("/obj/geo1/grid1", "/obj/geo1/merge1", dst_input_index=1)  # To second input
+```
+
+**Response:**
+```python
+{
+    "status": "success",
+    "node_path": "/obj/geo1/noise1",
+    "connection": {"input_index": 0, "source_node": "/obj/geo1/grid1", "source_output_index": 0},
+    "message": "Connected /obj/geo1/grid1 -> /obj/geo1/noise1",
+}
 ```
 
 **Validation:**
@@ -66,9 +77,8 @@ connect_nodes("/obj/geo1/grid1", "/obj/geo1/merge1", dst_input_index=1)  # To se
 
 **Features:**
 - ✅ Uses `node.setInput(input_index, None)`
-- ✅ Reports if connection was already disconnected
-- ✅ Returns previous source node path if was connected
-- ✅ Validates input index is in range
+- ✅ Returns the wire it cut as a connection record, or `None` if the input was already unwired
+- ✅ Validates input index is within the wired span (0..last wired input)
 
 **Example:**
 ```python
@@ -80,8 +90,9 @@ disconnect_node_input("/obj/geo1/merge1", input_index=1)  # Disconnect second in
 ```python
 {
     "status": "success",
-    "was_connected": True,
-    "previous_source": "/obj/geo1/grid1",
+    "node_path": "/obj/geo1/noise1",
+    "input_index": 0,
+    "disconnected": {"input_index": 0, "source_node": "/obj/geo1/grid1", "source_output_index": 0},
     "message": "Disconnected input 0 on /obj/geo1/noise1...",
 }
 ```
@@ -141,11 +152,30 @@ reorder_inputs("/obj/geo1/merge1", [2, 1, 0])
   "status": "success",
   "reconnection_count": 3,
   "reconnections": [
-    {"new_input_index": 0, "old_input_index": 1, "source_node": "/obj/geo1/sphere1", ...},
+    {"input_index": 0, "source_node": "/obj/geo1/sphere1", "source_output_index": 0, "previous_input_index": 1},
     ...
   ]
 }
 ```
+
+Each reconnection is the wire at its new input, as a connection record, plus the input it came from.
+
+---
+
+## One connection record
+
+Every tool that reports a wire reports it in one shape, built in one place
+(`InputConnection.as_record` in `houdini_mcp/tools/connections.py`):
+
+```python
+{"input_index": 0, "source_node": "/obj/geo1/grid1", "source_output_index": 0}
+```
+
+`get_node_info` (`input_connections`), `list_children` (`inputs`, full mode),
+`connect_nodes` (`connection`), `disconnect_node_input` (`disconnected`) and
+`reorder_inputs` (`reconnections`) all emit it, so a record read from any of them
+is the argument set `connect_nodes(source_node, node_path, input_index, source_output_index)`
+takes to put the wire back.
 
 ---
 
@@ -262,8 +292,8 @@ set_node_flags("/obj/geo1/noise1", display=True, render=True)
 
 ## 🔍 Edge Cases Discovered & Handled
 
-1. **Disconnecting already-disconnected input**
-   - Returns success with `was_connected: False`
+1. **Disconnecting an unwired input inside the wired span**
+   - Returns success with `disconnected: None`
    - Message indicates it was already disconnected
 
 2. **Reordering with gaps (None inputs)**
