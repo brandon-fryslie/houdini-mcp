@@ -154,6 +154,16 @@ class TestStdioServerSurface:
             "check_connection",
         } <= names
 
+    async def test_every_served_tool_has_a_policy(self, in_process_houdini: Any) -> None:
+        """TOOL_POLICIES is the map of the served surface: a new tool must be classified."""
+        from houdini_mcp.server import mcp
+        from houdini_mcp.tools.transactions import TOOL_POLICIES
+
+        async with Client(mcp) as client:
+            names = {tool.name for tool in await client.list_tools()}
+
+        assert names == set(TOOL_POLICIES)
+
     async def test_check_connection_failure_reports_the_target(
         self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
     ) -> None:

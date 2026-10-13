@@ -16,7 +16,7 @@ from ._common import (
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
 
-@handle_connection_errors("get_geometry_summary")
+@handle_connection_errors("get_geo_summary")
 def get_geo_summary(
     node_path: str,
     max_sample_points: int = 16,
@@ -228,6 +228,7 @@ print(json.dumps(result))
     exec_result = _execute_with_grant(
         geo_analysis_code,
         ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=_bypass_config_enabled()),
+        operation="get_geo_summary",
         max_stdout_size=500000,  # Allow larger output for geo data
         host=host,
         port=port,

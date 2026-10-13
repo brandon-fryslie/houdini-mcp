@@ -3157,7 +3157,7 @@ class TestConnectionErrorHandling:
         from tests.conftest import raised_inside_houdini
 
         result, disconnect = self._run(
-            raised_inside_houdini(TimeoutError("cook timed out")), "cook"
+            raised_inside_houdini(TimeoutError("cook timed out")), "get_node_info"
         )
 
         assert result["status"] == "error"
@@ -3309,7 +3309,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator passes through successful results."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def successful_function():
             return {"status": "success", "data": "test"}
 
@@ -3321,7 +3321,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator handles HoudiniConnectionError."""
         from houdini_mcp.tools._common import HoudiniConnectionError, handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def failing_function():
             raise HoudiniConnectionError("Connection failed")
 
@@ -3333,7 +3333,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator reports a transport failure (e.g., TimeoutError) as connection loss."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def timeout_function():
             raise TimeoutError("Operation timed out")
 
@@ -3343,13 +3343,13 @@ class TestHandleConnectionErrorsDecorator:
         assert result["status"] == "error"
         assert result["error_type"] == "connection_error"
         assert result["recoverable"] is True
-        assert "test_operation" in result["operation"]
+        assert "get_scene_info" in result["operation"]
 
     def test_decorator_handles_eof_error(self):
         """Test decorator handles EOFError (connection closed)."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def eof_function():
             raise EOFError("Connection closed")
 
@@ -3364,7 +3364,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator handles generic exceptions with traceback."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def generic_error_function():
             raise ValueError("Something went wrong")
 
@@ -3378,7 +3378,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator preserves function name and docstring."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def documented_function():
             """This is the docstring."""
             return {"status": "success"}
@@ -3390,7 +3390,7 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator passes arguments correctly."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("test_operation")
+        @handle_connection_errors("get_scene_info")
         def function_with_args(a, b, c=10):
             return {"status": "success", "result": a + b + c}
 
@@ -3402,11 +3402,21 @@ class TestHandleConnectionErrorsDecorator:
         """Test decorator uses operation name in error handling."""
         from houdini_mcp.tools._common import handle_connection_errors
 
-        @handle_connection_errors("custom_operation_name")
+        @handle_connection_errors("list_children")
         def closed_link_function():
             raise EOFError("stream has been closed")
 
         with patch("houdini_mcp.tools._common.disconnect"):
             result = closed_link_function()
 
-        assert result["operation"] == "custom_operation_name"
+        assert result["operation"] == "list_children"
+
+    def test_decorator_refuses_a_tool_with_no_policy(self):
+        """Every tool is classified in TOOL_POLICIES; an unclassified one cannot be defined."""
+        from houdini_mcp.tools._common import handle_connection_errors
+
+        with pytest.raises(KeyError, match="custom_operation_name"):
+
+            @handle_connection_errors("custom_operation_name")
+            def unclassified():
+                return {"status": "success"}

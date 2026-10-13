@@ -14,15 +14,48 @@ from typing import Any
 
 
 class TransactionPolicy(StrEnum):
+    """What a tool does to the world, and so what recovering from it takes.
+
+    The two reading values need no transaction. ``READS_IN_PROGRAM`` reads
+    through a server-authored program in the one worker slot, so it waits for a
+    running worker as the scene writers do; ``READS_ONLY`` never waits.
+    """
+
+    READS_ONLY = "reads_only"
+    READS_IN_PROGRAM = "reads_in_program"
     UNDOABLE = "undoable"
     CHECKPOINT_REQUIRED = "checkpoint_required"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
 
+    @property
+    def writes_scene(self) -> bool:
+        """Whether a tool under this policy changes the Houdini scene itself.
 
-MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
+        [LAW:one-source-of-truth] The policy already says what a tool does to
+        the scene; file writers (screenshots, save) are not scene writers.
+        """
+        return self in (TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED)
+
+    @property
+    def waits_for_worker(self) -> bool:
+        """Whether a running execute_code program refuses a tool under this policy."""
+        return self.writes_scene or self is TransactionPolicy.READS_IN_PROGRAM
+
+    @property
+    def needs_transaction(self) -> bool:
+        """Whether a tool under this policy has an effect a transaction can recover."""
+        return self not in (TransactionPolicy.READS_ONLY, TransactionPolicy.READS_IN_PROGRAM)
+
+
+# [LAW:types-are-the-program] Every tool the server exposes is classified here:
+# the tool boundary looks a decorated tool's name up at decoration time, so one
+# with no policy cannot be imported, and tests/plugin/test_server_surface.py
+# holds the served tool names equal to these keys.
+TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "assign_material": TransactionPolicy.UNDOABLE,
     "capture_multiple_panes": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
     "capture_pane_screenshot": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
+    "check_connection": TransactionPolicy.READS_ONLY,
     "connect_nodes": TransactionPolicy.UNDOABLE,
     "create_material": TransactionPolicy.UNDOABLE,
     "create_network_box": TransactionPolicy.UNDOABLE,
@@ -31,20 +64,44 @@ MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
     "delete_node": TransactionPolicy.UNDOABLE,
     "disconnect_node_input": TransactionPolicy.UNDOABLE,
     "execute_code": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "find_error_nodes": TransactionPolicy.READS_ONLY,
+    "find_nodes": TransactionPolicy.READS_ONLY,
+    "get_geo_summary": TransactionPolicy.READS_IN_PROGRAM,
+    "get_houdini_help": TransactionPolicy.READS_ONLY,
+    "get_last_scene_diff": TransactionPolicy.READS_ONLY,
+    "get_material_info": TransactionPolicy.READS_ONLY,
+    "get_node_info": TransactionPolicy.READS_ONLY,
+    "get_parameter_schema": TransactionPolicy.READS_ONLY,
+    "get_render_settings": TransactionPolicy.READS_ONLY,
+    "get_scene_info": TransactionPolicy.READS_ONLY,
+    "get_summarization_status": TransactionPolicy.READS_ONLY,
     "layout_children": TransactionPolicy.UNDOABLE,
+    "list_children": TransactionPolicy.READS_ONLY,
+    "list_node_types": TransactionPolicy.READS_ONLY,
+    "list_render_nodes": TransactionPolicy.READS_ONLY,
+    "list_visible_panes": TransactionPolicy.READS_ONLY,
     "load_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "manage_cache": TransactionPolicy.READS_ONLY,
     "new_scene": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "ping_houdini": TransactionPolicy.READS_ONLY,
     # Render tools write files and create temporary scene nodes; checkpointing
     # covers the scene component while side_effects records the output files.
     "render_quad_view": TransactionPolicy.CHECKPOINT_REQUIRED,
+    "render_node_network": TransactionPolicy.READS_ONLY,
     "render_viewport": TransactionPolicy.CHECKPOINT_REQUIRED,
     "reorder_inputs": TransactionPolicy.UNDOABLE,
     "save_scene": TransactionPolicy.EXTERNAL_SIDE_EFFECT,
+    "serialize_scene": TransactionPolicy.READS_ONLY,
     "set_node_color": TransactionPolicy.UNDOABLE,
     "set_node_flags": TransactionPolicy.UNDOABLE,
     "set_node_position": TransactionPolicy.UNDOABLE,
     "set_parameter": TransactionPolicy.UNDOABLE,
     "set_render_settings": TransactionPolicy.UNDOABLE,
+}
+
+# The tools a transaction can be begun for: everything with an effect to recover.
+MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
+    tool: policy for tool, policy in TOOL_POLICIES.items() if policy.needs_transaction
 }
 
 
@@ -200,6 +257,10 @@ class TransactionManager:
             TransactionPolicy.EXTERNAL_SIDE_EFFECT: 2,
         }
         resolved = policy or max(policies, key=precedence.__getitem__)
+        if not resolved.needs_transaction:
+            raise ValueError(
+                f"{resolved.value} is a reading policy; a transaction recovers nothing"
+            )
         return SceneTransaction(
             self,
             tools=list(tools),

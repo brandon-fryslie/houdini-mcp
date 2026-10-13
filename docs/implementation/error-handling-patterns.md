@@ -198,13 +198,46 @@ All tools return consistent response dictionaries:
     "status": "error",
     "message": "Human-readable error description",
     # Optional fields:
-    "error_type": "connection_error" | "validation_error" | ...,
+    "error_type": "connection_error" | "validation_error" | "worker_still_running" | ...,
     "exception": "ExceptionClassName",
     "operation": "tool_name",
     "recoverable": True | False,
     "traceback": "...",  # Only for unexpected errors
 }
 ```
+
+### `worker_still_running`
+
+`execute_code` runs the caller's program in a thread the server cannot kill.
+When it times out, the program keeps running with its undo group open, and
+`WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
+ends, every tool whose `TransactionPolicy.waits_for_worker` is true (see
+`TOOL_POLICIES` in `tools/transactions.py`: the scene writers, and
+`get_geo_summary`, which reads through a program in the same worker slot) is
+refused at the tool boundary:
+
+```python
+{
+    "status": "error",
+    "error_type": "worker_still_running",
+    "operation": "create_node",
+    "message": "create_node refused: a program launched by execute_code (sha256 ...) is still running ...",
+    "worker": {
+        "operation": "execute_code",
+        "code_sha256": "...",
+        "timeout": 30,
+        "running_for_seconds": 41.2,
+    },
+    "recoverable": True,
+}
+```
+
+`worker.operation` is the tool that launched the program and `worker.code_sha256`
+matches `audit.code_sha256` of the timeout response that started it. Plain reads
+and file writers (`save_scene`, the screenshot tools) proceed. Recovery: wait for the program to finish; a program that uses
+`hou` ends when Houdini restarts, one that never touches Houdini ends only with
+the MCP server. Nothing clears the slot while the thread lives, because a cleared
+slot with a live thread would be a lie.
 
 ## Validation Helpers
 
