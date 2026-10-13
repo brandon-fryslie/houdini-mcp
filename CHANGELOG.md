@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HscriptBatch executes no Python outside code.py's gate**
+  (houdini-laws-etg.cg2): the node-type cache used to fill itself by sending a
+  Python program over the RPyC connection (`conn.execute`) or `exec`-ing it in
+  the server process, through `HscriptBatch._exec_python`, with none of the
+  policy scan, bypass gates or audit that `execute_code` applies. The cache now
+  reads node types through the `hou` proxy, `HscriptBatch` holds only its
+  hscript commands (its four unused exec-backed readers, the `conn` plumbing
+  and the convenience wrappers are gone), and the in-process connection no
+  longer offers `execute`/`namespace`. The one place a program runs in Houdini
+  is the gate in `tools/code.py`.
 - **Input connections report the real source output; reorder_inputs preserves
   it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
   `reorder_inputs` read the source output index from Houdini's
