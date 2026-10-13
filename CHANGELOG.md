@@ -44,9 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rig, and configure the ROP from one per-renderer parm table, instead of each
   carrying its own copy. `look_at` now frames the named node's geometry in
   world space, the same way the scene is framed, and reports that box as
-  `bounding_box`; it accepts a geo object, an object subnet or a SOP, and a
-  path that names no node, or a node with no geometry, is an error instead of
-  being ignored. A displayed object subnet is framed by what it displays. A
+  `bounding_box`; it accepts any object or SOP, and a path that names no node,
+  or a node with no geometry to frame, is an error instead of being ignored. A
+  displayed object that contains objects, such as an object subnet, is framed
+  by what it displays. A single point is framed as if ten units across instead
+  of opening an orthographic view to nothing. `render_quad_view` reports
+  `status: error` with a message when no view rendered. A temporary render
+  file that cannot be removed is logged, and the image already read is still
+  returned. A
   `karma_engine` other than `cpu` or `gpu` is an error instead of silently
   rendering on the CPU. A render that leaves its output file empty is reported
   as producing no image. A node whose displayed geometry cannot be read fails

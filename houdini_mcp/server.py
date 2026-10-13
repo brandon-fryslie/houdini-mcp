@@ -484,7 +484,7 @@ def render_viewport(
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
         look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
-            an unknown path, or a node with no geometry, is an error
+            an unknown path, or a node with no geometry to frame, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -560,6 +560,7 @@ def render_quad_view(
             - orthographic: Whether orthographic projection was used
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
+        - message: Why no view rendered, when the status is "error"
         - total_render_time_ms: Total time for all renders
 
     Examples:

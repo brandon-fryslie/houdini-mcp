@@ -5,7 +5,6 @@ and capturing images for AI analysis.
 """
 
 import base64
-import contextlib
 import logging
 import math
 import time
@@ -157,12 +156,17 @@ class Framing:
         return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
 
     @property
-    def size(self) -> float:
-        """The box's longest side; an unframed render is sized as if ten units across."""
+    def extent(self) -> float:
+        """The box's longest side; zero for a single point, or no box at all."""
         if self.bounds is None:
-            return _UNFRAMED_SIZE
+            return 0.0
         lo, hi = self.bounds
         return max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+
+    @property
+    def size(self) -> float:
+        """How much space the camera makes for the box: its extent, or ten units when it has none."""
+        return self.extent or _UNFRAMED_SIZE
 
     @property
     def distance(self) -> float:
@@ -179,38 +183,65 @@ class Framing:
         if self.bounds is None:
             return None
         lo, hi = self.bounds
-        return {"min": list(lo), "max": list(hi), "center": list(self.center), "size": self.size}
+        return {"min": list(lo), "max": list(hi), "center": list(self.center), "size": self.extent}
 
 
 @dataclass(frozen=True)
 class _Shape:
     """A geometry and the transform that places it in the world."""
 
+    source: str
+    """The path of the node the geometry came from."""
     geometry: Any
     """The hou.Geometry; None when its SOP failed to cook."""
     transform: Any
     """The hou.Matrix4 from the geometry's space to world space."""
 
 
+def _category(node: Any) -> str:
+    return str(node.type().category().name())
+
+
+def _placing_object(sop: Any) -> Any:
+    """The object whose transform places a SOP's geometry: the nearest Object ancestor."""
+    node = sop.parent()
+    while _category(node) != "Object":
+        node = node.parent()
+    return node
+
+
 def _shapes(node: Any) -> list[_Shape] | None:
     """What a node puts in the world, and where; None for a kind of node that puts nothing.
 
-    [LAW:one-type-per-behavior] the three kinds of node that carry geometry,
-    told apart once: a SOP is its own geometry placed by its object, a geo
-    object is its display SOP's geometry placed by itself, and an object subnet
-    is whatever its displayed children place. A camera, a light, a DOP network
-    have no shape, and say so as None rather than as an empty list, so a caller
-    that asked to frame one can tell the difference.
+    [LAW:one-type-per-behavior] the kinds of node that carry geometry, told
+    apart once by category: a SOP is its own geometry placed by its object; an
+    object is what it displays - a SOP's geometry placed by the object itself,
+    or, for an object that contains objects, whatever its displayed children
+    place. A node of any other category - a ROP, a shader - has no shape, and
+    says so as None rather than as an empty list, so a caller that asked to
+    frame one can tell the difference.
     """
-    node_type = node.type()
-    if node_type.category().name() == "Sop":
-        return [_Shape(geometry=node.geometry(), transform=node.parent().worldTransform())]
-    if node_type.name() == "geo":
+    category = _category(node)
+    if category == "Sop":
+        return [
+            _Shape(
+                source=node.path(),
+                geometry=node.geometry(),
+                transform=_placing_object(node).worldTransform(),
+            )
+        ]
+    if category == "Object":
         display = node.displayNode()
         if display is None:
             return []
-        return [_Shape(geometry=display.geometry(), transform=node.worldTransform())]
-    if node_type.name() == "subnet":
+        if _category(display) == "Sop":
+            return [
+                _Shape(
+                    source=display.path(),
+                    geometry=display.geometry(),
+                    transform=node.worldTransform(),
+                )
+            ]
         return _displayed_shapes(node)
     return None
 
@@ -255,8 +286,8 @@ def _framing(hou: Any, shapes: Sequence[_Shape]) -> Framing:
     else:
         framing = Framing(bounds=None)
     logger.info(
-        "Framed %d shapes: bounds=%s distance=%.3f ortho_width=%.3f",
-        len(shapes),
+        "Framed %s: bounds=%s distance=%.3f ortho_width=%.3f",
+        [shape.source for shape in shapes],
         framing.bounds,
         framing.distance,
         framing.ortho_width,
@@ -403,8 +434,16 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
             raise RuntimeError("Render completed but produced no image")
         return base64.b64encode(image).decode("utf-8")
     finally:
-        with contextlib.suppress(FileNotFoundError):
+        try:
             remote_os.remove(output_path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            # [LAW:no-silent-failure] a file that would not go is reported where
+            # it was left; the image already read is still the answer
+            if transport_failure(e):
+                raise
+            logger.error("Leaked temporary render file %s: %r", output_path, e)
 
 
 # =============================================================================
@@ -438,7 +477,7 @@ def render_viewport(
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
         look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
-            an unknown path, or a node with no geometry, is an error
+            an unknown path, or a node with no geometry to frame, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -482,6 +521,8 @@ def render_viewport(
     else:
         shapes = []
     framing = _framing(prepared.hou, shapes)
+    if look_at is not None and framing.bounds is None:
+        return {"status": "error", "message": f"look_at node has no geometry to frame: {look_at}"}
     rotation = _ISOMETRIC if camera_rotation is None else camera_rotation
     offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
 
@@ -545,6 +586,7 @@ def render_quad_view(
             - orthographic: Whether orthographic projection was used
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
+        - message: Why no view rendered, when the status is "error"
         - total_render_time_ms: Total time for all renders
 
     Examples:
@@ -592,12 +634,17 @@ def render_quad_view(
                 )
             view_results.append(view)
 
+    rendered = [view for view in view_results if "image_base64" in view]
     result: dict[str, Any] = {
-        "status": "success",
+        "status": "success" if rendered else "error",
         "views": view_results,
         "renderer": renderer,
         "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
     }
+    if not rendered:
+        result["message"] = "No view rendered: " + "; ".join(
+            f"{view['name']}: {view['error']}" for view in view_results
+        )
     if (box := framing.report()) is not None:
         result["bounding_box"] = box
     return result

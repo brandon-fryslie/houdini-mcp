@@ -819,6 +819,16 @@ def rendering_scene(renders_locally: Any) -> Any:
     return renders_locally
 
 
+class _RemoteOs:
+    """The remote os module with one function replaced."""
+
+    def __init__(self, **replaced: Any):
+        self._replaced = replaced
+
+    def __getattr__(self, name: str) -> Any:
+        return self._replaced.get(name) or getattr(os, name)
+
+
 def _geo_with_box(obj: Any, name: str, tx: float, lo: tuple, hi: tuple) -> Any:
     """A displayed geo at x=tx whose display SOP's geometry fills the box lo..hi (local)."""
     from tests.conftest import MockGeometry
@@ -1272,18 +1282,98 @@ class TestRenderFraming:
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
         assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
 
-    def test_look_at_a_node_without_geometry_is_an_error(
-        self, frames: list[dict[str, Any]], framed_scene: Any
+    @pytest.mark.parametrize("path", ["/obj/user_cam", "/obj/bare_geo", "/out"])
+    def test_look_at_a_node_with_nothing_to_frame_is_an_error(
+        self, frames: list[dict[str, Any]], framed_scene: Any, path: str
     ) -> None:
+        """A camera, a geo with no SOPs and a node of a kind that has no geometry alike."""
         from houdini_mcp.tools import render_viewport
 
         framed_scene.node("/obj").createNode("cam", "user_cam")
+        framed_scene.node("/obj").createNode("geo", "bare_geo")
 
-        result = render_viewport(look_at="/obj/user_cam", host="localhost", port=18811)
+        result = render_viewport(look_at=path, host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert "/obj/user_cam" in result["message"]
+        assert path in result["message"]
         assert frames == []
+
+    def test_look_at_a_sop_inside_a_sop_subnet_is_placed_by_its_object(
+        self, frames: list[dict[str, Any]], framed_scene: Any
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+        from tests.conftest import MockGeometry
+
+        geometry = MockGeometry()
+        geometry.setBoundingBox((-1, -1, -1), (1, 1, 1))
+        inner = framed_scene.node("/obj/cube_b").createNode("subnet", "inner")
+        inner.createNode("box", "deep").setGeometry(geometry)
+
+        result = render_viewport(look_at="/obj/cube_b/inner/deep", host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_single_point_is_framed_as_if_ten_units_across(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        for name in ("cube_a", "cube_b"):
+            framed_scene.node(f"/obj/{name}").destroy()
+        _geo_with_box(framed_scene.node("/obj"), "point", 3.0, (0, 0, 0), (0, 0, 0))
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == {
+            "min": [3.0, 0.0, 0.0],
+            "max": [3.0, 0.0, 0.0],
+            "center": [3.0, 0.0, 0.0],
+            "size": 0.0,
+        }
+        assert frames[0]["pivot_t"] == (3.0, 0.0, 0.0)
+        assert frames[0]["orthowidth"] == pytest.approx(12.0)
+
+    def test_a_temporary_file_that_will_not_go_is_logged_and_the_image_still_returned(
+        self,
+        frames: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        def refuse(path: str) -> None:
+            raise PermissionError(f"held open: {path}")
+
+        monkeypatch.setattr(
+            "houdini_mcp.tools.rendering._get_remote_modules",
+            lambda *_: (_RemoteOs(remove=refuse), tempfile),
+        )
+
+        with caplog.at_level("ERROR", logger="houdini_mcp.tools.rendering"):
+            result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["image_base64"] == base64.b64encode(b"png").decode()
+        leaked = [r.getMessage() for r in caplog.records if "Leaked temporary" in r.getMessage()]
+        assert len(leaked) == 1 and "held open" in leaked[0]
+
+    def test_quad_view_with_no_view_rendered_is_an_error(
+        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from houdini_mcp.tools import render_quad_view
+        from tests.conftest import MockHouNode
+
+        monkeypatch.setattr(MockHouNode, "render", lambda _self: None, raising=False)
+
+        result = render_quad_view(host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert result["message"].startswith("No view rendered: front: ")
+        assert [v["name"] for v in result["views"]] == ["front", "left", "top", "perspective"]
+        assert all("error" in v for v in result["views"])
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_displayed_object_subnet_is_framed_by_what_it_displays(
@@ -1342,10 +1432,10 @@ class TestRenderFraming:
 
         assert result["status"] == "success", result
         messages = [r.getMessage() for r in caplog.records]
-        framed = [m for m in messages if m.startswith("Framed 2 shapes: ")]
+        framed = [m for m in messages if m.startswith("Framed ")]
         assert framed == [
-            "Framed 2 shapes: bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) "
-            "distance=23.382 ortho_width=14.400"
+            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1']: "
+            "bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) distance=23.382 ortho_width=14.400"
         ]
         rop = [m for m in messages if m.startswith("Render ROP ")]
         assert len(rop) == 1

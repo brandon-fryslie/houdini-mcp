@@ -249,6 +249,8 @@ class MockHouNode:
             mock_category.name.return_value = "Sop"
         elif self._node_type in ["dopnet", "pyrosolver"]:
             mock_category.name.return_value = "Dop"
+        elif self._node_type in ["out", "opengl", "karma"]:
+            mock_category.name.return_value = "Driver"
         else:
             mock_category.name.return_value = "Sop"  # Default to Sop
 
