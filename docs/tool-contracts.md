@@ -10,19 +10,23 @@ This document clarifies the input/output contracts for Houdini MCP tools and doc
 
 #### ❌ Wrong:
 ```python
-execute_code("""
+execute_code(
+    code="""
 import hou  # This will fail with ModuleNotFoundError
 node = hou.node('/obj')
-""")
+"""
+)
 ```
 
 #### ✅ Correct:
 ```python
-execute_code("""
+execute_code(
+    code="""
 # hou is already available - use it directly
 node = hou.node('/obj')
 geo = node.createNode('geo', 'my_geo')
-""")
+"""
+)
 ```
 
 ### Why This Happens
@@ -48,8 +52,13 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 
 ```python
 {
-    "worker": {"operation": "execute_code", "code_sha256": "...", "timeout": 30, "running_for_seconds": 30.0},
-    "audit": {"timed_out": True, "code_sha256": "...", ...},
+    "worker": {
+        "operation": "execute_code",
+        "code_sha256": "...",
+        "timeout": 30,
+        "running_for_seconds": 30.0,
+    },
+    "audit": {"timed_out": True, "code_sha256": "..."},
 }
 ```
 
@@ -66,7 +75,7 @@ The `render_viewport` tool accepts specific parameters. Do not use intuitive-but
 
 #### ❌ Wrong Parameters:
 ```python
-# These will raise TypeError
+# The server refuses these: they are not in render_viewport's schema
 render_viewport(width=512, height=512)  # Use resolution=[512, 512]
 render_viewport(camera_path="/obj/cam1")  # Use camera_position or camera_rotation
 ```
@@ -87,10 +96,10 @@ render_viewport(look_at="/obj/geo1")
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `camera_position` | `list[float]` (3 elements) | [x, y, z] world position | Auto-calculated |
-| `camera_rotation` | `list[float]` (3 elements) | [rx, ry, rz] degrees | [-30, 45, 0] |
+| `camera_position` | `[float, float, float]` | [x, y, z] world position | Auto-calculated |
+| `camera_rotation` | `[float, float, float]` | [rx, ry, rz] degrees | [-30, 45, 0] |
 | `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, or a node outside any object, is an error | None |
-| `resolution` | `list[int]` (2 elements) | [width, height] pixels | [512, 512] |
+| `resolution` | `[int, int]`, each 64–4096 | [width, height] in pixels | [512, 512] |
 | `renderer` | `str` | "opengl" or "karma" | "opengl" |
 | `output_format` | `str` | "png", "jpg", or "exr" | "png" |
 | `auto_frame` | `bool` | Auto-frame visible geometry | True |
@@ -127,7 +136,7 @@ Similar to `render_viewport`, but renders 4 canonical views (Front, Left, Top, P
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `resolution` | `list[int]` | [width, height] for each view | [512, 512] |
+| `resolution` | `[int, int]`, each 64–4096 | [width, height] for each view | [512, 512] |
 | `renderer` | `str` | "opengl" or "karma" | "opengl" |
 | `output_format` | `str` | "png", "jpg", or "exr" | "png" |
 | `orthographic` | `bool` | Use ortho for Front/Left/Top | True |
@@ -152,7 +161,7 @@ render_quad_view(renderer="karma", karma_engine="gpu")
 
 ## Schema Validation
 
-All tool parameters are validated by Python's function signature checking. Passing unexpected keyword arguments will raise a `TypeError` immediately, before any RPC call to Houdini.
+Every tool publishes a JSON schema for its arguments, and the server validates each call against it. An unexpected argument name or a wrong type is refused at the MCP boundary, before any RPC call to Houdini.
 
 This is intentional - it catches typos and misunderstandings early, with clear error messages.
 
@@ -178,7 +187,8 @@ When other tools don't cover your use case, `execute_code` is the escape hatch. 
 5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
 
 ```python
-result = execute_code("""
+result = execute_code(
+    code="""
 # Create a complete SOP chain
 obj = hou.node('/obj')
 geo = obj.createNode('geo', 'my_network')
@@ -186,7 +196,8 @@ sphere = geo.createNode('sphere')
 xform = geo.createNode('xform')
 xform.setFirstInput(sphere)
 print(f"Created: {xform.path()}")
-""")
+"""
+)
 
 print(result["stdout"])  # "Created: /obj/my_network/xform"
 ```
@@ -219,4 +230,4 @@ Before using a tool, check:
 2. **Parameter types** - Lists for resolution/position/rotation, not separate arguments
 3. **Parameter values** - Within valid ranges (e.g., resolution 64-4096)
 
-Python will catch incorrect parameter names immediately with a helpful `TypeError`.
+The served schema refuses incorrect parameter names before the call reaches Houdini.

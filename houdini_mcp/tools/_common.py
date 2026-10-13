@@ -11,7 +11,9 @@ This module contains common utilities used across all tool modules:
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, cast
+from typing import Annotated, Any, Generic, TypeVar, cast
+
+from pydantic import Field
 
 from ..connection import (
     HoudiniConnectionError,
@@ -72,8 +74,9 @@ __all__ = [
     "ExecutionTimeoutError",
     # Logging
     "logger",
-    # Validation helpers
-    "validate_resolution",
+    # Served vector types
+    "Resolution",
+    "Vec3",
 ]
 
 logger = logging.getLogger("houdini_mcp.tools")
@@ -228,35 +231,13 @@ def node_category(node: Any) -> str:
     return str(node.type().category().name())
 
 
-def validate_resolution(
-    resolution: list[int],
-    min_size: int = 64,
-    max_size: int = 4096,
-) -> dict[str, Any] | None:
-    """
-    Validate render resolution dimensions.
-
-    Returns an error dict if validation fails, None if valid.
-
-    Args:
-        resolution: [width, height] in pixels
-        min_size: Minimum dimension size (default: 64)
-        max_size: Maximum dimension size (default: 4096)
-
-    Returns:
-        None if valid, error dict if invalid
-
-    Example:
-        if error := validate_resolution(resolution):
-            return error
-        # Continue with valid resolution...
-    """
-    width, height = resolution[0], resolution[1]
-    if width < min_size or height < min_size:
-        return {"status": "error", "message": f"Resolution must be at least {min_size}x{min_size}"}
-    if width > max_size or height > max_size:
-        return {"status": "error", "message": f"Resolution cannot exceed {max_size}x{max_size}"}
-    return None
+# [LAW:types-are-the-program] the render inputs are typed exactly as the domain
+# is shaped, so the served schema refuses a one-element resolution, a 32-pixel
+# render or a two-component camera vector on the wire, and nothing inland checks.
+Dimension = Annotated[int, Field(ge=64, le=4096)]
+Resolution = tuple[Dimension, Dimension]
+"""(width, height) in pixels."""
+Vec3 = tuple[float, float, float]
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:

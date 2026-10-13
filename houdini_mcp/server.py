@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target, ensure_connected, get_connection_info, ping
-from .tools._common import apply_response_cap
+from .tools._common import Resolution, Vec3, apply_response_cap
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
 
@@ -21,7 +21,10 @@ HOUDINI_HOST = os.getenv("HOUDINI_HOST", "localhost")
 HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 
 # Create FastMCP instance
-mcp = FastMCP("Houdini MCP")
+# [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
+# refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
+# would coerce them. One switch, so no parameter type has to say so itself.
+mcp = FastMCP("Houdini MCP", strict_input_validation=True)
 
 
 # Health check endpoint
@@ -463,10 +466,10 @@ def find_nodes(
 
 @mcp.tool()
 def render_viewport(
-    camera_position: list[float] | None = None,
-    camera_rotation: list[float] | None = None,
+    camera_position: Vec3 | None = None,
+    camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -525,7 +528,7 @@ def render_viewport(
 
 @mcp.tool()
 def render_quad_view(
-    resolution: list[int] | None = None,
+    resolution: Resolution | None = None,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,

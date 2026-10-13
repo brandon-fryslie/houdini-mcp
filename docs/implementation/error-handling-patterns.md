@@ -209,25 +209,17 @@ and file writers (`save_scene`, the screenshot tools) proceed. Recovery: wait fo
 the MCP server. Nothing clears the slot while the thread lives, because a cleared
 slot with a live thread would be a lie.
 
-## Validation Helpers
+## Input Validation
 
-### `validate_resolution()`
-
-**Location:** `houdini_mcp/tools/_common.py:202-230`
-
-Validates render resolution dimensions:
-
-```python
-def render_viewport(resolution: Optional[List[int]] = None, ...):
-    if resolution is None:
-        resolution = [512, 512]
-
-    # Returns error dict if invalid, None if valid
-    if error := validate_resolution(resolution):
-        return error
-
-    # Continue with valid resolution...
-```
+Input shape is not checked inside a tool. It is stated in the tool's parameter
+types, which the server publishes as the tool's JSON schema and enforces at the
+MCP boundary before the call reaches Houdini. The render inputs are the model
+(`houdini_mcp/tools/_common.py`, `Resolution` and `Vec3`): a pair of integers in
+64–4096 and a triple of numbers. The server validates strictly
+(`strict_input_validation` in `houdini_mcp/server.py`), so it refuses exactly
+what the published schema refuses. A call that fails the schema is a protocol
+error to the client, never an error result. `tests/test_tool_contracts.py`
+asserts the schema and the server's refusals agree.
 
 ## Usage Patterns
 
@@ -250,24 +242,17 @@ def list_children(
     return {"status": "success", "children": children}
 ```
 
-### Pattern 2: Tool with Input Validation
+### Pattern 2: Tool with Constrained Input
 
 ```python
 @handle_connection_errors("render_viewport")
 def render_viewport(
-    resolution: Optional[List[int]] = None,
+    resolution: Resolution | None = None,
     ...
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     hou = ensure_connected(host, port)
-
-    if resolution is None:
-        resolution = [512, 512]
-
-    # Validate early, return error if invalid
-    if error := validate_resolution(resolution):
-        return error
-
-    # ... proceed with rendering
+    width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
+    # ... proceed with rendering: the type already refused anything else
 ```
 
 ### Pattern 3: Tool with Multiple Error Sources
@@ -342,17 +327,12 @@ def test_handles_connection_timeout(self, mock_connection):
     assert result["recoverable"] is True
 ```
 
-### Testing Validation Errors
+### Testing Input Refusal
 
-```python
-def test_validates_resolution(self, mock_connection):
-    from houdini_mcp.tools import render_viewport
-
-    result = render_viewport(resolution=[10, 10])  # Too small
-
-    assert result["status"] == "error"
-    assert "at least 64x64" in result["message"]
-```
+Input refusal is a fact of the served contract, so it is tested through the
+MCP client, not by calling the tool function. See
+`TestServedSchemas.test_render_resolution_bounds_are_served` in
+`tests/test_tool_contracts.py`.
 
 ## Best Practices
 

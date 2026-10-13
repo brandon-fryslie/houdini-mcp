@@ -13,54 +13,6 @@ import pytest
 class TestRenderViewportValidation:
     """Tests for render_viewport input validation."""
 
-    def test_resolution_too_small(self, mock_connection):
-        """Test rejection of resolution smaller than 64x64."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[32, 32], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "64x64" in result["message"]
-
-    def test_resolution_too_small_width(self, mock_connection):
-        """Test rejection of width smaller than 64."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[32, 512], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "64x64" in result["message"]
-
-    def test_resolution_too_small_height(self, mock_connection):
-        """Test rejection of height smaller than 64."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[512, 32], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "64x64" in result["message"]
-
-    def test_resolution_too_large(self, mock_connection):
-        """Test rejection of resolution larger than 4096x4096."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[8192, 8192], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "4096" in result["message"]
-
-    def test_resolution_too_large_width(self, mock_connection):
-        """Test rejection of width larger than 4096."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[8192, 512], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "4096" in result["message"]
-
-    def test_resolution_too_large_height(self, mock_connection):
-        """Test rejection of height larger than 4096."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(resolution=[512, 8192], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "4096" in result["message"]
-
     def test_connection_error(self, reset_connection_state):
         """Test handling of connection errors."""
         from houdini_mcp.tools import render_viewport
@@ -354,22 +306,6 @@ class TestRenderViewportCameraPosition:
 
 class TestRenderQuadViewValidation:
     """Tests for render_quad_view input validation."""
-
-    def test_resolution_too_small(self, mock_connection):
-        """Test rejection of resolution smaller than 64x64."""
-        from houdini_mcp.tools import render_quad_view
-
-        result = render_quad_view(resolution=[32, 32], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "64x64" in result["message"]
-
-    def test_resolution_too_large(self, mock_connection):
-        """Test rejection of resolution larger than 4096x4096."""
-        from houdini_mcp.tools import render_quad_view
-
-        result = render_quad_view(resolution=[8192, 8192], host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "4096" in result["message"]
 
     def test_connection_error(self, reset_connection_state):
         """Test handling of connection errors."""
@@ -941,9 +877,7 @@ class TestRenderLeavesSceneUnchanged:
         assert len(destroyed) == 1, destroyed
 
     @pytest.mark.parametrize("tool", TOOLS)
-    @pytest.mark.parametrize(
-        "bad", [{"renderer": "mantra"}, {"resolution": [0, 0]}, {"karma_engine": "tpu"}]
-    )
+    @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"karma_engine": "tpu"}])
     def test_a_bad_input_creates_nothing(
         self, rendering_scene: Any, tool: str, bad: dict[str, Any]
     ) -> None:
@@ -1343,19 +1277,6 @@ class TestRenderFraming:
         assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
             "Not framed: /obj/broken/file1 has no geometry (its SOP did not cook)"
         ]
-
-    @pytest.mark.parametrize("name", ["camera_position", "camera_rotation"])
-    @pytest.mark.parametrize("value", [[], [1.0, 2.0], ["1", "2", "3"]])
-    def test_a_camera_vector_that_is_not_three_numbers_is_an_error(
-        self, frames: list[dict[str, Any]], name: str, value: list[Any]
-    ) -> None:
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(**{name: value}, host="localhost", port=18811)
-
-        assert result["status"] == "error"
-        assert result["message"] == f"{name} must be [x, y, z], got {value!r}"
-        assert frames == []
 
     def test_look_at_a_sop_inside_a_sop_subnet_is_placed_by_its_object(
         self, frames: list[dict[str, Any]], framed_scene: Any

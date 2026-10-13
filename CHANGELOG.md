@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Render inputs are refused by the served schema** (houdini-laws-etg.ga7):
+  `render_viewport` and `render_quad_view` publish `resolution` as a pair of
+  integers in 64–4096 and the camera vectors as three numbers, so a
+  one-element or out-of-range resolution, or a two-component camera vector,
+  is a schema error at the MCP boundary instead of an error result after the
+  call reached Houdini. The server validates every tool's arguments strictly,
+  so the string `"512"` or `"yes"` is refused as the schema says, not coerced.
+
 ### Removed
 
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
