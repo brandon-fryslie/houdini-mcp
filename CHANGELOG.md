@@ -13,11 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `available_types`, the names `capture_pane_screenshot` and
   `capture_multiple_panes` accept, and the list an unknown-type error offers are
   all read from the connected Houdini's `hou.paneTabType`. The hand copy of that
-  enum is gone; it already lacked the `GenericGraphEditor` and `UsdShadeEditor`
-  panes Houdini 22 ships, and it answered in place of the live enum whenever the
-  live read failed. A name that is an attribute of the enum class but not a pane
-  type (`thisown`) is now refused as unknown instead of reported as not found in
-  the layout.
+  enum, `houdini_mcp.tools.VALID_PANE_TYPES`, is gone; it already lacked the
+  `GenericGraphEditor` and `UsdShadeEditor` panes Houdini 22 ships, and it
+  answered in place of the live enum whenever the live read failed. A name that
+  is an attribute of the enum class but not a pane type (`thisown`) is now
+  refused as unknown instead of being handed to `hou.ui.paneTabOfType`, which
+  raised on it.
 
 - **Render tools leave the scene as they found it** (houdini-laws-etg.jfl):
   `render_viewport` and `render_quad_view` destroy the camera rig and render

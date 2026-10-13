@@ -564,6 +564,7 @@ class MockHouModule:
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
 
+        self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
         self.ui = MockUi()
 
@@ -784,8 +785,8 @@ class MockEnumValue:
 
 class MockPaneTabType:
     """``hou.paneTabType``, shaped as Houdini ships it: the members are class
-    attributes, and SWIG adds ``thisown`` beside them, so ``dir()`` of the real
-    enum and of this one filter the same way."""
+    attributes holding ``hou.EnumValue`` instances, and SWIG adds ``thisown``
+    beside them."""
 
     NetworkEditor = MockEnumValue("NetworkEditor")
     Parm = MockEnumValue("Parm")

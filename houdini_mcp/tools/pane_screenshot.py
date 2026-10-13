@@ -45,12 +45,16 @@ def pane_type_names(hou: Any) -> list[str]:
     """Every pane type name this Houdini has, read from ``hou.paneTabType``.
 
     [LAW:one-source-of-truth] Houdini's enum is the one list of pane types: the
-    list a tool advertises, the names it accepts, and the names an unknown-type
-    error offers all derive from it here, so a new Houdini release cannot leave
-    a hand copy behind. ``thisown`` is SWIG's ownership flag on the enum class,
-    not a pane type.
+    list a tool advertises and the names an unknown-type error offers both
+    derive from it here, so a new Houdini release cannot leave a hand copy
+    behind. A pane type is a member whose value is a ``hou.EnumValue``; the
+    class's other attributes (SWIG's ``thisown`` flag, the dunders) are not.
     """
-    return [name for name in dir(hou.paneTabType) if not name.startswith("_") and name != "thisown"]
+    return [
+        name
+        for name in dir(hou.paneTabType)
+        if isinstance(getattr(hou.paneTabType, name), hou.EnumValue)
+    ]
 
 
 def _fit_pane_contents(pane: Any, pane_type_name: str) -> str | None:
@@ -108,18 +112,19 @@ def _capture_pane_to_bytes(
     Returns:
         Dict with either success data (including raw_bytes) or error info
     """
-    # [LAW:single-enforcer] a name is a pane type exactly when the advertised
-    # list holds it; getattr alone would also accept the enum class's own
-    # attributes (``thisown``, dunders) that no layout can hold a pane of.
-    names = pane_type_names(hou)
-    if pane_type_name not in names:
+    # [LAW:parse-dont-validate] the name resolves to the enum member the layout
+    # is searched by; a class attribute that is not a member (``thisown``) is
+    # as unknown as a name the enum lacks. The list of names is read only to
+    # answer an unknown name, not on every capture.
+    pane_type = getattr(hou.paneTabType, pane_type_name, None)
+    if not isinstance(pane_type, hou.EnumValue):
         return {
             "status": "error",
             "message": f"Unknown pane type: {pane_type_name}",
-            "available_types": names,
+            "available_types": pane_type_names(hou),
         }
 
-    pane = hou.ui.paneTabOfType(getattr(hou.paneTabType, pane_type_name))
+    pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
         return {
             "status": "error",

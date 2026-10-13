@@ -11,7 +11,7 @@ from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType
 
 
 def test_pane_type_names_are_the_enum_members_and_nothing_else(mock_hou: MockHouModule) -> None:
-    """The enum class carries SWIG's ``thisown`` and dunders beside its members; neither is a pane."""
+    """The enum class carries SWIG's ``thisown`` and dunders beside its members; neither is an EnumValue."""
     assert pane_type_names(mock_hou) == ["NetworkEditor", "Parm", "SceneViewer"]
 
 
@@ -36,7 +36,7 @@ def test_unknown_pane_type_error_offers_the_live_enum(mock_connection: MockHouMo
 
 
 def test_an_enum_class_attribute_is_not_a_pane_type(mock_connection: MockHouModule) -> None:
-    """``getattr(hou.paneTabType, "thisown")`` succeeds; the name check must not."""
+    """``getattr(hou.paneTabType, "thisown")`` succeeds with a bool, which is no pane type."""
     result = capture_pane_screenshot("thisown")
 
     assert result["status"] == "error"
