@@ -112,12 +112,14 @@ class Acked:
 class Cancelled:
     """The app withdrew the command and will not be told what became of it.
 
-    A command still queued was never sent. One already on the wire may still
-    run on the gateway; the client sends a best-effort ``cancel`` frame and
-    ignores any ack that follows, as a cancelled task's result is discarded.
+    ``sent`` is False for a command still queued: it was never sent and did
+    not run. It is True for one already on the wire, which may still run on
+    the gateway; the client sends a best-effort ``cancel`` frame and ignores
+    any ack that follows, as a cancelled task's result is discarded.
     """
 
     request_id: int
+    sent: bool
 
 
 class CloseReason(enum.Enum):
@@ -390,8 +392,14 @@ class WSClientCore:
     # ------------------------------------------------------------- lifecycle in
 
     def start(self) -> list[Action]:
-        """Begin connecting. Idempotent while already active."""
+        """Begin connecting. Idempotent while already active.
 
+        Raises :class:`ClientClosedError` once the client has closed for good:
+        CLOSED is terminal, and a new connection is a new core.
+        """
+
+        if self.state == ConnectionState.CLOSED:
+            raise ClientClosedError("client is closed; a new connection needs a new core")
         if self.state in (
             ConnectionState.CONNECTING,
             ConnectionState.HANDSHAKING,
@@ -403,8 +411,13 @@ class WSClientCore:
         return self._begin_connect()
 
     def stop(self) -> list[Action]:
-        """Gracefully stop; enter terminal CLOSED state. Sends ``bye`` if open."""
+        """Gracefully stop; enter terminal CLOSED state. Sends ``bye`` if open.
 
+        Idempotent once closed: a second stop changes nothing and emits nothing.
+        """
+
+        if self.state == ConnectionState.CLOSED:
+            return []
         actions: list[Action] = []
         if self.state == ConnectionState.CONNECTED:
             actions.append(Action(ActionType.SEND, frame={"type": BYE}))
@@ -642,8 +655,13 @@ class WSClientCore:
         ]
 
     def _on_error(self, frame: dict[str, Any]) -> list[Action]:
+        if not self._validate_session(frame):
+            return self._reject_stale(frame)
         fatal = bool(frame.get("fatal"))
         code = frame.get("code")
+        if self.state == ConnectionState.CLOSED:
+            # The socket is already being closed; nothing is left to fail.
+            return [self._telemetry("ignored_error", code=code, fatal=fatal)]
         if fatal:
             prev = self.state
             return [
@@ -734,19 +752,18 @@ class WSClientCore:
         if request_id not in self._live_request_ids():
             return [self._telemetry("cancel_ignored", request_id=request_id)]
 
-        # A cancel frame reaches the gateway only for a command it has already
-        # been sent; a queued one is simply never sent.
-        cancel_sent = request_id in self._pending and self.state == ConnectionState.CONNECTED
+        # Pending frames exist only while CONNECTED (flush runs from welcome
+        # and a guarded drain; backoff and close empty the map), so a pending
+        # id is one the gateway holds, and the cancel frame can go out now.
+        sent = request_id in self._pending
         actions: list[Action] = []
-        if cancel_sent:
+        if sent:
             cancel = {"type": CANCEL, "request_id": request_id}
             if self._session_id is not None:
                 cancel["session_id"] = self._session_id
             actions.append(Action(ActionType.SEND, frame=cancel))
-        actions.append(self._settle(Cancelled(request_id)))
-        actions.append(
-            self._telemetry("command_cancelled", request_id=request_id, cancel_sent=cancel_sent)
-        )
+        actions.append(self._settle(Cancelled(request_id, sent=sent)))
+        actions.append(self._telemetry("command_cancelled", request_id=request_id, sent=sent))
         return actions
 
     def drain(self) -> list[Action]:

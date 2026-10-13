@@ -519,6 +519,20 @@ class TestCommandsAndQueues:
         with pytest.raises(ClientClosedError):
             core.send_command({"op": "x"})
 
+    def test_start_after_close_raises(self):
+        core = WSClientCore(make_config())
+        connect_core(core)
+        core.stop()
+        with pytest.raises(ClientClosedError):
+            core.start()
+        assert core.state == ConnectionState.CLOSED
+
+    def test_stop_is_idempotent_once_closed(self):
+        core = WSClientCore(make_config())
+        connect_core(core)
+        core.stop()
+        assert core.stop() == []
+
     def test_send_command_is_nonblocking_and_returns_immediately(self):
         # Contract: send_command performs no I/O; it must not require a
         # connection and must return synchronously.
@@ -548,13 +562,13 @@ class TestCancellation:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         actions = core.cancel_command(rid)
-        assert outcomes_of(actions) == [Cancelled(rid)]
+        assert outcomes_of(actions) == [Cancelled(rid, sent=False)]
         assert telemetry_records(actions, "command_cancelled") == [
             {
                 "event": "command_cancelled",
                 "state": "disconnected",
                 "request_id": rid,
-                "cancel_sent": False,
+                "sent": False,
             }
         ]
         assert core.command_backlog == 0
@@ -571,13 +585,13 @@ class TestCancellation:
         cancels = [f for f in sent_frames(actions) if f["type"] == CANCEL]
         assert cancels and cancels[0]["request_id"] == rid
         assert cancels[0]["session_id"] == "s1"
-        assert outcomes_of(actions) == [Cancelled(rid)]
+        assert outcomes_of(actions) == [Cancelled(rid, sent=True)]
         assert telemetry_records(actions, "command_cancelled") == [
             {
                 "event": "command_cancelled",
                 "state": "connected",
                 "request_id": rid,
-                "cancel_sent": True,
+                "sent": True,
             }
         ]
         assert rid not in core.pending_request_ids
@@ -690,6 +704,35 @@ class TestErrors:
         actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
         assert core.state == ConnectionState.CLOSED
         assert "fatal_error" in telemetry_events(actions)
+
+    def test_fatal_error_from_a_stale_session_is_rejected(self):
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        connect_core(core, session_id="s1")
+        actions = core.on_frame(
+            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "OLD"}
+        )
+        assert core.state == ConnectionState.CONNECTED
+        assert outcomes_of(actions) == []
+        assert core.pending_request_ids == (rid,)
+        assert "stale_session_rejected" in telemetry_events(actions)
+
+    def test_fatal_error_after_close_is_ignored(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        core.stop()
+        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        assert actions == [
+            Action(
+                ActionType.TELEMETRY,
+                telemetry={
+                    "event": "ignored_error",
+                    "state": "closed",
+                    "code": "auth_failed",
+                    "fatal": True,
+                },
+            )
+        ]
 
     def test_nonfatal_error_stays_connected(self):
         core = WSClientCore(make_config())
@@ -997,7 +1040,11 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     @rule()
     def start(self):
-        self._run(self.core.start())
+        if self.core.state == ConnectionState.CLOSED:
+            with pytest.raises(ClientClosedError):
+                self.core.start()
+        else:
+            self._run(self.core.start())
 
     @rule()
     def socket_open(self):
