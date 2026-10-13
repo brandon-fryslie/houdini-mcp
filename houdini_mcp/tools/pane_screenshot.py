@@ -41,25 +41,33 @@ def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
     return QtWidgets, QtCore, QtGui
 
 
+def pane_type_member(hou: Any, name: str) -> Any | None:
+    """The ``hou.paneTabType`` member ``name`` names, or None when it names no pane type.
+
+    [LAW:parse-dont-validate] [LAW:single-enforcer] This is the one place a
+    name becomes a pane type: a member whose value is a ``hou.EnumValue``. The
+    enum class's other attributes (SWIG's ``thisown`` flag, the dunders) and a
+    name it lacks are not. The dunders and a missing name are decided here
+    without ``isinstance`` because rpyc 5.3 raises when a value it passed by
+    value (``__doc__`` is None, as is ``getattr``'s default) is checked against
+    a netref class; a member's class id matches the netref's locally, and
+    ``thisown`` is asked of Houdini once.
+    """
+    if name.startswith("_"):
+        return None
+    value = getattr(hou.paneTabType, name, None)
+    return value if value is not None and isinstance(value, hou.EnumValue) else None
+
+
 def pane_type_names(hou: Any) -> list[str]:
     """Every pane type name this Houdini has, read from ``hou.paneTabType``.
 
     [LAW:one-source-of-truth] Houdini's enum is the one list of pane types: the
     list a tool advertises and the names an unknown-type error offers both
     derive from it here, so a new Houdini release cannot leave a hand copy
-    behind. A pane type is a member whose value is a ``hou.EnumValue``; the
-    class's other attributes (SWIG's ``thisown`` flag, the dunders) are not.
+    behind.
     """
-    # Bound once: over rpyc each attribute read is a round trip. The dunders go
-    # by name because rpyc 5.3 cannot ``isinstance`` a value it passed by value
-    # (``__doc__`` is None) against a netref class; a member's class id matches
-    # the netref's locally, and ``thisown`` is asked of Houdini once.
-    enum, member = hou.paneTabType, hou.EnumValue
-    return [
-        name
-        for name in dir(enum)
-        if not name.startswith("_") and isinstance(getattr(enum, name), member)
-    ]
+    return [name for name in dir(hou.paneTabType) if pane_type_member(hou, name) is not None]
 
 
 def _fit_pane_contents(pane: Any, pane_type_name: str) -> str | None:
@@ -117,12 +125,9 @@ def _capture_pane_to_bytes(
     Returns:
         Dict with either success data (including raw_bytes) or error info
     """
-    # [LAW:parse-dont-validate] the name resolves to the enum member the layout
-    # is searched by; a class attribute that is not a member (``thisown``) is
-    # as unknown as a name the enum lacks. The list of names is read only to
-    # answer an unknown name, not on every capture.
-    pane_type = getattr(hou.paneTabType, pane_type_name, None)
-    if not isinstance(pane_type, hou.EnumValue):
+    # The list of names is read only to answer an unknown name, not on every capture.
+    pane_type = pane_type_member(hou, pane_type_name)
+    if pane_type is None:
         names = pane_type_names(hou)
         logger.warning(
             "Unknown pane type %r refused; this Houdini has %d pane types",

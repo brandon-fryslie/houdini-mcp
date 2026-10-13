@@ -12,6 +12,7 @@ import rpyc.utils.server
 from houdini_mcp.tools.pane_screenshot import (
     capture_pane_screenshot,
     list_visible_panes,
+    pane_type_member,
     pane_type_names,
 )
 from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, await_rpyc_client_threads
@@ -27,7 +28,8 @@ def test_pane_type_names_are_the_enum_members_and_nothing_else(mock_hou: MockHou
 def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
     """In production ``hou`` is an rpyc netref, so the membership test is rpyc's
     ``isinstance`` across netrefs; a classic SlaveService serving a fake enum
-    holds that path, dunders included (rpyc raises on a by-value ``__doc__``)."""
+    holds that path for the members, the dunders, ``thisown`` and a name the
+    enum lacks (rpyc raises on a by-value ``__doc__`` or ``None``)."""
     server = rpyc.utils.server.ThreadedServer(
         rpyc.core.SlaveService,
         hostname="127.0.0.1",
@@ -48,6 +50,8 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
                 EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
             )
             assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
+            assert pane_type_member(hou, "ChannelEditr") is None
+            assert pane_type_member(hou, "thisown") is None
     finally:
         server.close()
         await_rpyc_client_threads()
