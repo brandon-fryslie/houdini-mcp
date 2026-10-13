@@ -80,6 +80,13 @@ class TestModuleApi:
         assert status["status"] == "error"
         assert remote.is_hrpyc_running() is False
 
+    def test_invalid_env_port_refuses_to_start(self, monkeypatch):
+        monkeypatch.setenv("HOUDINI_RPC_BIND_PORT", "eighteen")
+
+        with pytest.raises(ValueError, match="HOUDINI_RPC_BIND_PORT='eighteen' is not a TCP port"):
+            remote.start_hrpyc_server()
+        assert remote.is_hrpyc_running() is False
+
     def test_self_test_exposed_at_module_level(self):
         port = _free_port()
         remote.start_hrpyc_server(port=port)

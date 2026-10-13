@@ -26,7 +26,12 @@ _listener = RemoteListener()
 
 
 def _config_from_env(port: int | None) -> ListenerConfig:
-    """The environment's listener config, with ``port`` overriding ``HOUDINI_RPC_BIND_PORT``."""
+    """The environment's listener config, with ``port`` overriding ``HOUDINI_RPC_BIND_PORT``.
+
+    Raises:
+        ValueError: a listener variable is set to something it cannot mean
+            (see :meth:`ListenerConfig.from_env`); nothing is started.
+    """
     cfg = ListenerConfig.from_env()
     if port is not None:
         cfg.port = port

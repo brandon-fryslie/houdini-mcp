@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Plugin config and lifecycle failures surface with their cause**
+  (houdini-laws-etg.o3a): `ListenerConfig.from_env` and the **Start Remote**
+  port prompt parse their input through `listener.parse_port` /
+  `listener.parse_flag`, which refuse anything that is not a port or a flag with
+  a `ValueError` naming the setting and the value; neither falls back to 18811
+  or to "off" any more. `self_test()` reports a `hou` that does not import as a
+  "Could not read Houdini version" warning with the cause. `status()` and
+  `self_test()` carry `local_ip: None` beside a `local_ip_error` when the
+  machine's address could not be detected, in place of the former "localhost"
+  stand-in. `RemoteListener.start()`/`reload()` take their config; the
+  environment is read by the `remote` facade.
+
 - **Listener depends on a declared server contract that real hrpyc satisfies**
   (houdini-laws-etg.zu6): `listener.HrpycModule` and `listener.HrpycServer`
   declare the rpyc surface the listener drives; the test fake and real rpyc are

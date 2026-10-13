@@ -109,7 +109,7 @@ Use this for:
 import hou
 
 try:
-    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running
+    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, parse_port
 
     if is_hrpyc_running():
         hou.ui.displayMessage(
@@ -125,10 +125,9 @@ try:
         )
 
         if result[0] == 0:  # OK pressed
-            try:
-                port = int(result[1])
-            except ValueError:
-                port = 18811
+            # Anything but a port is refused with the cause (shown by the
+            # handler below); nothing starts on a port the user did not type.
+            port = parse_port(result[1], "port")
 
             # Bind host and security come from the environment:
             #   HOUDINI_RPC_BIND_HOST       (default 127.0.0.1, loopback-only)
@@ -154,7 +153,7 @@ try:
                 hou.ui.displayMessage(
                     f"Remote listener started.\n\n"
                     f"Bind: {status.get('host')}:{status.get('bound_port', status.get('port'))}\n"
-                    f"Local IP: {status.get('local_ip', 'unknown')}\n"
+                    f"Local IP: {status['local_ip'] or status['local_ip_error']}\n"
                     f"Exposure: {sec.get('exposure', 'unknown')} | "
                     f"Authenticated: {sec.get('authenticated', False)}\n\n"
                     f"{status['message']}{warn}",
@@ -242,7 +241,7 @@ try:
         hou.ui.displayMessage(
             "Remote listener (hrpyc): RUNNING\n\n"
             f"Bind: {status.get('host')}:{status.get('bound_port', status.get('port'))}\n"
-            f"Local IP: {status.get('local_ip', 'unknown')}\n"
+            f"Local IP: {status['local_ip'] or status['local_ip_error']}\n"
             f"Exposure: {sec.get('exposure', 'unknown')}\n"
             f"Authenticated: {sec.get('authenticated', False)}\n\n"
             f"Connect with:\n{status.get('connection_string', '')}",

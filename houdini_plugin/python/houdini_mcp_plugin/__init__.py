@@ -22,6 +22,7 @@ from .listener import (
     ListenerConfig,
     RemoteListener,
     SecurityError,
+    parse_port,
     resolve_security_policy,
 )
 from .remote import (
@@ -70,6 +71,7 @@ __all__ = [
     "ListenerConfig",
     "SecurityError",
     "resolve_security_policy",
+    "parse_port",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
 ]

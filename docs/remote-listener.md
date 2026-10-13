@@ -32,6 +32,12 @@ The **Houdini MCP** shelf provides:
 | `HOUDINI_RPC_TRUSTED_NETWORK` | `0`         | Set `1` to allow a non-loopback bind (opt-in).      |
 | `HOUDINI_RPC_TOKEN`           | *(unset)*   | Shared secret; enables authenticated remote bind.   |
 
+A variable set to something it cannot mean (a port that is not an integer from
+0 to 65535, a flag that is not `1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)
+refuses to start the listener with a `ValueError` naming the variable and the
+value. Nothing falls back to a default: an unset or empty variable is the only
+way to get one. The **Start Remote** port prompt is held to the same rule.
+
 ## Security model — no silent exposure
 
 `hrpyc`/RPyC `SlaveService` grants **arbitrary remote code execution** inside
