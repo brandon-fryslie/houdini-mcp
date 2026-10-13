@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every ws_client request id reaches exactly one terminal outcome**
+  (houdini-laws-etg.jyr): `WSClientCore.send_command` returns an id that is live until
+  the core emits one `DELIVER_OUTCOME` action for it, carrying `Acked` (with the ack
+  frame), `Cancelled` or `Failed` (with the reason). `stop()`, reconnect exhaustion and
+  a fatal gateway error all close through one path that fails every queued and
+  pending request. A full command queue now raises `QueueFullError` before allocating
+  an id instead of silently evicting the oldest queued command; `reject_on_full` is
+  gone with the eviction. Submitting after close raises `ClientClosedError`.
+  `cancel_command` settles the id at once (a `cancel` frame still goes to the gateway
+  for an in-flight command; a later ack for it is ignored) and no longer records
+  unknown ids, which used to drop a command that was later allocated that id.
+  `DELIVER_ACK` is replaced by `DELIVER_OUTCOME`.
+
 - **Connection failure has one definition each of classification, retry and error**
   (houdini-laws-etg.c3b): the in-use failure set is the one union `TransportException`,
   which is both the check `transport_failure()` runs and the type of the proof it
