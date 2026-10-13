@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from ..connection import transport_failure
 from ._common import (
     ensure_connected,
     ensure_link,
@@ -19,6 +20,9 @@ from ._common import (
 )
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
+
+# A renderer name is the ROP type that renders it.
+_RENDERERS = frozenset({"opengl", "karma"})
 
 
 def _get_remote_modules(host: str, port: int):
@@ -41,20 +45,36 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
     so a user's node that happens to carry one of these names is never touched;
     Houdini uniquifies the requested name against it.
     """
-    created: list[Any] = []
+    created: list[tuple[str, Any]] = []
 
     def create(parent: Any, node_type: str, name: str) -> Any:
         node = parent.createNode(node_type, name)
-        created.append(node)
+        created.append((node.path(), node))
         return node
 
     try:
         yield create
     finally:
-        paths = [node.path() for node in reversed(created)]
-        for node in reversed(created):
-            node.destroy()
-        logger.debug("Removed temporary render nodes: %s", paths)
+        # [LAW:no-silent-failure] every node gets its destroy whatever happened to
+        # the others'; the first failure is raised once all have been tried, bare,
+        # so connection loss keeps the type the error classifier recognizes, with
+        # the rest attached as notes.
+        removed: list[str] = []
+        failures: list[tuple[str, Exception]] = []
+        for path, node in reversed(created):
+            try:
+                node.destroy()
+            except Exception as e:
+                failures.append((path, e))
+            else:
+                removed.append(path)
+        logger.debug("Removed temporary render nodes: %s", removed)
+        if failures:
+            first_path, first = failures[0]
+            first.add_note(f"destroying temporary render node {first_path}")
+            for path, other in failures[1:]:
+                first.add_note(f"also failed to destroy {path}: {other!r}")
+            raise first
 
 
 @handle_connection_errors("render_viewport")
@@ -220,6 +240,17 @@ def render_viewport(
                 except Exception:
                     pass
 
+    # [LAW:no-ambient-temporal-coupling] everything a render needs besides its rig
+    # is resolved before a single node exists: a bad input creates nothing.
+    rop_type = renderer.lower()
+    if rop_type not in _RENDERERS:
+        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+    out_context = hou.node("/out")
+    if out_context is None:
+        return {"status": "error", "message": "Cannot find /out context"}
+    # Get remote modules for file operations on the Houdini machine
+    remote_os, remote_tempfile = _get_remote_modules(host, port)
+
     with _temporary_nodes() as create:
         # Camera null (rotation pivot) at bbox center, camera as its child
         null = create(obj_context, "null", "_mcp_cam_center")
@@ -254,23 +285,14 @@ def render_viewport(
         else:
             camera.parm("projection").set(0)  # Perspective
 
-        # Get remote modules for file operations on the Houdini machine
-        remote_os, remote_tempfile = _get_remote_modules(host, port)
-
         # Create temp file for output ON THE REMOTE MACHINE
         suffix = f".{output_format}"
         fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
         remote_os.close(fd)
 
         try:
-            out_context = hou.node("/out")
-            if out_context is None:
-                return {"status": "error", "message": "Cannot find /out context"}
-
-            # Render using OpenGL or Karma
-            if renderer.lower() == "opengl":
-                rop = create(out_context, "opengl", "_mcp_opengl_rop")
-
+            rop = create(out_context, rop_type, f"_mcp_{rop_type}_rop")
+            if rop_type == "opengl":
                 rop.parm("camera").set(camera.path())
                 rop.parm("picture").set(output_path)
                 if rop.parm("tres"):
@@ -282,10 +304,7 @@ def render_viewport(
                 if rop.parm("trange"):
                     rop.parm("trange").set(0)  # Current frame only
                 rop.render()
-
-            elif renderer.lower() == "karma":
-                rop = create(out_context, "karma", "_mcp_karma_rop")
-
+            else:
                 rop.parm("camera").set(camera.path())
                 rop.parm("picture").set(output_path)
                 if rop.parm("resolutionx"):
@@ -299,8 +318,6 @@ def render_viewport(
                     engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
                     rop.parm("engine").set(engine_value)
                 rop.render()
-            else:
-                return {"status": "error", "message": f"Unknown renderer: {renderer}"}
 
             # Read rendered image from REMOTE MACHINE and encode as base64
             if remote_os.path.exists(output_path):
@@ -395,6 +412,14 @@ def render_quad_view(
         return error
     width, height = resolution[0], resolution[1]
 
+    # [LAW:no-ambient-temporal-coupling] everything a render needs besides its rig
+    # is resolved before a single node exists: a bad input creates nothing.
+    rop_type = renderer.lower()
+    if rop_type not in _RENDERERS:
+        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+    out_context = hou.node("/out")
+    if out_context is None:
+        return {"status": "error", "message": "Cannot find /out context"}
     # Get remote modules for file operations on the Houdini machine
     remote_os, remote_tempfile = _get_remote_modules(host, port)
 
@@ -502,18 +527,7 @@ def render_quad_view(
         distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
         distance = max(5.0, distance + bbox_size / 2)
 
-        # Get/create render context
-        out_context = hou.node("/out")
-        if out_context is None:
-            return {"status": "error", "message": "Cannot find /out context"}
-
-        # Render ROP for the chosen renderer
-        if renderer.lower() == "opengl":
-            rop = create(out_context, "opengl", "_mcp_quad_opengl_rop")
-        elif renderer.lower() == "karma":
-            rop = create(out_context, "karma", "_mcp_quad_karma_rop")
-        else:
-            return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+        rop = create(out_context, rop_type, f"_mcp_quad_{rop_type}_rop")
 
         # Render each view
         view_results = []
@@ -544,7 +558,7 @@ def render_quad_view(
 
                 try:
                     # Configure and render
-                    if renderer.lower() == "opengl":
+                    if rop_type == "opengl":
                         rop.parm("camera").set(camera.path())
                         rop.parm("picture").set(output_path)
                         if rop.parm("tres"):
@@ -556,7 +570,7 @@ def render_quad_view(
                         if rop.parm("trange"):
                             rop.parm("trange").set(0)
                         rop.render()
-                    elif renderer.lower() == "karma":
+                    else:
                         rop.parm("camera").set(camera.path())
                         rop.parm("picture").set(output_path)
                         if rop.parm("resolutionx"):
@@ -607,6 +621,9 @@ def render_quad_view(
                             pass
 
             except Exception as e:
+                # [LAW:no-silent-failure] a dead link is not a view's failure
+                if transport_failure(e):
+                    raise
                 view_results.append(
                     {
                         "name": view_name,

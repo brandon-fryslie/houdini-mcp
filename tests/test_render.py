@@ -797,9 +797,9 @@ class TestRenderViewportMinimalValidExamples:
 class TestRenderLeavesSceneUnchanged:
     """A render is read-only to the scene: whatever it creates, it removes.
 
-    Both outcomes are pinned. With ``/out`` present and a ROP that writes its
-    picture, the render succeeds; without ``/out`` it fails after the camera
-    rig exists. Either way the scene after the call is the scene before it,
+    Both outcomes are pinned. With a ROP that writes its picture the render
+    succeeds; with a ROP whose render raises it fails after the camera rig and
+    the ROP exist. Either way the scene after the call is the scene before it,
     and a user's node that carries one of the temporary names is untouched.
     """
 
@@ -872,16 +872,110 @@ class TestRenderLeavesSceneUnchanged:
             "['/out/_mcp_opengl_rop', '/obj/_mcp_render_cam', '/obj/_mcp_cam_center']"
         ]
 
+    @pytest.fixture
+    def render_raises(self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """A scene whose ROP fails mid-render, after every temporary node exists."""
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            raise RuntimeError("OpenGL ROP: no display")
+
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        return rendering_scene
+
     @pytest.mark.parametrize("tool", TOOLS)
-    def test_failure_leaves_scene_unchanged(self, renders_locally: Any, tool: str) -> None:
-        """No /out: the tool fails after its camera rig exists, and the rig is gone."""
+    def test_failure_leaves_scene_unchanged(self, render_raises: Any, tool: str) -> None:
         import houdini_mcp.tools as tools
 
-        before = self._scene(renders_locally)
+        before = self._scene(render_raises)
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result == {"status": "error", "message": "Cannot find /out context"}
-        assert self._scene(renders_locally) == before
+        # The render's failure reaches the caller; which status quad view reports
+        # for it is houdini-laws-etg.tmx's.
+        assert "OpenGL ROP: no display" in str(result), result
+        assert self._scene(render_raises) == before
+
+    def test_quad_view_connection_loss_is_not_a_view_error(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The link dying mid-view ends the call as connection loss, not as a view that failed."""
+        from houdini_mcp.tools import render_quad_view
+        from tests.conftest import MockHouNode
+
+        renders = 0
+
+        def render(self: Any) -> None:
+            nonlocal renders
+            renders += 1
+            raise EOFError("stream has been closed")
+
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+
+        result = render_quad_view(host="localhost", port=18811)
+
+        assert result["error_type"] == "connection_error", result
+        assert result["operation"] == "render_quad_view"
+        assert renders == 1
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"resolution": [0, 0]}])
+    def test_a_bad_input_creates_nothing(
+        self, rendering_scene: Any, tool: str, bad: dict[str, Any]
+    ) -> None:
+        """Input is checked before any node exists: nothing is made and unmade."""
+        import houdini_mcp.tools as tools
+
+        created: list[str] = []
+        original = type(rendering_scene.node("/obj")).createNode
+
+        def createNode(self: Any, node_type: str, name: str | None = None) -> Any:
+            created.append(node_type)
+            return original(self, node_type, name)
+
+        with patch.object(type(rendering_scene.node("/obj")), "createNode", createNode):
+            result = getattr(tools, tool)(host="localhost", port=18811, **bad)
+
+        assert result["status"] == "error", result
+        assert created == []
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_every_node_is_destroyed_even_when_one_destroy_fails(
+        self, render_raises: Any, tool: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One destroy raising does not spare the others; the failure is reported."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode
+
+        original = MockHouNode.destroy
+
+        def destroy(self: Any) -> None:
+            if self.type().name() == "cam":
+                raise RuntimeError("camera is locked")
+            original(self)
+
+        before = {
+            ctx: [name for _, name in nodes] for ctx, nodes in self._scene(render_raises).items()
+        }
+        with (
+            patch.object(MockHouNode, "destroy", destroy),
+            caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"),
+        ):
+            result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "error", result
+        assert "camera is locked" in str(result), result
+        # The locked camera is the one node left behind; null and ROP are gone.
+        after = {
+            ctx: [name for _, name in nodes] for ctx, nodes in self._scene(render_raises).items()
+        }
+        cam = {"render_viewport": "_mcp_render_cam", "render_quad_view": "_mcp_quad_render_cam"}[
+            tool
+        ]
+        assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
+        removed = [
+            r.getMessage() for r in caplog.records if "temporary render nodes" in r.getMessage()
+        ]
+        assert len(removed) == 1 and cam not in removed[0], removed
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("outcome", ["success", "failure"])
@@ -895,12 +989,22 @@ class TestRenderLeavesSceneUnchanged:
         obj = renders_locally.node("/obj")
         users = [
             obj.createNode("geo", name)
-            for name in ("_mcp_cam_center", "_mcp_render_cam", "_mcp_quad_cam_center")
+            for name in (
+                "_mcp_cam_center",
+                "_mcp_render_cam",
+                "_mcp_quad_cam_center",
+                "_mcp_quad_render_cam",
+            )
         ]
+        out = renders_locally.node("/out")
+        if out is not None:
+            users += [
+                out.createNode("geo", name) for name in ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")
+            ]
         before = self._scene(renders_locally)
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
         assert (result["status"] == "success") is (outcome == "success"), result
         assert self._scene(renders_locally) == before
-        assert [obj.node(user.name()) for user in users] == users
+        assert [user.parent().node(user.name()) for user in users] == users
