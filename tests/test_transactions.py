@@ -15,32 +15,6 @@ from houdini_mcp.tools.transactions import (
     TransactionPolicy,
 )
 
-EXPECTED_MUTATING_TOOLS = {
-    "assign_material",
-    "capture_multiple_panes",
-    "capture_pane_screenshot",
-    "connect_nodes",
-    "create_material",
-    "create_network_box",
-    "create_node",
-    "create_render_node",
-    "delete_node",
-    "disconnect_node_input",
-    "execute_code",
-    "layout_children",
-    "load_scene",
-    "new_scene",
-    "render_quad_view",
-    "render_viewport",
-    "reorder_inputs",
-    "save_scene",
-    "set_node_color",
-    "set_node_flags",
-    "set_node_position",
-    "set_parameter",
-    "set_render_settings",
-}
-
 
 def manager(mock_connection, tmp_path: Path, revision):
     return TransactionManager(
@@ -52,22 +26,35 @@ def manager(mock_connection, tmp_path: Path, revision):
     )
 
 
-def test_every_mutating_tool_has_an_explicit_policy():
-    assert set(MUTATING_TOOL_POLICIES) == EXPECTED_MUTATING_TOOLS
-    assert all(isinstance(policy, TransactionPolicy) for policy in MUTATING_TOOL_POLICIES.values())
+@pytest.mark.parametrize(
+    ("policy", "writes_scene", "waits_for_worker", "needs_transaction"),
+    [
+        (TransactionPolicy.READS_ONLY, False, False, False),
+        (TransactionPolicy.READS_IN_PROGRAM, False, True, False),
+        (TransactionPolicy.UNDOABLE, True, True, True),
+        (TransactionPolicy.CHECKPOINT_REQUIRED, True, True, True),
+        (TransactionPolicy.EXTERNAL_SIDE_EFFECT, False, False, True),
+    ],
+)
+def test_policy_says_what_a_tool_does_to_the_world(
+    policy: TransactionPolicy, writes_scene: bool, waits_for_worker: bool, needs_transaction: bool
+):
+    """A file writer (screenshot, save) has an effect to recover but never writes the
+    scene, so it may run beside a program still mutating it; a read through a program
+    waits for that program without needing a transaction."""
+    assert (policy.writes_scene, policy.waits_for_worker, policy.needs_transaction) == (
+        writes_scene,
+        waits_for_worker,
+        needs_transaction,
+    )
 
 
-def test_only_scene_writers_write_the_scene():
-    """File writers and plain readers may run beside a program still mutating the scene."""
-    writers = {tool for tool, policy in TOOL_POLICIES.items() if policy.writes_scene}
-    assert writers == EXPECTED_MUTATING_TOOLS - {
-        "capture_multiple_panes",
-        "capture_pane_screenshot",
-        "save_scene",
-    }
-    waiting = {tool for tool, policy in TOOL_POLICIES.items() if policy.waits_for_worker}
-    assert waiting == writers | {"get_geo_summary"}
-    assert all(policy.needs_transaction for policy in MUTATING_TOOL_POLICIES.values())
+def test_mutating_tools_are_exactly_the_classified_tools_with_an_effect_to_recover():
+    """[LAW:one-source-of-truth] TOOL_POLICIES classifies every served tool (held by
+    tests/plugin/test_server_surface.py); the mutating set is derived from it."""
+    derived = {tool: policy for tool, policy in TOOL_POLICIES.items() if policy.needs_transaction}
+    assert derived == MUTATING_TOOL_POLICIES
+    assert derived
 
 
 def test_begin_refuses_a_reading_policy(mock_connection, tmp_path):

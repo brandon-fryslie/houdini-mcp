@@ -564,6 +564,9 @@ class MockHouModule:
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
 
+        self.paneTabType = MockPaneTabType
+        self.ui = MockUi()
+
     def applicationVersionString(self) -> str:
         return self._version
 
@@ -767,6 +770,75 @@ class MockUndoGroupContext:
             self._undos.open_groups.pop()
         self._undos.closed_groups.append(self._label)
         return False
+
+
+class MockEnumValue:
+    """One member of a hou enum: ``hou.paneTabType.NetworkEditor.name()``."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+
+class MockPaneTabType:
+    """``hou.paneTabType``, shaped as Houdini ships it: the members are class
+    attributes, and SWIG adds ``thisown`` beside them, so ``dir()`` of the real
+    enum and of this one filter the same way."""
+
+    NetworkEditor = MockEnumValue("NetworkEditor")
+    Parm = MockEnumValue("Parm")
+    SceneViewer = MockEnumValue("SceneViewer")
+    thisown = True
+
+
+class MockPaneTab:
+    def __init__(self, name: str, pane_type: MockEnumValue, width: int, height: int) -> None:
+        self._name = name
+        self._type = pane_type
+        self._geometry = MagicMock()
+        self._geometry.width.return_value = width
+        self._geometry.height.return_value = height
+        self._geometry.x.return_value = 0
+        self._geometry.y.return_value = 0
+
+    def name(self) -> str:
+        return self._name
+
+    def type(self) -> MockEnumValue:
+        return self._type
+
+    def qtScreenGeometry(self) -> MagicMock:
+        return self._geometry
+
+
+class MockDesktop:
+    def __init__(self, name: str, pane_tabs: list[MockPaneTab]) -> None:
+        self._name = name
+        self._pane_tabs = pane_tabs
+
+    def name(self) -> str:
+        return self._name
+
+    def paneTabs(self) -> list[MockPaneTab]:
+        return self._pane_tabs
+
+
+class MockUi:
+    """``hou.ui``: one current desktop holding the layout's pane tabs."""
+
+    def __init__(self) -> None:
+        self._desktop = MockDesktop("Build", [])
+
+    def curDesktop(self) -> MockDesktop:
+        return self._desktop
+
+    def desktops(self) -> list[MockDesktop]:
+        return [self._desktop]
+
+    def paneTabOfType(self, pane_type: MockEnumValue) -> MockPaneTab | None:
+        return next((tab for tab in self._desktop.paneTabs() if tab.type() is pane_type), None)
 
 
 class MockUndos:

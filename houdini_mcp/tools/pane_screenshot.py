@@ -53,41 +53,6 @@ from ._common import (
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
-# All valid pane type names from hou.paneTabType
-VALID_PANE_TYPES: list[str] = [
-    "ApexEditor",
-    "AssetBrowser",
-    "BundleList",
-    "ChannelEditor",
-    "ChannelList",
-    "ChannelViewer",
-    "CompositorViewer",
-    "ContextViewer",
-    "DataTree",
-    "DetailsView",
-    "EngineSessionSync",
-    "HandleList",
-    "HelpBrowser",
-    "IPRViewer",
-    "LightLinker",
-    "MaterialPalette",
-    "NetworkEditor",
-    "OutputViewer",
-    "Parm",
-    "ParmSpreadsheet",
-    "PerformanceMonitor",
-    "PythonPanel",
-    "PythonShell",
-    "RenderGallery",
-    "SceneGraphTree",
-    "SceneViewer",
-    "ShaderViewer",
-    "TakeList",
-    "Textport",
-    "TreeView",
-]
-
-
 def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
     """Get Qt modules from the connection to the Houdini ``host:port`` names.
 
@@ -105,20 +70,16 @@ def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
     return QtWidgets, QtCore, QtGui
 
 
-def _get_available_pane_types(hou: Any) -> list[str]:
-    """
-    Get list of available pane type names from hou.paneTabType enum.
+def pane_type_names(hou: Any) -> list[str]:
+    """Every pane type name this Houdini has, read from ``hou.paneTabType``.
 
-    Args:
-        hou: The hou module reference
-
-    Returns:
-        List of pane type names (strings)
+    [LAW:one-source-of-truth] Houdini's enum is the one list of pane types: the
+    list a tool advertises, the names it accepts, and the names an unknown-type
+    error offers all derive from it here, so a new Houdini release cannot leave
+    a hand copy behind. ``thisown`` is SWIG's ownership flag on the enum class,
+    not a pane type.
     """
-    try:
-        return [t for t in dir(hou.paneTabType) if not t.startswith("_") and t != "thisown"]
-    except Exception:
-        return VALID_PANE_TYPES
+    return [name for name in dir(hou.paneTabType) if not name.startswith("_") and name != "thisown"]
 
 
 def _fit_pane_contents(pane: Any, pane_type_name: str) -> str | None:
@@ -176,17 +137,18 @@ def _capture_pane_to_bytes(
     Returns:
         Dict with either success data (including raw_bytes) or error info
     """
-    # Get pane type enum
-    pane_type = getattr(hou.paneTabType, pane_type_name, None)
-    if pane_type is None:
+    # [LAW:single-enforcer] a name is a pane type exactly when the advertised
+    # list holds it; getattr alone would also accept the enum class's own
+    # attributes (``thisown``, dunders) that no layout can hold a pane of.
+    names = pane_type_names(hou)
+    if pane_type_name not in names:
         return {
             "status": "error",
             "message": f"Unknown pane type: {pane_type_name}",
-            "available_types": _get_available_pane_types(hou),
+            "available_types": names,
         }
 
-    # Find pane
-    pane = hou.ui.paneTabOfType(pane_type)
+    pane = hou.ui.paneTabOfType(getattr(hou.paneTabType, pane_type_name))
     if pane is None:
         return {
             "status": "error",
@@ -275,16 +237,9 @@ def capture_pane_screenshot(
     accessed remotely via RPyC.
 
     Args:
-        pane_type_name: Name of the pane type to capture. Common values:
-            - "NetworkEditor": Node network editor (default)
-            - "SceneViewer": 3D scene viewer
-            - "Parm": Parameter editor panel
-            - "CompositorViewer": Compositor/COP viewer
-            - "IPRViewer": Interactive render preview
-            - "ChannelEditor": Animation channel editor
-            - "ParmSpreadsheet": Parameter spreadsheet
-            - "Textport": Houdini textport/console
-            - "PythonShell": Python shell
+        pane_type_name: Name of the pane type to capture, as ``hou.paneTabType``
+            names it (default: "NetworkEditor"). ``list_visible_panes`` returns
+            every name this Houdini has under ``available_types``.
         save_path: Optional path to save PNG file. If provided, saves to disk
             instead of returning base64. Parent directories are created if needed.
         fit_contents: If True, fit/frame all contents before capture (default: False).
@@ -448,7 +403,7 @@ def list_visible_panes(
         "panes": panes_info,
         "capturable_count": sum(1 for p in panes_info if p["capturable"]),
         "total_count": len(panes_info),
-        "available_types": VALID_PANE_TYPES,
+        "available_types": pane_type_names(hou),
     }
 
 
