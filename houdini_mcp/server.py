@@ -21,7 +21,10 @@ HOUDINI_HOST = os.getenv("HOUDINI_HOST", "localhost")
 HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 
 # Create FastMCP instance
-mcp = FastMCP("Houdini MCP")
+# [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
+# refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
+# would coerce them. One switch, so no parameter type has to say so itself.
+mcp = FastMCP("Houdini MCP", strict_input_validation=True)
 
 
 # Health check endpoint

@@ -7,10 +7,13 @@ Python signature, a docstring, or the spelling of an annotation, so a different
 implementation of the same contract passes, and a broken contract fails whatever
 its docstring says.
 
-The documented examples in ``docs/tool-contracts.md`` are a map of that contract
-[LAW:one-source-of-truth]: each call they show is checked against the served
-schema, and each program they hand to ``execute_code`` is run through the served
-tool, so the doc cannot drift from the server.
+A tool's contract has two faces a client can see: the schema it publishes and
+the calls it refuses. They are two statements of one fact [LAW:one-source-of-truth],
+so every probe here asks both and fails the moment they disagree.
+
+The documented examples in ``docs/tool-contracts.md`` are a map of that contract:
+each call they show is sent to the server, and each program they hand to
+``execute_code`` must clear its rails, so the doc cannot drift from the server.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from typing import Any
 import jsonschema
 import pytest
 from fastmcp import Client
+from fastmcp.client.client import CallToolResult
 from mcp.types import Tool
 
 from houdini_mcp.server import mcp
@@ -39,8 +43,8 @@ WRONG_EXAMPLE_MARK = "❌"
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[Client[Any]]:
-    """One session with the server for the whole test."""
+async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+    """One session with the server for the whole test, served against a fake Houdini."""
     async with Client(mcp) as client:
         yield client
 
@@ -51,17 +55,37 @@ async def served(client: Client[Any]) -> dict[str, Tool]:
     return {tool.name: tool for tool in await client.list_tools()}
 
 
-def accepts(tool: Tool, arguments: dict[str, Any]) -> bool:
-    """Whether the served schema admits this call.
-
-    [LAW:single-enforcer] the schema is the one statement of what a tool accepts;
-    the test asks it rather than restating it as a keyword list.
-    """
+def schema_admits(tool: Tool, arguments: dict[str, Any]) -> bool:
+    """Whether the published schema says this call is legal."""
     try:
         jsonschema.validate(arguments, tool.input_schema)
     except jsonschema.ValidationError:
         return False
     return True
+
+
+async def call(
+    client: Client[Any], served: dict[str, Tool], name: str, arguments: dict[str, Any]
+) -> CallToolResult | None:
+    """The server's result, or None when it refuses the call at the boundary.
+
+    The published schema must promise exactly the refusals the server makes:
+    a schema that says "integer" over a server that coerces "512" is a lie a
+    client can read.
+    """
+    result = await client.call_tool(name, arguments, raise_on_error=False)
+    assert schema_admits(served[name], arguments) == (not result.is_error), (
+        name,
+        arguments,
+        result.content,
+    )
+    return None if result.is_error else result
+
+
+async def accepts(
+    client: Client[Any], served: dict[str, Tool], name: str, arguments: dict[str, Any]
+) -> bool:
+    return await call(client, served, name, arguments) is not None
 
 
 # =============================================================================
@@ -78,35 +102,41 @@ class TestServedSchemas:
             assert json.loads(json.dumps(schema)) == schema, tool.name
             jsonschema.Draft202012Validator.check_schema(schema)
 
-    def test_execute_code_requires_only_the_program(self, served: dict[str, Tool]) -> None:
-        tool = served["execute_code"]
-        schema = tool.input_schema
-        assert schema["required"] == ["code"]
-        assert accepts(tool, {"code": "hou.node('/obj')"})
-        assert not accepts(tool, {})
-        assert not accepts(tool, {"code": 42})
+    async def test_execute_code_requires_only_the_program(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        assert served["execute_code"].input_schema["required"] == ["code"]
+        assert await accepts(client, served, "execute_code", {"code": "hou.node('/obj')"})
+        assert not await accepts(client, served, "execute_code", {})
+        assert not await accepts(client, served, "execute_code", {"code": 42})
         # The Houdini address is the server's, never the caller's.
-        assert not accepts(tool, {"code": "", "host": "elsewhere", "port": 1})
+        assert not await accepts(
+            client, served, "execute_code", {"code": "", "host": "elsewhere", "port": 1}
+        )
 
-    def test_execute_code_rails_are_opt_in_booleans(self, served: dict[str, Tool]) -> None:
-        tool = served["execute_code"]
-        properties = tool.input_schema["properties"]
+    async def test_execute_code_rails_are_opt_in_booleans(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        properties = served["execute_code"].input_schema["properties"]
         for flag in ("capture_diff", "allow_dangerous", "allow_heavy_geometry"):
             assert properties[flag]["type"] == "boolean", flag
             assert properties[flag]["default"] is False, flag
-            assert not accepts(tool, {"code": "", flag: "yes"}), flag
+            assert not await accepts(client, served, "execute_code", {"code": "", flag: "yes"})
 
-    def test_execute_code_policy_is_the_closed_domain(self, served: dict[str, Tool]) -> None:
+    async def test_execute_code_policy_is_the_closed_domain(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
         """[LAW:parse-dont-validate] a client learns the legal policies from the schema."""
-        tool = served["execute_code"]
-        policy = tool.input_schema["properties"]["policy"]
+        policy = served["execute_code"].input_schema["properties"]["policy"]
         assert policy["enum"] == list(VALID_POLICIES)
         assert policy["default"] == "normal"
-        assert not accepts(tool, {"code": "", "policy": "yolo"})
+        assert not await accepts(client, served, "execute_code", {"code": "", "policy": "yolo"})
 
-    def test_render_viewport_parameters(self, served: dict[str, Tool]) -> None:
-        tool = served["render_viewport"]
-        assert set(tool.input_schema["properties"]) == {
+    async def test_render_viewport_parameters(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        schema = served["render_viewport"].input_schema
+        assert set(schema["properties"]) == {
             "camera_position",
             "camera_rotation",
             "look_at",
@@ -117,45 +147,55 @@ class TestServedSchemas:
             "orthographic",
             "karma_engine",
         }
-        assert "required" not in tool.input_schema
-        assert accepts(tool, {})
+        assert "required" not in schema
+        assert await accepts(client, served, "render_viewport", {})
         # The intuitive-but-wrong spellings the doc warns about are refused on the wire.
-        assert not accepts(tool, {"width": 512, "height": 512})
-        assert not accepts(tool, {"camera_path": "/obj/cam1"})
+        assert not await accepts(client, served, "render_viewport", {"width": 512, "height": 512})
+        assert not await accepts(client, served, "render_viewport", {"camera_path": "/obj/cam1"})
 
-    def test_render_viewport_resolution_is_a_pair_of_integers_or_absent(
-        self, served: dict[str, Tool]
+    async def test_render_viewport_resolution_is_a_pair_of_integers_or_absent(
+        self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        tool = served["render_viewport"]
-        assert accepts(tool, {"resolution": [512, 512]})
-        assert accepts(tool, {"resolution": None})
-        assert not accepts(tool, {"resolution": "512x512"})
-        assert not accepts(tool, {"resolution": [512.5, 512]})
-        assert not accepts(tool, {"resolution": [512]})
-        assert not accepts(tool, {"resolution": [512, 512, 512]})
+        legal: list[dict[str, Any]] = [{"resolution": [512, 512]}, {"resolution": None}]
+        illegal: list[dict[str, Any]] = [
+            {"resolution": "512x512"},
+            {"resolution": [512.5, 512]},
+            {"resolution": ["512", "512"]},
+            {"resolution": [512]},
+            {"resolution": [512, 512, 512]},
+        ]
+        for arguments in legal:
+            assert await accepts(client, served, "render_viewport", arguments), arguments
+        for arguments in illegal:
+            assert not await accepts(client, served, "render_viewport", arguments), arguments
 
-    def test_render_resolution_bounds_are_served(self, served: dict[str, Tool]) -> None:
+    async def test_render_resolution_bounds_are_served(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
         """The 64..4096 limit the doc states is a fact of the schema, not of a later error."""
         for name in ("render_viewport", "render_quad_view"):
-            tool = served[name]
-            assert accepts(tool, {"resolution": [64, 64]}), name
-            assert accepts(tool, {"resolution": [4096, 4096]}), name
-            assert not accepts(tool, {"resolution": [32, 512]}), name
-            assert not accepts(tool, {"resolution": [512, 8000]}), name
+            assert await accepts(client, served, name, {"resolution": [64, 64]}), name
+            assert await accepts(client, served, name, {"resolution": [4096, 4096]}), name
+            assert not await accepts(client, served, name, {"resolution": [32, 512]}), name
+            assert not await accepts(client, served, name, {"resolution": [512, 8000]}), name
 
-    def test_render_viewport_camera_vectors_are_three_numbers(
-        self, served: dict[str, Tool]
+    async def test_render_viewport_camera_vectors_are_three_numbers(
+        self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        tool = served["render_viewport"]
         for name in ("camera_position", "camera_rotation"):
-            assert accepts(tool, {name: [1, 2.5, -3]}), name
-            assert accepts(tool, {name: None}), name
-            assert not accepts(tool, {name: [1, 2]}), name
-            assert not accepts(tool, {name: ["1", "2", "3"]}), name
+            assert await accepts(client, served, "render_viewport", {name: [1, 2.5, -3]}), name
+            assert await accepts(client, served, "render_viewport", {name: None}), name
+            for value in ([1, 2], ["1", "2", "3"], [True, 2, 3]):
+                assert not await accepts(client, served, "render_viewport", {name: value}), (
+                    name,
+                    value,
+                )
 
-    def test_render_quad_view_parameters(self, served: dict[str, Tool]) -> None:
-        tool = served["render_quad_view"]
-        assert set(tool.input_schema["properties"]) == {
+    async def test_render_quad_view_parameters(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        schema = served["render_quad_view"].input_schema
+        assert set(schema["properties"]) == {
             "resolution",
             "renderer",
             "output_format",
@@ -163,8 +203,8 @@ class TestServedSchemas:
             "include_perspective",
             "karma_engine",
         }
-        assert "required" not in tool.input_schema
-        assert accepts(tool, {})
+        assert "required" not in schema
+        assert await accepts(client, served, "render_quad_view", {})
 
     def test_no_served_description_teaches_importing_hou(self, served: dict[str, Tool]) -> None:
         """A program line importing hou in a tool's description would teach the one
@@ -210,12 +250,17 @@ def documented_calls(markdown: str, served: dict[str, Tool]) -> list[DocumentedC
     """Every call to a served tool in the doc's python blocks, arguments evaluated.
 
     An MCP call is a JSON object of literal arguments, so that is the only call
-    shape an example may take: keywords, each a literal. Anything else fails
-    the parse loudly under the heading it sits beneath [LAW:no-silent-failure].
+    shape an example may take: keywords, each a literal, in a block that parses.
+    Anything else fails loudly under the heading it sits beneath
+    [LAW:no-silent-failure].
     """
     calls = []
     for heading, block in python_blocks(markdown):
-        for node in ast.walk(ast.parse(textwrap.dedent(block))):
+        try:
+            tree = ast.parse(textwrap.dedent(block))
+        except SyntaxError as exc:
+            pytest.fail(f"{heading}: python block does not parse: {exc}")
+        for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
                 continue
             if node.func.id not in served:
@@ -249,44 +294,37 @@ class TestDocumentedExamples:
         return calls
 
     async def accepted_by_server(
-        self, client: Client[Any], served: dict[str, Tool], call: DocumentedCall
+        self, client: Client[Any], served: dict[str, Tool], documented: DocumentedCall
     ) -> bool:
-        """Schema first; a program handed to execute_code must also clear its rails.
+        """Boundary first; a program handed to execute_code must also clear its rails.
 
-        The render tools' whole contract is their schema. execute_code's code
-        policy is not expressible as one, so its program is run.
+        The render tools' whole contract is their boundary. execute_code's code
+        policy is not expressible as a schema, so its program's result decides.
         """
-        if not accepts(served[call.tool], call.arguments):
+        result = await call(client, served, documented.tool, documented.arguments)
+        if result is None:
             return False
-        if call.tool != "execute_code":
+        if documented.tool != "execute_code":
             return True
-        result = await client.call_tool("execute_code", call.arguments)
+        assert result.structured_content is not None, documented
         return bool(result.structured_content["status"] == "success")
 
     async def test_correct_examples_are_accepted(
-        self,
-        in_process_houdini: Any,
-        client: Client[Any],
-        served: dict[str, Tool],
-        calls: list[DocumentedCall],
+        self, client: Client[Any], served: dict[str, Tool], calls: list[DocumentedCall]
     ) -> None:
         refused = [
-            call
-            for call in calls
-            if call.correct and not await self.accepted_by_server(client, served, call)
+            documented
+            for documented in calls
+            if documented.correct and not await self.accepted_by_server(client, served, documented)
         ]
         assert refused == []
 
     async def test_wrong_examples_are_refused(
-        self,
-        in_process_houdini: Any,
-        client: Client[Any],
-        served: dict[str, Tool],
-        calls: list[DocumentedCall],
+        self, client: Client[Any], served: dict[str, Tool], calls: list[DocumentedCall]
     ) -> None:
         accepted = [
-            call
-            for call in calls
-            if not call.correct and await self.accepted_by_server(client, served, call)
+            documented
+            for documented in calls
+            if not documented.correct and await self.accepted_by_server(client, served, documented)
         ]
         assert accepted == []
