@@ -59,6 +59,24 @@ def short_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(handshake, "HANDSHAKE_TIMEOUT", 0.3)
 
 
+def _trickle(sock: socket.socket) -> None:
+    """Send one byte well inside each idle window until the listener hangs up."""
+    try:
+        while True:
+            time.sleep(handshake.HANDSHAKE_TIMEOUT / 3)
+            sock.sendall(b"h")
+    except OSError:
+        return  # the listener closed the socket; the test asserts that on its own
+
+
+def _hung_up(sock: socket.socket) -> bool:
+    """The peer closed: a clean EOF, or a reset when we kept sending after it did."""
+    try:
+        return sock.recv(1) == b""
+    except ConnectionResetError:
+        return True
+
+
 class TestSharedHandshake:
     def test_tokened_client_connects(self, tokened_server):
         conn = handshake.connect("127.0.0.1", tokened_server, token=TOKEN)
@@ -101,30 +119,36 @@ class TestSharedHandshake:
         with pytest.raises(handshake.HandshakeError, match="closed the connection"):
             handshake.connect("127.0.0.1", tokened_server, token=mistyped)
 
+    @pytest.mark.parametrize("stall", ["silent", "trickle"])
     def test_stalled_clients_are_disconnected_and_their_threads_released(
-        self, tokened_server, short_handshake
+        self, tokened_server, short_handshake, stall
     ):
         # [LAW:no-ambient-temporal-coupling] houdini-laws-etg.ml7: the handshake's
-        # deadline is HANDSHAKE_TIMEOUT, owned by the handshake, not the peer. rpyc
-        # runs the authenticator on a per-connection thread, so a client that
-        # announces a token and never finishes sending it must be dropped by the
-        # deadline, or N such clients pin N threads of the RCE listener forever.
-        baseline = threading.active_count()
+        # deadline is HANDSHAKE_TIMEOUT from the first byte, owned by the handshake,
+        # not the peer. rpyc runs the authenticator on a per-connection thread, so
+        # a client that announces a token and never finishes sending it must be
+        # dropped at the deadline, whether it goes silent or keeps one byte
+        # trickling, or N such clients pin N threads of the RCE listener forever.
+        before = set(threading.enumerate())
         stalled = [socket.create_connection(("127.0.0.1", tokened_server)) for _ in range(5)]
+        tricklers = [
+            threading.Thread(target=_trickle, args=(sock,), daemon=True) for sock in stalled
+        ]
         try:
             for sock in stalled:
-                sock.sendall(b"\x00\x07hu")  # announces 7 bytes, sends 2, never closes
+                sock.sendall(b"\xff\xff")  # announces 65535 bytes
+            if stall == "trickle":
+                for thread in tricklers:
+                    thread.start()
             for sock in stalled:
                 sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
-                assert sock.recv(1) == b""  # the listener gave up and closed
+                assert _hung_up(sock)  # the listener gave up at the deadline
         finally:
             for sock in stalled:
                 sock.close()
-        for _ in range(50):  # rpyc closes the socket before its thread exits
-            if threading.active_count() == baseline:
-                break
-            time.sleep(0.05)
-        assert threading.active_count() == baseline
+        for thread in set(threading.enumerate()) - before:
+            thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
+            assert not thread.is_alive(), f"{thread.name} still alive"
 
     def test_no_token_is_the_empty_exchange(self):
         assert handshake.exchange(None) == (b"", b"")

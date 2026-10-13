@@ -9,15 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A client that stalls the token handshake is disconnected, not held**
-  (houdini-laws-etg.ml7): the listener's token authenticator reads the client's
-  framed token under `HANDSHAKE_TIMEOUT`, so a client that connects and sends
-  fewer bytes than it announced is rejected at the deadline and rpyc releases
-  its per-connection thread. Before the shared handshake (houdini-laws-etg.8d0)
-  that read had no timeout, and each such client pinned a listener thread for
-  as long as it stayed connected. Pinned by a test against the real rpyc
-  server: five stalled clients are all closed and the thread count returns to
-  its baseline.
+- **The token handshake's bound is a deadline, not an idle timeout**
+  (houdini-laws-etg.ml7): `HANDSHAKE_TIMEOUT` is counted once from the first
+  byte for the whole framed token (and for the client's wait for the
+  acknowledgement), so a client that keeps one byte trickling can no longer
+  hold a listener thread past it. Previously each read restarted the timer, so
+  a client announcing a long token and sending it slowly pinned the listener's
+  per-connection thread for as long as it kept sending.
 - **Input connections report the real source output; reorder_inputs preserves
   it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
   `reorder_inputs` read the source output index from Houdini's
