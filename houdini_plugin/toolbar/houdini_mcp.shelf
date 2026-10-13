@@ -189,27 +189,16 @@ Stop the hrpyc server for remote connections.
 import hou
 
 try:
-    from houdini_mcp_plugin import stop_hrpyc_server, is_hrpyc_running
-    
-    if not is_hrpyc_running():
-        hou.ui.displayMessage(
-            "Remote server (hrpyc) is not running.",
-            title="Houdini MCP Remote"
-        )
-    else:
-        status = stop_hrpyc_server()
-        
-        if status["status"] == "success":
-            hou.ui.displayMessage(
-                "Remote server stopped.",
-                title="Houdini MCP Remote"
-            )
-        else:
-            hou.ui.displayMessage(
-                f"Failed to stop remote server:\n{status['message']}",
-                title="Houdini MCP Remote",
-                severity=hou.severityType.Warning
-            )
+    from houdini_mcp_plugin import stop_hrpyc_server
+
+    # stop() is idempotent and lets go of a server that stopped serving too;
+    # its result says which of not_running, success or error happened.
+    status = stop_hrpyc_server()
+    hou.ui.displayMessage(
+        status["message"],
+        title="Houdini MCP Remote",
+        severity=hou.severityType.Warning if status["status"] == "error" else hou.severityType.Message
+    )
 except ImportError as e:
     hou.ui.displayMessage(
         f"Failed to import houdini_mcp_plugin:\n{e}",
