@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Listener status reports a dead server** (houdini-laws-etg.qt8):
+  `RemoteListener.status()` (and `remote.get_hrpyc_status()`) reports
+  `running: False, stale: True` with the endpoint when the held hrpyc server
+  has stopped serving, instead of `running: True` until a self-test; a stopped
+  listener reports `stale: False`. The running state is one
+  `RunningListener` record (server, config, policy, bound port) instead of four
+  independently nullable fields.
+
 - **Input connections have one record shape** (houdini-laws-etg.7xv): every
   tool that reports a wire reports `{input_index, source_node,
   source_output_index}`, built once by `InputConnection.as_record`.

@@ -282,6 +282,28 @@ class TestSelfTestAndStatus:
         assert report["reachable"] is False
         assert report["stale"] is True
 
+    def test_status_reports_a_dead_server_as_not_running(self, fake_hrpyc, fake_hou, free_port):
+        """status() needs no probe: a server that stopped serving is not running, and stale."""
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        assert listener.status()["stale"] is False
+
+        fake_hrpyc.servers[0].close()
+
+        status = listener.status()
+        assert status["running"] is False
+        assert status["stale"] is True
+        assert status["bound_port"] == free_port
+        assert "stop or reload" in status["message"]
+        # The listener still holds the dead server: stop() is what lets go of it.
+        assert listener.is_running() is True
+        assert listener.stop()["status"] == "success"
+        assert listener.status() == {
+            "running": False,
+            "stale": False,
+            "message": "hrpyc listener is not running.",
+        }
+
 
 class TestReportedCauses:
     """A report never substitutes a value for something it could not find out."""
