@@ -10,7 +10,6 @@ import pytest
 from houdini_mcp.connection import (
     IN_PROCESS_HOUDINI,
     HoudiniConnectionError,
-    HoudiniOperationError,
     TransportFailure,
     connect,
     disconnect,
@@ -19,7 +18,6 @@ from houdini_mcp.connection import (
     get_connection_info,
     is_connected,
     ping,
-    safe_execute,
     transport_failure,
     use_houdini,
 )
@@ -174,6 +172,15 @@ class TestConnect:
 
         assert "Failed to connect" in str(exc_info.value)
         assert "after 2 attempts" in str(exc_info.value)
+
+    def test_connect_rejects_fewer_than_one_attempt(self, reset_connection_state):
+        """Zero attempts is refused outright, never reported as an unreachable Houdini."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_handshake,
+            pytest.raises(ValueError, match="at least 1"),
+        ):
+            connect("localhost", 18811, max_retries=0, retry_delay=0.01)
+        assert mock_handshake.mock_calls == []
 
     def test_connect_exponential_backoff(self, reset_connection_state, mock_hou):
         """Test that retry delay doubles each attempt (exponential backoff)."""
@@ -495,20 +502,6 @@ class TestHoudiniConnectionError:
         assert isinstance(error, Exception)
 
 
-class TestHoudiniOperationError:
-    """Tests for the HoudiniOperationError exception."""
-
-    def test_exception_message(self):
-        """Test exception contains useful message."""
-        error = HoudiniOperationError("Operation failed")
-        assert str(error) == "Operation failed"
-
-    def test_exception_inheritance(self):
-        """Test exception inherits from Exception."""
-        error = HoudiniOperationError("Test")
-        assert isinstance(error, Exception)
-
-
 class TestTransportFailure:
     """Only a failure of the link itself is connection loss."""
 
@@ -536,7 +529,7 @@ class TestTransportFailure:
             # rpyc wraps a reset it meets into EOFError; a bare one came from local code
             ConnectionResetError("reset by peer"),
             BrokenPipeError("broken pipe"),
-            HoudiniOperationError("connection to input 0 was reset"),
+            RuntimeError("connection to input 0 was reset"),
             ValueError("timeout must be positive"),
         ],
         ids=lambda e: type(e).__name__,
@@ -568,110 +561,3 @@ class TestTransportFailure:
         and no transport, so the same exceptions are the code's own."""
         use_houdini(IN_PROCESS_HOUDINI)
         assert transport_failure(exc) is None
-
-
-class TestSafeExecute:
-    """safe_execute tears the connection down only for the failures that broke it."""
-
-    def test_file_error_reaches_caller_as_its_own_kind(self, mock_connection):
-        def save():
-            raise FileNotFoundError("/renders/missing/frame.exr")
-
-        result = safe_execute(save, operation_name="save")
-
-        assert result.success is False
-        assert result.connection_lost is False
-        assert result.timed_out is False
-        assert result.error_type == "FileNotFoundError"
-        assert get_connection() is not None
-
-    def test_error_text_that_mentions_the_connection_is_not_connection_loss(self, mock_connection):
-        def wire():
-            raise HoudiniOperationError("connection refused: input 0 is already wired")
-
-        result = safe_execute(wire, operation_name="wire")
-
-        assert result.connection_lost is False
-        assert result.error_type == "HoudiniOperationError"
-        assert get_connection() is not None
-
-    def test_timeout_raised_inside_houdini_is_not_our_deadline(self, mock_connection):
-        def cook():
-            raise raised_inside_houdini(TimeoutError("cook timed out"))
-
-        result = safe_execute(cook, timeout=5.0, operation_name="cook")
-
-        assert result.timed_out is False
-        assert result.connection_lost is False
-        assert result.error_type == "TimeoutError"
-        assert get_connection() is not None
-
-    def test_rpyc_sync_timeout_is_connection_loss_not_our_deadline(self, mock_connection):
-        """rpyc's sync_request_timeout fires inside the operation as a bare TimeoutError:
-        the link stopped answering, so it is torn down rather than reported as our own
-        deadline, which only a future that never settles can be."""
-
-        def stalled():
-            raise TimeoutError("result expired")
-
-        result = safe_execute(stalled, timeout=5.0, operation_name="stalled")
-
-        assert result.timed_out is False
-        assert result.connection_lost is True
-        assert get_connection() is None
-
-    def test_link_failure_is_connection_loss_and_tears_down(self, mock_connection):
-        def read():
-            raise EOFError("stream has been closed")
-
-        result = safe_execute(read, operation_name="read")
-
-        assert result.connection_lost is True
-        assert result.error_type == "connection_error"
-        assert get_connection() is None
-
-    def test_our_deadline_is_a_timeout(self, mock_connection, caplog):
-        import threading
-
-        release = threading.Event()
-
-        def hang():
-            release.wait(5.0)
-
-        try:
-            with caplog.at_level("WARNING", logger="houdini_mcp.connection"):
-                result = safe_execute(hang, timeout=0.05, operation_name="hang")
-        finally:
-            release.set()
-
-        assert result.timed_out is True
-        assert result.connection_lost is False
-        assert result.error_type == "timeout"
-        assert "still running on the link" in caplog.text
-
-
-class TestExecuteWithTimeout:
-    """execute_with_timeout owns one deadline; a TimeoutError the operation raised is not it."""
-
-    def test_timeout_raised_by_the_operation_propagates_as_itself(self):
-        from houdini_mcp.connection import HoudiniOperationTimeout, execute_with_timeout
-
-        def cook():
-            raise TimeoutError("cook timed out")
-
-        with pytest.raises(TimeoutError) as exc_info:
-            execute_with_timeout(cook, timeout=5.0)
-        assert not isinstance(exc_info.value, HoudiniOperationTimeout)
-        assert "cook timed out" in str(exc_info.value)
-
-    def test_our_deadline_is_houdini_operation_timeout(self):
-        import threading
-
-        from houdini_mcp.connection import HoudiniOperationTimeout, execute_with_timeout
-
-        release = threading.Event()
-        try:
-            with pytest.raises(HoudiniOperationTimeout):
-                execute_with_timeout(release.wait, 5.0, timeout=0.05)
-        finally:
-            release.set()

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Connection failure has one definition each of classification, retry and error**
+  (houdini-laws-etg.c3b): the in-use failure set is the one union `TransportException`,
+  which is both the check `transport_failure()` runs and the type of the proof it
+  returns; opening a link is the one retry policy (`_open_link_with_retries`); and the
+  tool decorator's `_tool_error_response` is the one caller-facing error. Removed as
+  dead, with their tests: the never-applied `retry_with_backoff` decorator,
+  `safe_execute`, `SafeExecutionResult`, `execute_with_timeout`,
+  `HoudiniOperationTimeout`, `HoudiniOperationError`, the module thread pool, and the
+  unused `DEFAULT_TIMEOUT` / `DEFAULT_OPERATION_TIMEOUT` constants.
+
 - **Connection state has one owner** (houdini-laws-etg.bfq): `connection.py`'s
   module globals (`_connection`, `_hou`, `_target`, `_executor`) are replaced by
   `HoudiniConnection`, which holds the target and at most one `Link` (target, host,
@@ -222,13 +232,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`EOFError`, which is also how rpyc surfaces a reset or broken pipe, and
   `TimeoutError`) and only when Houdini's own code
   did not raise it; in-process (the plugin's stdio server) nothing is connection
-  loss. Opening a connection still retries on any socket-layer `OSError`. `safe_execute`
-  drops its substring sniff for "connection"/"timeout" in error text and no longer
-  mistakes a `TimeoutError` raised by the operation for its own deadline: one it
-  raised itself is now its own kind, and one rpyc's sync timeout raised is
-  connection loss (the link stopped answering) rather than `timed_out`.
-  `execute_with_timeout` had the same deadline bug and shares the one fix.
-  `CONNECTION_ERRORS` is removed from `houdini_mcp.tools`.
+  loss. Opening a connection still retries on any socket-layer `OSError`. A
+  `TimeoutError` rpyc's sync timeout raised is connection loss (the link stopped
+  answering), not an operation error. `CONNECTION_ERRORS` is removed from
+  `houdini_mcp.tools`.
 
 - **Listener start no longer races its own serve thread**: `start()` listens
   on the server socket before spawning the accept thread (rpyc's own readiness

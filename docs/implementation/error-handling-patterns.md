@@ -31,7 +31,6 @@ This document describes the error handling patterns used throughout the Houdini 
 │  - HoudiniConnection: the one owner of the target and the link  │
 │  - connect() with exponential backoff + jitter                  │
 │  - ensure_connected() reaches the Houdini named, or fails       │
-│  - safe_execute() for timeout protection                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -39,7 +38,7 @@ This document describes the error handling patterns used throughout the Houdini 
 
 ### 1. `@handle_connection_errors` Decorator
 
-**Location:** `houdini_mcp/tools/_common.py:82-124`
+**Location:** `handle_connection_errors` in `houdini_mcp/tools/_common.py`
 
 The primary error handling mechanism. Wraps tool functions with a three-tier error pattern:
 
@@ -121,22 +120,16 @@ Takes a `TransportFailure` (so it cannot be called for anything else) and:
 
 #### Retry with Exponential Backoff
 
-```python
-@retry_with_backoff(
-    max_retries=3,
-    base_delay=1.0,
-    max_delay=30.0,
-    exponential_base=2.0,
-    jitter=True,  # Prevents thundering herd
-)
-def connect_to_houdini(): ...
-```
-
-**Key Parameters:**
-- `max_retries=3` - Three attempts before failing
-- `base_delay=1.0` - Start with 1 second delay
-- `max_delay=30.0` - Cap delay at 30 seconds
-- `jitter=True` - Add up to 10% random delay to prevent thundering herd
+Opening a link is the one place anything retries, in `_open_link_with_retries()`,
+which `connect()` and `ensure_connected()` both go through. Whether an open-time
+failure is worth another attempt is the installed `HoudiniTarget`'s decision
+(`open_is_retryable`): over rpyc any socket-layer `OSError`/`EOFError` is, a rejected
+token is not, and in-process nothing is. The delay starts at `retry_delay` (1.0s),
+doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s), and then carries up to
+10% jitter on top of the capped value so clients that lost Houdini together do not
+reconnect in lockstep, even once they are all at the cap. After `max_retries` (3)
+attempts it raises `HoudiniConnectionError` with the last error; `max_retries` below 1
+is rejected with `ValueError`.
 
 #### `ensure_connected()` Function
 
@@ -156,29 +149,6 @@ def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
 `is_connected()` and `get_connection_info()` are queries: they read the link and
 never tear it down. `get_connection_info` reports the host, port and target of the
 Houdini actually reached when connected, not the ones it was asked about.
-
-#### `safe_execute()` Function
-
-Wraps RPC operations with timeout protection. Its own deadline is detected by waiting
-on the future, not by catching `TimeoutError`, so a `TimeoutError` the operation itself
-raised is reported as that and not as a timeout; connection loss is whatever
-`transport_failure()` says it is:
-
-```python
-result = safe_execute(
-    func,
-    *args,
-    timeout=DEFAULT_OPERATION_TIMEOUT,  # 45 seconds
-    operation_name="heavy_operation",
-    **kwargs
-)
-
-if not result.success:
-    if result.timed_out:
-        # Handle timeout
-    elif result.connection_lost:
-        # Handle connection loss
-```
 
 ## Standard Response Format
 
