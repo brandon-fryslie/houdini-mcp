@@ -538,8 +538,10 @@ def capture_multiple_panes(
     success_count = 0
 
     for pane_type_name in pane_types:
-        # One pane's failure is recorded in its slot, in the same shape every
-        # tool failure takes, and the next pane is still tried.
+        # A pane's own failure (unknown type, not in the layout, could not be
+        # captured) is recorded in its slot, in the same shape every tool failure
+        # takes, and the next pane is still tried. Anything else - a torn link, a
+        # bug - is the whole call's and reaches the boundary.
         try:
             result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
         except ToolError as e:
@@ -565,9 +567,9 @@ def capture_multiple_panes(
         success_count += 1
         results[pane_type_name] = result
 
-    # [LAW:dataflow-not-control-flow] the call succeeds by reporting every pane;
-    # each slot is a capture or the failure arm for that pane, so the aggregate
-    # has one shape whether none, some or all of the captures worked.
+    # [LAW:dataflow-not-control-flow] the call succeeds by reporting every pane
+    # it could try; each slot is a capture or the failure arm for that pane, so
+    # the aggregate has one shape whether none, some or all of the captures worked.
     return {
         "status": "success",
         "success_count": success_count,
