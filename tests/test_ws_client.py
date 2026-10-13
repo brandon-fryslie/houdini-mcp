@@ -488,7 +488,8 @@ class TestCommandsAndQueues:
         core.send_command({"op": 2})  # evicts op0
         assert core.command_backlog == 2
         # Only the two most recent reach the wire, in order.
-        assert [f["payload"]["op"] for f in sent_frames(connect_core(core))] == [1, 2]
+        sent = [f for f in sent_frames(connect_core(core)) if f["type"] == COMMAND]
+        assert [f["payload"]["op"] for f in sent] == [1, 2]
 
     def test_command_queue_reject_policy_raises(self):
         core = WSClientCore(make_config(max_command_queue=1))
@@ -513,17 +514,6 @@ class TestEventBackpressure:
         delivered = [a for a in actions if a.type == ActionType.DELIVER_EVENT]
         assert len(delivered) == 1
         assert delivered[0].event["id"] == "e1"
-
-    def test_event_backpressure_never_blocks(self):
-        # Even with a tiny bound, delivering many events must never raise or
-        # block: each on_frame hands exactly its own event to the app and
-        # returns, so the UI thread stays free.
-        core = WSClientCore(make_config(max_event_queue=1))
-        connect_core(core, session_id="s1")
-        for i in range(10):
-            actions = core.on_frame({"type": EVENT, "id": f"e{i}", "session_id": "s1"})
-            delivered = actions_of(actions, ActionType.DELIVER_EVENT)
-            assert [a.event["id"] for a in delivered] == [f"e{i}"]
 
 
 # --------------------------------------------------------------------------- #
@@ -742,7 +732,7 @@ class TestScenarios:
         driver.call("on_socket_open")
         driver.call("on_frame", {"type": WELCOME, "session_id": "s2"})
         resent = [f for f in driver.sent if f["type"] == COMMAND and f["request_id"] == rid]
-        assert len(resent) >= 2  # original + retry
+        assert len(resent) == 2  # original + retry
 
         # Finally acked exactly once terminates it.
         driver.call("on_frame", {"type": ACK, "request_id": rid, "session_id": "s2"})
@@ -908,6 +898,12 @@ class WSClientStateMachine(RuleBasedStateMachine):
     @invariant()
     def command_queue_stays_bounded(self):
         assert self.core.command_backlog <= self.core.config.max_command_queue
+
+    @invariant()
+    def no_event_is_retained_past_on_frame(self):
+        # Each event is handed to the app inside the on_frame that received it;
+        # a retained event is a leak in a long-lived Houdini session.
+        assert self.core.event_backlog == 0
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):
