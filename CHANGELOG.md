@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The token handshake's bound is a deadline, not an idle timeout**
+  (houdini-laws-etg.ml7): `HANDSHAKE_TIMEOUT` is counted once, from the moment
+  the listener starts reading, for the whole framed token (and likewise for the
+  client's wait for the acknowledgement), so a client that keeps one byte
+  trickling can no longer hold a listener thread past it. Previously each read
+  restarted the timer, so a client announcing a long token and sending it
+  slowly pinned the listener's per-connection thread for as long as it kept
+  sending.
 - **HscriptBatch executes no Python outside code.py's gate**
   (houdini-laws-etg.cg2): the node-type cache used to fill itself by sending a
   Python program over the RPyC connection (`conn.execute`) or `exec`-ing it in
