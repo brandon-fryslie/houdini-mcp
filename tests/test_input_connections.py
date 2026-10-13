@@ -158,11 +158,12 @@ class TestSubnetIndirectInputs:
 
     @pytest.fixture
     def merge(self, mock_connection) -> MockHouNode:
-        subnet = MockHouNode(path="/obj/subnet1", name="subnet1", node_type="subnet")
+        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
+        subnet = MockHouNode(path="/obj/geo1/subnet1", name="subnet1", node_type="subnet")
         mock_connection.add_node(subnet)
-        box = MockHouNode(path="/obj/subnet1/box1", name="box1", node_type="box")
+        box = MockHouNode(path="/obj/geo1/subnet1/box1", name="box1", node_type="box")
         mock_connection.add_node(box)
-        merge = MockHouNode(path="/obj/subnet1/merge1", name="merge1", node_type="merge")
+        merge = MockHouNode(path="/obj/geo1/subnet1/merge1", name="merge1", node_type="merge")
         mock_connection.add_node(merge)
         merge.setInput(0, subnet.indirectInputs()[0], 0)
         merge.setInput(1, box, 0)
@@ -174,11 +175,11 @@ class TestSubnetIndirectInputs:
         trip holds for this source too and takes no error-swallowing path."""
         from houdini_mcp.tools import connect_nodes, disconnect_node_input
 
-        cut = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
+        cut = disconnect_node_input("/obj/geo1/subnet1/merge1", 0, host="localhost", port=18811)
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.wiring"):
             made = connect_nodes(
                 cut["disconnected"]["source_node"],
-                "/obj/subnet1/merge1",
+                "/obj/geo1/subnet1/merge1",
                 cut["disconnected"]["input_index"],
                 cut["disconnected"]["source_output_index"],
                 host="localhost",
@@ -188,83 +189,88 @@ class TestSubnetIndirectInputs:
         assert made["status"] == "success"
         assert caplog.records == []
         assert made["connection"] == cut["disconnected"]
-        assert _wires(merge) == [(0, "/obj/subnet1/1", 0), (1, "/obj/subnet1/box1", 0)]
+        assert _wires(merge) == [(0, "/obj/geo1/subnet1/1", 0), (1, "/obj/geo1/subnet1/box1", 0)]
 
     def test_get_node_info_reports_the_indirect_input(self, merge):
         from houdini_mcp.tools import get_node_info
 
         result = get_node_info(
-            "/obj/subnet1/merge1", detail="standard", host="localhost", port=18811
+            "/obj/geo1/subnet1/merge1", detail="standard", host="localhost", port=18811
         )
 
         assert result["status"] == "success"
         assert result["input_connections"] == [
-            {"input_index": 0, "source_node": "/obj/subnet1/1", "source_output_index": 0},
-            {"input_index": 1, "source_node": "/obj/subnet1/box1", "source_output_index": 0},
+            {"input_index": 0, "source_node": "/obj/geo1/subnet1/1", "source_output_index": 0},
+            {"input_index": 1, "source_node": "/obj/geo1/subnet1/box1", "source_output_index": 0},
         ]
 
     def test_list_children_reports_the_indirect_input(self, merge):
         from houdini_mcp.tools import list_children
 
-        result = list_children("/obj/subnet1", host="localhost", port=18811)
+        result = list_children("/obj/geo1/subnet1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         merge_info = next(c for c in result["children"] if c["name"] == "merge1")
         assert merge_info["inputs"] == [
-            {"input_index": 0, "source_node": "/obj/subnet1/1", "source_output_index": 0},
-            {"input_index": 1, "source_node": "/obj/subnet1/box1", "source_output_index": 0},
+            {"input_index": 0, "source_node": "/obj/geo1/subnet1/1", "source_output_index": 0},
+            {"input_index": 1, "source_node": "/obj/geo1/subnet1/box1", "source_output_index": 0},
         ]
 
     def test_get_node_info_inputs_list_and_count_agree_with_the_wires(self, merge):
         from houdini_mcp.tools import get_node_info
 
         standard = get_node_info(
-            "/obj/subnet1/merge1", detail="standard", host="localhost", port=18811
+            "/obj/geo1/subnet1/merge1", detail="standard", host="localhost", port=18811
         )
         compact = get_node_info(
-            "/obj/subnet1/merge1", detail="compact", host="localhost", port=18811
+            "/obj/geo1/subnet1/merge1", detail="compact", host="localhost", port=18811
         )
 
-        assert standard["inputs"] == ["/obj/subnet1/1", "/obj/subnet1/box1"]
+        assert standard["inputs"] == ["/obj/geo1/subnet1/1", "/obj/geo1/subnet1/box1"]
         assert compact["inputs_count"] == 2
 
     def test_disconnect_node_input_reports_the_indirect_input_it_cut(self, merge):
         from houdini_mcp.tools import disconnect_node_input
 
-        result = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
+        result = disconnect_node_input("/obj/geo1/subnet1/merge1", 0, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["disconnected"] == {
             "input_index": 0,
-            "source_node": "/obj/subnet1/1",
+            "source_node": "/obj/geo1/subnet1/1",
             "source_output_index": 0,
         }
-        assert _wires(merge) == [(1, "/obj/subnet1/box1", 0)]
+        assert _wires(merge) == [(1, "/obj/geo1/subnet1/box1", 0)]
 
     def test_connect_nodes_names_the_indirect_input_it_replaces(self, merge, caplog):
         from houdini_mcp.tools import connect_nodes
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.wiring"):
             result = connect_nodes(
-                "/obj/subnet1/box1", "/obj/subnet1/merge1", 0, 0, host="localhost", port=18811
+                "/obj/geo1/subnet1/box1",
+                "/obj/geo1/subnet1/merge1",
+                0,
+                0,
+                host="localhost",
+                port=18811,
             )
 
         assert result["status"] == "success"
         assert result["connection"] == {
             "input_index": 0,
-            "source_node": "/obj/subnet1/box1",
+            "source_node": "/obj/geo1/subnet1/box1",
             "source_output_index": 0,
         }
-        assert "from /obj/subnet1/1 to /obj/subnet1/merge1[0]" in caplog.text
-        assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/box1", 0)]
+        assert "from /obj/geo1/subnet1/1 to /obj/geo1/subnet1/merge1[0]" in caplog.text
+        assert _wires(merge) == [(0, "/obj/geo1/subnet1/box1", 0), (1, "/obj/geo1/subnet1/box1", 0)]
 
     def test_reorder_inputs_moves_the_indirect_input(self, merge):
         from houdini_mcp.tools import reorder_inputs
 
-        result = reorder_inputs("/obj/subnet1/merge1", [1, 0], host="localhost", port=18811)
+        result = reorder_inputs("/obj/geo1/subnet1/merge1", [1, 0], host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/1", 0)]
+        assert _wires(merge) == [(0, "/obj/geo1/subnet1/box1", 0), (1, "/obj/geo1/subnet1/1", 0)]
 
 
 class TestOneRecordShape:

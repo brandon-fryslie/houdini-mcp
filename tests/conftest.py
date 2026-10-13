@@ -228,7 +228,15 @@ class MockHouNode:
         # Determine category from node type
         # SOPs: grid, sphere, box, noise, mountain, merge, etc.
         # Objects: geo, cam, light, null (at /obj level)
-        if self._node_type in [
+        # A subnet is of its network's category: an Object subnet under /obj,
+        # a SOP subnet inside a geo.
+        parent = self._parent
+        object_subnet = (
+            self._node_type == "subnet" and parent is not None and parent.path() == "/obj"
+        )
+        if object_subnet or self._node_type in ["geo", "cam", "light", "null"]:
+            mock_category.name.return_value = "Object"
+        elif self._node_type in [
             "grid",
             "sphere",
             "box",
@@ -239,8 +247,6 @@ class MockHouNode:
             "subnet",
         ]:
             mock_category.name.return_value = "Sop"
-        elif self._node_type in ["geo", "cam", "light", "null"]:
-            mock_category.name.return_value = "Object"
         elif self._node_type in ["dopnet", "pyrosolver"]:
             mock_category.name.return_value = "Dop"
         else:
@@ -1065,11 +1071,14 @@ class MockGeoGroup:
 
 
 class MockBoundingBox:
-    """Mock hou.BoundingBox."""
+    """Mock hou.BoundingBox: the box around empty geometry is invalid, as Houdini's is."""
 
     def __init__(self, min_vec: tuple, max_vec: tuple):
         self._min = list(min_vec)
         self._max = list(max_vec)
+
+    def isValid(self) -> bool:
+        return all(lo <= hi for lo, hi in zip(self._min, self._max, strict=True))
 
     def minvec(self) -> tuple:
         return tuple(self._min)
@@ -1096,7 +1105,8 @@ class MockGeometry:
         self._detail_attribs: list[MockGeoAttrib] = []
         self._point_groups: list[MockGeoGroup] = []
         self._prim_groups: list[MockGeoGroup] = []
-        self._bbox: MockBoundingBox | None = None
+        inf = float("inf")
+        self._bbox = MockBoundingBox((inf, inf, inf), (-inf, -inf, -inf))
 
     def points(self) -> list[MockGeoPoint]:
         """Return list of points."""
@@ -1132,7 +1142,7 @@ class MockGeometry:
     def primGroups(self) -> list[MockGeoGroup]:
         return self._prim_groups
 
-    def boundingBox(self) -> MockBoundingBox | None:
+    def boundingBox(self) -> MockBoundingBox:
         return self._bbox
 
     def addPoint(self, position: tuple, attribs: dict[str, Any] | None = None) -> MockGeoPoint:

@@ -483,20 +483,22 @@ def render_viewport(
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
-        look_at: Node path to look at (centers camera on this node's geometry)
+        look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
+            an unknown path, or a node with no geometry, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         auto_frame: If True, automatically frame all visible geometry (default: True)
         orthographic: If True, use orthographic projection (default: False)
-        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Only used when renderer="karma"
+        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Always one of
+            the two; only a karma render uses it
 
     Returns:
         Dict with:
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - bounding_box: Scene bounding box if auto_frame was used
+        - bounding_box: The world-space box that was framed, when geometry was
 
     Examples:
         render_viewport()  # Auto-frame scene with isometric view
@@ -543,7 +545,8 @@ def render_quad_view(
         output_format: Image format - "png", "jpg", or "exr"
         orthographic: If True, use orthographic projection for Front/Left/Top views (default: True)
         include_perspective: If True, include perspective view; if False, only orthographic views (default: True)
-        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Only used when renderer="karma"
+        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Always one of
+            the two; only a karma render uses it
 
     Returns:
         Dict with:
@@ -555,7 +558,7 @@ def render_quad_view(
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
-        - bounding_box: Scene bounding box info
+        - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
         - total_render_time_ms: Total time for all renders
 

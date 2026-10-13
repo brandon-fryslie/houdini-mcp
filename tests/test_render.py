@@ -1261,6 +1261,97 @@ class TestRenderFraming:
         }
         assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
 
+    def test_look_at_a_sop_frames_it_where_its_object_places_it(
+        self, frames: list[dict[str, Any]]
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(look_at="/obj/cube_b/box1", host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
+        assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
+
+    def test_look_at_a_node_without_geometry_is_an_error(
+        self, frames: list[dict[str, Any]], framed_scene: Any
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        framed_scene.node("/obj").createNode("cam", "user_cam")
+
+        result = render_viewport(look_at="/obj/user_cam", host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert "/obj/user_cam" in result["message"]
+        assert frames == []
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_displayed_object_subnet_is_framed_by_what_it_displays(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        asset = framed_scene.node("/obj").createNode("subnet", "asset")
+        _geo_with_box(asset, "shown", 20.0, (-1, -1, -1), (1, 1, 1))
+        _geo_with_box(asset, "hidden", 40.0, (-1, -1, -1), (1, 1, 1)).setDisplayFlag(False)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"]["max"] == [21.0, 1.0, 1.0]
+        assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_empty_geometry_contributes_nothing_to_the_frame(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockGeometry
+
+        empty = framed_scene.node("/obj").createNode("geo", "empty")
+        empty.parm("tx").set(1000.0)
+        empty.createNode("box", "box1").setGeometry(MockGeometry())
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+
+    def test_a_rop_missing_a_table_parm_fails_naming_it(
+        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from houdini_mcp.tools import render_viewport, rendering
+
+        monkeypatch.setitem(rendering._RENDERERS, "opengl", lambda _w, _h, _e: {"nosuchparm": 1})
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "error"
+        assert "nosuchparm" in result["message"]
+        assert "/out/_mcp_opengl_rop" in result["message"]
+        assert frames == []
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_render_logs_what_it_framed_and_what_it_set(
+        self, frames: list[dict[str, Any]], caplog: pytest.LogCaptureFixture, tool: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.rendering"):
+            result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        messages = [r.getMessage() for r in caplog.records]
+        framed = [m for m in messages if m.startswith("Framed 2 shapes: ")]
+        assert framed == [
+            "Framed 2 shapes: bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) "
+            "distance=23.382 ortho_width=14.400"
+        ]
+        rop = [m for m in messages if m.startswith("Render ROP ")]
+        assert len(rop) == 1
+        assert f"/out/{self.PREFIX[tool]}opengl_rop" in rop[0]
+        assert "'tres': True" in rop[0] and "'res1': 512" in rop[0]
+
     def test_auto_frame_off_frames_nothing(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_viewport
 

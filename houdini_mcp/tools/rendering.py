@@ -182,45 +182,86 @@ class Framing:
         return {"min": list(lo), "max": list(hi), "center": list(self.center), "size": self.size}
 
 
-def _displayed_geometry(obj_context: Any) -> list[Any]:
-    """The /obj nodes a viewport shows: geometry and subnets with the display flag on."""
-    return [
-        node
-        for node in obj_context.children()
-        if node.type().name() in ("geo", "subnet") and node.isDisplayFlagSet()
-    ]
+@dataclass(frozen=True)
+class _Shape:
+    """A geometry and the transform that places it in the world."""
+
+    geometry: Any
+    """The hou.Geometry; None when its SOP failed to cook."""
+    transform: Any
+    """The hou.Matrix4 from the geometry's space to world space."""
 
 
-def _world_corners(hou: Any, node: Any) -> list[Vec3]:
-    """The eight corners of the box around a node's displayed geometry, in world space.
+def _shapes(node: Any) -> list[_Shape] | None:
+    """What a node puts in the world, and where; None for a kind of node that puts nothing.
 
-    A node that shows no geometry - no display SOP, or one with nothing cooked -
-    has no corners and contributes nothing to a framing.
+    [LAW:one-type-per-behavior] the three kinds of node that carry geometry,
+    told apart once: a SOP is its own geometry placed by its object, a geo
+    object is its display SOP's geometry placed by itself, and an object subnet
+    is whatever its displayed children place. A camera, a light, a DOP network
+    have no shape, and say so as None rather than as an empty list, so a caller
+    that asked to frame one can tell the difference.
     """
-    display = node.displayNode()
-    geometry = display.geometry() if display is not None else None
-    box = geometry.boundingBox() if geometry is not None else None
-    if box is None:
+    node_type = node.type()
+    if node_type.category().name() == "Sop":
+        return [_Shape(geometry=node.geometry(), transform=node.parent().worldTransform())]
+    if node_type.name() == "geo":
+        display = node.displayNode()
+        if display is None:
+            return []
+        return [_Shape(geometry=display.geometry(), transform=node.worldTransform())]
+    if node_type.name() == "subnet":
+        return _displayed_shapes(node)
+    return None
+
+
+def _displayed_shapes(network: Any) -> list[_Shape]:
+    """The shapes of the children a network shows: display flag on, and of a kind that has one."""
+    shapes: list[_Shape] = []
+    for child in network.children():
+        if child.isDisplayFlagSet():
+            shapes.extend(_shapes(child) or [])
+    return shapes
+
+
+def _world_corners(hou: Any, shape: _Shape) -> list[Vec3]:
+    """The eight corners of the box around a shape's geometry, in world space.
+
+    Geometry that failed to cook, or that holds no points, has no box and so
+    contributes no corners to a framing.
+    """
+    if shape.geometry is None:
         return []
-    transform = node.worldTransform()
+    box = shape.geometry.boundingBox()
+    if not box.isValid():
+        return []
     lo, hi = box.minvec(), box.maxvec()
     corners: list[Vec3] = []
     for x in (lo[0], hi[0]):
         for y in (lo[1], hi[1]):
             for z in (lo[2], hi[2]):
-                world = hou.Vector4(x, y, z, 1.0) * transform
+                world = hou.Vector4(x, y, z, 1.0) * shape.transform
                 corners.append((world[0], world[1], world[2]))
     return corners
 
 
-def _framing(hou: Any, nodes: Sequence[Any]) -> Framing:
-    """Frame the geometry the nodes display, together, in world space."""
-    corners = [corner for node in nodes for corner in _world_corners(hou, node)]
-    if not corners:
-        return Framing(bounds=None)
-    lo = (min(c[0] for c in corners), min(c[1] for c in corners), min(c[2] for c in corners))
-    hi = (max(c[0] for c in corners), max(c[1] for c in corners), max(c[2] for c in corners))
-    return Framing(bounds=(lo, hi))
+def _framing(hou: Any, shapes: Sequence[_Shape]) -> Framing:
+    """Frame the shapes together, in world space."""
+    corners = [corner for shape in shapes for corner in _world_corners(hou, shape)]
+    if corners:
+        lo = (min(c[0] for c in corners), min(c[1] for c in corners), min(c[2] for c in corners))
+        hi = (max(c[0] for c in corners), max(c[1] for c in corners), max(c[2] for c in corners))
+        framing = Framing(bounds=(lo, hi))
+    else:
+        framing = Framing(bounds=None)
+    logger.info(
+        "Framed %d shapes: bounds=%s distance=%.3f ortho_width=%.3f",
+        len(shapes),
+        framing.bounds,
+        framing.distance,
+        framing.ortho_width,
+    )
+    return framing
 
 
 # =============================================================================
@@ -334,7 +375,13 @@ def _build_rop(
     rop = create(prepared.out, prepared.rop_type, f"{prefix}{prepared.rop_type}_rop")
     settings = {"camera": rig.camera.path(), "trange": 0, **prepared.rop_settings}
     for name, value in settings.items():
-        rop.parm(name).set(value)
+        parm = rop.parm(name)
+        if parm is None:
+            # [LAW:no-silent-failure] a parm the table names that the ROP lacks
+            # is a wrong table, reported by name
+            raise RuntimeError(f"{prepared.rop_type} ROP {rop.path()} has no parm {name!r}")
+        parm.set(value)
+    logger.info("Render ROP %s: %s", rop.path(), settings)
     return rop
 
 
@@ -390,13 +437,15 @@ def render_viewport(
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
         camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
-        look_at: Node path to look at (frames this node's geometry instead of the scene's)
+        look_at: Path of a geometry node (an object or a SOP) to frame instead of the scene;
+            an unknown path, or a node with no geometry, is an error
         resolution: [width, height] in pixels (default: [512, 512])
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         auto_frame: If True, automatically frame all visible geometry (default: True)
         orthographic: If True, use orthographic projection (default: False)
-        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Only used when renderer="karma"
+        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Always one of
+            the two; only a karma render uses it
 
     Returns:
         Dict with:
@@ -421,13 +470,18 @@ def render_viewport(
     if look_at is not None:
         target = prepared.hou.node(look_at)
         if target is None:
-            return {"status": "error", "message": f"look_at node not found: {look_at}"}
-        framed = [target]
+            return {"status": "error", "message": f"Node not found: {look_at}"}
+        shapes = _shapes(target)
+        if shapes is None:
+            return {
+                "status": "error",
+                "message": f"look_at must name a geometry node (an object or a SOP): {look_at}",
+            }
     elif auto_frame:
-        framed = _displayed_geometry(prepared.obj)
+        shapes = _displayed_shapes(prepared.obj)
     else:
-        framed = []
-    framing = _framing(prepared.hou, framed)
+        shapes = []
+    framing = _framing(prepared.hou, shapes)
     rotation = _ISOMETRIC if camera_rotation is None else camera_rotation
     offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
 
@@ -476,7 +530,8 @@ def render_quad_view(
         output_format: Image format - "png", "jpg", or "exr"
         orthographic: If True, use orthographic projection for Front/Left/Top views (default: True)
         include_perspective: If True, include perspective view; if False, only orthographic views (default: True)
-        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Only used when renderer="karma"
+        karma_engine: Karma render engine - "cpu" (quality) or "gpu" (fast XPU). Always one of
+            the two; only a karma render uses it
 
     Returns:
         Dict with:
@@ -509,7 +564,7 @@ def render_quad_view(
     if include_perspective:
         views.append(("perspective", _ISOMETRIC, False))
 
-    framing = _framing(prepared.hou, _displayed_geometry(prepared.obj))
+    framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
     offset = (0.0, 0.0, framing.distance)
     view_results: list[dict[str, Any]] = []
 
@@ -525,8 +580,10 @@ def render_quad_view(
                 # [LAW:no-silent-failure] a dead link is not a view's failure
                 if transport_failure(e):
                     raise
+                logger.error("Quad view %s failed: %r", name, e)
                 view["error"] = str(e)
             else:
+                logger.info("Rendered quad view %s", name)
                 view.update(
                     image_base64=image,
                     format=output_format,
