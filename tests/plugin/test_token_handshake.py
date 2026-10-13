@@ -12,7 +12,7 @@ import os
 import socket
 import threading
 from collections.abc import Iterator
-from contextlib import closing
+from contextlib import ExitStack, closing
 
 import houdini_mcp_handshake as handshake
 import pytest
@@ -69,11 +69,14 @@ def _trickle(sock: socket.socket, interval: float | None, stop: threading.Event)
 
 
 def _hung_up(sock: socket.socket) -> bool:
-    """The peer closed: a clean EOF, or a reset when we kept sending after it did."""
+    """The peer closed: a clean EOF, or a reset/abort when we kept sending after
+    it did. A recv that times out instead means the peer is still holding on."""
     try:
         return sock.recv(1) == b""
-    except ConnectionResetError:
+    except (ConnectionResetError, ConnectionAbortedError):
         return True
+    except TimeoutError:
+        return False
 
 
 class TestSharedHandshake:
@@ -135,29 +138,35 @@ class TestSharedHandshake:
         interval = None if trickle_every is None else trickle_every * handshake.HANDSHAKE_TIMEOUT
         before = set(threading.enumerate())
         stop = threading.Event()
-        stalled = [socket.create_connection(("127.0.0.1", tokened_server)) for _ in range(5)]
-        tricklers = [
-            threading.Thread(target=_trickle, args=(sock, interval, stop), daemon=True)
-            for sock in stalled
-        ]
-        try:
-            with caplog.at_level(logging.INFO, logger="houdini_mcp_handshake"):
-                for sock in stalled:
-                    sock.sendall(b"\xff\xff")  # announces 65535 bytes
+        with ExitStack() as clients, caplog.at_level(logging.INFO, logger="houdini_mcp_handshake"):
+            stalled = [
+                clients.enter_context(
+                    closing(socket.create_connection(("127.0.0.1", tokened_server)))
+                )
+                for _ in range(5)
+            ]
+            tricklers = [
+                threading.Thread(target=_trickle, args=(sock, interval, stop), daemon=True)
+                for sock in stalled
+            ]
+
+            def stop_tricklers() -> None:  # unwound before the sockets close
+                stop.set()
                 for thread in tricklers:
-                    thread.start()
-                for sock in stalled:
-                    sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
-                    assert _hung_up(sock)  # the listener gave up at the deadline
-        finally:
-            stop.set()
-            for thread in tricklers:
-                thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
+                    thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
+
+            clients.callback(stop_tricklers)
             for sock in stalled:
-                sock.close()
+                sock.sendall(b"\xff\xff")  # announces 65535 bytes
+            for thread in tricklers:
+                thread.start()
+            for sock in stalled:
+                sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
+                assert _hung_up(sock), "the listener held the connection past 5x HANDSHAKE_TIMEOUT"
         rejections = [r.getMessage() for r in caplog.records if "left before completing" in r.msg]
         assert len(rejections) == len(stalled)
         assert all("did not complete the handshake within" in r for r in rejections)
+        assert all("of 65535 bytes arrived" in r for r in rejections)
         for thread in set(threading.enumerate()) - before:
             thread.join(timeout=5 * handshake.HANDSHAKE_TIMEOUT)
             assert not thread.is_alive(), f"{thread.name} still alive"

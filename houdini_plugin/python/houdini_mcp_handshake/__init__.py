@@ -109,22 +109,30 @@ def _handshake_reader(sock: Any) -> Iterator[Callable[[int], bytes]]:
     deadline = time.monotonic() + HANDSHAKE_TIMEOUT
 
     def read(length: int) -> bytes:
-        received = b""
+        received = bytearray()
+
+        def expired() -> TimeoutError:
+            return TimeoutError(
+                f"peer did not complete the handshake within {HANDSHAKE_TIMEOUT}s "
+                f"({len(received)} of {length} bytes arrived)"
+            )
+
         while len(received) < length:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
-                    f"peer did not complete the handshake within {HANDSHAKE_TIMEOUT}s"
-                )
+                raise expired()
             sock.settimeout(remaining)
             try:
                 chunk = sock.recv(length - len(received))
-            except TimeoutError:
-                continue  # the budget is spent; the check above raises the one message
+            except TimeoutError as exc:
+                # A recv armed with what was left and still waiting is the
+                # deadline; the cause stays chained for the transport's own
+                # ETIMEDOUT, which arrives as the same type.
+                raise expired() from exc
             if not chunk:
                 raise EOFError("peer closed the connection during the handshake")
             received += chunk
-        return received
+        return bytes(received)
 
     previous = sock.gettimeout()
     try:
