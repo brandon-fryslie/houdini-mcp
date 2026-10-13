@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Input connections report the real source output; reorder_inputs preserves
+  it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
+  `reorder_inputs` read the source output index from Houdini's
+  `inputConnections()` records. The old `inputConnectors()[idx][1]` read never
+  matched HOM's shape, so every index fell back to 0: inspection reported the
+  wrong topology and `reorder_inputs` rewired every input from output 0. A
+  connection record that cannot be read is now an error naming the node, and
+  `reorder_inputs` reads every wire first and then sets each input to its new
+  wire in input order, clearing only the inputs left unwired, so no wire is
+  unplugged before its replacement is known. `connect_nodes`,
+  `disconnect_node_input`, and the `inputs` list and `inputs_count` of
+  `get_node_info` read the same records. The source is read as the wire's item
+  (`inputItem()` / `inputItemOutputIndex()`), so a node inside a subnet fed from
+  one of the subnet's indirect inputs reports that indirect input by path and
+  `reorder_inputs` moves it like any other wire; the earlier `inputNode()` read
+  looked through to the parent network and was None when nothing was wired
+  there. `new_order` must be a permutation of the input indices: a shorter or
+  repeated order used to disconnect wires silently and report success, and is
+  now rejected before any wire is touched. `list_children` no longer swallows
+  errors raised while building a child's record; only a parent refusing to list
+  its children is tolerated. The uncalled `HscriptBatch.get_input_connections`
+  and `get_output_connections`, second derivations of the same facts with their
+  own shapes, are removed.
+
 ### Changed
 
 - **Listener depends on a declared server contract that real hrpyc satisfies**

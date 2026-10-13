@@ -2310,7 +2310,7 @@ class TestReorderInputs:
         result = reorder_inputs("/obj/geo1/merge1", [0, 1, 2, 3, 4], host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert "exceeds number of inputs" in result["message"]
+        assert "permutation of []" in result["message"]
 
     def test_reorder_inputs_invalid_indices(self, mock_connection):
         """Test error when indices are out of range."""
@@ -2323,7 +2323,7 @@ class TestReorderInputs:
         result = reorder_inputs("/obj/geo1/merge1", [0, 5, 2], host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert "Invalid indices" in result["message"]
+        assert "permutation of []" in result["message"]
 
     def test_reorder_inputs_with_gaps(self, mock_connection):
         """Test reordering with some None inputs."""
