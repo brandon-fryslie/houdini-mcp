@@ -21,7 +21,7 @@ from ._common import (
     ToolError,
     ensure_connected,
     ensure_link,
-    failure_response,
+    failure_for,
     handle_connection_errors,
     node_at,
 )
@@ -30,32 +30,21 @@ logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
 def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
-    """Get Qt modules from the connection to the Houdini ``host:port`` names.
-
-    Returns:
-        Tuple of (QtWidgets, QtCore, QtGui) module references
-    """
+    """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``host:port`` names,
+    or the one failure every capture tool reports when Houdini has no PySide2."""
     # [LAW:single-enforcer] the connection module owns the connection; it is the
     # same object whether Houdini is remote (rpyc) or this interpreter.
     conn = ensure_link(host, port).conn
-
-    QtWidgets = conn.modules["PySide2.QtWidgets"]
-    QtCore = conn.modules["PySide2.QtCore"]
-    QtGui = conn.modules["PySide2.QtGui"]
-
-    return QtWidgets, QtCore, QtGui
-
-
-def _qt(host: str, port: int) -> tuple[Any, Any]:
-    """PySide2's QtWidgets and QtCore from the Houdini a capture runs in, or the one
-    failure every capture tool reports when Houdini has no PySide2."""
     try:
-        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
+        return (
+            conn.modules["PySide2.QtWidgets"],
+            conn.modules["PySide2.QtCore"],
+            conn.modules["PySide2.QtGui"],
+        )
     except ImportError as e:
         raise OperationFailed(
             f"Failed to access PySide2 modules: {e}. Ensure Houdini has PySide2 available."
         ) from e
-    return QtWidgets, QtCore
 
 
 def pane_type_member(hou: Any, name: str) -> Any | None:
@@ -286,7 +275,7 @@ def capture_pane_screenshot(
     """
     hou = ensure_connected(host, port)
 
-    QtWidgets, QtCore = _qt(host, port)
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     # Capture pane to bytes
     result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore, fit_contents)
@@ -467,7 +456,7 @@ def render_node_network(
     except Exception:
         child_count = 0
 
-    QtWidgets, QtCore = _qt(host, port)
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     # Find NetworkEditor pane
     pane_type = hou.paneTabType.NetworkEditor
@@ -543,7 +532,7 @@ def capture_multiple_panes(
     """
     hou = ensure_connected(host, port)
 
-    QtWidgets, QtCore = _qt(host, port)
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     results: dict[str, dict[str, Any]] = {}
     success_count = 0
@@ -554,7 +543,11 @@ def capture_multiple_panes(
         try:
             result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
         except ToolError as e:
-            results[pane_type_name] = failure_response(e, "capture_multiple_panes")
+            failure = failure_for(e, "capture_multiple_panes")
+            logger.warning(
+                "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
+            )
+            results[pane_type_name] = failure.model_dump()
             continue
 
         raw_bytes: bytes = result.pop("raw_bytes")

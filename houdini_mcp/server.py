@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import tools
-from .connection import describe_target, ensure_connected, get_connection_info, ping
+from .connection import describe_target, ensure_connected, ensure_link, ping
 from .tools._common import Resolution, Vec3, apply_response_cap, handle_connection_errors
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
@@ -763,9 +763,9 @@ def check_connection() -> dict[str, Any]:
     """
     # [LAW:single-enforcer] ensure is the one check: it reconnects when the link is
     # gone and fails when the live link reaches a different Houdini, and its
-    # failure reads like every other tool's.
-    ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
-    return {"status": "success", **get_connection_info(HOUDINI_HOST, HOUDINI_PORT)}
+    # failure reads like every other tool's. The record is the link it returned,
+    # not a re-read of installed state that may have changed since.
+    return {"status": "success", **ensure_link(HOUDINI_HOST, HOUDINI_PORT).info()}
 
 
 @mcp.tool()

@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `retry` that kind fixes (`start_houdini`, `call_again`, `fix_input`,
   `wait_for_worker`, `none`), in place of the ad-hoc `error_type` and the
   hard-coded `recoverable: True`. A Houdini that cannot be reached names its
-  `target`; a live link to a different Houdini than the one named says which
+  `target`; a program that outlives its `timeout` is `worker_still_running`
+  (wait for that worker), while `timeout` is reserved for a request or link
+  that never answered; a live link to a different Houdini than the one named says which
   (`connection_mismatch`, not "start Houdini"); a timeout says whether the
   connection was reset. `capture_multiple_panes` always succeeds by reporting
   every pane, each slot a capture or that pane's failure arm. `check_connection`

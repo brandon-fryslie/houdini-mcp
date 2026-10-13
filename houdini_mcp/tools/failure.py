@@ -46,6 +46,8 @@ __all__ = [
     "InvalidInput",
     "OperationFailed",
     "TimedOut",
+    "ProgramStillRunning",
+    "tool_error",
     "failure_for",
     "failure_response",
 ]
@@ -174,15 +176,20 @@ class ToolError(Exception):
     """A failure a tool body reports on purpose, with the fields its caller needs.
 
     [LAW:parse-dont-validate] Subclasses name the kind; the enforcer never has to
-    guess it from a message. Fields are splatted beside the declared ones, so a
-    field spelled like a declared one is a programming error that is refused
-    loudly: Python for ``operation`` and ``message`` (passed twice), pydantic for
-    ``kind``, ``status`` and ``retry`` (a literal the arm fixes).
+    guess it from a message. Fields ride beside the declared ones and cannot be
+    spelled like one: that is a programming error, refused here where the tool
+    raises, so the boundary reports it as the bug it is (``operation_failed``
+    with the ``TypeError`` and its traceback, and an ERROR in the log).
     """
 
     arm: type[_Failure]
 
     def __init__(self, message: str, **fields: Any) -> None:
+        redefined = fields.keys() & _Failure.model_fields.keys()
+        if redefined:
+            raise TypeError(
+                f"{type(self).__name__} fields redefine declared ones: {sorted(redefined)}"
+            )
         super().__init__(message)
         self.message = message
         self.fields = fields
@@ -204,7 +211,8 @@ class OperationFailed(ToolError):
 
 
 class TimedOut(ToolError):
-    """The operation exceeded its bound while the link to Houdini stayed up."""
+    """A request exceeded its bound while the link to Houdini stayed up, and
+    nothing of it is still running: calling again is the remedy."""
 
     arm = TimeoutFailure
 
@@ -212,6 +220,26 @@ class TimedOut(ToolError):
         return TimeoutFailure(
             operation=operation, message=self.message, connection_reset=False, **self.fields
         )
+
+
+class ProgramStillRunning(ToolError):
+    """The program this call launched exceeded its bound and still holds the
+    scene: the same arm as a refusal, since the remedy is to wait for that worker."""
+
+    arm = WorkerBusyFailure
+
+
+_TOOL_ERROR: dict[str, type[ToolError]] = {
+    "invalid_input": InvalidInput,
+    "operation_failed": OperationFailed,
+}
+
+
+def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
+    """The exception for a failure something else already classified by ``kind``:
+    a program Houdini ran, a ledger of writes. [LAW:one-source-of-truth] the
+    kind named there is the kind the caller reads, through this one table."""
+    return _TOOL_ERROR[kind](message, **fields)
 
 
 # =============================================================================

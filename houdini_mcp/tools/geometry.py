@@ -9,20 +9,13 @@ import logging
 from typing import Any
 
 from ._common import (
-    InvalidInput,
     OperationFailed,
     _add_response_metadata,
     handle_connection_errors,
+    tool_error,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
-
-# [LAW:one-source-of-truth] the kinds the analysis program can name, and the
-# exception each becomes on this side of the link.
-_PROGRAM_FAILURE: dict[str, type[InvalidInput] | type[OperationFailed]] = {
-    "invalid_input": InvalidInput,
-    "operation_failed": OperationFailed,
-}
 
 
 @handle_connection_errors("get_geo_summary")
@@ -115,16 +108,18 @@ else:
         pass
     result["cook_state"] = cook_state
 
-    # Get geometry. A node with no geometry() is the caller's path to fix; a cook
+    # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
     # that raises or yields nothing is Houdini's. The program says which.
-    try:
-        geo = node.geometry()
-    except AttributeError:
-        geo, failure = None, ("invalid_input", "it is not a geometry node")
-    except Exception as e:
-        geo, failure = None, ("operation_failed", f"{{type(e).__name__}}: {{e}}")
+    geo = None
+    if not isinstance(node, hou.SopNode):
+        failure = ("invalid_input", "it is not a SOP node")
     else:
-        failure = None if geo is not None else ("operation_failed", "geometry() returned None")
+        try:
+            geo = node.geometry()
+        except Exception as e:
+            failure = ("operation_failed", f"{{type(e).__name__}}: {{e}}")
+        else:
+            failure = None if geo is not None else ("operation_failed", "geometry() returned None")
     if failure is not None:
         result = {{"status": "error", "kind": failure[0], "message": f"Node {{node_path}} has no geometry: {{failure[1]}}"}}
 
@@ -260,5 +255,5 @@ print(json.dumps(result))
     # caller's path; a cook that yields no geometry is Houdini's), and that kind
     # crosses back into the one failure type here.
     if result["status"] == "error":
-        raise _PROGRAM_FAILURE[result["kind"]](result["message"], path=node_path)
+        raise tool_error(result["kind"], result["message"], path=node_path)
     return _add_response_metadata(result, apply_cap=not _defer_cap)

@@ -60,7 +60,8 @@ discriminated on `kind`; each kind fixes its own `retry`:
 | `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
 | A `TransportFailure` (see below) that is not a timeout | `connection_lost` | `call_again` | `exception`; the link is torn down first |
 | A `TransportFailure` that is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
-| `TimedOut` (a program or request exceeded its bound on an intact link) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
+| `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
+| `ProgramStillRunning` (the program this call launched outlived its bound and holds the scene) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `rollback`, `audit`, ...) |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
@@ -73,8 +74,10 @@ a torn link still tears the connection down. A served tool that finishes its res
 after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then cap)
 is under the same boundary, awaited.
 
-Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`
-or `TimedOut` with the fields their caller needs, and `node_at(hou, path, what)`
+Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`,
+`TimedOut` or `ProgramStillRunning` with the fields their caller needs; a failure
+something else already classified by kind (a program Houdini ran, a ledger of
+parameter writes) becomes its exception through `tool_error(kind, ...)`; and `node_at(hou, path, what)`
 resolves a path or raises `InvalidInput` for them. A caller parses any failure back
 through `FAILURE` (a pydantic `TypeAdapter` over the union) and lands in exactly one
 arm; the contract tests do exactly that.

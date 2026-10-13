@@ -27,11 +27,13 @@ from .failure import (
     FAILURE,
     InvalidInput,
     OperationFailed,
+    ProgramStillRunning,
     TimedOut,
     ToolError,
     ToolFailure,
     failure_for,
     failure_response,
+    tool_error,
 )
 from .hscript import HscriptBatch
 from .parms import evaluated
@@ -59,6 +61,8 @@ __all__ = [
     "InvalidInput",
     "OperationFailed",
     "TimedOut",
+    "ProgramStillRunning",
+    "tool_error",
     "node_at",
     # Output utilities
     "_truncate_output",
@@ -152,7 +156,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
         # the caller's bug and raises as one, before the boundary opens; only what
         # the tool itself raises becomes an error response.
-        def admit(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        def admit() -> None:
             if waits_for_worker:
                 WORKERS.admit(operation_name)
 
@@ -165,8 +169,9 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
                 signature.bind(*args, **kwargs)
                 try:
-                    admit(args, kwargs)
-                    return await func(*args, **kwargs)
+                    admit()
+                    result: dict[str, Any] = await func(*args, **kwargs)
+                    return result
                 except Exception as e:
                     return failure_response(e, operation_name)
 
@@ -176,8 +181,9 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         def wrapper(*args, **kwargs) -> dict[str, Any]:
             signature.bind(*args, **kwargs)
             try:
-                admit(args, kwargs)
-                return func(*args, **kwargs)
+                admit()
+                result: dict[str, Any] = func(*args, **kwargs)
+                return result
             except Exception as e:
                 return failure_response(e, operation_name)
 

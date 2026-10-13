@@ -97,7 +97,10 @@ def test_capture_multiple_panes_reports_every_pane_in_its_slot(
     from houdini_mcp.tools._common import FAILURE
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
-    with patch("houdini_mcp.tools.pane_screenshot._qt", return_value=(object(), object())):
+    with patch(
+        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+        return_value=(object(), object(), object()),
+    ):
         result = capture_multiple_panes(["ChannelEditor", "thisown"])
 
     assert result["status"] == "success"

@@ -112,9 +112,19 @@ class TestWriteAll:
         assert writes.failed[0]["reason"] == "Parameter t is a tuple, provide a list/tuple value"
         assert writes.failed[1]["reason"] == "Parameter not found: nope on /obj/n"
         assert writes.failed[2]["reason"] == "read only"
+        # A missing name or a wrong-shaped value is the caller's; a set Houdini
+        # refused is Houdini's.
+        assert [f["kind"] for f in writes.failed] == [
+            "invalid_input",
+            "invalid_input",
+            "operation_failed",
+        ]
         assert node._params["radx"] == 3.0
-        assert "updated=['radx'] failed=[{'name': 't', 'reason': " in caplog.text
-        assert "{'name': 'bad', 'reason': 'read only'}" in caplog.text
+        assert (
+            "updated=['radx'] failed=[{'name': 't', 'kind': 'invalid_input', 'reason': "
+            in caplog.text
+        )
+        assert "{'name': 'bad', 'kind': 'operation_failed', 'reason': 'read only'}" in caplog.text
 
     def test_nothing_failed_is_success(self):
         writes = write_all(node_with(radx=2.5), {"radx": 1.0})
@@ -158,7 +168,11 @@ class TestToolsShareTheOwner:
         assert result["status"] == "partial"
         assert result["updated"] == [{"name": "metallic", "value": 1.0}]
         assert result["failed"] == [
-            {"name": "nope", "reason": "Parameter not found: nope on /mat/m"}
+            {
+                "name": "nope",
+                "kind": "invalid_input",
+                "reason": "Parameter not found: nope on /mat/m",
+            }
         ]
 
     def test_create_render_node_reports_the_setting_it_could_not_set(self, mock_connection):
@@ -171,7 +185,11 @@ class TestToolsShareTheOwner:
         assert result["status"] == "partial"
         assert result["updated"] == [{"name": "tx", "value": 1.0}]
         assert result["failed"] == [
-            {"name": "nope", "reason": "Parameter not found: nope on /out/k"}
+            {
+                "name": "nope",
+                "kind": "invalid_input",
+                "reason": "Parameter not found: nope on /out/k",
+            }
         ]
 
     def test_set_render_settings_reports_the_same_way(self, mock_connection):
@@ -183,7 +201,11 @@ class TestToolsShareTheOwner:
         assert result["status"] == "partial"
         assert result["updated"] == [{"name": "tx", "value": 1.0}]
         assert result["failed"] == [
-            {"name": "nope", "reason": "Parameter not found: nope on /out/k"}
+            {
+                "name": "nope",
+                "kind": "invalid_input",
+                "reason": "Parameter not found: nope on /out/k",
+            }
         ]
 
     def test_reads_return_one_shape_for_a_vector(self, mock_connection):

@@ -154,7 +154,7 @@ class TestStdioServerSurface:
         def refuse(*_a: Any, **_k: Any) -> None:
             raise conn_module.HoudiniConnectionError("no hou here", target="this interpreter")
 
-        monkeypatch.setattr(shared_server, "ensure_connected", refuse)
+        monkeypatch.setattr(shared_server, "ensure_link", refuse)
         async with Client(shared_server.mcp) as client:
             payload = (await client.call_tool("check_connection", {})).structured_content
 

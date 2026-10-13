@@ -51,7 +51,7 @@ from typing import Any, Literal, get_args
 from ._common import (
     InvalidInput,
     OperationFailed,
-    TimedOut,
+    ProgramStillRunning,
     _get_scene_diff,
     _serialize_scene_state,
     _truncate_output,
@@ -656,7 +656,7 @@ def _execute_with_grant(
             timeout,
             detected.code_sha256,
         )
-        raise TimedOut(
+        raise ProgramStillRunning(
             f"Execution timeout: code did not complete within {timeout} seconds",
             policy=grant.policy,
             stdout=stdout_capture.getvalue()[:max_stdout_size],

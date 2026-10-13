@@ -19,6 +19,7 @@ from houdini_mcp.tools._common import (
     FAILURE,
     InvalidInput,
     OperationFailed,
+    ProgramStillRunning,
     TimedOut,
     apply_response_cap,
     handle_connection_errors,
@@ -78,7 +79,12 @@ class TestEveryFailureIsOneArm:
             (TimeoutError("no answer"), "timeout", "call_again"),
             (InvalidInput("Node not found: /obj/x", path="/obj/x"), "invalid_input", "fix_input"),
             (OperationFailed("cook failed"), "operation_failed", "none"),
-            (TimedOut("program still running", timeout=30), "timeout", "call_again"),
+            (TimedOut("request timed out", url="https://x"), "timeout", "call_again"),
+            (
+                ProgramStillRunning("still running", worker={"code_sha256": "abc"}),
+                "worker_still_running",
+                "wait_for_worker",
+            ),
             (ValueError("nobody classified this"), "operation_failed", "none"),
             (raised_inside_houdini(TimeoutError("cook timed out")), "operation_failed", "none"),
         ],
@@ -106,17 +112,29 @@ class TestEveryFailureIsOneArm:
         with pytest.raises(ValidationError):
             FAILURE.validate_python({**lost, "kind": "something_new"})
 
-    def test_a_tool_payload_cannot_redefine_the_declared_fields(self) -> None:
-        with pytest.raises(ValidationError):
-            failing(OperationFailed("x", kind="invalid_input"))
-        with pytest.raises(ValidationError):
-            failing(OperationFailed("x", status="success"))
-        with pytest.raises(ValidationError):
-            failing(OperationFailed("x", retry="call_again"))
-        with pytest.raises(TypeError):
-            failing(OperationFailed("x", operation="other"))
-        with pytest.raises(TypeError):
-            failing(InvalidInput("x", message="other"))
+    @pytest.mark.parametrize(
+        "redefined",
+        [
+            {"kind": "invalid_input"},
+            {"status": "success"},
+            {"retry": "call_again"},
+            {"operation": "other"},
+            {"message": "other"},
+        ],
+        ids=lambda d: next(iter(d)),
+    )
+    def test_a_tool_payload_cannot_redefine_the_declared_fields(
+        self, redefined: dict[str, Any]
+    ) -> None:
+        """Spelling a payload field like a declared one is the tool's bug, refused
+        where the tool raises, and the boundary reports it as a bug."""
+
+        @handle_connection_errors("get_node_info")
+        def tool() -> dict[str, Any]:
+            raise OperationFailed("x", **redefined)
+
+        result = arm(failing_tool(tool))
+        assert (result.kind, result.exception) == ("operation_failed", "TypeError")
 
     def test_unavailable_names_the_target(self) -> None:
         result = arm(failing(HoudiniConnectionError("down", target="farm:19999")))
@@ -194,15 +212,30 @@ class TestEveryFailureIsOneArm:
         assert result.exception == "TimeoutError"
         disconnect.assert_called_once()
 
-    def test_a_program_timeout_keeps_the_connection_and_says_so(self) -> None:
-        @handle_connection_errors("execute_code")
+    def test_a_request_timeout_keeps_the_connection_and_says_so(self) -> None:
+        @handle_connection_errors("get_houdini_help")
         def tool() -> dict[str, Any]:
-            raise TimedOut("still running", timeout=30, worker={"code_sha256": "abc"})
+            raise TimedOut("Request timed out after 30 seconds", url="https://x")
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
             result = arm(tool())
 
+        assert (result.kind, result.retry) == ("timeout", "call_again")
         assert result.connection_reset is False
+        disconnect.assert_not_called()
+
+    def test_a_program_that_outlives_its_bound_is_the_worker_to_wait_for(self) -> None:
+        """The program still holds the scene, so "call again" would only be
+        refused: the arm is the worker's, naming it, with the link standing."""
+
+        @handle_connection_errors("execute_code")
+        def tool() -> dict[str, Any]:
+            raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = arm(tool())
+
+        assert (result.kind, result.retry) == ("worker_still_running", "wait_for_worker")
         assert result.timeout == 30
         assert result.worker == {"code_sha256": "abc"}
         disconnect.assert_not_called()

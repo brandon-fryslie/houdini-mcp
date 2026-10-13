@@ -13,6 +13,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
     node_at,
+    tool_error,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 
@@ -40,7 +41,8 @@ def set_parameter(
 
     writes = write_all(node, {param_name: value})
     if writes.failed:
-        raise InvalidInput(writes.failed[0]["reason"], failed=writes.failed)
+        [failed] = writes.failed
+        raise tool_error(failed["kind"], failed["reason"], failed=writes.failed)
 
     return {
         "status": "success",

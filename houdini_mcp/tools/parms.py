@@ -134,17 +134,22 @@ def write_all(node: Any, values: Mapping[str, Any]) -> Writes:
     """Write each ``name: value``; a failure is reported by name and reason.
 
     [LAW:no-silent-failure] A parameter that is missing, refuses the value, or
-    raises inside Houdini lands in ``failed`` with its reason; the others are
-    still written. Connection loss is not a parameter failure and propagates.
+    raises inside Houdini lands in ``failed`` with its reason and its ``kind``:
+    a name the node lacks or a value of the wrong shape is ``invalid_input``, a
+    set Houdini itself refused is ``operation_failed``. The others are still
+    written. Connection loss is not a parameter failure and propagates.
     """
     updated: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for name, value in values.items():
         try:
             write(resolve(node, name), value)
+        except (ParmNotFound, ParmValueError) as e:
+            failed.append({"name": name, "kind": "invalid_input", "reason": str(e)})
+            continue
         except Exception as e:
             _reraise_transport_failure(e)
-            failed.append({"name": name, "reason": str(e)})
+            failed.append({"name": name, "kind": "operation_failed", "reason": str(e)})
             continue
         updated.append({"name": name, "value": value})
     logger.info(

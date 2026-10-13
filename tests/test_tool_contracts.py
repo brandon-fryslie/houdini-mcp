@@ -370,7 +370,7 @@ class TestServedFailures:
         def refuse(*_a: Any, **_k: Any) -> None:
             raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
 
-        monkeypatch.setattr(server, "ensure_connected", refuse)
+        monkeypatch.setattr(server, "ensure_link", refuse)
         monkeypatch.setattr(server, "ping", refuse)
         for probe in ("check_connection", "ping_houdini"):
             failure = await self.failure_of(client, probe, {})

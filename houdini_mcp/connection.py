@@ -241,6 +241,27 @@ class Link:
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
+    def info(self) -> dict[str, Any]:
+        """The Houdini this link reaches: version, build and current hip file.
+
+        [LAW:no-silent-failure] a link that cannot answer for its version raises;
+        the tool boundary classifies that, instead of a success carrying ``error``.
+        """
+        version_tuple = self.hou.applicationVersion()
+        return {
+            "host": self.host,
+            "port": self.port,
+            "target": self.name,
+            "connected": True,
+            "houdini_version": self.hou.applicationVersionString(),
+            "houdini_build": {
+                "major": version_tuple[0],
+                "minor": version_tuple[1],
+                "build": version_tuple[2],
+            },
+            "hip_file": self.hou.hipFile.path() or "untitled.hip",
+        }
+
 
 def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
     """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini."""
@@ -430,32 +451,16 @@ class HoudiniConnection:
         the one a connection to ``host:port`` would reach."""
         link = self._live()
         if link is not None:
-            host, port, target = link.host, link.port, link.name
-        else:
-            target = self._target.describe(host, port)
-        info: dict[str, Any] = {
+            return link.info()
+        return {
             "host": host,
             "port": port,
-            "target": target,
-            "connected": link is not None,
+            "target": self._target.describe(host, port),
+            "connected": False,
             "houdini_version": None,
             "houdini_build": None,
             "hip_file": None,
         }
-
-        # [LAW:no-silent-failure] a link that cannot answer for its version raises;
-        # the tool boundary classifies that, instead of a success carrying ``error``.
-        if link is not None:
-            info["houdini_version"] = link.hou.applicationVersionString()
-            version_tuple = link.hou.applicationVersion()
-            info["houdini_build"] = {
-                "major": version_tuple[0],
-                "minor": version_tuple[1],
-                "build": version_tuple[2],
-            }
-            info["hip_file"] = link.hou.hipFile.path() or "untitled.hip"
-
-        return info
 
 
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
@@ -583,15 +588,23 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> st
             failure instead of being logged and collapsed into False.
     """
     target = _houdini.target.describe(host, port)
-    try:
-        conn = _houdini.target.open(host, port, timeout)
-        try:
-            version = str(conn.modules.hou.applicationVersionString())
-        finally:
-            conn.close()
-    except Exception as e:
-        raise HoudiniConnectionError(
+
+    def unanswered(e: Exception) -> HoudiniConnectionError:
+        return HoudiniConnectionError(
             f"No Houdini answered at {target}: {type(e).__name__}: {e}. {_houdini.target.remedy}",
             target=target,
-        ) from e
-    return version
+        )
+
+    try:
+        conn = _houdini.target.open(host, port, timeout)
+        link = Link(_houdini.target, host, port, conn, conn.modules.hou)
+    except Exception as e:
+        raise unanswered(e) from e
+    # The probe's link closes like any other: a close that fails is logged, and
+    # the version Houdini already gave is still the answer.
+    try:
+        return str(link.hou.applicationVersionString())
+    except Exception as e:
+        raise unanswered(e) from e
+    finally:
+        link.close()
