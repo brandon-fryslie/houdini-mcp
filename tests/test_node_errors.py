@@ -241,12 +241,8 @@ class TestFindErrorNodes:
         """Test find_error_nodes finds nodes with errors."""
         from houdini_mcp.tools import find_error_nodes
 
-        # Create nodes with errors
-        obj_node = mock_connection.node("/obj")
-
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         geo1._errors = ["Missing input"]
-        obj_node._children = [geo1]
         mock_connection.add_node(geo1)
 
         result = find_error_nodes(root_path="/obj", host="localhost", port=18811)
@@ -261,11 +257,8 @@ class TestFindErrorNodes:
         """Test find_error_nodes finds nodes with warnings."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         geo1._warnings = ["Deprecated parameter used"]
-        obj_node._children = [geo1]
         mock_connection.add_node(geo1)
 
         result = find_error_nodes(
@@ -281,11 +274,8 @@ class TestFindErrorNodes:
         """Test find_error_nodes can exclude warnings."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         geo1._warnings = ["Some warning"]
-        obj_node._children = [geo1]
         mock_connection.add_node(geo1)
 
         result = find_error_nodes(
@@ -302,15 +292,12 @@ class TestFindErrorNodes:
         """Test find_error_nodes with both errors and warnings."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         geo1._errors = ["Error in geo1"]
 
         geo2 = MockHouNode(path="/obj/geo2", name="geo2", node_type="geo")
         geo2._warnings = ["Warning in geo2"]
 
-        obj_node._children = [geo1, geo2]
         mock_connection.add_node(geo1)
         mock_connection.add_node(geo2)
 
@@ -326,8 +313,6 @@ class TestFindErrorNodes:
         """Test find_error_nodes respects max_results limit."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         # Create 10 nodes with errors
         children = []
         for i in range(10):
@@ -335,8 +320,6 @@ class TestFindErrorNodes:
             node._errors = [f"Error {i}"]
             children.append(node)
             mock_connection.add_node(node)
-
-        obj_node._children = children
 
         result = find_error_nodes(root_path="/obj", max_results=5, host="localhost", port=18811)
 
@@ -357,14 +340,10 @@ class TestFindErrorNodes:
         """Test find_error_nodes with specific root path."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
         sphere._errors = ["Sphere error"]
-        geo1._children = [sphere]
 
-        obj_node._children = [geo1]
         mock_connection.add_node(geo1)
         mock_connection.add_node(sphere)
 
@@ -389,16 +368,12 @@ class TestFindErrorNodes:
         """Test find_error_nodes reports total_scanned correctly."""
         from houdini_mcp.tools import find_error_nodes
 
-        obj_node = mock_connection.node("/obj")
-
         # Create several nodes
         children = []
         for i in range(5):
             node = MockHouNode(path=f"/obj/geo{i}", name=f"geo{i}", node_type="geo")
             children.append(node)
             mock_connection.add_node(node)
-
-        obj_node._children = children
 
         result = find_error_nodes(root_path="/obj", host="localhost", port=18811)
 

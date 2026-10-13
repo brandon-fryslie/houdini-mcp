@@ -372,9 +372,8 @@ class TestLegacyPaginationCompatibility:
         from houdini_mcp.tools.nodes import find_nodes
         from tests.conftest import MockHouNode
 
-        obj = mock_connection.node("/obj")
         child = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        obj._children.append(child)
+        mock_connection.add_node(child)
         result = find_nodes(limit=0, cursor=0, host="localhost", port=18811)
         assert result["returned"] == 1
         assert result["matches"][0]["path"] == "/obj/geo1"
@@ -604,21 +603,13 @@ class TestProductionPathResponseCap:
         import json
 
         from houdini_mcp.tools.nodes import list_children
-        from tests.conftest import MockHouNode
 
         mock_hou = mock_connection
 
         # Create a large child hierarchy
-        large_children = []
+        parent = mock_hou.node("/obj").createNode("geo", "geo1")
         for i in range(200):
-            child = MockHouNode(path=f"/obj/geo1/child{i}", name=f"child{i}", node_type="geo")
-            large_children.append(child)
-
-        # Create parent with many children
-        parent = MockHouNode(
-            path="/obj/geo1", name="geo1", node_type="geo", children=large_children
-        )
-        mock_hou.add_node(parent)
+            parent.createNode("geo", f"child{i}")
 
         # Call with small cap
         result = list_children("/obj/geo1", limit=100, host="localhost", port=18811)
@@ -639,19 +630,13 @@ class TestProductionPathResponseCap:
         import json
 
         from houdini_mcp.tools.nodes import find_nodes
-        from tests.conftest import MockHouNode
 
         mock_hou = mock_connection
 
         # Create many nested nodes
-        children = []
+        obj = mock_hou.node("/obj")
         for i in range(500):
-            child = MockHouNode(path=f"/obj/sphere{i}", name=f"sphere{i}", node_type="sphere")
-            children.append(child)
-
-        # Create obj node with many children
-        obj = MockHouNode(path="/obj", name="obj", node_type="Object", children=children)
-        mock_hou.add_node(obj)
+            obj.createNode("sphere", f"sphere{i}")
 
         result = find_nodes("/obj", pattern="*", limit=200, host="localhost", port=18811)
 

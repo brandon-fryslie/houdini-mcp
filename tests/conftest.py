@@ -94,7 +94,10 @@ class MockHouNode:
         self._name = name
         self._node_type = node_type
         self._type_description = type_description
-        self._children: list[MockHouNode] = children if children is not None else []
+        # [LAW:one-source-of-truth] the tree is the scene graph: a node is in the
+        # scene exactly when it is in its parent's children, and hou.node() walks it.
+        self._children: list[MockHouNode] = []
+        self._parent: MockHouNode | None = None
         self._params: dict[str, Any] = (
             params if params is not None else {"tx": 0.0, "ty": 0.0, "tz": 0.0}
         )
@@ -107,7 +110,6 @@ class MockHouNode:
         self._display_flag = True
         self._render_flag = True
         self._bypass = False
-        self._destroyed = False
         # Cook state tracking
         self._cook_state = "Cooked"  # Cooked, CookFailed, Dirty, Uncooked
         self._errors: list[str] = []
@@ -115,8 +117,6 @@ class MockHouNode:
         self._last_cook_time: float | None = None
         # Geometry
         self._geometry: MockGeometry | None = None
-        # Parent node (set during createNode)
-        self._parent: MockHouNode | None = None
         # Network position
         self._position: tuple = (0.0, 0.0)
         # Node color
@@ -128,6 +128,28 @@ class MockHouNode:
         self.layout_calls: list[tuple[float, float]] = []
         # A subnet's indirect inputs, numbered 1..4 as Houdini names them.
         self._indirect_inputs = tuple(MockSubnetIndirectInput(self, n) for n in range(1, 5))
+        for child in children or []:
+            self.attach(child)
+
+    def attach(self, child: "MockHouNode") -> None:
+        """Place a prebuilt child in this network; the child's path must say so.
+
+        The one write path for a node built by hand (createNode builds its own).
+        A path that names another parent, or a name already taken here, is a
+        fixture lying about the scene, and the test fails here instead of later.
+        """
+        parent_path, _, name = child.path().rpartition("/")
+        if parent_path != self.path() or name != child.name():
+            raise ValueError(
+                f"{child.path()!r} (name {child.name()!r}) cannot be a child of {self.path()!r}"
+            )
+        if any(existing.name() == name for existing in self._children):
+            raise ValueError(f"{self.path()!r} already has a child named {name!r}")
+        child._parent = self
+        self._children.append(child)
+
+    def child(self, name: str) -> "MockHouNode | None":
+        return next((c for c in self._children if c.name() == name), None)
 
     def path(self) -> str:
         return self._path
@@ -254,7 +276,11 @@ class MockHouNode:
         return mock_parm
 
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
-        new_name = name if name else f"{node_type}1"
+        # Houdini uniquifies a taken or omitted name: strip the digit suffix, then
+        # the next free number.
+        stem = (name or node_type).rstrip("0123456789")
+        free = (c for n in range(1, 10_000) if self.child(c := f"{stem}{n}") is None)
+        new_name = name if name and self.child(name) is None else next(free)
         new_path = f"{self._path}/{new_name}"
 
         # Create node with type-specific default parameters
@@ -278,12 +304,15 @@ class MockHouNode:
             )
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type, params=params)
-        new_node._parent = self  # Set parent reference
-        self._children.append(new_node)
+        self.attach(new_node)
         return new_node
 
     def destroy(self) -> None:
-        self._destroyed = True
+        """Leave the scene: the subtree is no longer reachable from any path."""
+        if self._parent is None:
+            raise RuntimeError(f"{self.path()!r} is not in a scene")
+        self._parent._children.remove(self)
+        self._parent = None
 
     def isDisplayFlagSet(self) -> bool:
         return self._display_flag
@@ -443,14 +472,13 @@ class MockHouModule:
     """Mock hou module for testing."""
 
     def __init__(self) -> None:
-        self._nodes: dict[str, MockHouNode] = {}
+        # [LAW:one-source-of-truth] the whole scene hangs off one root node.
+        self._root = MockHouNode(path="", name="", node_type="root")
         self._hip_file = "/path/to/test.hip"
         self._version = "20.5.123"
         self._version_tuple = (20, 5, 123)
 
-        # Create default /obj node
-        obj_node = MockHouNode(path="/obj", name="obj", node_type="obj")
-        self._nodes["/obj"] = obj_node
+        self.add_node(MockHouNode(path="/obj", name="obj", node_type="obj"))
 
         # Mock hipFile
         self.hipFile = MagicMock()
@@ -487,15 +515,21 @@ class MockHouModule:
         return self._version_tuple
 
     def node(self, path: str) -> MockHouNode | None:
-        return self._nodes.get(path)
+        """Walk the tree from the root; None when any segment is missing."""
+        current: MockHouNode | None = self._root
+        for name in [segment for segment in path.split("/") if segment]:
+            current = current.child(name)
+            if current is None:
+                return None
+        return current
 
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
         """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
-        node = self._nodes.get(path)
+        node = self.node(path)
         if node is not None:
             return node
         parent_path, _, name = path.rpartition("/")
-        parent = self._nodes.get(parent_path)
+        parent = self.node(parent_path)
         if parent is None:
             return None
         return next((i for i in parent.indirectInputs() if i.name() == name), None)
@@ -594,13 +628,12 @@ class MockHouModule:
         return {"Object": object_category, "Sop": sop_category}
 
     def add_node(self, node: MockHouNode) -> None:
-        """Helper to add a node to the mock."""
-        self._nodes[node.path()] = node
-
-    def remove_node(self, path: str) -> None:
-        """Helper to remove a node from the mock."""
-        if path in self._nodes:
-            del self._nodes[path]
+        """Place a prebuilt node in the scene under the parent its path names."""
+        parent_path = node.path().rpartition("/")[0]
+        parent = self.node(parent_path)
+        if parent is None:
+            raise ValueError(f"cannot add {node.path()!r}: no node at {parent_path!r}")
+        parent.attach(node)
 
 
 @pytest.fixture

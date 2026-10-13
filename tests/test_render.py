@@ -69,8 +69,7 @@ class TestRenderViewportValidation:
         """Test handling when /obj context is not found."""
         from houdini_mcp.tools import render_viewport
 
-        # Remove /obj from the mock
-        mock_connection._nodes.pop("/obj", None)
+        mock_connection.node("/obj").destroy()
 
         result = render_viewport(host="localhost", port=18811)
         assert result["status"] == "error"
@@ -83,10 +82,6 @@ class TestRenderViewportAutoFrame:
     def test_auto_frame_with_empty_scene(self, mock_connection):
         """Test auto_frame with no child nodes uses defaults."""
         from houdini_mcp.tools import render_viewport
-
-        # Empty scene - /obj has no children
-        obj_node = mock_connection.node("/obj")
-        obj_node._children = []
 
         # The function should proceed but may fail at render stage
         result = render_viewport(auto_frame=True, host="localhost", port=18811)
@@ -384,8 +379,7 @@ class TestRenderQuadViewValidation:
         """Test handling when /obj context is not found."""
         from houdini_mcp.tools import render_quad_view
 
-        # Remove /obj from the mock
-        mock_connection._nodes.pop("/obj", None)
+        mock_connection.node("/obj").destroy()
 
         result = render_quad_view(host="localhost", port=18811)
         assert result["status"] == "error"
@@ -562,9 +556,6 @@ class TestListRenderNodes:
         """Test handling when /out context is not found."""
         from houdini_mcp.tools import list_render_nodes
 
-        # Remove /out from the mock
-        mock_connection._nodes.pop("/out", None)
-
         result = list_render_nodes(host="localhost", port=18811)
         assert result["status"] == "error"
         assert "/out" in result["message"] or "Cannot find" in result["message"]
@@ -637,9 +628,6 @@ class TestCreateRenderNode:
     def test_out_context_not_found(self, mock_connection):
         """Test handling when /out context is not found."""
         from houdini_mcp.tools import create_render_node
-
-        # Remove /out from the mock
-        mock_connection._nodes.pop("/out", None)
 
         result = create_render_node("karma", host="localhost", port=18811)
         assert result["status"] == "error"

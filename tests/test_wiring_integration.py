@@ -28,10 +28,8 @@ class TestWiringIntegration:
 
         # Step 1: Create initial network (grid → noise)
         grid = geo1.createNode("grid", "grid1")
-        mock_connection.add_node(grid)
 
         noise = geo1.createNode("noise", "noise1")
-        mock_connection.add_node(noise)
 
         # Connect grid → noise
         result = connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1", 0, 0, "localhost", 18811)
@@ -45,7 +43,6 @@ class TestWiringIntegration:
 
         # Step 2: Create mountain node
         mountain = geo1.createNode("mountain", "mountain1")
-        mock_connection.add_node(mountain)
 
         # Step 3: Insert mountain in the chain
         # First, disconnect noise's input
@@ -124,10 +121,6 @@ class TestWiringIntegration:
         sphere = geo1.createNode("sphere", "sphere1")
         noise = geo1.createNode("noise", "noise1")
 
-        mock_connection.add_node(grid)
-        mock_connection.add_node(sphere)
-        mock_connection.add_node(noise)
-
         # Connect grid → noise
         result = connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1", 0, 0, "localhost", 18811)
         assert result["status"] == "success"
@@ -164,11 +157,6 @@ class TestWiringIntegration:
         sphere = geo1.createNode("sphere", "sphere1")
         box = geo1.createNode("box", "box1")
         merge = geo1.createNode("merge", "merge1")
-
-        mock_connection.add_node(grid)
-        mock_connection.add_node(sphere)
-        mock_connection.add_node(box)
-        mock_connection.add_node(merge)
 
         # Connect all to merge
         result1 = connect_nodes("/obj/geo1/grid1", "/obj/geo1/merge1", 0, 0, "localhost", 18811)
@@ -223,10 +211,6 @@ class TestWiringIntegration:
         mountain = geo1.createNode("mountain", "mountain1")
         noise = geo1.createNode("noise", "noise1")
 
-        mock_connection.add_node(grid)
-        mock_connection.add_node(mountain)
-        mock_connection.add_node(noise)
-
         # Connect chain
         connect_nodes("/obj/geo1/grid1", "/obj/geo1/mountain1", 0, 0, "localhost", 18811)
         connect_nodes("/obj/geo1/mountain1", "/obj/geo1/noise1", 0, 0, "localhost", 18811)
@@ -260,8 +244,6 @@ class TestWiringIntegration:
         # two-input SOP that really holds the gap
         copy = geo1.createNode("copytopoints", "copy1")
         copy_feed = geo1.createNode("box", "box0")
-        mock_connection.add_node(copy)
-        mock_connection.add_node(copy_feed)
         copy.setInput(1, copy_feed)
 
         result = disconnect_node_input("/obj/geo1/copy1", 0, "localhost", 18811)
@@ -272,10 +254,6 @@ class TestWiringIntegration:
         merge = geo1.createNode("merge", "merge1")
         grid = geo1.createNode("grid", "grid1")
         sphere = geo1.createNode("sphere", "sphere1")
-
-        mock_connection.add_node(merge)
-        mock_connection.add_node(grid)
-        mock_connection.add_node(sphere)
 
         # Connect with gap: grid→0, None→1, sphere→2
         merge.setInput(0, grid)
@@ -289,10 +267,8 @@ class TestWiringIntegration:
         assert merge._inputs[2] == grid
 
         # Edge case 3: Connect nodes of same category (SOP→SOP)
-        box = geo1.createNode("box", "box1")
-        transform = geo1.createNode("transform", "transform1")
-        mock_connection.add_node(box)
-        mock_connection.add_node(transform)
+        geo1.createNode("box", "box1")
+        geo1.createNode("transform", "transform1")
 
         result = connect_nodes("/obj/geo1/box1", "/obj/geo1/transform1", 0, 0, "localhost", 18811)
         assert result["status"] == "success"
