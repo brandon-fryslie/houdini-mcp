@@ -29,6 +29,9 @@ class MockSubnetIndirectInput:
     def path(self) -> str:
         return f"{self._subnet.path()}/{self._number}"
 
+    def parent(self) -> "MockHouNode":
+        return self._subnet
+
 
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
@@ -124,6 +127,8 @@ class MockHouNode:
         self._network_box_counter = 0
         # Recorded layoutChildren invocations: (horizontal_spacing, vertical_spacing)
         self.layout_calls: list[tuple[float, float]] = []
+        # A subnet's indirect inputs, numbered 1..4 as Houdini names them.
+        self._indirect_inputs = tuple(MockSubnetIndirectInput(self, n) for n in range(1, 5))
 
     def path(self) -> str:
         return self._path
@@ -164,6 +169,14 @@ class MockHouNode:
 
     def children(self) -> list["MockHouNode"]:
         return self._children
+
+    def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
+        return self._indirect_inputs
+
+    def childTypeCategory(self) -> MagicMock:
+        """The category of this network's children; one category per double, so
+        it is the node's own."""
+        return self.type().category()
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -462,6 +475,8 @@ class MockHouModule:
         # Houdini types
         self.Color = MockColor
         self.Vector2 = MockVector2
+        self.Node = MockHouNode
+        self.SubnetIndirectInput = MockSubnetIndirectInput
 
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
@@ -474,6 +489,17 @@ class MockHouModule:
 
     def node(self, path: str) -> MockHouNode | None:
         return self._nodes.get(path)
+
+    def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
+        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
+        node = self._nodes.get(path)
+        if node is not None:
+            return node
+        parent_path, _, name = path.rpartition("/")
+        parent = self._nodes.get(parent_path)
+        if parent is None:
+            return None
+        return next((i for i in parent.indirectInputs() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, Any]:
         """Return mock node type categories with sufficient types for testing limits."""

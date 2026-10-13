@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from tests.conftest import MockHouNode, MockSubnetIndirectInput
+from tests.conftest import MockHouNode
 
 
 def _merge_fed_from_split_output_1(mock_connection):
@@ -63,9 +63,9 @@ class TestInspectionReportsSourceOutput:
         assert result["status"] == "success"
         merge_info = next(c for c in result["children"] if c["name"] == "merge1")
         assert merge_info["inputs"] == [
-            {"index": 0, "source_node": "/obj/geo1/grid1", "output_index": 0},
-            {"index": 1, "source_node": "/obj/geo1/split1", "output_index": 1},
-            {"index": 2, "source_node": "/obj/geo1/box1", "output_index": 0},
+            {"input_index": 0, "source_node": "/obj/geo1/grid1", "source_output_index": 0},
+            {"input_index": 1, "source_node": "/obj/geo1/split1", "source_output_index": 1},
+            {"input_index": 2, "source_node": "/obj/geo1/box1", "source_output_index": 0},
         ]
 
 
@@ -85,22 +85,22 @@ class TestReorderPreservesSourceOutput:
         ]
         assert result["reconnections"] == [
             {
-                "new_input_index": 0,
-                "old_input_index": 1,
+                "input_index": 0,
                 "source_node": "/obj/geo1/split1",
                 "source_output_index": 1,
+                "previous_input_index": 1,
             },
             {
-                "new_input_index": 1,
-                "old_input_index": 0,
+                "input_index": 1,
                 "source_node": "/obj/geo1/grid1",
                 "source_output_index": 0,
+                "previous_input_index": 0,
             },
             {
-                "new_input_index": 2,
-                "old_input_index": 2,
+                "input_index": 2,
                 "source_node": "/obj/geo1/box1",
                 "source_output_index": 0,
+                "previous_input_index": 2,
             },
         ]
 
@@ -166,9 +166,31 @@ class TestSubnetIndirectInputs:
         subnet._children = [box, merge]
         for node in (subnet, box, merge):
             mock_connection.add_node(node)
-        merge.setInput(0, MockSubnetIndirectInput(subnet, 1), 0)
+        merge.setInput(0, subnet.indirectInputs()[0], 0)
         merge.setInput(1, box, 0)
         return merge
+
+    def test_a_cut_indirect_input_wire_goes_back_as_reported(self, merge, caplog):
+        """The record names the indirect input by its path, and connect_nodes
+        resolves that path and reads its category from the subnet, so the round
+        trip holds for this source too and takes no error-swallowing path."""
+        from houdini_mcp.tools import connect_nodes, disconnect_node_input
+
+        cut = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.wiring"):
+            made = connect_nodes(
+                cut["disconnected"]["source_node"],
+                "/obj/subnet1/merge1",
+                cut["disconnected"]["input_index"],
+                cut["disconnected"]["source_output_index"],
+                host="localhost",
+                port=18811,
+            )
+
+        assert made["status"] == "success"
+        assert caplog.records == []
+        assert made["connection"] == cut["disconnected"]
+        assert _wires(merge) == [(0, "/obj/subnet1/1", 0), (1, "/obj/subnet1/box1", 0)]
 
     def test_get_node_info_reports_the_indirect_input(self, merge):
         from houdini_mcp.tools import get_node_info
@@ -191,8 +213,8 @@ class TestSubnetIndirectInputs:
         assert result["status"] == "success"
         merge_info = next(c for c in result["children"] if c["name"] == "merge1")
         assert merge_info["inputs"] == [
-            {"index": 0, "source_node": "/obj/subnet1/1", "output_index": 0},
-            {"index": 1, "source_node": "/obj/subnet1/box1", "output_index": 0},
+            {"input_index": 0, "source_node": "/obj/subnet1/1", "source_output_index": 0},
+            {"input_index": 1, "source_node": "/obj/subnet1/box1", "source_output_index": 0},
         ]
 
     def test_get_node_info_inputs_list_and_count_agree_with_the_wires(self, merge):
@@ -214,8 +236,11 @@ class TestSubnetIndirectInputs:
         result = disconnect_node_input("/obj/subnet1/merge1", 0, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["was_connected"] is True
-        assert result["previous_source"] == "/obj/subnet1/1"
+        assert result["disconnected"] == {
+            "input_index": 0,
+            "source_node": "/obj/subnet1/1",
+            "source_output_index": 0,
+        }
         assert _wires(merge) == [(1, "/obj/subnet1/box1", 0)]
 
     def test_connect_nodes_names_the_indirect_input_it_replaces(self, merge, caplog):
@@ -227,6 +252,11 @@ class TestSubnetIndirectInputs:
             )
 
         assert result["status"] == "success"
+        assert result["connection"] == {
+            "input_index": 0,
+            "source_node": "/obj/subnet1/box1",
+            "source_output_index": 0,
+        }
         assert "from /obj/subnet1/1 to /obj/subnet1/merge1[0]" in caplog.text
         assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/box1", 0)]
 
@@ -237,6 +267,45 @@ class TestSubnetIndirectInputs:
 
         assert result["status"] == "success"
         assert _wires(merge) == [(0, "/obj/subnet1/box1", 0), (1, "/obj/subnet1/1", 0)]
+
+
+class TestOneRecordShape:
+    """Every tool reports a wire with the same three fields, so a record read from
+    any of them is a valid argument set for connect_nodes."""
+
+    def test_every_emitter_reports_the_same_record(self, mock_connection):
+        from houdini_mcp.tools import (
+            connect_nodes,
+            disconnect_node_input,
+            get_node_info,
+            list_children,
+            reorder_inputs,
+        )
+
+        _merge_fed_from_split_output_1(mock_connection)
+        split_wire = {"input_index": 1, "source_node": "/obj/geo1/split1", "source_output_index": 1}
+
+        info = get_node_info("/obj/geo1/merge1", detail="standard", host="localhost", port=18811)
+        children = list_children("/obj/geo1", host="localhost", port=18811)
+        merge_child = next(c for c in children["children"] if c["name"] == "merge1")
+        assert info["input_connections"][1] == split_wire
+        assert merge_child["inputs"][1] == split_wire
+
+        reordered = reorder_inputs("/obj/geo1/merge1", [0, 1, 2], host="localhost", port=18811)
+        assert reordered["reconnections"][1] == {**split_wire, "previous_input_index": 1}
+
+        cut = disconnect_node_input("/obj/geo1/merge1", 1, host="localhost", port=18811)
+        assert cut["disconnected"] == split_wire
+
+        made = connect_nodes(
+            cut["disconnected"]["source_node"],
+            "/obj/geo1/merge1",
+            cut["disconnected"]["input_index"],
+            cut["disconnected"]["source_output_index"],
+            host="localhost",
+            port=18811,
+        )
+        assert made["connection"] == split_wire
 
 
 class TestNewOrderIsAPermutation:

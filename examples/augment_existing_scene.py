@@ -97,7 +97,7 @@ def main():
         if child["inputs"]:
             for inp in child["inputs"]:
                 print(
-                    f"      Input {inp['index']}: {inp['source_node']} [output {inp['output_index']}]"
+                    f"      Input {inp['input_index']}: {inp['source_node']} [output {inp['source_output_index']}]"
                 )
 
     # Step 3: Use get_node_info to see current connections
