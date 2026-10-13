@@ -223,6 +223,11 @@ def _handle_connection_error(failure: TransportFailure, operation: str) -> dict[
 # =============================================================================
 
 
+def node_category(node: Any) -> str:
+    """The name of the category a node's type belongs to: Object, Sop, Driver, ..."""
+    return str(node.type().category().name())
+
+
 def validate_resolution(
     resolution: list[int],
     min_size: int = 64,

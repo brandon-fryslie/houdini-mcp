@@ -111,8 +111,16 @@ _TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
         "projection": 0,
         "orthowidth": 1.0,
     },
-    "opengl": {"camera": "", "picture": ""},
-    "karma": {"camera": "", "picture": ""},
+    # Each ROP's resolution and frame-range parms carry the names the real ROP uses.
+    "opengl": {"camera": "", "picture": "", "tres": False, "res1": 0, "res2": 0, "trange": 0},
+    "karma": {
+        "camera": "",
+        "picture": "",
+        "resolutionx": 0,
+        "resolutiony": 0,
+        "engine": "cpu",
+        "trange": 0,
+    },
 }
 
 
@@ -220,7 +228,15 @@ class MockHouNode:
         # Determine category from node type
         # SOPs: grid, sphere, box, noise, mountain, merge, etc.
         # Objects: geo, cam, light, null (at /obj level)
-        if self._node_type in [
+        # A subnet is of its network's category: an Object subnet under /obj,
+        # a SOP subnet inside a geo.
+        parent = self._parent
+        object_subnet = (
+            self._node_type == "subnet" and parent is not None and parent.path() == "/obj"
+        )
+        if object_subnet or self._node_type in ["geo", "cam", "light", "null"]:
+            mock_category.name.return_value = "Object"
+        elif self._node_type in [
             "grid",
             "sphere",
             "box",
@@ -231,10 +247,12 @@ class MockHouNode:
             "subnet",
         ]:
             mock_category.name.return_value = "Sop"
-        elif self._node_type in ["geo", "cam", "light", "null"]:
-            mock_category.name.return_value = "Object"
         elif self._node_type in ["dopnet", "pyrosolver"]:
             mock_category.name.return_value = "Dop"
+        elif self._node_type in ["opengl", "karma"]:
+            mock_category.name.return_value = "Driver"
+        elif self._node_type in ["root", "obj", "out"]:
+            mock_category.name.return_value = "Manager"
         else:
             mock_category.name.return_value = "Sop"  # Default to Sop
 
@@ -247,10 +265,18 @@ class MockHouNode:
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
         return self._indirect_inputs
 
-    def childTypeCategory(self) -> MagicMock:
-        """The category of this network's children; one category per double, so
-        it is the node's own."""
-        return self.type().category()
+    def childTypeCategory(self) -> MagicMock | None:
+        """The category of this network's children: SOPs inside a geo, objects under
+        /obj, ROPs under /out, any other network's own kind; None for a node that is
+        not a network, as hou.Node.childTypeCategory returns."""
+        if self._node_type in ("cam", "light", "null"):
+            return None
+        contained = {"geo": "Sop", "obj": "Object", "out": "Driver"}.get(self._node_type)
+        if contained is None:
+            return self.type().category()
+        category = MagicMock()
+        category.name.return_value = contained
+        return category
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -373,6 +399,12 @@ class MockHouNode:
     def isDisplayFlagSet(self) -> bool:
         return self._display_flag
 
+    def worldTransform(self) -> "MockMatrix4":
+        """The node's world transform: its own translate, as hou.ObjNode.worldTransform."""
+        return MockMatrix4(
+            (self._params["tx"], self._params["ty"], self._params["tz"]),
+        )
+
     def isRenderFlagSet(self) -> bool:
         return self._render_flag
 
@@ -466,12 +498,14 @@ class MockHouNode:
         return self._parent
 
     def displayNode(self) -> Optional["MockHouNode"]:
-        """Return the display node (node with display flag set, or last child)."""
-        # Find child with display flag set
+        """The SOP inside this object whose display flag is set, as hou.ObjNode.displayNode:
+        None for an object whose children are not SOPs, and for one with no children."""
+        contained = self.childTypeCategory()
+        if contained is None or contained.name() != "Sop":
+            return None
         for child in self._children:
             if child._display_flag:
                 return child
-        # Fallback to last child if any
         if self._children:
             return self._children[-1]
         return None
@@ -560,6 +594,7 @@ class MockHouModule:
         # Houdini types
         self.Color = MockColor
         self.Vector2 = MockVector2
+        self.Vector4 = MockVector4
         self.Node = MockHouNode
         self.SubnetIndirectInput = MockSubnetIndirectInput
 
@@ -903,6 +938,37 @@ class MockColor:
         return f"<MockColor {self._rgb}>"
 
 
+class MockMatrix4:
+    """Mock hou.Matrix4: a translation, which is all the fake scene's nodes carry."""
+
+    def __init__(self, translate: tuple[float, float, float]):
+        self._translate = (float(translate[0]), float(translate[1]), float(translate[2]))
+
+    def translate(self) -> tuple[float, float, float]:
+        return self._translate
+
+    def extractTranslates(self) -> tuple[float, float, float]:
+        return self._translate
+
+
+class MockVector4:
+    """Mock hou.Vector4: a homogeneous point, so ``point * matrix`` lands it in world space."""
+
+    def __init__(self, x: float, y: float, z: float, w: float = 1.0):
+        self._v = (float(x), float(y), float(z), float(w))
+
+    def __getitem__(self, index: int) -> float:
+        return self._v[index]
+
+    def __mul__(self, matrix: MockMatrix4) -> "MockVector4":
+        tx, ty, tz = matrix.translate()
+        x, y, z, w = self._v
+        return MockVector4(x + tx * w, y + ty * w, z + tz * w, w)
+
+    def __repr__(self) -> str:
+        return f"MockVector4{self._v}"
+
+
 class MockVector2:
     """Mock hou.Vector2 object."""
 
@@ -1022,11 +1088,14 @@ class MockGeoGroup:
 
 
 class MockBoundingBox:
-    """Mock hou.BoundingBox."""
+    """Mock hou.BoundingBox: the box around empty geometry is invalid, as Houdini's is."""
 
     def __init__(self, min_vec: tuple, max_vec: tuple):
         self._min = list(min_vec)
         self._max = list(max_vec)
+
+    def isValid(self) -> bool:
+        return all(lo <= hi for lo, hi in zip(self._min, self._max, strict=True))
 
     def minvec(self) -> tuple:
         return tuple(self._min)
@@ -1053,7 +1122,8 @@ class MockGeometry:
         self._detail_attribs: list[MockGeoAttrib] = []
         self._point_groups: list[MockGeoGroup] = []
         self._prim_groups: list[MockGeoGroup] = []
-        self._bbox: MockBoundingBox | None = None
+        inf = float("inf")
+        self._bbox = MockBoundingBox((inf, inf, inf), (-inf, -inf, -inf))
 
     def points(self) -> list[MockGeoPoint]:
         """Return list of points."""
@@ -1089,7 +1159,7 @@ class MockGeometry:
     def primGroups(self) -> list[MockGeoGroup]:
         return self._prim_groups
 
-    def boundingBox(self) -> MockBoundingBox | None:
+    def boundingBox(self) -> MockBoundingBox:
         return self._bbox
 
     def addPoint(self, position: tuple, attribs: dict[str, Any] | None = None) -> MockGeoPoint:

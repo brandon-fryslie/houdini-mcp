@@ -89,13 +89,13 @@ render_viewport(look_at="/obj/geo1")
 |-----------|------|-------------|---------|
 | `camera_position` | `list[float]` (3 elements) | [x, y, z] world position | Auto-calculated |
 | `camera_rotation` | `list[float]` (3 elements) | [rx, ry, rz] degrees | [-30, 45, 0] |
-| `look_at` | `str` | Node path to center on | None |
+| `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, or a node outside any object, is an error | None |
 | `resolution` | `list[int]` (2 elements) | [width, height] pixels | [512, 512] |
 | `renderer` | `str` | "opengl" or "karma" | "opengl" |
 | `output_format` | `str` | "png", "jpg", or "exr" | "png" |
 | `auto_frame` | `bool` | Auto-frame visible geometry | True |
 | `orthographic` | `bool` | Use orthographic projection | False |
-| `karma_engine` | `str` | "cpu" or "gpu" (for Karma only) | "cpu" |
+| `karma_engine` | `str` | "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
 
 ### Minimal Valid Examples
 
@@ -132,7 +132,7 @@ Similar to `render_viewport`, but renders 4 canonical views (Front, Left, Top, P
 | `output_format` | `str` | "png", "jpg", or "exr" | "png" |
 | `orthographic` | `bool` | Use ortho for Front/Left/Top | True |
 | `include_perspective` | `bool` | Include perspective view | True |
-| `karma_engine` | `str` | "cpu" or "gpu" (Karma only) | "cpu" |
+| `karma_engine` | `str` | "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
 
 ### Minimal Valid Examples
 

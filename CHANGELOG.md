@@ -37,6 +37,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Render tools share one implementation of framing, rig and ROP configuration**
+  (houdini-laws-etg.arl): `render_viewport` and `render_quad_view` derive the
+  camera pivot, distance, orthographic width and reported `bounding_box` from
+  one `Framing` of the displayed geometry's world-space box, build one camera
+  rig, and configure the ROP from one per-renderer parm table, instead of each
+  carrying its own copy. `look_at` now frames the named node's geometry in
+  world space, the same way the scene is framed, and reports that box as
+  `bounding_box`; it accepts any object or SOP, frames one with no geometry
+  where it stands, and a path that names no node, or a node outside any object,
+  is an error instead of being ignored. A SOP that did not cook is left out of
+  the frame with a warning naming it. `camera_position` and `camera_rotation`
+  that are not three numbers are an error before anything is created. A
+  displayed object that contains objects, such as an object subnet, is framed
+  by what it displays. A single point is framed as if ten units across instead
+  of opening an orthographic view to nothing. `render_quad_view` reports
+  `status: error` with a message when no view rendered. A temporary render
+  file that cannot be removed is logged, and the image already read is still
+  returned. A
+  `karma_engine` other than `cpu` or `gpu` is an error instead of silently
+  rendering on the CPU. A render that leaves its output file empty is reported
+  as producing no image. A node whose displayed geometry cannot be read fails
+  the render instead of being silently left out of the frame; a ROP missing a
+  parm the renderer table names fails the render naming the parm. Each render
+  logs what it framed and what it set on the ROP.
 - **Inbound ws_client frames are parsed into typed frames gated by state and session**
   (houdini-laws-etg.qhj): `parse_frame` is the one boundary between the wire and
   `WSClientCore`. It turns a decoded frame into `WelcomeFrame`, `PongFrame`,

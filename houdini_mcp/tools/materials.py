@@ -11,6 +11,7 @@ from ._common import (
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
+    node_category,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 
@@ -148,13 +149,13 @@ def assign_material(
 
     # Check if it's an OBJ-level geo node
     node_type = geo_node.type().name()
-    node_category = geo_node.type().category().name()
+    category = node_category(geo_node)
 
-    if node_category != "Object":
+    if category != "Object":
         return {
             "status": "error",
             "message": f"Node {geometry_path} is not an Object-level node. "
-            f"Expected geo node, got {node_category}/{node_type}",
+            f"Expected geo node, got {category}/{node_type}",
         }
 
     # Validate material exists
