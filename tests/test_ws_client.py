@@ -25,9 +25,11 @@ sockets, sleeps, or threads.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import random
 import sys
+from typing import assert_never
 
 import pytest
 
@@ -51,22 +53,32 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     HELLO,
     PING,
     PONG,
+    SOCKET_STATES,
+    UNBOUNDED,
     WELCOME,
     Acked,
     AckFrame,
     Action,
-    ActionType,
     Cancelled,
+    CancelTimer,
     ClientClosedError,
+    Close,
     CloseReason,
     ConnectionState,
+    DeliverEvent,
+    DeliverOutcome,
     ErrorFrame,
     EventFrame,
     Failed,
     FrameParseError,
+    Open,
     PongFrame,
     QueueFullError,
     RequestOutcome,
+    ScheduleTimer,
+    Send,
+    Telemetry,
+    Timer,
     WelcomeFrame,
     WSClientCore,
     WSConfig,
@@ -97,32 +109,28 @@ def make_config(**overrides) -> WSConfig:
     return WSConfig(**base)
 
 
-def actions_of(actions: list[Action], kind: ActionType) -> list[Action]:
-    return [a for a in actions if a.type == kind]
+def actions_of(actions: list[Action], kind: type) -> list:
+    return [a for a in actions if isinstance(a, kind)]
 
 
 def sent_frames(actions: list[Action]) -> list[dict]:
-    return [a.frame for a in actions if a.type == ActionType.SEND and a.frame is not None]
+    return [a.frame for a in actions_of(actions, Send)]
 
 
 def telemetry_events(actions: list[Action]) -> list[str]:
-    return [a.telemetry["event"] for a in actions if a.type == ActionType.TELEMETRY]
+    return [a.record["event"] for a in actions_of(actions, Telemetry)]
 
 
-def timers_scheduled(actions: list[Action]) -> list[str]:
-    return [a.timer for a in actions if a.type == ActionType.SCHEDULE_TIMER]
+def timers_scheduled(actions: list[Action]) -> list[Timer]:
+    return [a.timer for a in actions_of(actions, ScheduleTimer)]
 
 
 def outcomes_of(actions: list[Action]) -> list[RequestOutcome]:
-    return [a.outcome for a in actions if a.type == ActionType.DELIVER_OUTCOME and a.outcome]
+    return [a.outcome for a in actions_of(actions, DeliverOutcome)]
 
 
 def telemetry_records(actions: list[Action], event: str) -> list[dict]:
-    return [
-        a.telemetry
-        for a in actions
-        if a.type == ActionType.TELEMETRY and a.telemetry["event"] == event
-    ]
+    return [a.record for a in actions_of(actions, Telemetry) if a.record["event"] == event]
 
 
 def connect_core(core: WSClientCore, *, session_id="s1", capabilities=("events",)):
@@ -146,28 +154,32 @@ class Driver:
         self.telemetry: list[dict] = []
         self.events: list[EventFrame] = []
         self.outcomes: list[RequestOutcome] = []
-        self.timers: dict[str, float] = {}
+        self.timers: dict[Timer, float] = {}
         self.open_count = 0
         self.close_count = 0
 
     def _apply(self, actions: list[Action]) -> None:
+        # Each action kind carries exactly its payload, so nothing here guards.
         for a in actions:
-            if a.type == ActionType.SEND and a.frame is not None:
-                self.sent.append(a.frame)
-            elif a.type == ActionType.TELEMETRY and a.telemetry is not None:
-                self.telemetry.append(a.telemetry)
-            elif a.type == ActionType.DELIVER_EVENT and a.event is not None:
-                self.events.append(a.event)
-            elif a.type == ActionType.DELIVER_OUTCOME and a.outcome is not None:
-                self.outcomes.append(a.outcome)
-            elif a.type == ActionType.SCHEDULE_TIMER and a.timer is not None:
-                self.timers[a.timer] = a.delay
-            elif a.type == ActionType.CANCEL_TIMER and a.timer is not None:
-                self.timers.pop(a.timer, None)
-            elif a.type == ActionType.OPEN:
-                self.open_count += 1
-            elif a.type == ActionType.CLOSE:
-                self.close_count += 1
+            match a:
+                case Send(frame):
+                    self.sent.append(frame)
+                case Telemetry(record):
+                    self.telemetry.append(record)
+                case DeliverEvent(event):
+                    self.events.append(event)
+                case DeliverOutcome(outcome):
+                    self.outcomes.append(outcome)
+                case ScheduleTimer(timer, delay):
+                    self.timers[timer] = delay
+                case CancelTimer(timer):
+                    self.timers.pop(timer, None)
+                case Open():
+                    self.open_count += 1
+                case Close():
+                    self.close_count += 1
+                case _:
+                    assert_never(a)
 
     def call(self, method: str, *args, **kwargs):
         result = getattr(self.core, method)(*args, **kwargs)
@@ -215,9 +227,43 @@ class TestConfig:
         with pytest.raises(ValueError, match="backoff"):
             make_config(backoff_initial=10, backoff_max=5)
 
-    def test_invalid_heartbeat_rejected(self):
-        with pytest.raises(ValueError, match="heartbeat_interval"):
-            make_config(heartbeat_interval=0)
+    @pytest.mark.parametrize(
+        "name", ["heartbeat_interval", "heartbeat_timeout", "handshake_timeout"]
+    )
+    def test_timing_must_be_positive(self, name):
+        # A zero timeout fires its timer at once, so a connection never settles.
+        with pytest.raises(ValueError, match=name):
+            make_config(**{name: 0})
+
+    @pytest.mark.parametrize("bad", [0.0, 0.5])
+    def test_backoff_multiplier_below_one_rejected(self, bad):
+        with pytest.raises(ValueError, match="backoff_multiplier"):
+            make_config(backoff_multiplier=bad)
+        assert make_config(backoff_multiplier=1.0).backoff_multiplier == 1.0
+
+    def test_queued_payload_is_the_callers_at_submission_time(self):
+        # The caller may reuse its dict; what was submitted is what gets sent.
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s")
+        payload = {"op": "set", "value": 1}
+        core.send_command(payload)
+        payload["value"] = 2
+        assert sent_frames(core.drain())[0]["payload"] == {"op": "set", "value": 1}
+
+    def test_config_is_frozen(self):
+        # What __post_init__ proved must stay proved for the config's whole life.
+        cfg = make_config()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.max_command_queue = 0  # type: ignore[misc]
+
+    @pytest.mark.parametrize("name", ["max_command_queue", "max_reconnect_attempts"])
+    @pytest.mark.parametrize("bad", [0, -1, 2.5, True, "8", None])
+    def test_limit_is_a_positive_int_or_unbounded(self, name, bad):
+        # Zero and negative no longer mean unlimited; UNBOUNDED says it in the type.
+        with pytest.raises(ValueError, match=name):
+            make_config(**{name: bad})
+        assert getattr(make_config(**{name: 1}), name) == 1
+        assert getattr(make_config(**{name: UNBOUNDED}), name) is UNBOUNDED
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +280,8 @@ class TestLifecycleTransitions:
         core = WSClientCore(make_config())
         actions = core.start()
         assert core.state == ConnectionState.CONNECTING
-        assert actions_of(actions, ActionType.OPEN)
+        # The open action carries the connection config itself, not a telemetry dict.
+        assert actions_of(actions, Open) == [Open("wss://gateway.example/ws", True)]
         assert "connecting" in telemetry_events(actions)
 
     def test_start_is_idempotent_while_active(self):
@@ -257,7 +304,7 @@ class TestLifecycleTransitions:
         assert hello["api_key"] == "super-secret-key"
         assert hello["protocol_version"] == 1
         assert hello["capabilities"] == ["events", "commands"]
-        assert "handshake_timeout" in timers_scheduled(actions)
+        assert Timer.HANDSHAKE_TIMEOUT in timers_scheduled(actions)
 
     def test_welcome_transitions_to_connected_and_negotiates(self):
         core = WSClientCore(make_config())
@@ -267,7 +314,7 @@ class TestLifecycleTransitions:
         assert core.state == ConnectionState.CONNECTED
         assert core.session_id == "sess-42"
         assert core.negotiated_capabilities == ("events",)
-        assert "heartbeat" in timers_scheduled(actions)
+        assert Timer.HEARTBEAT in timers_scheduled(actions)
         assert "connected" in telemetry_events(actions)
 
     def test_full_happy_path_transition_sequence(self):
@@ -286,7 +333,7 @@ class TestLifecycleTransitions:
         actions = core.stop()
         assert core.state == ConnectionState.CLOSED
         assert any(f["type"] == BYE for f in sent_frames(actions))
-        assert actions_of(actions, ActionType.CLOSE)
+        assert actions_of(actions, Close)
 
     def test_stop_from_disconnected_is_terminal_without_bye(self):
         core = WSClientCore(make_config())
@@ -300,7 +347,7 @@ class TestLifecycleTransitions:
         core.on_socket_open()
         actions = core.on_socket_error("reset")
         assert core.state == ConnectionState.BACKOFF
-        assert "backoff" in timers_scheduled(actions)
+        assert Timer.BACKOFF in timers_scheduled(actions)
 
     def test_handshake_timeout_enters_backoff(self):
         core = WSClientCore(make_config())
@@ -318,14 +365,40 @@ class TestLifecycleTransitions:
         assert core.state == ConnectionState.BACKOFF
         actions = core.on_backoff_elapsed()
         assert core.state == ConnectionState.CONNECTING
-        assert actions_of(actions, ActionType.OPEN)
+        assert actions_of(actions, Open)
 
     def test_closed_is_terminal_ignores_socket_events(self):
         core = WSClientCore(make_config())
         core.stop()
-        assert core.on_socket_error() == []
-        assert core.on_socket_closed() == []
+        assert (
+            telemetry_records(core.on_socket_error("reset"), "ignored_socket_error")[0]["reason"]
+            == "reset"
+        )
+        assert (
+            telemetry_records(core.on_socket_closed("eof"), "ignored_socket_closed")[0]["reason"]
+            == "eof"
+        )
         assert core.state == ConnectionState.CLOSED
+
+    def test_drop_reported_during_backoff_is_not_a_second_failure(self):
+        # The driver closes the socket on the core's order and then reports it
+        # closed; that report must not spend a reconnect or grow the backoff.
+        core = WSClientCore(make_config(max_reconnect_attempts=1), rng=random.Random(1))
+        core.start()
+        core.on_socket_open()
+        core.on_socket_error("reset")
+        assert core.state == ConnectionState.BACKOFF
+        assert telemetry_events(core.on_socket_closed()) == ["ignored_socket_closed"]
+        assert telemetry_events(core.on_socket_error("reset")) == ["ignored_socket_error"]
+        assert core.backoff_attempt == 1
+        assert core.state == ConnectionState.BACKOFF
+        core.on_backoff_elapsed()
+        assert core.state == ConnectionState.CONNECTING
+
+    def test_drop_before_start_is_ignored(self):
+        core = WSClientCore(make_config())
+        assert telemetry_events(core.on_socket_error()) == ["ignored_socket_error"]
+        assert core.state == ConnectionState.DISCONNECTED
 
 
 # --------------------------------------------------------------------------- #
@@ -336,7 +409,7 @@ class TestLifecycleTransitions:
 class TestBackoffAndJitter:
     def _first_backoff_delay(self, actions: list[Action]) -> float:
         for a in actions:
-            if a.type == ActionType.SCHEDULE_TIMER and a.timer == "backoff":
+            if isinstance(a, ScheduleTimer) and a.timer == Timer.BACKOFF:
                 return a.delay
         raise AssertionError("no backoff timer scheduled")
 
@@ -414,9 +487,26 @@ class TestBackoffAndJitter:
         core.on_socket_error()  # attempt 2
         core.on_backoff_elapsed()
         core.on_socket_open()
-        actions = core.on_socket_error()  # attempt 3 -> exhausted
+        actions = core.on_socket_error()  # attempt 3: the last one the budget allows
+        assert core.state == ConnectionState.BACKOFF
+        assert Timer.BACKOFF in timers_scheduled(actions)
+        core.on_backoff_elapsed()
+        core.on_socket_open()
+        actions = core.on_socket_error()  # a fourth would exceed the budget
         assert core.state == ConnectionState.CLOSED
         assert "reconnect_exhausted" in telemetry_events(actions)
+        assert telemetry_records(actions, "reconnect_exhausted")[0]["attempts"] == 3
+
+    def test_unbounded_reconnect_budget_never_exhausts(self):
+        core = WSClientCore(make_config(max_reconnect_attempts=UNBOUNDED), rng=random.Random(1))
+        core.start()
+        for _ in range(50):
+            core.on_socket_open()
+            actions = core.on_socket_error()
+            assert core.state == ConnectionState.BACKOFF
+            assert Timer.BACKOFF in timers_scheduled(actions)
+            core.on_backoff_elapsed()
+        assert core.backoff_attempt == 50
 
 
 # --------------------------------------------------------------------------- #
@@ -432,16 +522,16 @@ class TestHeartbeat:
         frames = sent_frames(actions)
         assert any(f["type"] == PING for f in frames)
         assert frames[0]["session_id"] == "hb"
-        assert "heartbeat_timeout" in timers_scheduled(actions)
+        assert Timer.HEARTBEAT_TIMEOUT in timers_scheduled(actions)
 
     def test_pong_clears_timeout_and_rearms_interval(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="hb")
         core.on_heartbeat_tick()
         actions = core.on_frame(PongFrame("hb"))
-        cancelled = [a.timer for a in actions if a.type == ActionType.CANCEL_TIMER]
-        assert "heartbeat_timeout" in cancelled
-        assert "heartbeat" in timers_scheduled(actions)
+        cancelled = [a.timer for a in actions_of(actions, CancelTimer)]
+        assert Timer.HEARTBEAT_TIMEOUT in cancelled
+        assert Timer.HEARTBEAT in timers_scheduled(actions)
 
     def test_missing_pong_timeout_triggers_reconnect(self):
         core = WSClientCore(make_config())
@@ -451,11 +541,7 @@ class TestHeartbeat:
         assert core.state == ConnectionState.BACKOFF
         assert "heartbeat_timeout" in [
             t["reason"]
-            for t in [
-                a.telemetry
-                for a in actions
-                if a.type == ActionType.TELEMETRY and "reason" in a.telemetry
-            ]
+            for t in [a.record for a in actions_of(actions, Telemetry) if "reason" in a.record]
         ]
 
     def test_heartbeat_tick_ignored_when_not_connected(self):
@@ -479,7 +565,7 @@ class TestHeartbeat:
 
 class TestCommandsAndQueues:
     def test_request_ids_are_monotonic_and_unique(self):
-        core = WSClientCore(make_config(max_command_queue=0))
+        core = WSClientCore(make_config(max_command_queue=UNBOUNDED))
         ids = [core.send_command({"op": i}) for i in range(5)]
         assert ids == sorted(ids)
         assert len(set(ids)) == len(ids)
@@ -550,7 +636,7 @@ class TestEventDelivery:
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         actions = core.on_frame(EventFrame("s1", "e1", {}))
-        delivered = [a for a in actions if a.type == ActionType.DELIVER_EVENT]
+        delivered = actions_of(actions, DeliverEvent)
         assert len(delivered) == 1
         assert delivered[0].event.id == "e1"
 
@@ -640,7 +726,7 @@ class TestStaleSessionAndOrdering:
         core = WSClientCore(make_config())
         connect_core(core, session_id="current")
         actions = core.on_frame(EventFrame("OLD", "e", {}))
-        assert not any(a.type == ActionType.DELIVER_EVENT for a in actions)
+        assert not actions_of(actions, DeliverEvent)
         assert "stale_session_rejected" in telemetry_events(actions)
 
     def test_stale_session_ack_rejected(self):
@@ -684,7 +770,7 @@ class TestStaleSessionAndOrdering:
         # A pong arriving with no outstanding ping: harmless, just re-arms.
         actions = core.on_frame(PongFrame("s1"))
         assert core.state == ConnectionState.CONNECTED
-        assert "heartbeat" in timers_scheduled(actions)
+        assert Timer.HEARTBEAT in timers_scheduled(actions)
 
     def test_welcome_before_socket_open_ignored(self):
         # Out-of-order: a welcome cannot arrive before we even connect.
@@ -780,7 +866,7 @@ class TestStateGate:
         core.start()
         core.on_socket_open()
         actions = core.on_frame(EventFrame("s1", "early", {}))
-        assert not actions_of(actions, ActionType.DELIVER_EVENT)
+        assert not actions_of(actions, DeliverEvent)
         assert self._ignored(actions, EVENT, ConnectionState.HANDSHAKING)
 
     def test_event_during_backoff_is_not_delivered(self):
@@ -788,7 +874,7 @@ class TestStateGate:
         connect_core(core, session_id="s1")
         core.on_socket_error("partition")
         actions = core.on_frame(EventFrame("s1", "late", {}))
-        assert not actions_of(actions, ActionType.DELIVER_EVENT)
+        assert not actions_of(actions, DeliverEvent)
         assert self._ignored(actions, EVENT, ConnectionState.BACKOFF)
 
     def test_pong_during_handshake_does_not_arm_the_heartbeat(self):
@@ -815,7 +901,7 @@ class TestStateGate:
         core.on_socket_open()
         core.on_frame(WelcomeFrame("assigned", ()))
         assert core.session_id == "assigned"
-        assert actions_of(core.on_frame(EventFrame("assigned", "e", {})), ActionType.DELIVER_EVENT)
+        assert actions_of(core.on_frame(EventFrame("assigned", "e", {})), DeliverEvent)
         assert "stale_session_rejected" in telemetry_events(
             core.on_frame(EventFrame("other", "e", {}))
         )
@@ -850,10 +936,7 @@ class TestErrors:
         core.stop()
         actions = core.on_frame(ErrorFrame("auth_failed", True, "s1"))
         assert actions == [
-            Action(
-                ActionType.TELEMETRY,
-                telemetry={"event": "ignored_frame", "state": "closed", "frame_type": ERROR},
-            )
+            Telemetry({"event": "ignored_frame", "state": "closed", "frame_type": ERROR})
         ]
 
     def test_fatal_error_during_handshake_closes_whatever_session_it_names(self):
@@ -944,6 +1027,12 @@ class TestTerminalOutcomes:
         rid = driver.call("send_command", {"op": "critical"})
         driver.call("drain")
         driver.call("on_socket_error", "partition")
+        # A budget of 1 buys one reconnect; the command rides along on it.
+        assert core.state == ConnectionState.BACKOFF
+        assert driver.outcomes == []
+        driver.call("on_backoff_elapsed")
+        driver.call("on_socket_open")
+        driver.call("on_socket_error", "partition")
         assert core.state == ConnectionState.CLOSED
         assert driver.outcomes == [Failed(rid, CloseReason.RECONNECT_EXHAUSTED)]
         assert [t["request_id"] for t in driver.telemetry if t["event"] == "command_failed"] == [
@@ -975,7 +1064,7 @@ class TestTerminalOutcomes:
         connect_core(core, session_id="s1")
         core.stop()
         late = core.on_frame(EventFrame("s1", "7", {}))
-        assert not [a for a in late if a.type == ActionType.DELIVER_EVENT]
+        assert not actions_of(late, DeliverEvent)
         assert "ignored_frame" in telemetry_events(late)
 
     def test_acked_outcome_does_not_alias_the_drivers_frame(self):
@@ -991,9 +1080,9 @@ class TestTerminalOutcomes:
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         buffer = {"type": EVENT, "session_id": "s1", "id": "e1", "payload": {"n": {"m": 1}}}
-        (delivered,) = [a for a in core.on_frame(parse_frame(buffer)) if a.event]
+        (delivered,) = actions_of(core.on_frame(parse_frame(buffer)), DeliverEvent)
         buffer["payload"]["n"]["m"] = 2
-        assert delivered.event is not None and delivered.event.payload == {"n": {"m": 1}}
+        assert delivered.event.payload == {"n": {"m": 1}}
 
 
 # --------------------------------------------------------------------------- #
@@ -1117,7 +1206,7 @@ class TestScenarios:
         stray = core.on_backoff_elapsed()  # stray timer while connected
         assert core.state == ConnectionState.CONNECTED
         assert "ignored_backoff_elapsed" in [
-            a.telemetry["event"] for a in stray if a.type == ActionType.TELEMETRY
+            a.record["event"] for a in actions_of(stray, Telemetry)
         ]
 
     def test_full_reconnect_cycle_never_opens_two_sockets_at_once(self):
@@ -1141,6 +1230,7 @@ from hypothesis import HealthCheck, given, settings  # noqa: E402
 from hypothesis import strategies as st  # noqa: E402
 from hypothesis.stateful import (  # noqa: E402
     RuleBasedStateMachine,
+    initialize,
     invariant,
     precondition,
     rule,
@@ -1159,7 +1249,7 @@ def test_backoff_delay_always_within_bounds_property(seed):
     for _ in range(40):
         actions = core.on_socket_error()
         for a in actions:
-            if a.type == ActionType.SCHEDULE_TIMER and a.timer == "backoff":
+            if isinstance(a, ScheduleTimer) and a.timer == Timer.BACKOFF:
                 assert 0.0 <= a.delay <= cfg.backoff_max * (1 + cfg.jitter_ratio) + 1e-9
         if core.state == ConnectionState.CLOSED:
             break
@@ -1174,7 +1264,7 @@ def test_backoff_delay_always_within_bounds_property(seed):
     )
 )
 def test_request_ids_strictly_increasing_property(ops):
-    core = WSClientCore(make_config(max_command_queue=0))  # unbounded for id test
+    core = WSClientCore(make_config(max_command_queue=UNBOUNDED))
     ids = [core.send_command(op) for op in ops]
     assert ids == sorted(ids)
     assert len(set(ids)) == len(ids)
@@ -1185,7 +1275,6 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
         super().__init__()
-        self.core = WSClientCore(make_config(max_command_queue=8), rng=random.Random(0))
         self._sent_secret = "super-secret-key"
         # Every id send_command returned, and every id an outcome was delivered for.
         self.allocated: list[int] = []
@@ -1194,9 +1283,17 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def _run(self, actions: list[Action]) -> None:
         self.settled.extend(o.request_id for o in outcomes_of(actions))
         # An event reaches the app only from the session the core is in.
-        for a in actions_of(actions, ActionType.DELIVER_EVENT):
+        for a in actions_of(actions, DeliverEvent):
             assert self.core.state == ConnectionState.CONNECTED
-            assert a.event is not None and a.event.session_id == self.core.session_id
+            assert a.event.session_id == self.core.session_id
+
+    @initialize(budget=st.sampled_from([1, 2, UNBOUNDED]))
+    def configure(self, budget):
+        # A small budget makes reconnect exhaustion a reachable close.
+        self.core = WSClientCore(
+            make_config(max_command_queue=8, max_reconnect_attempts=budget),
+            rng=random.Random(0),
+        )
 
     @rule()
     def start(self):
@@ -1210,9 +1307,22 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def socket_open(self):
         self._run(self.core.on_socket_open())
 
+    def _drop(self, report, reason):
+        # A drop outside the socket states is stale: it changes nothing.
+        before = (self.core.state, self.core.backoff_attempt)
+        actions = report(reason)
+        self._run(actions)
+        if before[0] not in SOCKET_STATES:
+            assert (self.core.state, self.core.backoff_attempt) == before
+            assert len(actions) == 1 and telemetry_events(actions)[0].startswith("ignored_")
+
     @rule(reason=st.sampled_from(["reset", "partition", "restart"]))
     def socket_error(self, reason):
-        self._run(self.core.on_socket_error(reason))
+        self._drop(self.core.on_socket_error, reason)
+
+    @rule(reason=st.sampled_from(["eof", "going_away"]))
+    def socket_closed(self, reason):
+        self._drop(self.core.on_socket_closed, reason)
 
     @rule()
     def backoff_elapsed(self):
@@ -1244,7 +1354,10 @@ class WSClientStateMachine(RuleBasedStateMachine):
         if self.core.state == ConnectionState.CLOSED:
             with pytest.raises(ClientClosedError):
                 self.core.send_command(payload)
-        elif self.core.command_backlog >= self.core.config.max_command_queue:
+        elif (
+            self.core.config.max_command_queue is not UNBOUNDED
+            and self.core.command_backlog >= self.core.config.max_command_queue
+        ):
             with pytest.raises(QueueFullError):
                 self.core.send_command(payload)
         else:
@@ -1298,8 +1411,9 @@ class WSClientStateMachine(RuleBasedStateMachine):
         assert len(self.allocated) == len(self.settled) + live
 
     @invariant()
-    def command_queue_stays_bounded(self):
-        assert self.core.command_backlog <= self.core.config.max_command_queue
+    def reconnects_stay_within_budget(self):
+        budget = self.core.config.max_reconnect_attempts
+        assert budget is UNBOUNDED or self.core.backoff_attempt <= budget
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):

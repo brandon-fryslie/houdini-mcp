@@ -86,27 +86,51 @@ class ConnectionState(enum.Enum):
     CLOSED = "closed"  # terminal; will not reconnect (fatal/auth error or stop)
 
 
-class ActionType(enum.Enum):
-    """Side effects the I/O driver must perform on the core's behalf."""
-
-    OPEN = "open"  # open a TLS websocket to the gateway
-    SEND = "send"  # send a frame (payload in Action.frame)
-    CLOSE = "close"  # close the current socket
-    SCHEDULE_TIMER = "schedule_timer"  # (re)arm a named timer after Action.delay seconds
-    CANCEL_TIMER = "cancel_timer"  # cancel a named timer
-    DELIVER_EVENT = "deliver_event"  # hand an inbound application event to the app
-    DELIVER_OUTCOME = "deliver_outcome"  # hand a request's terminal outcome to the app
-    TELEMETRY = "telemetry"  # structured, secret-redacted telemetry record
+# The states in which the driver holds a socket on the core's behalf. A drop
+# reported from any other state is stale (the core already ordered the close)
+# and is ignored rather than charged against the reconnect budget.
+SOCKET_STATES = frozenset(
+    {ConnectionState.CONNECTING, ConnectionState.HANDSHAKING, ConnectionState.CONNECTED}
+)
+# The states a started core passes through before it closes: start() is a no-op in these.
+ACTIVE_STATES = SOCKET_STATES | {ConnectionState.BACKOFF}
 
 
-# Named timers used by the state machine.
-TIMER_HEARTBEAT = "heartbeat"
-TIMER_HEARTBEAT_TIMEOUT = "heartbeat_timeout"
-TIMER_HANDSHAKE_TIMEOUT = "handshake_timeout"
-TIMER_BACKOFF = "backoff"
+class Timer(enum.Enum):
+    """The timers the state machine arms; the driver keeps one slot per member."""
+
+    HEARTBEAT = "heartbeat"
+    HEARTBEAT_TIMEOUT = "heartbeat_timeout"
+    HANDSHAKE_TIMEOUT = "handshake_timeout"
+    BACKOFF = "backoff"
+
+
 # The timers a live socket may hold; closing for good also kills the backoff timer.
-CONNECTION_TIMERS = (TIMER_HEARTBEAT, TIMER_HEARTBEAT_TIMEOUT, TIMER_HANDSHAKE_TIMEOUT)
-ALL_TIMERS = (*CONNECTION_TIMERS, TIMER_BACKOFF)
+CONNECTION_TIMERS = (Timer.HEARTBEAT, Timer.HEARTBEAT_TIMEOUT, Timer.HANDSHAKE_TIMEOUT)
+ALL_TIMERS = (*CONNECTION_TIMERS, Timer.BACKOFF)
+
+
+class Unbounded(enum.Enum):
+    """The one value a limit takes when nothing is limited."""
+
+    UNBOUNDED = "unbounded"
+
+
+UNBOUNDED = Unbounded.UNBOUNDED
+
+# [LAW:types-are-the-program] A limit is a positive count or explicitly no limit;
+# "0 means unlimited" was a convention every reader of the int had to know.
+Limit = int | Unbounded
+
+
+def limit_reached(count: int, limit: Limit) -> bool:
+    """Whether ``count`` has used up ``limit``; an unbounded limit is never reached.
+
+    [LAW:single-enforcer] The one reading of a Limit, for the queue bound and the
+    reconnect budget alike.
+    """
+
+    return limit is not UNBOUNDED and count >= limit
 
 
 # ---------------------------------------------------------------- inbound frames
@@ -301,25 +325,80 @@ class Failed:
 
 
 # [LAW:types-are-the-program] A request id's end is one of these, each carrying only
-# what its variant can know. The app that waits on an id waits for a DELIVER_OUTCOME
+# what its variant can know. The app that waits on an id waits for a DeliverOutcome
 # action holding one of them, and the core emits exactly one per allocated id.
 RequestOutcome = Acked | Cancelled | Failed
 
 
+# ----------------------------------------------------------------- actions
+
+
 @dataclass(frozen=True)
-class Action:
-    """A single side effect for the I/O driver. Immutable and inspectable."""
+class Open:
+    """Open a TLS websocket to the gateway."""
 
-    type: ActionType
-    frame: dict[str, Any] | None = None
-    timer: str | None = None
-    delay: float | None = None
-    event: EventFrame | None = None
-    outcome: RequestOutcome | None = None
-    telemetry: dict[str, Any] | None = None
+    gateway_url: str
+    tls_verify: bool
 
 
-@dataclass
+@dataclass(frozen=True)
+class Send:
+    """Send a frame on the current socket."""
+
+    frame: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Close:
+    """Close the current socket."""
+
+
+@dataclass(frozen=True)
+class ScheduleTimer:
+    """(Re)arm ``timer`` to fire after ``delay`` seconds."""
+
+    timer: Timer
+    delay: float
+
+
+@dataclass(frozen=True)
+class CancelTimer:
+    """Disarm ``timer`` if it is armed."""
+
+    timer: Timer
+
+
+@dataclass(frozen=True)
+class DeliverEvent:
+    """Hand an inbound application event to the app."""
+
+    event: EventFrame
+
+
+@dataclass(frozen=True)
+class DeliverOutcome:
+    """Hand a request's terminal outcome to the app."""
+
+    outcome: RequestOutcome
+
+
+@dataclass(frozen=True)
+class Telemetry:
+    """A structured, secret-redacted telemetry record."""
+
+    record: dict[str, Any]
+
+
+# [LAW:types-are-the-program] A side effect for the I/O driver carries exactly the
+# payload its kind needs, so the driver matches on the kind and reads its fields
+# without guarding for the ones another kind would have left unset.
+Action = (
+    Open | Send | Close | ScheduleTimer | CancelTimer | DeliverEvent | DeliverOutcome | Telemetry
+)
+
+
+# [LAW:types-are-the-program] Frozen, so what __post_init__ proves stays proven.
+@dataclass(frozen=True)
 class WSConfig:
     """Configuration for :class:`WSClientCore`.
 
@@ -340,14 +419,19 @@ class WSConfig:
     backoff_max: float = 60.0
     backoff_multiplier: float = 2.0
     jitter_ratio: float = 0.2  # +/- 20 %
-    # Bounded command queue (backpressure). Zero/negative disables the bound.
-    max_command_queue: int = 256
+    # Commands the queue holds before send_command pushes back (backpressure).
+    max_command_queue: Limit = 256
     # TLS.
     tls_verify: bool = True
-    # Reconnect policy.
-    max_reconnect_attempts: int = 0  # 0 == unlimited
+    # Reconnect attempts before the client closes for good.
+    max_reconnect_attempts: Limit = UNBOUNDED
 
     def __post_init__(self) -> None:
+        for name in ("max_command_queue", "max_reconnect_attempts"):
+            limit = getattr(self, name)
+            # type() not isinstance: a bool is an int to isinstance, and True is not a count.
+            if not (limit is UNBOUNDED or (type(limit) is int and limit >= 1)):
+                raise ValueError(f"{name} must be a positive int or UNBOUNDED (got {limit!r})")
         if not self.gateway_url:
             raise ValueError("gateway_url is required")
         if not self.gateway_url.startswith("wss://") and self.tls_verify:
@@ -356,10 +440,14 @@ class WSConfig:
             )
         if not self.api_key:
             raise ValueError("api_key is required")
-        if self.heartbeat_interval <= 0:
-            raise ValueError("heartbeat_interval must be positive")
+        for name in ("heartbeat_interval", "heartbeat_timeout", "handshake_timeout"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
         if self.backoff_initial <= 0 or self.backoff_max < self.backoff_initial:
             raise ValueError("invalid backoff configuration")
+        # Below 1 the "exponential growth" shrinks; at 0 every retry is immediate.
+        if self.backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
         if not (0.0 <= self.jitter_ratio < 1.0):
             raise ValueError("jitter_ratio must be in [0, 1)")
 
@@ -409,7 +497,7 @@ class WSClientCore:
 
     Request lifecycle: :meth:`send_command` either raises or returns an id that
     is now *live* (queued, then pending once sent). A live id leaves the core in
-    exactly one way, :meth:`_settle`, which emits the ``DELIVER_OUTCOME`` action
+    exactly one way, :meth:`_settle`, which emits the ``DeliverOutcome`` action
     the app waits on. So every id ever returned ends in exactly one outcome:
     acked by the gateway, cancelled by the app, or failed when the client
     closes for good.
@@ -433,17 +521,19 @@ class WSClientCore:
         # Request ids (monotonic, never reused within a process lifetime).
         self._next_request_id = 1
         # [LAW:one-source-of-truth] A live request id is in exactly one of these two:
-        # the backlog of command frames not yet on the wire (bounded), or the map of
-        # sent, unacked frames. Nothing else records which ids are live.
+        # the backlog of command frames not yet on the wire, or the map of sent,
+        # unacked frames. Nothing else records which ids are live. max_command_queue
+        # bounds admission through send_command only: a drop requeues every
+        # unacked frame regardless, because each is a live id that owes an outcome.
         self._command_queue: deque[dict[str, Any]] = deque()
         self._pending: dict[int, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ helpers
 
-    def _telemetry(self, event: str, **fields: Any) -> Action:
+    def _telemetry(self, event: str, **fields: Any) -> Telemetry:
         record = {"event": event, "state": self.state.value}
         record.update(redact(fields))
-        return Action(ActionType.TELEMETRY, telemetry=record)
+        return Telemetry(record)
 
     def _compute_backoff_delay(self) -> float:
         """Exponential backoff capped at ``backoff_max`` with capped +/- jitter.
@@ -481,19 +571,19 @@ class WSClientCore:
         queued = [frame["request_id"] for frame in self._command_queue]
         return sorted(queued + list(self._pending))
 
-    def _settle(self, outcome: RequestOutcome) -> Action:
+    def _settle(self, outcome: RequestOutcome) -> DeliverOutcome:
         """Retire a live request id with its one terminal outcome.
 
         [LAW:single-enforcer] This is the only code that removes an id from the
         live set (the queue and the pending map together; flushing and requeuing
         only move ids between the two), so an id cannot leave the core without
-        the DELIVER_OUTCOME action the app is waiting on.
+        the DeliverOutcome action the app is waiting on.
         """
 
         rid = outcome.request_id
         self._command_queue = deque(f for f in self._command_queue if f["request_id"] != rid)
         self._pending.pop(rid, None)
-        return Action(ActionType.DELIVER_OUTCOME, outcome=outcome)
+        return DeliverOutcome(outcome)
 
     def _enter_closed(self, *, reason: CloseReason) -> list[Action]:
         """Enter terminal CLOSED: every live request fails, every timer dies.
@@ -510,7 +600,7 @@ class WSClientCore:
         actions.extend(self._close_socket(ALL_TIMERS))
         return actions
 
-    def _close_socket(self, timers: tuple[str, ...]) -> list[Action]:
+    def _close_socket(self, timers: tuple[Timer, ...]) -> list[Action]:
         """Cancel ``timers`` and close the socket: the teardown shared by backoff and closing for good.
 
         [LAW:one-source-of-truth] The two paths once kept their own copies of
@@ -518,8 +608,8 @@ class WSClientCore:
         """
 
         return [
-            *(Action(ActionType.CANCEL_TIMER, timer=t) for t in timers),
-            Action(ActionType.CLOSE),
+            *(CancelTimer(t) for t in timers),
+            Close(),
         ]
 
     # ------------------------------------------------------------- public state
@@ -555,12 +645,7 @@ class WSClientCore:
 
         if self.state == ConnectionState.CLOSED:
             raise ClientClosedError("client is closed; a new connection needs a new core")
-        if self.state in (
-            ConnectionState.CONNECTING,
-            ConnectionState.HANDSHAKING,
-            ConnectionState.CONNECTED,
-            ConnectionState.BACKOFF,
-        ):
+        if self.state in ACTIVE_STATES:
             return []
         self._reset_backoff()
         return self._begin_connect()
@@ -575,7 +660,7 @@ class WSClientCore:
             return []
         actions: list[Action] = []
         if self.state == ConnectionState.CONNECTED:
-            actions.append(Action(ActionType.SEND, frame={"type": BYE}))
+            actions.append(Send({"type": BYE}))
         prev = self.state
         actions.extend(self._enter_closed(reason=CloseReason.STOPPED))
         actions.append(self._telemetry("stopped", previous=prev.value))
@@ -586,13 +671,7 @@ class WSClientCore:
         self._session_id = None
         self._awaiting_pong = False
         return [
-            Action(
-                ActionType.OPEN,
-                telemetry={
-                    "gateway_url": self.config.gateway_url,
-                    "tls_verify": self.config.tls_verify,
-                },
-            ),
+            Open(self.config.gateway_url, self.config.tls_verify),
             self._telemetry("connecting", attempt=self._backoff_attempt),
         ]
 
@@ -612,12 +691,8 @@ class WSClientCore:
             "capabilities": list(self.config.capabilities),
         }
         return [
-            Action(ActionType.SEND, frame=hello),
-            Action(
-                ActionType.SCHEDULE_TIMER,
-                timer=TIMER_HANDSHAKE_TIMEOUT,
-                delay=self.config.handshake_timeout,
-            ),
+            Send(hello),
+            ScheduleTimer(Timer.HANDSHAKE_TIMEOUT, self.config.handshake_timeout),
             # Telemetry is redacted: the api_key must never be logged.
             self._telemetry(
                 "hello_sent",
@@ -629,15 +704,15 @@ class WSClientCore:
     def on_socket_error(self, reason: str = "") -> list[Action]:
         """Driver reports the socket failed / dropped. Schedule reconnect."""
 
-        if self.state == ConnectionState.CLOSED:
-            return []
+        if self.state not in SOCKET_STATES:
+            return [self._telemetry("ignored_socket_error", reason=reason)]
         return self._enter_backoff(reason=reason or "socket_error")
 
     def on_socket_closed(self, reason: str = "") -> list[Action]:
         """Driver reports the socket closed unexpectedly. Treat like an error."""
 
-        if self.state == ConnectionState.CLOSED:
-            return []
+        if self.state not in SOCKET_STATES:
+            return [self._telemetry("ignored_socket_closed", reason=reason)]
         return self._enter_backoff(reason=reason or "socket_closed")
 
     def _enter_backoff(self, *, reason: str) -> list[Action]:
@@ -647,18 +722,9 @@ class WSClientCore:
             self._command_queue.appendleft(self._pending[rid])
         self._pending.clear()
 
-        # Compute this attempt's delay from the *current* backoff (so the first
-        # retry uses backoff_initial, the next backoff_initial*multiplier, ...),
-        # then advance the backoff and attempt counter for the following retry.
-        delay = self._compute_backoff_delay()
-        self._advance_backoff()
-
-        # Respect a bounded reconnect attempt budget. Once we have used up the
-        # configured number of attempts, stop trying and close terminally.
-        if (
-            self.config.max_reconnect_attempts
-            and self._backoff_attempt >= self.config.max_reconnect_attempts
-        ):
+        # _backoff_attempt counts the reconnects already scheduled, so it is read
+        # before this one is counted: a budget of N allows N reconnects.
+        if limit_reached(self._backoff_attempt, self.config.max_reconnect_attempts):
             return [
                 *self._enter_closed(reason=CloseReason.RECONNECT_EXHAUSTED),
                 self._telemetry(
@@ -666,12 +732,18 @@ class WSClientCore:
                 ),
             ]
 
+        # Compute this attempt's delay from the *current* backoff (so the first
+        # retry uses backoff_initial, the next backoff_initial*multiplier, ...),
+        # then advance the backoff and attempt counter for the following retry.
+        delay = self._compute_backoff_delay()
+        self._advance_backoff()
+
         self.state = ConnectionState.BACKOFF
         self._session_id = None
         self._awaiting_pong = False
         return [
             *self._close_socket(CONNECTION_TIMERS),
-            Action(ActionType.SCHEDULE_TIMER, timer=TIMER_BACKOFF, delay=delay),
+            ScheduleTimer(Timer.BACKOFF, delay),
             self._telemetry(
                 "backoff_scheduled", reason=reason, delay=delay, attempt=self._backoff_attempt
             ),
@@ -742,12 +814,8 @@ class WSClientCore:
         self._awaiting_pong = False
 
         actions: list[Action] = [
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HANDSHAKE_TIMEOUT),
-            Action(
-                ActionType.SCHEDULE_TIMER,
-                timer=TIMER_HEARTBEAT,
-                delay=self.config.heartbeat_interval,
-            ),
+            CancelTimer(Timer.HANDSHAKE_TIMEOUT),
+            ScheduleTimer(Timer.HEARTBEAT, self.config.heartbeat_interval),
             self._telemetry(
                 "connected",
                 session_id=self._session_id,
@@ -761,19 +829,15 @@ class WSClientCore:
     def _on_pong(self) -> list[Action]:
         self._awaiting_pong = False
         return [
-            Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
-            Action(
-                ActionType.SCHEDULE_TIMER,
-                timer=TIMER_HEARTBEAT,
-                delay=self.config.heartbeat_interval,
-            ),
+            CancelTimer(Timer.HEARTBEAT_TIMEOUT),
+            ScheduleTimer(Timer.HEARTBEAT, self.config.heartbeat_interval),
         ]
 
     def _on_event(self, frame: EventFrame) -> list[Action]:
         # Every event is handed to the app inside the on_frame that received it;
         # the core keeps none, so a slow app is the driver's concern, not a
         # backlog here.
-        return [Action(ActionType.DELIVER_EVENT, event=frame)]
+        return [DeliverEvent(frame)]
 
     def _on_ack(self, frame: AckFrame) -> list[Action]:
         rid = frame.request_id
@@ -810,12 +874,8 @@ class WSClientCore:
         if self._session_id is not None:
             ping["session_id"] = self._session_id
         return [
-            Action(ActionType.SEND, frame=ping),
-            Action(
-                ActionType.SCHEDULE_TIMER,
-                timer=TIMER_HEARTBEAT_TIMEOUT,
-                delay=self.config.heartbeat_timeout,
-            ),
+            Send(ping),
+            ScheduleTimer(Timer.HEARTBEAT_TIMEOUT, self.config.heartbeat_timeout),
             self._telemetry("heartbeat_ping"),
         ]
 
@@ -835,7 +895,7 @@ class WSClientCore:
         bounded queue, and (if connected) the caller then invokes
         :meth:`drain` / receives actions. It never performs I/O.
 
-        The returned id is live and will reach exactly one DELIVER_OUTCOME.
+        The returned id is live and will reach exactly one DeliverOutcome.
         When the command cannot become live, no id is allocated and the caller
         hears why: :class:`ClientClosedError` once the client has closed for
         good, :class:`QueueFullError` when the bounded queue has no room.
@@ -845,13 +905,14 @@ class WSClientCore:
         # call site rather than discarding an earlier command behind its back.
         if self.state == ConnectionState.CLOSED:
             raise ClientClosedError("client is closed; no further commands can be sent")
-        if (
-            self.config.max_command_queue > 0
-            and len(self._command_queue) >= self.config.max_command_queue
-        ):
+        if limit_reached(len(self._command_queue), self.config.max_command_queue):
             raise QueueFullError(f"command queue full ({self.config.max_command_queue})")
         rid = self._allocate_request_id()
-        self._command_queue.append({"type": COMMAND, "request_id": rid, "payload": payload})
+        # [LAW:effects-at-boundaries] The queue owns its copy: a caller that reuses
+        # the dict cannot change what is sent later, or re-sent after a drop.
+        self._command_queue.append(
+            {"type": COMMAND, "request_id": rid, "payload": copy.deepcopy(payload)}
+        )
         return rid
 
     def cancel_command(self, request_id: int) -> list[Action]:
@@ -875,7 +936,7 @@ class WSClientCore:
             cancel = {"type": CANCEL, "request_id": request_id}
             if self._session_id is not None:
                 cancel["session_id"] = self._session_id
-            actions.append(Action(ActionType.SEND, frame=cancel))
+            actions.append(Send(cancel))
         actions.append(self._settle(Cancelled(request_id, sent=sent)))
         actions.append(self._telemetry("command_cancelled", request_id=request_id, sent=sent))
         return actions
@@ -896,6 +957,6 @@ class WSClientCore:
             out = dict(frame)
             if self._session_id is not None:
                 out["session_id"] = self._session_id
-            actions.append(Action(ActionType.SEND, frame=out))
+            actions.append(Send(out))
             actions.append(self._telemetry("command_sent", request_id=rid))
         return actions

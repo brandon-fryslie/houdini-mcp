@@ -37,6 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ws_client actions carry exactly their own payload; limits aren't magic numbers**
+  (houdini-laws-etg.tnz): `Action` is now the union `Open | Send | Close | ScheduleTimer
+  | CancelTimer | DeliverEvent | DeliverOutcome | Telemetry`, one frozen dataclass per
+  side effect with only the fields that effect needs: `Open` carries `gateway_url` and
+  `tls_verify` as fields (they were a dict under `telemetry`), `Send` a `frame`,
+  `ScheduleTimer` a `timer` and `delay`, `CancelTimer` a `timer`, `DeliverEvent` an
+  `event`, `DeliverOutcome` an `outcome` and `Telemetry` a `record`. A driver matches
+  on the class; `ActionType` and the optional fields are gone. Timer names are the
+  `Timer` enum (`HEARTBEAT`, `HEARTBEAT_TIMEOUT`, `HANDSHAKE_TIMEOUT`, `BACKOFF`, with
+  the old strings as values) instead of four string constants. `WSConfig.max_command_queue`
+  and `max_reconnect_attempts` are a `Limit`: a positive int or `UNBOUNDED`, read by one
+  `limit_reached`; zero and negative no longer mean unlimited and are rejected, and
+  `max_reconnect_attempts` defaults to `UNBOUNDED` (it was `0`). A budget of N now
+  allows N reconnects (it allowed N-1: the attempt was counted before the budget was
+  read, so `1` meant never reconnect). `WSConfig` is frozen, and it rejects a
+  non-positive `heartbeat_timeout` or `handshake_timeout` (the timer fired at once)
+  and a `backoff_multiplier` below 1 (the delay shrank on every retry; at 0 every
+  retry after the first was immediate). A drop the driver reports while the core is
+  not holding a socket (before `start`, in backoff, or after closing) is ignored
+  with `ignored_socket_error` / `ignored_socket_closed` telemetry instead of being
+  charged as another failure.
 - **Render tools share one implementation of framing, rig and ROP configuration**
   (houdini-laws-etg.arl): `render_viewport` and `render_quad_view` derive the
   camera pivot, distance, orthographic width and reported `bounding_box` from
