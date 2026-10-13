@@ -896,6 +896,27 @@ class TestRenderLeavesSceneUnchanged:
         assert self._scene(render_raises) == before
 
     @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_link_that_fails_under_a_destroy_is_sent_nothing_more(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """The first destroy kills the link: the call ends as connection loss after that one."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode
+
+        destroyed: list[str] = []
+
+        def destroy(self: Any) -> None:
+            destroyed.append(self.path())
+            raise EOFError("stream has been closed")
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["error_type"] == "connection_error", result
+        assert len(destroyed) == 1, destroyed
+
+    @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"resolution": [0, 0]}])
     def test_a_bad_input_creates_nothing(
         self, rendering_scene: Any, tool: str, bad: dict[str, Any]

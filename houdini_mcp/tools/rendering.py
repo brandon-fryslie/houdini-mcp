@@ -35,13 +35,19 @@ def _get_remote_modules(host: str, port: int):
 
 
 def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
-    """Destroy every node, last created first; the ones that refused, with why."""
+    """Destroy every node, last created first; the ones that refused, with why.
+
+    A link that fails under a destroy is raised at once: nothing more is sent
+    over it, and the connection owner hears it as the loss it is.
+    """
     removed: list[str] = []
     failures: list[tuple[str, Exception]] = []
     for path, node in reversed(created):
         try:
             node.destroy()
         except Exception as e:
+            if transport_failure(e):
+                raise
             logger.error("Failed to destroy temporary render node %s: %r", path, e)
             failures.append((path, e))
         else:
@@ -253,8 +259,8 @@ def render_viewport(
                 except Exception:
                     pass
 
-    # [LAW:no-ambient-temporal-coupling] everything a render needs besides its rig
-    # is resolved before a single node exists: a bad input creates nothing.
+    # [LAW:no-ambient-temporal-coupling] the renderer, /out and the link are
+    # resolved before a single node exists: a bad renderer creates nothing.
     rop_type = renderer.lower()
     if rop_type not in _RENDERERS:
         return {"status": "error", "message": f"Unknown renderer: {renderer}"}
@@ -425,8 +431,8 @@ def render_quad_view(
         return error
     width, height = resolution[0], resolution[1]
 
-    # [LAW:no-ambient-temporal-coupling] everything a render needs besides its rig
-    # is resolved before a single node exists: a bad input creates nothing.
+    # [LAW:no-ambient-temporal-coupling] the renderer, /out and the link are
+    # resolved before a single node exists: a bad renderer creates nothing.
     rop_type = renderer.lower()
     if rop_type not in _RENDERERS:
         return {"status": "error", "message": f"Unknown renderer: {renderer}"}
