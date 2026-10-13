@@ -3154,15 +3154,14 @@ class TestConnectionErrorHandling:
         assert result["recoverable"] is True
         disconnect.assert_called_once()
 
-    def test_handle_connection_error_broken_pipe(self):
-        """Test that BrokenPipeError produces a helpful error response."""
-        result, disconnect = self._run(BrokenPipeError("Broken pipe"), "create_node")
+    def test_handle_connection_error_reset_arrives_as_eof(self):
+        """rpyc wraps a reset it meets into EOFError; the message says so."""
+        result, disconnect = self._run(
+            EOFError("[Errno 54] Connection reset by peer"), "create_node"
+        )
 
-        assert result["status"] == "error"
         assert result["error_type"] == "connection_error"
-        assert result["exception"] == "BrokenPipeError"
-        assert "lost" in result["message"]
-        assert result["recoverable"] is True
+        assert "reset" in result["message"]
         disconnect.assert_called_once()
 
     @pytest.mark.parametrize(
@@ -3171,6 +3170,7 @@ class TestConnectionErrorHandling:
             FileNotFoundError("/renders/missing/frame.exr"),
             PermissionError("/renders/locked/frame.exr"),
             OSError("Network is unreachable"),
+            BrokenPipeError("local pipe, not the rpyc channel"),
         ],
         ids=lambda e: type(e).__name__,
     )
@@ -3436,10 +3436,10 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("custom_operation_name")
-        def broken_pipe_function():
-            raise BrokenPipeError("Pipe broken")
+        def closed_link_function():
+            raise EOFError("stream has been closed")
 
         with patch("houdini_mcp.tools._common.disconnect"):
-            result = broken_pipe_function()
+            result = closed_link_function()
 
         assert result["operation"] == "custom_operation_name"

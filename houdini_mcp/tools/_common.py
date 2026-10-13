@@ -13,7 +13,7 @@ import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 from ..connection import (
     DEFAULT_OPERATION_TIMEOUT,
@@ -43,7 +43,6 @@ __all__ = [
     "DEFAULT_OPERATION_TIMEOUT",
     # Error handling
     "handle_connection_errors",  # Decorator for consistent error handling
-    "tool_error_response",
     # Code safety
     "DANGEROUS_PATTERNS",
     "HEAVY_GEOMETRY_PATTERNS",
@@ -98,15 +97,20 @@ logger = logging.getLogger("houdini_mcp.tools")
 # =============================================================================
 
 import functools
+import inspect
 import traceback
 from collections.abc import Callable
 
+# [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
+# keep its signature and return type, not a bare Callable.
+ToolFn = TypeVar("ToolFn", bound=Callable[..., Any])
 
-def handle_connection_errors(operation_name: str) -> Callable:
+
+def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
     Decorator that wraps tool functions with consistent error handling.
 
-    Every exception the tool raises becomes the response ``tool_error_response``
+    Every exception the tool raises becomes the response ``_tool_error_response``
     builds for it; connection loss is the only failure that tears the connection down.
 
     Args:
@@ -123,20 +127,26 @@ def handle_connection_errors(operation_name: str) -> Callable:
             return {"status": "success", ...}
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: ToolFn) -> ToolFn:
+        signature = inspect.signature(func)
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
+            # [LAW:no-silent-failure] A call that does not fit the tool's signature is
+            # the caller's bug and raises as one; only what the tool itself raises
+            # becomes an error response.
+            signature.bind(*args, **kwargs)
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                return tool_error_response(e, operation_name)
+                return _tool_error_response(e, operation_name)
 
-        return wrapper
+        return cast(ToolFn, wrapper)
 
     return decorator
 
 
-def tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
+def _tool_error_response(e: Exception, operation: str) -> dict[str, Any]:
     """Turn the exception a tool raised into its error response.
 
     [LAW:single-enforcer] The one definition of how a tool failure reads to the
@@ -174,34 +184,20 @@ def _handle_connection_error(failure: TransportFailure, operation: str) -> dict[
     error_msg = str(e)
 
     # Clean up the broken connection so next call can reconnect
-    try:
-        disconnect()
-    except Exception:
-        pass
+    disconnect()
 
     logger.error(f"Connection error during {operation}: {error_type}: {error_msg}")
 
-    # Provide helpful messages based on error type
     if isinstance(e, TimeoutError):
         message = (
             f"Operation '{operation}' timed out. Houdini may be busy with a heavy computation. "
             "The connection has been reset - subsequent calls will reconnect automatically."
         )
-    elif isinstance(e, EOFError):
-        message = (
-            f"Connection to Houdini closed unexpectedly during '{operation}'. "
-            "Houdini may have crashed or the RPC server stopped. "
-            "The connection has been reset - subsequent calls will attempt to reconnect."
-        )
-    elif isinstance(e, (BrokenPipeError, ConnectionResetError)):
-        message = (
-            f"Connection to Houdini was lost during '{operation}'. "
-            "The connection has been reset - subsequent calls will reconnect automatically."
-        )
     else:
         message = (
-            f"Connection error during '{operation}': {error_type}: {error_msg}. "
-            "The connection has been reset - subsequent calls will reconnect automatically."
+            f"Connection to Houdini closed unexpectedly during '{operation}'. "
+            "Houdini may have crashed, the RPC server stopped, or the connection was reset. "
+            "The connection has been reset - subsequent calls will attempt to reconnect."
         )
 
     return {

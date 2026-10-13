@@ -51,8 +51,7 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]
     return {"status": "success", ...}
 ```
 
-**Error Tiers** (one definition, `tool_error_response()`, used by the decorator and by
-the render tools that need their own `try` block):
+**Error Tiers** (one definition, `_tool_error_response()`, which the decorator applies):
 
 | Tier | Exception | Handling |
 |------|-----------|----------|
@@ -68,9 +67,10 @@ Only a failure of the link itself is connection loss. `transport_failure(exc)` r
 `TransportFailure` proof, or `None`, and the installed `HoudiniTarget` is what decides:
 
 - Over rpyc (`REMOTE_HOUDINI`), the type must be one the channel raises: `EOFError`
-  (peer closed), `ConnectionError` and its subclasses (refused, reset, aborted, broken
-  pipe), or `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout`
-  is that same class). `OSError` is deliberately not admitted: it is also the base of
+  (peer closed, reset, or broken pipe: rpyc's `SocketStream` wraps every socket error
+  it meets into `EOFError`, so no `ConnectionError` crosses a live channel), or
+  `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout` is that
+  same class). `OSError` is deliberately not admitted: it is also the base of
   `FileNotFoundError` and `PermissionError`, which are the tool's errors, not the link's.
   And the exception must not have been raised inside Houdini: rpyc rebuilds a remote
   exception locally as the same class and tags it with `_remote_tb`; a `TimeoutError`
@@ -113,9 +113,7 @@ Takes a `TransportFailure` (so it cannot be called for anything else) and:
 | Exception | Message Focus |
 |-----------|--------------|
 | `TimeoutError` | Houdini may be busy with heavy computation |
-| `EOFError` | Houdini may have crashed or RPC server stopped |
-| `BrokenPipeError`, `ConnectionResetError` | Connection was lost |
-| Other `ConnectionError` | Generic connection error |
+| `EOFError` | Houdini crashed, the RPC server stopped, or the connection was reset (rpyc wraps socket errors into `EOFError`) |
 
 ### 4. Connection Layer Error Handling
 

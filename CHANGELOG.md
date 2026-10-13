@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reaches the caller as its own kind with the connection left standing.
   Connection loss is decided in one place, `connection.transport_failure()`, by
   the installed `HoudiniTarget`: over rpyc it admits only what the channel raises
-  (`EOFError`, `ConnectionError`, `TimeoutError`) and only when Houdini's own code
+  (`EOFError`, which is also how rpyc surfaces a reset or broken pipe, and
+  `TimeoutError`) and only when Houdini's own code
   did not raise it; in-process (the plugin's stdio server) nothing is connection
   loss. Opening a connection still retries on any socket-layer `OSError`. `safe_execute`
   drops its substring sniff for "connection"/"timeout" in error text and no longer
