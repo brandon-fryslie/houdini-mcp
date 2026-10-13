@@ -52,6 +52,7 @@ __all__ = [
     "RemoteListener",
     "detect_local_ip",
     "parse_flag",
+    "parse_host",
     "parse_port",
     "resolve_security_policy",
     "is_loopback_host",
@@ -107,9 +108,12 @@ def _env_setting(name: str, parse: Callable[[str, str], T], default: T) -> T:
     return parse(text, name) if text.strip() else default
 
 
-def _env_text(text: str, _name: str) -> str:
-    """The identity parser: a host is any text; the socket is where it is checked."""
-    return text
+def parse_host(text: str, _name: str) -> str:
+    """The host *text* names: its text without surrounding whitespace.
+
+    Whether it is an address this machine can bind is the socket's to say.
+    """
+    return text.strip()
 
 
 def is_loopback_host(host: str) -> bool:
@@ -227,7 +231,7 @@ class ListenerConfig:
                 message names the variable and the value. An unset or empty
                 variable is its default.
         """
-        host = _env_setting("HOUDINI_RPC_BIND_HOST", _env_text, DEFAULT_HOST)
+        host = _env_setting("HOUDINI_RPC_BIND_HOST", parse_host, DEFAULT_HOST)
         port = _env_setting("HOUDINI_RPC_BIND_PORT", parse_port, DEFAULT_PORT)
         trusted = _env_setting("HOUDINI_RPC_TRUSTED_NETWORK", parse_flag, False)
         return cls(host=host, port=port, trusted_network=trusted, token=token_from_env())

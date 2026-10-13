@@ -117,6 +117,10 @@ class TestConfigParsing:
         ):
             parse_flag(text, "HOUDINI_RPC_TRUSTED_NETWORK")
 
+    def test_from_env_strips_the_host(self, monkeypatch):
+        monkeypatch.setenv("HOUDINI_RPC_BIND_HOST", " 0.0.0.0\n")
+        assert ListenerConfig.from_env().host == "0.0.0.0"
+
     def test_from_env_reads_a_blank_variable_as_its_default(self, monkeypatch):
         monkeypatch.setenv("HOUDINI_RPC_BIND_HOST", "")
         monkeypatch.setenv("HOUDINI_RPC_BIND_PORT", " ")
