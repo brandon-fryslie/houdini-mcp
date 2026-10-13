@@ -128,22 +128,19 @@ class InProcessConnection:
     """The connection surface the tools use, satisfied by the interpreter they run in.
 
     [LAW:one-type-per-behavior] rpyc's classic connection and this class are two
-    instances of one contract: ``modules``, ``execute``/``namespace``, ``closed``,
-    ``close``. Tools cannot tell them apart, so the whole tool surface - rails,
-    audit, transactions, response shapes - is shared by construction.
+    instances of one contract: ``modules``, ``closed``, ``close``. Tools cannot
+    tell them apart, so the whole tool surface - rails, audit, transactions,
+    response shapes - is shared by construction. Neither is asked to execute a
+    program: [LAW:single-enforcer] the gate in ``tools/code.py`` is the one
+    place that runs one, and it does so with the ``hou`` these expose.
     """
 
     def __init__(self) -> None:
         self.modules = _InterpreterModules()
-        self.namespace: dict[str, Any] = {}
         self.closed = False
-
-    def execute(self, code: str) -> None:
-        exec(code, self.namespace)
 
     def close(self) -> None:
         self.closed = True
-        self.namespace.clear()
 
 
 def _open_rpyc(host: str, port: int, sync_timeout: float) -> Any:

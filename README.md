@@ -252,11 +252,10 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `capture_multiple_panes` | Batch capture multiple panes |
 | `render_node_network` | Navigate to node and capture network |
 
-### Code Execution (`code.py`, `hscript.py`)
+### Code Execution (`code.py`)
 | Tool | Description |
 |------|-------------|
 | `execute_code` | Execute Python with `hou` available |
-| `execute_hscript` | Execute HScript commands |
 
 ### Error Handling (`errors.py`)
 | Tool | Description |

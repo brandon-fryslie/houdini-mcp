@@ -24,6 +24,7 @@ from ..connection import (
     safe_execute,
     transport_failure,
 )
+from .hscript import HscriptBatch
 
 T = TypeVar("T")
 
@@ -556,39 +557,20 @@ def _serialize_scene_state(hou: Any, root_path: str = "/obj") -> list[dict[str, 
     Returns:
         List of node dictionaries with path, type, name, children
     """
-    # Try fast hscript-based approach first (works with real Houdini)
+    # [LAW:single-enforcer] whether hou offers hscript is decided once, by
+    # HscriptBatch's constructor; a hou without it (a mock) takes the proxy walk.
+    # [LAW:no-silent-failure] an hscript failure on a real hou propagates.
     try:
-        if hasattr(hou, "hscript"):
-            return _serialize_scene_state_fast(hou, root_path)
-    except Exception as e:
-        logger.debug(f"Fast serialization failed, using fallback: {e}")
+        batch = HscriptBatch(hou)
+    except AttributeError:
+        batch = None
+    if batch is not None:
+        return batch.get_scene_tree(root_path)
 
-    # Fallback for mocks or if hscript fails
     obj = hou.node(root_path)
     if obj is None:
         return []
     return [_node_to_dict(child, hou=hou) for child in obj.children()]
-
-
-def _serialize_scene_state_fast(hou: Any, root_path: str = "/obj") -> list[dict[str, Any]]:
-    """
-    Fast scene serialization using hscript commands.
-
-    This avoids per-node RPC calls by using hscript to get all paths
-    and types in bulk operations. ~800x faster than per-node RPC.
-
-    Args:
-        hou: The hou module (must have hscript method)
-        root_path: Root node path to serialize from
-
-    Returns:
-        List of node dictionaries with path, name, type, children
-    """
-    # Use the dedicated hscript module for fast operations
-    from .hscript import HscriptBatch
-
-    batch = HscriptBatch(hou)
-    return batch.get_scene_tree(root_path)
 
 
 def _get_scene_diff(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> dict[str, Any]:

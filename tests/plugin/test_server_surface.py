@@ -90,17 +90,21 @@ class TestInProcessConnection:
         assert "some-remote-host" not in message
         assert "hrpyc" not in message
 
-    def test_connection_exposes_interpreter_modules_and_exec(self) -> None:
+    def test_connection_exposes_interpreter_modules(self) -> None:
         conn = InProcessConnection()
         assert conn.modules.os is sys.modules["os"]
         assert conn.modules["os.path"] is sys.modules["os.path"]
         assert hasattr(conn.modules, "no_such_module_for_this_test") is False
-        conn.execute("answer = 6 * 7")
-        assert conn.namespace["answer"] == 42
         assert conn.closed is False
         conn.close()
         assert conn.closed is True
-        assert conn.namespace == {}
+
+    def test_connection_executes_no_program(self) -> None:
+        # [LAW:single-enforcer] a program reaches Houdini only through the gate
+        # in tools/code.py; the connection offers nothing that would run one.
+        conn = InProcessConnection()
+        assert not hasattr(conn, "execute")
+        assert not hasattr(conn, "namespace")
 
 
 class TestStdioServerSurface:
