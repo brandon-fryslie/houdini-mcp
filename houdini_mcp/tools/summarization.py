@@ -34,25 +34,35 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 
 # [LAW:effects-at-boundaries] The one place an SDK client is built. Tests replace this
 # with a client whose transport is a fake, so the request the SDK puts on the wire is
-# what gets asserted.
+# what gets asserted. A summary is best effort inside a tool call, so a failed attempt
+# is reported, not retried: the SDK's default of two retries would hold the tool for
+# three timeouts.
 def anthropic_client() -> AsyncAnthropic:
     """Build the SDK client the summarizer talks through."""
-    return AsyncAnthropic(timeout=REQUEST_TIMEOUT_SECONDS)
+    return AsyncAnthropic(timeout=REQUEST_TIMEOUT_SECONDS, max_retries=0)
 
 
-# The SDK reports "no credential resolved" as a TypeError at request time
-# (anthropic/_client.py, _validate_headers), outside its own exception tree; a
-# profile it cannot load is a CredentialsError at construction.
-SUMMARIZER_ERRORS = (anthropic.AnthropicError, TypeError)
+# [LAW:parse-dont-validate] The checkpoint for credentials. The SDK resolves them at
+# construction (key, token, or a profile under `credentials`) but only reports their
+# absence as a bare TypeError at request time (anthropic/_client.py, _validate_headers);
+# here that absence is the SDK's own CredentialsError, which failure_cause already names.
+def credentialed_client() -> AsyncAnthropic:
+    """The client the summarizer talks through, or ``CredentialsError`` when none resolved."""
+    client = anthropic_client()
+    if client.api_key is None and client.auth_token is None and client.credentials is None:
+        raise anthropic.CredentialsError(
+            "No Anthropic credential found: set ANTHROPIC_API_KEY or run `ant auth login`."
+        )
+    return client
 
 
-def failure_cause(exc: BaseException) -> str:
+def failure_cause(exc: anthropic.AnthropicError) -> str:
     """Name what a user has to fix, from the exception the SDK raised.
 
     One of: ``no_credentials``, ``rejected_credentials``, ``unknown_model``,
     ``unreachable``, ``api_error``.
     """
-    if isinstance(exc, (TypeError, anthropic.CredentialsError)):
+    if isinstance(exc, anthropic.CredentialsError):
         return "no_credentials"
     if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
         return "rejected_credentials"
@@ -279,19 +289,36 @@ async def _call_claude(prompt: str) -> str | None:
         return None
 
     try:
-        async with anthropic_client() as client:
+        async with credentialed_client() as client:
             message = await client.messages.create(
                 model=SUMMARIZATION_MODEL,
                 max_tokens=TARGET_SUMMARY_TOKENS * 2,  # Allow some buffer
-                # A short summary of structured data: spend the model's effort on the
-                # text, not on deliberation.
+                # A short summary of structured data: the cap is for the text, so the
+                # model does not think into it (thinking counts toward max_tokens).
+                thinking={"type": "disabled"},
                 output_config={"effort": "low"},
                 messages=[{"role": "user", "content": prompt}],
             )
-    except SUMMARIZER_ERRORS as exc:
+    except anthropic.AnthropicError as exc:
         logger.warning("Summarization failed (%s): %s", failure_cause(exc), exc)
         return None
 
+    # [LAW:no-silent-failure] A summary the model did not finish is not a summary.
+    if message.stop_reason != "end_turn":
+        logger.warning(
+            "Summarization stopped early (%s) after %d output tokens; the cap is %d",
+            message.stop_reason,
+            message.usage.output_tokens,
+            TARGET_SUMMARY_TOKENS * 2,
+        )
+        return None
+
+    logger.info(
+        "Summarized with %s: %d input tokens, %d output tokens",
+        message.model,
+        message.usage.input_tokens,
+        message.usage.output_tokens,
+    )
     return "".join(block.text for block in message.content if block.type == "text")
 
 
@@ -307,12 +334,17 @@ async def probe_endpoint() -> dict[str, Any]:
         ``{"ok": False, "cause": ..., "message": ...}`` with a ``failure_cause``.
     """
     try:
-        async with anthropic_client() as client:
+        async with credentialed_client() as client:
             base_url = str(client.base_url)
             info = await client.models.retrieve(SUMMARIZATION_MODEL)
-    except SUMMARIZER_ERRORS as exc:
-        return {"ok": False, "cause": failure_cause(exc), "message": str(exc)}
+    except anthropic.AnthropicError as exc:
+        cause = failure_cause(exc)
+        logger.warning("Summarization endpoint probe failed (%s): %s", cause, exc)
+        return {"ok": False, "cause": cause, "message": str(exc)}
 
+    logger.info(
+        "Summarization endpoint %s serves %s (lifecycle %s)", base_url, info.id, info.lifecycle
+    )
     return {"ok": True, "base_url": base_url, "model_lifecycle": info.lifecycle}
 
 

@@ -32,8 +32,9 @@ dependencies = [
     "beautifulsoup4>=4.15",
     # Imported directly (server.py); not left to fastmcp's transitive set
     "starlette>=1.7",
-    # tools/summarization.py calls Claude through the official SDK
-    "anthropic>=1",
+    # tools/summarization.py calls Claude through the official SDK: CredentialsError
+    # (1.5), output_config (1.x), and ModelInfo.lifecycle (1.12) must exist.
+    "anthropic>=1.12",
 ]
 
 [dependency-groups]
@@ -52,6 +53,8 @@ dev = [
     "bandit[toml]>=1.9",
     # `twine check` on the wheel/sdist in the CI build job
     "twine>=7",
+    # tests/test_summarization.py drives the SDK over a MockTransport; not left to anthropic's transitive set
+    "httpx2>=2.13",
 ]
 
 [tool.uv]

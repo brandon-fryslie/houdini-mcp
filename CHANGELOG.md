@@ -78,7 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "model_lifecycle"}`, or `{"ok": false, "cause", "message"}` where `cause` is
   one of `no_credentials`, `rejected_credentials`, `unknown_model`,
   `unreachable`, `api_error`. A failed summarization call is logged with the
-  same cause.
+  same cause, a finished one with the model and the tokens it cost, and one the
+  model did not finish (`stop_reason` other than `end_turn`) is dropped and
+  logged rather than attached as a summary. The call is one attempt: the SDK's
+  default retries are off, so a dead endpoint holds a tool call for one
+  timeout, not three.
 
 - **Inbound ws_client frames are parsed into typed frames gated by state and session**
   (houdini-laws-etg.qhj): `parse_frame` is the one boundary between the wire and

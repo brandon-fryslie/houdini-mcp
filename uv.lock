@@ -903,6 +903,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
+    { name = "httpx2" },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -916,7 +917,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=1" },
+    { name = "anthropic", specifier = ">=1.12" },
     { name = "beautifulsoup4", specifier = ">=4.15" },
     { name = "fastmcp", specifier = ">=4.1" },
     { name = "requests", specifier = ">=2.34" },
@@ -927,6 +928,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", extras = ["toml"], specifier = ">=1.9" },
+    { name = "httpx2", specifier = ">=2.13" },
     { name = "hypothesis", specifier = ">=6.169" },
     { name = "mypy", specifier = ">=2.4" },
     { name = "pre-commit", specifier = ">=4.6" },

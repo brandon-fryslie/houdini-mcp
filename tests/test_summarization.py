@@ -137,6 +137,13 @@ class TestDefaults:
         module = importlib.reload(summarization)
         assert module.SUMMARIZATION_MODEL == "claude-haiku-5-5"
 
+    def test_client_does_not_retry(self, monkeypatch):
+        """A summary inside a tool call is one attempt: the SDK's retries are off."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        client = summarization.anthropic_client()
+        assert client.max_retries == 0
+        assert client.timeout == summarization.REQUEST_TIMEOUT_SECONDS
+
     def test_no_private_proxy_default(self):
         """The upstream org's localhost proxy is not a default anywhere in the module."""
         import inspect
@@ -165,8 +172,29 @@ class TestCallClaude:
         body = json.loads(request.content)
         assert body["model"] == summarization.SUMMARIZATION_MODEL
         assert body["max_tokens"] == summarization.TARGET_SUMMARY_TOKENS * 2
+        assert body["thinking"] == {"type": "disabled"}
         assert body["output_config"] == {"effort": "low"}
         assert body["messages"] == [{"role": "user", "content": "test prompt"}]
+
+    async def test_call_claude_logs_the_summary_event(self, wire, caplog):
+        """A finished summary is logged with the model that wrote it and the tokens it cost."""
+        with caplog.at_level("INFO", logger="houdini_mcp.summarization"):
+            await summarization._call_claude("test prompt")
+
+        assert "Summarized with claude-haiku-5-5: 10 input tokens, 5 output tokens" in caplog.text
+
+    async def test_call_claude_drops_a_summary_the_model_did_not_finish(self, wire, caplog):
+        """A response cut off by the cap is reported, not attached as a summary."""
+        respond_with(
+            wire,
+            httpx2.Response(200, json={**MESSAGE_RESPONSE, "stop_reason": "max_tokens"}),
+        )
+
+        with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
+            result = await summarization._call_claude("test prompt")
+
+        assert result is None
+        assert "Summarization stopped early (max_tokens) after 5 output tokens" in caplog.text
 
     async def test_call_claude_joins_text_blocks_only(self, wire):
         """Thinking blocks are not part of the summary; several text blocks are one string."""
@@ -248,6 +276,21 @@ class TestProbeEndpoint:
         assert result["ok"] is False
         assert result["cause"] == cause
         assert result["message"]
+
+    async def test_probe_logs_what_it_learned(self, wire, caplog):
+        """A probe logs the endpoint and model it found, or the cause it failed for."""
+        respond_with(wire, httpx2.Response(200, json=MODEL_RESPONSE))
+        with caplog.at_level("INFO", logger="houdini_mcp.summarization"):
+            await summarization.probe_endpoint()
+        assert (
+            "Summarization endpoint http://summarizer.test serves claude-haiku-5-5"
+            " (lifecycle active)" in caplog.text
+        )
+
+        respond_with(wire, api_error(401, "authentication_error"))
+        with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
+            await summarization.probe_endpoint()
+        assert "Summarization endpoint probe failed (rejected_credentials)" in caplog.text
 
     async def test_probe_reports_missing_credentials(self, monkeypatch, tmp_path):
         """With nothing to authenticate as, the probe says so before any request is sent."""
