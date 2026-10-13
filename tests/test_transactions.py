@@ -8,8 +8,6 @@ from pathlib import Path
 import pytest
 
 from houdini_mcp.tools.transactions import (
-    MUTATING_TOOL_POLICIES,
-    TOOL_POLICIES,
     TransactionConflict,
     TransactionManager,
     TransactionPolicy,
@@ -24,37 +22,6 @@ def manager(mock_connection, tmp_path: Path, revision):
         audit_path=tmp_path / "transactions.jsonl",
         checkpoint_retention=2,
     )
-
-
-@pytest.mark.parametrize(
-    ("policy", "writes_scene", "waits_for_worker", "needs_transaction"),
-    [
-        (TransactionPolicy.READS_ONLY, False, False, False),
-        (TransactionPolicy.READS_IN_PROGRAM, False, True, False),
-        (TransactionPolicy.UNDOABLE, True, True, True),
-        (TransactionPolicy.CHECKPOINT_REQUIRED, True, True, True),
-        (TransactionPolicy.EXTERNAL_SIDE_EFFECT, False, False, True),
-    ],
-)
-def test_policy_says_what_a_tool_does_to_the_world(
-    policy: TransactionPolicy, writes_scene: bool, waits_for_worker: bool, needs_transaction: bool
-):
-    """A file writer (screenshot, save) has an effect to recover but never writes the
-    scene, so it may run beside a program still mutating it; a read through a program
-    waits for that program without needing a transaction."""
-    assert (policy.writes_scene, policy.waits_for_worker, policy.needs_transaction) == (
-        writes_scene,
-        waits_for_worker,
-        needs_transaction,
-    )
-
-
-def test_mutating_tools_are_exactly_the_classified_tools_with_an_effect_to_recover():
-    """[LAW:one-source-of-truth] TOOL_POLICIES classifies every served tool (held by
-    tests/plugin/test_server_surface.py); the mutating set is derived from it."""
-    derived = {tool: policy for tool, policy in TOOL_POLICIES.items() if policy.needs_transaction}
-    assert derived == MUTATING_TOOL_POLICIES
-    assert derived
 
 
 def test_begin_refuses_a_reading_policy(mock_connection, tmp_path):

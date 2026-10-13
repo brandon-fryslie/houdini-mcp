@@ -4,37 +4,8 @@ This module provides tools for capturing screenshots of Houdini pane tabs
 using Qt's screen grab functionality. Screenshots are returned as base64-encoded
 PNG images.
 
-Available pane types (30 total):
-    - NetworkEditor: Node network editor (default)
-    - SceneViewer: 3D scene viewer
-    - Parm: Parameter editor panel
-    - CompositorViewer: Compositor/COP viewer
-    - ChannelEditor: Animation channel editor
-    - ParmSpreadsheet: Parameter spreadsheet
-    - Textport: Houdini textport/console
-    - PythonShell: Python shell
-    - IPRViewer: Interactive render preview
-    - MaterialPalette: Material palette
-    - AssetBrowser: Asset browser
-    - TreeView: Tree view
-    - DetailsView: Details view
-    - DataTree: Data tree (USD)
-    - SceneGraphTree: Scene graph tree (USD/Solaris)
-    - RenderGallery: Render gallery
-    - ChannelList: Channel list
-    - ChannelViewer: Channel viewer
-    - TakeList: Take list
-    - BundleList: Bundle list
-    - HandleList: Handle list
-    - LightLinker: Light linker
-    - HelpBrowser: Help browser
-    - PerformanceMonitor: Performance monitor
-    - OutputViewer: Output viewer
-    - ShaderViewer: Shader viewer
-    - ApexEditor: APEX graph editor
-    - ContextViewer: Context viewer
-    - EngineSessionSync: Engine session sync
-    - PythonPanel: Python panel
+Pane type names are read from the connected Houdini's ``hou.paneTabType``;
+``list_visible_panes`` returns them under ``available_types``.
 
 Note: Panes on inactive desktops may report -1x-1 geometry and cannot be captured.
 """
