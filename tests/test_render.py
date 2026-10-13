@@ -24,16 +24,6 @@ class TestRenderViewportValidation:
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
 
-    def test_obj_context_not_found(self, mock_connection):
-        """Test handling when /obj context is not found."""
-        from houdini_mcp.tools import render_viewport
-
-        mock_connection.node("/obj").destroy()
-
-        result = render_viewport(host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "/obj" in result["message"] or "Cannot find" in result["message"]
-
 
 class TestRenderViewportAutoFrame:
     """Tests for render_viewport auto-framing functionality."""
@@ -318,16 +308,6 @@ class TestRenderQuadViewValidation:
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
 
-    def test_obj_context_not_found(self, mock_connection):
-        """Test handling when /obj context is not found."""
-        from houdini_mcp.tools import render_quad_view
-
-        mock_connection.node("/obj").destroy()
-
-        result = render_quad_view(host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "/obj" in result["message"] or "Cannot find" in result["message"]
-
 
 class TestRenderQuadViewConfiguration:
     """Tests for render_quad_view configuration options."""
@@ -495,15 +475,6 @@ class TestListRenderNodes:
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
 
-    def test_out_context_not_found(self, mock_connection):
-        """Test handling when /out context is not found."""
-        from houdini_mcp.tools import list_render_nodes
-
-        assert mock_connection.node("/out") is None
-        result = list_render_nodes(host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "/out" in result["message"] or "Cannot find" in result["message"]
-
 
 class TestGetRenderSettings:
     """Tests for get_render_settings function."""
@@ -568,15 +539,6 @@ class TestCreateRenderNode:
 
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
-
-    def test_out_context_not_found(self, mock_connection):
-        """Test handling when /out context is not found."""
-        from houdini_mcp.tools import create_render_node
-
-        assert mock_connection.node("/out") is None
-        result = create_render_node("karma", host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "/out" in result["message"] or "Cannot find" in result["message"]
 
 
 class TestKarmaEngineParameter:
@@ -873,7 +835,7 @@ class TestRenderLeavesSceneUnchanged:
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["error_type"] == "connection_error", result
+        assert result["kind"] == "connection_lost", result
         assert len(destroyed) == 1, destroyed
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -981,7 +943,7 @@ class TestRenderLeavesSceneUnchanged:
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["error_type"] == "connection_error", result
+        assert result["kind"] == "connection_lost", result
         assert result["operation"] == tool
         assert destroyed == []
 

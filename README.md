@@ -271,7 +271,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `get_summarization_status` | Get summarization config |
 
 ### Infrastructure (`_common.py`, `cache.py`)
-- **Error handling**: `@handle_connection_errors` decorator
+- **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`
 - **Connection retry**: Exponential backoff with jitter
 - **Response size**: Thresholds, truncation, metadata
 - **Caching**: Node type cache with TTL

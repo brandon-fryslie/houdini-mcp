@@ -9,8 +9,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import tools
-from .connection import describe_target, ensure_connected, get_connection_info, ping
-from .tools._common import Resolution, Vec3, apply_response_cap
+from .connection import describe_target, ensure_connected, ensure_link, ping
+from .tools._common import Resolution, Vec3, apply_response_cap, handle_connection_errors
 from .tools.code import Policy
 from .tools.nodes import CookInfo, Detail
 
@@ -68,6 +68,7 @@ def create_node(
 
 
 @mcp.tool()
+@handle_connection_errors("execute_code")
 def execute_code(
     code: str,
     capture_diff: bool = False,
@@ -697,6 +698,7 @@ def create_render_node(
 
 
 @mcp.tool()
+@handle_connection_errors("find_error_nodes")
 async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
@@ -749,41 +751,38 @@ async def find_error_nodes(
 
 
 @mcp.tool()
+@handle_connection_errors("check_connection")
 def check_connection() -> dict[str, Any]:
     """
     Check Houdini connection status with detailed info.
 
-    Returns connection status, Houdini version, build info, and current hip file.
-    Attempts to connect if not already connected.
+    Connects if not already connected, then reports the Houdini reached: its
+    version, build and current hip file. When no Houdini can be reached the
+    result is the same ``connection_unavailable`` failure every tool reports,
+    naming the target and the cause.
     """
     # [LAW:single-enforcer] ensure is the one check: it reconnects when the link is
-    # gone and fails when the live link reaches a different Houdini. [LAW:one-source-of-truth]
-    # ``status`` is ``connected`` in words, whichever Houdini the link reaches; the
-    # failure, if any, is reported beside it rather than overruling it.
-    try:
-        ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
-        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-    except Exception as e:
-        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        info["error"] = str(e)
-    info["status"] = "connected" if info["connected"] else "disconnected"
-    return info
+    # gone and fails when the live link reaches a different Houdini, and its
+    # failure reads like every other tool's. The record is the link it returned,
+    # not a re-read of installed state that may have changed since.
+    return {"status": "success", **ensure_link(HOUDINI_HOST, HOUDINI_PORT).info()}
 
 
 @mcp.tool()
+@handle_connection_errors("ping_houdini")
 def ping_houdini() -> dict[str, Any]:
     """
     Quick connectivity test to Houdini.
 
-    Returns True if Houdini RPC server is reachable.
-    Does not maintain a persistent connection.
+    Opens a short-lived connection, reads the Houdini version, and closes it;
+    the server's own connection is left as it was. An unreachable Houdini is
+    the ``connection_unavailable`` failure, naming the target and the cause.
     """
-    reachable = ping(HOUDINI_HOST, HOUDINI_PORT)
     return {
-        "status": "success" if reachable else "error",
-        "reachable": reachable,
+        "status": "success",
         "host": HOUDINI_HOST,
         "port": HOUDINI_PORT,
+        "houdini_version": ping(HOUDINI_HOST, HOUDINI_PORT),
     }
 
 
@@ -939,6 +938,7 @@ def get_parameter_schema(
 
 
 @mcp.tool()
+@handle_connection_errors("get_geo_summary")
 async def get_geo_summary(
     node_path: str,
     max_sample_points: int = 16,

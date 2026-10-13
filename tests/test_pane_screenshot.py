@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import rpyc
@@ -86,3 +87,25 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     assert (
         refusal.getMessage() == f"Unknown pane type {name!r} refused; this Houdini has 3 pane types"
     )
+
+
+def test_capture_multiple_panes_reports_every_pane_in_its_slot(
+    mock_connection: MockHouModule,
+) -> None:
+    """The aggregate has one shape whether the captures worked or not: each slot
+    is a capture or that pane's own failure arm, so a client reads the slots."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    with patch(
+        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+        return_value=(object(), object(), object()),
+    ):
+        result = capture_multiple_panes(["ChannelEditor", "thisown"])
+
+    assert result["status"] == "success"
+    assert (result["success_count"], result["total_requested"]) == (0, 2)
+    for name in ("ChannelEditor", "thisown"):
+        slot = FAILURE.validate_python(result["results"][name])
+        assert (slot.kind, slot.operation) == ("invalid_input", "capture_multiple_panes")
+        assert slot.message == f"Unknown pane type: {name}"

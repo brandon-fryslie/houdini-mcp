@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every tool failure is one arm of one result type** (houdini-laws-etg.2m5):
+  an error result carries `kind` (`connection_unavailable`, `connection_mismatch`,
+  `connection_lost`, `timeout`, `invalid_input`, `operation_failed` or
+  `worker_still_running`) and
+  the `retry` that kind fixes (`start_houdini`, `call_again`, `fix_input`,
+  `wait_for_worker`, `none`), in place of the ad-hoc `error_type` and the
+  hard-coded `recoverable: True`. A Houdini that cannot be reached names its
+  `target`; a program that outlives its `timeout` is `worker_still_running`
+  (wait for that worker), while `timeout` is reserved for a request or link
+  that never answered; a live link to a different Houdini than the one named says which
+  (`connection_mismatch`, not "start Houdini"); a timeout says whether the
+  connection was reset. `capture_multiple_panes` always succeeds by reporting
+  every pane, each slot a capture or that pane's failure arm. `check_connection`
+  and `ping_houdini` report that same failure instead of `status: "disconnected"`
+  or `reachable: false`, and a tool result the server cannot serialize is an
+  error, not a response marked `_truncated`.
+
 - **Render inputs are refused by the served schema** (houdini-laws-etg.ga7):
   `render_viewport` and `render_quad_view` publish `resolution` as a pair of
   integers in 64–4096 and the camera vectors as three numbers, so a

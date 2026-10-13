@@ -8,8 +8,11 @@ import logging
 from typing import Any
 
 from ._common import (
+    InvalidInput,
+    OperationFailed,
     ensure_connected,
     handle_connection_errors,
+    node_at,
 )
 from .connections import (
     InputConnection,
@@ -58,30 +61,25 @@ def connect_nodes(
     # here as is.
     src_node = wire_source(hou, src_path)
     if src_node is None:
-        return {
-            "status": "error",
-            "message": f"Source node not found: {src_path} (no node or subnet indirect input there)",
-        }
+        raise InvalidInput(
+            f"Source node not found: {src_path} (no node or subnet indirect input there)",
+            path=src_path,
+        )
 
-    dst_node = hou.node(dst_path)
-    if dst_node is None:
-        return {"status": "error", "message": f"Destination node not found: {dst_path}"}
+    dst_node = node_at(hou, dst_path, "Destination node")
 
-    # Validate compatible node types
-    # Get category name (e.g., "Sop", "Object", "Dop")
-    try:
-        src_category = source_category(hou, src_node)
-        dst_category = source_category(hou, dst_node)
-
-        if src_category != dst_category:
-            return {
-                "status": "error",
-                "message": f"Incompatible node types: {src_category} -> {dst_category}. "
-                f"Cannot connect {src_path} ({src_category}) to {dst_path} ({dst_category})",
-            }
-    except Exception as e:
-        logger.warning(f"Could not validate node categories: {e}")
-        # Continue if category check fails - let Houdini validate
+    # Validate compatible node types by category name (e.g., "Sop", "Object", "Dop").
+    # [LAW:no-silent-failure] a category Houdini cannot report is the boundary's
+    # to classify, not a check to skip.
+    src_category = source_category(hou, src_node)
+    dst_category = source_category(hou, dst_node)
+    if src_category != dst_category:
+        raise InvalidInput(
+            f"Incompatible node types: {src_category} -> {dst_category}. "
+            f"Cannot connect {src_path} ({src_category}) to {dst_path} ({dst_category})",
+            src_path=src_path,
+            dst_path=dst_path,
+        )
 
     # setInput replaces whatever wire is at the input; say which one.
     replaced = wire_at(input_connections(dst_node), dst_input_index)
@@ -97,11 +95,11 @@ def connect_nodes(
     # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
     wire = wire_at(input_connections(dst_node), dst_input_index)
     if wire is None:
-        return {
-            "status": "error",
-            "message": f"Houdini reports no wire at {dst_path}[{dst_input_index}] "
-            f"after connecting {src_path}",
-        }
+        raise OperationFailed(
+            f"Houdini reports no wire at {dst_path}[{dst_input_index}] after connecting {src_path}",
+            dst_path=dst_path,
+            dst_input_index=dst_input_index,
+        )
 
     return {
         "status": "success",
@@ -133,9 +131,7 @@ def disconnect_node_input(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     # The wires and the input span both come from Houdini's connection records:
     # inputs() looks through a subnet's indirect input to None, which would cut
@@ -143,11 +139,11 @@ def disconnect_node_input(
     connections = input_connections(node)
     span = input_span(connections)
     if input_index not in span:
-        return {
-            "status": "error",
-            "message": f"Input index {input_index} out of range for node {node_path}: "
+        raise InvalidInput(
+            f"Input index {input_index} out of range for node {node_path}: "
             f"nothing is wired at or beyond it ({len(span)} inputs wired or gapped)",
-        }
+            input_index=input_index,
+        )
 
     existing = wire_at(connections, input_index)
 
@@ -201,9 +197,7 @@ def set_node_flags(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     flags_set: dict[str, bool] = {}
     flags_unavailable: list[str] = []
@@ -286,9 +280,7 @@ def reorder_inputs(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     # Read every wire, with the source output it comes from, before touching any.
     # [LAW:no-silent-failure] a wire whose output cannot be read fails the whole
@@ -302,10 +294,9 @@ def reorder_inputs(
     # new_order is a permutation of the span: every wire gets exactly one new
     # position, so none is dropped and none is doubled. [LAW:parse-dont-validate]
     if sorted(new_order) != span:
-        return {
-            "status": "error",
-            "message": f"new_order must be a permutation of {span}; got {new_order}",
-        }
+        raise InvalidInput(
+            f"new_order must be a permutation of {span}; got {new_order}", new_order=new_order
+        )
     new_position = {old_idx: new_idx for new_idx, old_idx in enumerate(new_order)}
 
     # Each input is overwritten with its new wire, ascending, then the inputs that

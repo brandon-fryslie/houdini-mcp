@@ -246,7 +246,8 @@ class TestGetGeoSummary:
 
         error_data = {
             "status": "error",
-            "message": "Node /obj/cam1 has no geometry",
+            "kind": "operation_failed",
+            "message": "Node /obj/cam1 has no geometry: geometry() returned None",
         }
         mock_execute_code.return_value = {
             "status": "success",
@@ -256,8 +257,11 @@ class TestGetGeoSummary:
 
         result = get_geo_summary("/obj/cam1", host="localhost", port=18811)
 
+        # The program said the cook yielded nothing: Houdini's failure, not the path.
         assert result["status"] == "error"
+        assert (result["kind"], result["retry"]) == ("operation_failed", "none")
         assert "has no geometry" in result["message"]
+        assert result["path"] == "/obj/cam1"
 
     def test_get_geo_summary_node_not_found(self, mock_execute_code):
         """Test error when node doesn't exist."""
@@ -265,6 +269,7 @@ class TestGetGeoSummary:
 
         error_data = {
             "status": "error",
+            "kind": "invalid_input",
             "message": "Node not found: /obj/geo1/nonexistent",
         }
         mock_execute_code.return_value = {
@@ -276,6 +281,7 @@ class TestGetGeoSummary:
         result = get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
 
         assert result["status"] == "error"
+        assert (result["kind"], result["retry"]) == ("invalid_input", "fix_input")
         assert "Node not found" in result["message"]
 
     def test_get_geo_summary_no_attributes(self, mock_execute_code):
@@ -580,17 +586,19 @@ class TestGetGeoSummary:
         assert result["vertex_count"] == 18
 
     def test_get_geo_summary_execute_code_error(self, mock_execute_code):
-        """Test handling when execute_code returns an error."""
+        """The program runner's failure is the tool's failure, in the same shape."""
+        from houdini_mcp.connection import HoudiniConnectionError
         from houdini_mcp.tools import get_geo_summary
 
-        mock_execute_code.return_value = {
-            "status": "error",
-            "message": "Houdini connection lost",
-        }
+        mock_execute_code.side_effect = HoudiniConnectionError(
+            "Houdini connection lost", target="localhost:18811"
+        )
 
         result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
+        assert result["kind"] == "connection_unavailable"
+        assert result["target"] == "localhost:18811"
         assert "Houdini connection lost" in result["message"]
 
     def test_get_geo_summary_empty_stdout(self, mock_execute_code):

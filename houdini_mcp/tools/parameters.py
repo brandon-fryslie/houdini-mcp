@@ -8,9 +8,12 @@ import logging
 from typing import Any
 
 from ._common import (
+    InvalidInput,
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
+    node_at,
+    tool_error,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 
@@ -34,13 +37,12 @@ def set_parameter(
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     writes = write_all(node, {param_name: value})
     if writes.failed:
-        return {"status": "error", "message": writes.failed[0]["reason"]}
+        [failed] = writes.failed
+        raise tool_error(failed["kind"], failed["reason"], failed=writes.failed)
 
     return {
         "status": "success",
@@ -123,9 +125,7 @@ def get_parameter_schema(
 
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     parameters: list[dict[str, Any]] = []
 
@@ -134,7 +134,7 @@ def get_parameter_schema(
         try:
             parm_template = resolve(node, parm_name).template()
         except ParmNotFound as e:
-            return {"status": "error", "message": str(e)}
+            raise InvalidInput(str(e), parm_name=parm_name) from e
 
         # When we only requested one parameter, we expect to include it even if
         # its template is folder-like (rare but possible).

@@ -14,6 +14,7 @@ from typing import Any
 from ._common import (
     ensure_connected,
     handle_connection_errors,
+    node_at,
 )
 from .cache import invalidate_all_caches
 from .parms import evaluated
@@ -152,8 +153,6 @@ def serialize_scene(
 
         return result
 
-    root = hou.node(root_path)
-    if root is None:
-        return {"status": "error", "message": f"Root node not found: {root_path}"}
+    root = node_at(hou, root_path, "Root node")
 
     return {"status": "success", "root": root_path, "structure": node_to_dict_recursive(root)}

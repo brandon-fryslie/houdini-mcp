@@ -47,11 +47,16 @@ If you try to import `hou`, you'll now receive a helpful error message:
 ### Timeouts Leave a Running Worker
 
 A program that exceeds `timeout` cannot be stopped; it keeps running with its
-undo group open. The response is `status: "error"` with `timeout`, a `warning`,
-`rollback.scene_consistency: "unknown"`, and a `worker` block:
+undo group open. The response is the `worker_still_running` arm, since waiting
+for that worker is the remedy, with `timeout`, a `warning`,
+`rollback.scene_consistency: "unknown"`, and the `worker` block:
 
 ```python
 {
+    "status": "error",
+    "kind": "worker_still_running",
+    "retry": "wait_for_worker",
+    "timeout": 30,
     "worker": {
         "operation": "execute_code",
         "code_sha256": "...",
@@ -64,7 +69,8 @@ undo group open. The response is `status: "error"` with `timeout`, a `warning`,
 
 Until that program ends, every scene-writing tool, another `execute_code`, and
 `get_geo_summary` (which reads through a program in the same worker slot) return
-`error_type: "worker_still_running"` naming the same worker; plain reads,
+`kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
+worker; plain reads,
 `save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 
 ## render_viewport

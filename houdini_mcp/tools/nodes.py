@@ -19,6 +19,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
     join_warnings,
+    node_at,
     paginate,
     paging_fields,
     parse_page_request,
@@ -64,9 +65,7 @@ def create_node(
     """
     hou = ensure_connected(host, port)
 
-    parent = hou.node(parent_path)
-    if parent is None:
-        return {"status": "error", "message": f"Parent node not found: {parent_path}"}
+    parent = node_at(hou, parent_path, "Parent node")
 
     node = parent.createNode(node_type, name) if name else parent.createNode(node_type)
 
@@ -114,9 +113,7 @@ def get_node_info(
     _require_choice("cook_info", cook_info, COOK_INFO_MODES)
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     info = _compact_record(node) if detail == "compact" else _standard_record(node)
     if detail == "full":
@@ -283,9 +280,7 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
     """
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
     node_name = node.name()
     node.destroy()
@@ -404,9 +399,7 @@ def list_children(
     hou = ensure_connected(host, port)
     request = parse_page_request(limit=limit, cursor=cursor)
 
-    parent = hou.node(node_path)
-    if parent is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    parent = node_at(hou, node_path)
 
     children_list: list[dict[str, Any]] = []
     nodes_collected = 0
@@ -555,9 +548,7 @@ def find_nodes(
     """
     hou = ensure_connected(host, port)
 
-    root = hou.node(root_path)
-    if root is None:
-        return {"status": "error", "message": f"Root node not found: {root_path}"}
+    root = node_at(hou, root_path, "Root node")
 
     request = parse_page_request(limit=limit, cursor=cursor)
 

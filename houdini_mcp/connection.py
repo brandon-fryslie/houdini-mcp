@@ -91,9 +91,30 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
 
 
 class HoudiniConnectionError(Exception):
-    """Raised when unable to connect to Houdini."""
+    """Raised when the Houdini a call named cannot be reached.
 
-    pass
+    [LAW:types-are-the-program] ``target`` names that Houdini the way its
+    ``HoudiniTarget`` describes it, so the failure a client reads says where
+    Houdini was expected rather than leaving it to be parsed out of the message.
+    """
+
+    def __init__(self, message: str, *, target: str) -> None:
+        super().__init__(message)
+        self.target = target
+
+
+class HoudiniTargetMismatch(Exception):
+    """Raised when the live link reaches a different Houdini than a call named.
+
+    [LAW:types-are-the-program] Not a ``HoudiniConnectionError``: Houdini is up
+    and linked, so "start Houdini" is the wrong remedy. The failure names both
+    so a caller sees which Houdini this server holds.
+    """
+
+    def __init__(self, message: str, *, requested: str, connected: str) -> None:
+        super().__init__(message)
+        self.requested = requested
+        self.connected = connected
 
 
 class _InterpreterModules:
@@ -220,6 +241,27 @@ class Link:
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
+    def info(self) -> dict[str, Any]:
+        """The Houdini this link reaches: version, build and current hip file.
+
+        [LAW:no-silent-failure] a link that cannot answer for its version raises;
+        the tool boundary classifies that, instead of a success carrying ``error``.
+        """
+        version_tuple = self.hou.applicationVersion()
+        return {
+            "host": self.host,
+            "port": self.port,
+            "target": self.name,
+            "connected": True,
+            "houdini_version": self.hou.applicationVersionString(),
+            "houdini_build": {
+                "major": version_tuple[0],
+                "minor": version_tuple[1],
+                "build": version_tuple[2],
+            },
+            "hip_file": self.hou.hipFile.path() or "untitled.hip",
+        }
+
 
 def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
     """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini."""
@@ -281,7 +323,8 @@ def _open_link_with_retries(
             if not target.open_is_retryable(e):
                 raise HoudiniConnectionError(
                     f"Non-retryable error connecting to Houdini at "
-                    f"{target.describe(host, port)}: {e}. {target.remedy}"
+                    f"{target.describe(host, port)}: {e}. {target.remedy}",
+                    target=target.describe(host, port),
                 ) from e
             last_error = e
             logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
@@ -301,7 +344,8 @@ def _open_link_with_retries(
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {target.describe(host, port)} after {max_retries} attempts. "
         f"{target.remedy} "
-        f"Last error: {last_error}"
+        f"Last error: {last_error}",
+        target=target.describe(host, port),
     )
 
 
@@ -361,10 +405,12 @@ class HoudiniConnection:
             if link is not None and link.alive:
                 requested = self._target.describe(host, port)
                 if link.name != requested:
-                    raise HoudiniConnectionError(
+                    raise HoudiniTargetMismatch(
                         f"Connected to Houdini at {link.name}, but {requested} was requested. "
                         "This server holds one connection; disconnect before targeting "
-                        "another Houdini."
+                        "another Houdini.",
+                        requested=requested,
+                        connected=link.name,
                     )
                 return link
             logger.info("Connection lost or not established, reconnecting...")
@@ -405,34 +451,16 @@ class HoudiniConnection:
         the one a connection to ``host:port`` would reach."""
         link = self._live()
         if link is not None:
-            host, port, target = link.host, link.port, link.name
-        else:
-            target = self._target.describe(host, port)
-        info: dict[str, Any] = {
+            return link.info()
+        return {
             "host": host,
             "port": port,
-            "target": target,
-            "connected": link is not None,
+            "target": self._target.describe(host, port),
+            "connected": False,
             "houdini_version": None,
             "houdini_build": None,
             "hip_file": None,
         }
-
-        if link is not None:
-            try:
-                info["houdini_version"] = link.hou.applicationVersionString()
-                version_tuple = link.hou.applicationVersion()
-                info["houdini_build"] = {
-                    "major": version_tuple[0],
-                    "minor": version_tuple[1],
-                    "build": version_tuple[2],
-                }
-                info["hip_file"] = link.hou.hipFile.path() or "untitled.hip"
-            except Exception as e:
-                logger.warning(f"Error getting connection info: {e}")
-                info["error"] = str(e)
-
-        return info
 
 
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
@@ -505,8 +533,9 @@ def ensure_link(host: str = "localhost", port: int = 18811) -> Link:
     absent, instead of reading the installed one and guarding against None.
 
     Raises:
-        HoudiniConnectionError: If unable to establish connection, or if the
-            installed connection reaches a different Houdini than the one named
+        HoudiniConnectionError: If unable to establish connection
+        HoudiniTargetMismatch: If the installed connection reaches a different
+            Houdini than the one named
     """
     return _houdini.ensure(host, port)
 
@@ -522,8 +551,9 @@ def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
         The remote hou module
 
     Raises:
-        HoudiniConnectionError: If unable to establish connection, or if the
-            installed connection reaches a different Houdini than the one named
+        HoudiniConnectionError: If unable to establish connection
+        HoudiniTargetMismatch: If the installed connection reaches a different
+            Houdini than the one named
     """
     return ensure_link(host, port).hou
 
@@ -539,7 +569,7 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bool:
+def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> str:
     """
     Quick connectivity test without maintaining connection.
 
@@ -550,14 +580,31 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> bo
             the TCP connect and token handshake are bounded by the handshake module
 
     Returns:
-        True if Houdini RPC server is reachable, False otherwise.
+        The version string of the Houdini reached.
+
+    Raises:
+        HoudiniConnectionError: naming the target and the cause, when no Houdini
+            answered there. [LAW:no-silent-failure] the cause travels with the
+            failure instead of being logged and collapsed into False.
     """
+    target = _houdini.target.describe(host, port)
+
+    def unanswered(e: Exception) -> HoudiniConnectionError:
+        return HoudiniConnectionError(
+            f"No Houdini answered at {target}: {type(e).__name__}: {e}. {_houdini.target.remedy}",
+            target=target,
+        )
+
     try:
         conn = _houdini.target.open(host, port, timeout)
-        hou = conn.modules.hou
-        hou.applicationVersion()  # Validate we can call methods
-        conn.close()
-        return True
+        link = Link(_houdini.target, host, port, conn, conn.modules.hou)
     except Exception as e:
-        logger.debug(f"Ping failed: {e}")
-        return False
+        raise unanswered(e) from e
+    # The probe's link closes like any other: a close that fails is logged, and
+    # the version Houdini already gave is still the answer.
+    try:
+        return str(link.hou.applicationVersionString())
+    except Exception as e:
+        raise unanswered(e) from e
+    finally:
+        link.close()

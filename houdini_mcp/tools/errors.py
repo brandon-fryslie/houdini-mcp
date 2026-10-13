@@ -11,6 +11,7 @@ from ._common import (
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
+    node_at,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
@@ -53,9 +54,7 @@ def find_error_nodes(
     """
     hou = ensure_connected(host, port)
 
-    root = hou.node(root_path)
-    if root is None:
-        return {"status": "error", "message": f"Root node not found: {root_path}"}
+    root = node_at(hou, root_path, "Root node")
 
     error_nodes: list[dict[str, Any]] = []
     warning_nodes: list[dict[str, Any]] = []

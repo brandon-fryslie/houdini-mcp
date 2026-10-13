@@ -32,8 +32,11 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from mcp.types import Tool
+from pydantic import ValidationError
 
+from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.server import mcp
+from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import VALID_POLICIES
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
@@ -328,3 +331,74 @@ class TestDocumentedExamples:
             if not documented.correct and await self.accepted_by_server(client, served, documented)
         ]
         assert accepted == []
+
+
+# =============================================================================
+# Served failures
+# =============================================================================
+
+
+class TestServedFailures:
+    """Whatever a served tool cannot do, it says in one arm of ``ToolFailure``.
+
+    Each probe is a real call over the protocol; the payload that comes back is
+    parsed through the served union and must land in exactly one arm.
+    """
+
+    @staticmethod
+    async def failure_of(client: Client[Any], name: str, arguments: dict[str, Any]) -> Any:
+        result = await client.call_tool(name, arguments, raise_on_error=False)
+        # A tool's own failure is a result, never a protocol error.
+        assert not result.is_error, result.content
+        assert result.structured_content is not None
+        parsed = FAILURE.validate_python(result.structured_content)
+        assert parsed.model_dump() == result.structured_content
+        return parsed
+
+    async def test_a_missing_node_is_invalid_input(self, client: Client[Any]) -> None:
+        failure = await self.failure_of(client, "get_node_info", {"node_path": "/obj/nowhere"})
+        assert failure.kind == "invalid_input"
+        assert failure.retry == "fix_input"
+        assert failure.operation == "get_node_info"
+        assert failure.path == "/obj/nowhere"
+
+    async def test_an_unreachable_houdini_is_connection_unavailable(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import houdini_mcp.server as server
+
+        def refuse(*_a: Any, **_k: Any) -> None:
+            raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
+
+        monkeypatch.setattr(server, "ensure_link", refuse)
+        monkeypatch.setattr(server, "ping", refuse)
+        for probe in ("check_connection", "ping_houdini"):
+            failure = await self.failure_of(client, probe, {})
+            assert failure.kind == "connection_unavailable", probe
+            assert failure.retry == "start_houdini", probe
+            assert failure.target == "farm:1", probe
+
+    async def test_a_result_the_server_cannot_serialize_is_the_tools_failure(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cap runs after ``get_geo_summary`` returns and is awaited under the
+        same boundary: a tool bug there is one arm, never a protocol error."""
+        import houdini_mcp.server as server
+
+        def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
+            return {"status": "success", "points": {1, 2}}
+
+        monkeypatch.setattr(server.tools, "get_geo_summary", unserializable)
+        failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.operation == "get_geo_summary"
+        assert failure.exception == "TypeError"
+        assert "not JSON-serializable" in failure.message
+
+    async def test_the_probes_report_success_as_success(self, client: Client[Any]) -> None:
+        for probe in ("check_connection", "ping_houdini"):
+            result = await client.call_tool(probe, {})
+            assert result.structured_content is not None
+            assert result.structured_content["status"] == "success", probe
+            with pytest.raises(ValidationError):
+                FAILURE.validate_python(result.structured_content)

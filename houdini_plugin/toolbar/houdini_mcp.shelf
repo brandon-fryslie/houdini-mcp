@@ -84,9 +84,9 @@ try:
     
     hou.ui.displayMessage(status_text, title="Houdini MCP Status")
     
-except ImportError as e:
+except Exception as e:
     hou.ui.displayMessage(
-        f"Failed to import houdini_mcp_plugin:\n{e}",
+        f"Could not read MCP status:\n{type(e).__name__}: {e}",
         title="Houdini MCP",
         severity=hou.severityType.Error
     )

@@ -4,15 +4,18 @@ This module provides tools for fetching Houdini documentation from
 the SideFX website. It does NOT require a Houdini connection.
 """
 
-import logging
-import traceback
 from typing import Any
 
-from ._common import _add_response_metadata
+from ._common import (
+    InvalidInput,
+    OperationFailed,
+    TimedOut,
+    _add_response_metadata,
+    handle_connection_errors,
+)
 
-logger = logging.getLogger("houdini_mcp.tools.help")
 
-
+@handle_connection_errors("get_houdini_help")
 def get_houdini_help(
     help_type: str,
     item_name: str,
@@ -63,11 +66,10 @@ def get_houdini_help(
     try:
         import requests
         from bs4 import BeautifulSoup
-    except ImportError:
-        return {
-            "status": "error",
-            "message": "Required packages not installed. Run: pip install requests beautifulsoup4",
-        }
+    except ImportError as e:
+        raise OperationFailed(
+            "Required packages not installed. Run: pip install requests beautifulsoup4"
+        ) from e
 
     base_url = "https://www.sidefx.com/docs/houdini/"
 
@@ -87,11 +89,11 @@ def get_houdini_help(
     }
 
     if help_type not in url_mapping:
-        return {
-            "status": "error",
-            "message": f"Unsupported help type: {help_type}. "
+        raise InvalidInput(
+            f"Unsupported help type: {help_type}. "
             f"Supported types: {', '.join(sorted(url_mapping.keys()))}",
-        }
+            help_type=help_type,
+        )
 
     full_url = base_url + url_mapping[help_type]
 
@@ -99,19 +101,15 @@ def get_houdini_help(
         response = requests.get(full_url, timeout=timeout)
 
         if response.status_code == 404:
-            return {
-                "status": "error",
-                "message": f"Documentation not found for {help_type}/{item_name}. "
-                f"Check if the name is correct.",
-                "url": full_url,
-            }
+            raise InvalidInput(
+                f"Documentation not found for {help_type}/{item_name}. Check if the name is correct.",
+                url=full_url,
+            )
 
         if response.status_code != 200:
-            return {
-                "status": "error",
-                "message": f"Failed to fetch help page. HTTP status: {response.status_code}",
-                "url": full_url,
-            }
+            raise OperationFailed(
+                f"Failed to fetch help page. HTTP status: {response.status_code}", url=full_url
+            )
 
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -250,23 +248,7 @@ def get_houdini_help(
 
         return _add_response_metadata(result)
 
-    except requests.exceptions.Timeout:
-        return {
-            "status": "error",
-            "message": f"Request timed out after {timeout} seconds",
-            "url": full_url,
-        }
+    except requests.exceptions.Timeout as e:
+        raise TimedOut(f"Request timed out after {timeout} seconds", url=full_url) from e
     except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "message": f"Network error: {str(e)}",
-            "url": full_url,
-        }
-    except Exception as e:
-        logger.error(f"Error fetching Houdini help: {e}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "url": full_url,
-            "traceback": traceback.format_exc(),
-        }
+        raise OperationFailed(f"Network error: {str(e)}", url=full_url) from e

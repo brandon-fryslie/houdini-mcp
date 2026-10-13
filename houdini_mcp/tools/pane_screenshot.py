@@ -16,29 +16,35 @@ from pathlib import Path
 from typing import Any
 
 from ._common import (
+    InvalidInput,
+    OperationFailed,
+    ToolError,
     ensure_connected,
     ensure_link,
+    failure_for,
     handle_connection_errors,
+    node_at,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
 def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
-    """Get Qt modules from the connection to the Houdini ``host:port`` names.
-
-    Returns:
-        Tuple of (QtWidgets, QtCore, QtGui) module references
-    """
+    """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``host:port`` names,
+    or the one failure every capture tool reports when Houdini has no PySide2."""
     # [LAW:single-enforcer] the connection module owns the connection; it is the
     # same object whether Houdini is remote (rpyc) or this interpreter.
     conn = ensure_link(host, port).conn
-
-    QtWidgets = conn.modules["PySide2.QtWidgets"]
-    QtCore = conn.modules["PySide2.QtCore"]
-    QtGui = conn.modules["PySide2.QtGui"]
-
-    return QtWidgets, QtCore, QtGui
+    try:
+        return (
+            conn.modules["PySide2.QtWidgets"],
+            conn.modules["PySide2.QtCore"],
+            conn.modules["PySide2.QtGui"],
+        )
+    except ImportError as e:
+        raise OperationFailed(
+            f"Failed to access PySide2 modules: {e}. Ensure Houdini has PySide2 available."
+        ) from e
 
 
 def pane_type_member(hou: Any, name: str) -> Any | None:
@@ -123,7 +129,12 @@ def _capture_pane_to_bytes(
         fit_contents: If True, fit/frame contents before capture (for supported panes)
 
     Returns:
-        Dict with either success data (including raw_bytes) or error info
+        Dict with the capture's data, including raw_bytes.
+
+    Raises:
+        InvalidInput: the pane type is unknown here.
+        OperationFailed: no pane of that type is open in the layout, or the pane
+            is open but could not be captured; a human changes the layout.
     """
     # The list of names is read only to answer an unknown name, not on every capture.
     pane_type = pane_type_member(hou, pane_type_name)
@@ -134,19 +145,15 @@ def _capture_pane_to_bytes(
             pane_type_name,
             len(names),
         )
-        return {
-            "status": "error",
-            "message": f"Unknown pane type: {pane_type_name}",
-            "available_types": names,
-        }
+        raise InvalidInput(f"Unknown pane type: {pane_type_name}", available_types=names)
 
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
-        return {
-            "status": "error",
-            "message": f"No pane of type {pane_type_name} found in the current Houdini layout. "
+        raise OperationFailed(
+            f"No pane of type {pane_type_name} found in the current Houdini layout. "
             "Make sure a pane of this type is visible in the UI.",
-        }
+            pane_type=pane_type_name,
+        )
 
     # Fit contents if requested
     if fit_contents:
@@ -163,32 +170,29 @@ def _capture_pane_to_bytes(
 
     # Check for invalid geometry (pane on inactive desktop or minimized)
     if geom_width <= 0 or geom_height <= 0:
-        return {
-            "status": "error",
-            "message": f"Pane {pane_type_name} has invalid geometry ({geom_width}x{geom_height}). "
+        raise OperationFailed(
+            f"Pane {pane_type_name} has invalid geometry ({geom_width}x{geom_height}). "
             "It may be on an inactive desktop or minimized.",
-        }
+            pane_type=pane_type_name,
+        )
 
     # Get QApplication and screen
     app = QtWidgets.QApplication.instance()
     if app is None:
-        return {
-            "status": "error",
-            "message": "No QApplication instance found. Houdini UI may not be initialized.",
-        }
+        raise OperationFailed("No QApplication instance found. Houdini UI may not be initialized.")
 
     screen = app.primaryScreen()
     if screen is None:
-        return {"status": "error", "message": "No primary screen found."}
+        raise OperationFailed("No primary screen found.")
 
     # Capture screen region
     pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)
 
     if pixmap.isNull():
-        return {
-            "status": "error",
-            "message": "Screen grab returned null pixmap. The screen region may not be accessible.",
-        }
+        raise OperationFailed(
+            "Screen grab returned null pixmap. The screen region may not be accessible.",
+            pane_type=pane_type_name,
+        )
 
     # Convert to PNG bytes
     image = pixmap.toImage()
@@ -271,21 +275,10 @@ def capture_pane_screenshot(
     """
     hou = ensure_connected(host, port)
 
-    # Get Qt modules from RPyC connection
-    try:
-        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to access PySide2 modules: {e}. "
-            "Ensure Houdini has PySide2 available.",
-        }
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     # Capture pane to bytes
     result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore, fit_contents)
-
-    if result["status"] != "success":
-        return result
 
     # Extract raw bytes and add format info
     raw_bytes: bytes = result.pop("raw_bytes")
@@ -384,7 +377,7 @@ def list_visible_panes(
                 except Exception as e:
                     logger.debug(f"Failed to get pane info: {e}")
     except Exception as e:
-        return {"status": "error", "message": f"Failed to enumerate panes: {e}"}
+        raise OperationFailed(f"Failed to enumerate panes: {e}") from e
 
     # Sort: capturable first, then by type name
     panes_info.sort(key=lambda p: (not p["capturable"], p["type"]))
@@ -454,12 +447,7 @@ def render_node_network(
     hou = ensure_connected(host, port)
 
     # Validate node exists
-    node = hou.node(node_path)
-    if node is None:
-        return {
-            "status": "error",
-            "message": f"Node not found: {node_path}",
-        }
+    node = node_at(hou, node_path)
 
     # Get child count for context
     try:
@@ -468,39 +456,25 @@ def render_node_network(
     except Exception:
         child_count = 0
 
-    # Get Qt modules from RPyC connection
-    try:
-        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to access PySide2 modules: {e}. "
-            "Ensure Houdini has PySide2 available.",
-        }
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     # Find NetworkEditor pane
     pane_type = hou.paneTabType.NetworkEditor
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
-        return {
-            "status": "error",
-            "message": "No NetworkEditor pane found in the current Houdini layout.",
-        }
+        raise OperationFailed(
+            "No NetworkEditor pane found in the current Houdini layout.",
+            pane_type="NetworkEditor",
+        )
 
     # Navigate to the node (set as current network)
     try:
         pane.cd(node_path)
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to navigate to {node_path}: {e}",
-        }
+        raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
 
     # Capture the pane
     result = _capture_pane_to_bytes(hou, "NetworkEditor", QtWidgets, QtCore, fit_contents)
-
-    if result["status"] != "success":
-        return result
 
     # Extract raw bytes and build response
     raw_bytes: bytes = result.pop("raw_bytes")
@@ -558,41 +532,46 @@ def capture_multiple_panes(
     """
     hou = ensure_connected(host, port)
 
-    # Get Qt modules from RPyC connection
-    try:
-        QtWidgets, QtCore, _ = _get_qt_modules(host, port)
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to access PySide2 modules: {e}. "
-            "Ensure Houdini has PySide2 available.",
-        }
+    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
     results: dict[str, dict[str, Any]] = {}
     success_count = 0
 
     for pane_type_name in pane_types:
-        result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+        # A pane's own failure (unknown type, not in the layout, could not be
+        # captured) is recorded in its slot, in the same shape every tool failure
+        # takes, and the next pane is still tried. Anything else - a torn link, a
+        # bug - is the whole call's and reaches the boundary.
+        try:
+            result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+        except ToolError as e:
+            failure = failure_for(e, "capture_multiple_panes")
+            logger.warning(
+                "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
+            )
+            results[pane_type_name] = failure.model_dump()
+            continue
 
-        if result["status"] == "success":
-            raw_bytes: bytes = result.pop("raw_bytes")
-            result["image_format"] = "png"
-            result["image_size_bytes"] = len(raw_bytes)
+        raw_bytes: bytes = result.pop("raw_bytes")
+        result["image_format"] = "png"
+        result["image_size_bytes"] = len(raw_bytes)
 
-            if save_dir:
-                path = Path(save_dir) / f"{pane_type_name}.png"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(raw_bytes)
-                result["file_path"] = str(path.absolute())
-            else:
-                result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
+        if save_dir:
+            path = Path(save_dir) / f"{pane_type_name}.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw_bytes)
+            result["file_path"] = str(path.absolute())
+        else:
+            result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
 
-            success_count += 1
-
+        success_count += 1
         results[pane_type_name] = result
 
+    # [LAW:dataflow-not-control-flow] the call succeeds by reporting every pane
+    # it could try; each slot is a capture or the failure arm for that pane, so
+    # the aggregate has one shape whether none, some or all of the captures worked.
     return {
-        "status": "success" if success_count > 0 else "error",
+        "status": "success",
         "success_count": success_count,
         "total_requested": len(pane_types),
         "results": results,

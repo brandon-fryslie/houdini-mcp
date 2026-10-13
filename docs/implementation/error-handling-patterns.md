@@ -50,13 +50,37 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]
     return {"status": "success", ...}
 ```
 
-**Error Tiers** (one definition, `_tool_error_response()`, which the decorator applies):
+**The failure arms** (one definition, `failure_for()` in `houdini_mcp/tools/failure.py`,
+which the decorator applies). Every failure is one arm of `ToolFailure`, a union
+discriminated on `kind`; each kind fixes its own `retry`:
 
-| Tier | Exception | Handling |
-|------|-----------|----------|
-| 1 | `HoudiniConnectionError` | Simple error response with message |
-| 2 | A `TransportFailure` (see below) | `_handle_connection_error()`: disconnects, then builds the response |
-| 3 | Anything else | Log + error response with traceback; the connection stays up |
+| Exception raised in the tool | `kind` | `retry` | Also carries |
+|------|-----------|----------|------|
+| `HoudiniConnectionError` | `connection_unavailable` | `start_houdini` | `target`: the Houdini that was wanted |
+| `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
+| A `TransportFailure` (see below) that is not a timeout | `connection_lost` | `call_again` | `exception`; the link is torn down first |
+| A `TransportFailure` that is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
+| `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
+| `ProgramStillRunning` (the program this call launched outlived its bound and holds the scene) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `rollback`, `audit`, ...) |
+| `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
+| `OperationFailed` | `operation_failed` | `none` | the tool's fields |
+| `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
+| Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error with the traceback |
+
+A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
+its cause, and the link's own failures in that cause outrank the label: a torn link,
+an unreachable Houdini or a mismatched one wrapped that way is still its own arm, and
+a torn link still tears the connection down. A served tool that finishes its result
+after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then cap)
+is under the same boundary, awaited.
+
+Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`,
+`TimedOut` or `ProgramStillRunning` with the fields their caller needs; a failure
+something else already classified by kind (a program Houdini ran, a ledger of
+parameter writes) becomes its exception through `tool_error(kind, ...)`; and `node_at(hou, path, what)`
+resolves a path or raises `InvalidInput` for them. A caller parses any failure back
+through `FAILURE` (a pydantic `TypeAdapter` over the union) and lands in exactly one
+arm; the contract tests do exactly that.
 
 ### 2. `transport_failure()` - the one place connection loss is decided
 
@@ -83,27 +107,23 @@ whole family - unreachable network, unresolved host, refused or denied socket, a
 stalled handshake - is retried. A rejected token raises `HandshakeError` and is not.
 
 A bad save or render path, a denied file, or a Houdini operation error therefore never
-tears the session down and never reports `connection_error` / `recoverable: True`.
+tears the session down and is never `connection_lost` or `timeout` with
+`connection_reset: true`.
 
-### 3. `_handle_connection_error()` Function
+### 3. Connection loss as the caller reads it
 
-**Location:** `houdini_mcp/tools/_common.py`
+A `TransportFailure` is the one thing that tears the connection down: `failure_for`
+calls `disconnect()` so the next call reconnects, then builds the arm.
 
-Takes a `TransportFailure` (so it cannot be called for anything else) and:
-
-1. Cleans up the broken connection (calls `disconnect()`)
-2. Logs the error
-3. Returns a user-friendly error response with context
-
-**Response Format:**
 ```python
 {
     "status": "error",
-    "error_type": "connection_error",
-    "exception": "TimeoutError",  # Exception class name
+    "kind": "timeout",
+    "retry": "call_again",
+    "connection_reset": True,
+    "exception": "TimeoutError",
     "message": "Operation 'get_scene_info' timed out...",
     "operation": "get_scene_info",
-    "recoverable": True,  # Indicates retry is possible
 }
 ```
 
@@ -166,13 +186,18 @@ All tools return consistent response dictionaries:
 ```python
 {
     "status": "error",
-    "message": "Human-readable error description",
-    # Optional fields:
-    "error_type": "connection_error" | "validation_error" | "worker_still_running" | ...,
-    "exception": "ExceptionClassName",
+    "kind": "connection_unavailable"
+    | "connection_mismatch"
+    | "connection_lost"
+    | "timeout"
+    | "invalid_input"
+    | "operation_failed"
+    | "worker_still_running",
+    "retry": "start_houdini" | "call_again" | "fix_input" | "wait_for_worker" | "none",
     "operation": "tool_name",
-    "recoverable": True | False,
-    "traceback": "...",  # Only for unexpected errors
+    "message": "Human-readable error description",
+    # Per kind: target / exception / connection_reset / worker (see the table above),
+    # then whatever fields the tool attached (a path, a URL, stdout so far, an audit).
 }
 ```
 
@@ -189,7 +214,8 @@ refused at the tool boundary:
 ```python
 {
     "status": "error",
-    "error_type": "worker_still_running",
+    "kind": "worker_still_running",
+    "retry": "wait_for_worker",
     "operation": "create_node",
     "message": "create_node refused: a program launched by execute_code (sha256 ...) is still running ...",
     "worker": {
@@ -198,7 +224,6 @@ refused at the tool boundary:
         "timeout": 30,
         "running_for_seconds": 41.2,
     },
-    "recoverable": True,
 }
 ```
 
@@ -323,9 +348,12 @@ def test_handles_connection_timeout(self, mock_connection):
     result = get_scene_info()
 
     assert result["status"] == "error"
-    assert result["error_type"] == "connection_error"
-    assert result["recoverable"] is True
+    assert result["kind"] == "timeout"
+    assert result["connection_reset"] is True
 ```
+
+`tests/test_failure.py` parses every arm the boundary emits back through `FAILURE`
+and refuses a response relabelled as another kind or as success.
 
 ### Testing Input Refusal
 
@@ -338,16 +366,18 @@ MCP client, not by calling the tool function. See
 
 1. **Always use the decorator** - Don't write try/except for connection errors in tool functions
 2. **Validate early** - Check inputs before connecting to Houdini
-3. **Return dicts, don't raise** - Tools should return error dicts, not raise exceptions
-4. **Include `recoverable` flag** - Help clients know if they can retry
-5. **Log at appropriate levels** - Use `logger.error()` for unexpected errors, `logger.warning()` for recoverable ones
-6. **Clean up connections** - The decorator handles this, but be aware of the pattern
+3. **Raise, don't build error dicts** - `InvalidInput`, `OperationFailed` or `TimedOut`
+   with the fields the caller needs; the boundary shapes the response, so every
+   tool's failure reads the same and a new tool cannot invent a shape
+4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you
+5. **Clean up connections** - The decorator handles this, but be aware of the pattern
 
 ## Files Reference
 
 | File | Purpose |
 |------|---------|
-| `houdini_mcp/tools/_common.py` | Core error handling utilities |
+| `houdini_mcp/tools/failure.py` | `ToolFailure`, its arms, what tools raise, and `failure_for` |
+| `houdini_mcp/tools/_common.py` | The `@handle_connection_errors` boundary and `node_at` |
 | `houdini_mcp/connection.py` | Connection management with retry logic |
 | `tests/conftest.py` | Mock infrastructure for testing |
 | `tests/test_tools.py` | Tests for error handling decorator |
