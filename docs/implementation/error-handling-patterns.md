@@ -222,7 +222,12 @@ refused at the tool boundary:
     "error_type": "worker_still_running",
     "operation": "create_node",
     "message": "create_node refused: a program launched by execute_code (sha256 ...) is still running ...",
-    "worker": {"operation": "execute_code", "code_sha256": "...", "timeout": 30, "running_for_seconds": 41.2},
+    "worker": {
+        "operation": "execute_code",
+        "code_sha256": "...",
+        "timeout": 30,
+        "running_for_seconds": 41.2,
+    },
     "recoverable": True,
 }
 ```
