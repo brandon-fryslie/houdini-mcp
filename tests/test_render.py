@@ -1,6 +1,13 @@
 """Tests for the render_viewport function."""
 
+import base64
+import os
+import pathlib
+import tempfile
+from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 
 class TestRenderViewportValidation:
@@ -785,3 +792,115 @@ class TestRenderViewportMinimalValidExamples:
 
         result = render_viewport(renderer="karma", karma_engine="gpu", resolution=[512, 512])
         assert "status" in result
+
+
+class TestRenderLeavesSceneUnchanged:
+    """A render is read-only to the scene: whatever it creates, it removes.
+
+    Both outcomes are pinned. With ``/out`` present and a ROP that writes its
+    picture, the render succeeds; without ``/out`` it fails after the camera
+    rig exists. Either way the scene after the call is the scene before it,
+    and a user's node that carries one of the temporary names is untouched.
+    """
+
+    TOOLS = ["render_viewport", "render_quad_view"]
+
+    @staticmethod
+    def _scene(hou: Any) -> dict[str, list[tuple[int, str]]]:
+        """Every context's children by identity and name: the scene as a value."""
+        return {
+            path: [(id(child), child.name()) for child in context.children()]
+            for path in ("/obj", "/out")
+            if (context := hou.node(path)) is not None
+        }
+
+    @pytest.fixture
+    def renders_locally(self, mock_connection: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """Houdini's files are this machine's, and a ROP's render writes its picture."""
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            pathlib.Path(self.parm("picture").eval()).write_bytes(b"png")
+
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        monkeypatch.setattr(
+            "houdini_mcp.tools.rendering._get_remote_modules", lambda *_: (os, tempfile)
+        )
+        return mock_connection
+
+    @pytest.fixture
+    def rendering_scene(self, renders_locally: Any) -> Any:
+        """A scene with /out and a user's geo, so a render can succeed."""
+        from tests.conftest import MockHouNode
+
+        renders_locally.add_node(MockHouNode(path="/out", name="out", node_type="out"))
+        renders_locally.node("/obj").createNode("geo", "user_geo")
+        return renders_locally
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_success_leaves_scene_unchanged(self, rendering_scene: Any, tool: str) -> None:
+        import houdini_mcp.tools as tools
+
+        before = self._scene(rendering_scene)
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert "camera_path" not in result
+        assert self._scene(rendering_scene) == before
+
+    def test_viewport_success_returns_the_rendered_image(self, rendering_scene: Any) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert base64.b64decode(result["image_base64"]) == b"png"
+
+    def test_removal_is_logged_with_the_nodes_removed(
+        self, rendering_scene: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        with caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"):
+            result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert [
+            r.getMessage() for r in caplog.records if "temporary render nodes" in r.getMessage()
+        ] == [
+            "Removed temporary render nodes: "
+            "['/out/_mcp_opengl_rop', '/obj/_mcp_render_cam', '/obj/_mcp_cam_center']"
+        ]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_failure_leaves_scene_unchanged(self, renders_locally: Any, tool: str) -> None:
+        """No /out: the tool fails after its camera rig exists, and the rig is gone."""
+        import houdini_mcp.tools as tools
+
+        before = self._scene(renders_locally)
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result == {"status": "error", "message": "Cannot find /out context"}
+        assert self._scene(renders_locally) == before
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("outcome", ["success", "failure"])
+    def test_a_user_node_with_a_temporary_name_survives(
+        self, request: pytest.FixtureRequest, renders_locally: Any, tool: str, outcome: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        if outcome == "success":
+            request.getfixturevalue("rendering_scene")
+        obj = renders_locally.node("/obj")
+        users = [
+            obj.createNode("geo", name)
+            for name in ("_mcp_cam_center", "_mcp_render_cam", "_mcp_quad_cam_center")
+        ]
+        before = self._scene(renders_locally)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert (result["status"] == "success") is (outcome == "success"), result
+        assert self._scene(renders_locally) == before
+        assert [obj.node(user.name()) for user in users] == users

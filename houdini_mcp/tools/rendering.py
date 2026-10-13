@@ -7,6 +7,8 @@ and capturing images for AI analysis.
 import base64
 import logging
 import math
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from ._common import (
@@ -28,6 +30,33 @@ def _get_remote_modules(host: str, port: int):
     return remote_os, remote_tempfile
 
 
+@contextmanager
+def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
+    """Nodes that exist only for the duration of one render.
+
+    [LAW:no-ambient-temporal-coupling] the one owner of the temporary nodes'
+    lifetime: every node made through the yielded ``create`` is destroyed on
+    exit, on success and on failure alike, so the scene after a render is the
+    scene before it. Nodes are destroyed by reference, never looked up by name,
+    so a user's node that happens to carry one of these names is never touched;
+    Houdini uniquifies the requested name against it.
+    """
+    created: list[Any] = []
+
+    def create(parent: Any, node_type: str, name: str) -> Any:
+        node = parent.createNode(node_type, name)
+        created.append(node)
+        return node
+
+    try:
+        yield create
+    finally:
+        paths = [node.path() for node in reversed(created)]
+        for node in reversed(created):
+            node.destroy()
+        logger.debug("Removed temporary render nodes: %s", paths)
+
+
 @handle_connection_errors("render_viewport")
 def render_viewport(
     camera_position: list[float] | None = None,
@@ -47,6 +76,8 @@ def render_viewport(
 
     Creates a temporary camera, positions it to frame the scene geometry,
     renders the scene, and returns the rendered image encoded as base64.
+    The camera and render node are removed again before returning, whatever
+    the outcome: the scene is as it was before the call.
 
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
@@ -65,7 +96,6 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - camera_path: Path to the temporary camera used
         - bounding_box: Scene bounding box if auto_frame was used
 
     Example:
@@ -190,133 +220,114 @@ def render_viewport(
                 except Exception:
                     pass
 
-    # Create camera null (for rotation pivot) and camera
-    null_name = "_mcp_cam_center"
-    cam_name = "_mcp_render_cam"
+    with _temporary_nodes() as create:
+        # Camera null (rotation pivot) at bbox center, camera as its child
+        null = create(obj_context, "null", "_mcp_cam_center")
+        null.parmTuple("t").set(bbox_center)
+        null.parmTuple("r").set(camera_rotation)
 
-    # Delete existing nodes
-    existing_null = obj_context.node(null_name)
-    if existing_null:
-        existing_null.destroy()
-    existing_cam = obj_context.node(cam_name)
-    if existing_cam:
-        existing_cam.destroy()
+        camera = create(obj_context, "cam", "_mcp_render_cam")
+        camera.setFirstInput(null)
 
-    # Create null at bbox center
-    null = obj_context.createNode("null", null_name)
-    null.parmTuple("t").set(bbox_center)
-    null.parmTuple("r").set(camera_rotation)
+        # Calculate camera distance to frame geometry
+        # Using FOV and bbox size
+        fov_degrees = 45.0  # Default FOV
+        padding = 1.2  # 20% padding
+        distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
+        distance = max(5.0, distance + bbox_size / 2)  # Ensure minimum distance
 
-    # Create camera as child of null
-    camera = obj_context.createNode("cam", cam_name)
-    camera.setFirstInput(null)
-
-    # Calculate camera distance to frame geometry
-    # Using FOV and bbox size
-    fov_degrees = 45.0  # Default FOV
-    padding = 1.2  # 20% padding
-    distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
-    distance = max(5.0, distance + bbox_size / 2)  # Ensure minimum distance
-
-    # Position camera along Z axis (it will be rotated by null)
-    if camera_position:
-        camera.parmTuple("t").set(camera_position)
-    else:
-        camera.parmTuple("t").set([0, 0, distance])
-
-    # Set resolution
-    camera.parm("resx").set(width)
-    camera.parm("resy").set(height)
-
-    # Set projection type
-    if orthographic:
-        camera.parm("projection").set(1)  # Orthographic
-        # Set ortho width to frame geometry
-        camera.parm("orthowidth").set(bbox_size * padding)
-    else:
-        camera.parm("projection").set(0)  # Perspective
-
-    # Get remote modules for file operations on the Houdini machine
-    remote_os, remote_tempfile = _get_remote_modules(host, port)
-
-    # Create temp file for output ON THE REMOTE MACHINE
-    suffix = f".{output_format}"
-    fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
-    remote_os.close(fd)
-
-    try:
-        out_context = hou.node("/out")
-        if out_context is None:
-            return {"status": "error", "message": "Cannot find /out context"}
-
-        # Render using OpenGL or Karma
-        if renderer.lower() == "opengl":
-            rop_name = "_mcp_opengl_rop"
-            rop = out_context.node(rop_name)
-            if rop is None:
-                rop = out_context.createNode("opengl", rop_name)
-
-            rop.parm("camera").set(camera.path())
-            rop.parm("picture").set(output_path)
-            if rop.parm("tres"):
-                rop.parm("tres").set(True)
-            if rop.parm("res1"):
-                rop.parm("res1").set(width)
-            if rop.parm("res2"):
-                rop.parm("res2").set(height)
-            if rop.parm("trange"):
-                rop.parm("trange").set(0)  # Current frame only
-            rop.render()
-
-        elif renderer.lower() == "karma":
-            rop_name = "_mcp_karma_rop"
-            rop = out_context.node(rop_name)
-            if rop is None:
-                rop = out_context.createNode("karma", rop_name)
-
-            rop.parm("camera").set(camera.path())
-            rop.parm("picture").set(output_path)
-            if rop.parm("resolutionx"):
-                rop.parm("resolutionx").set(width)
-            if rop.parm("resolutiony"):
-                rop.parm("resolutiony").set(height)
-            if rop.parm("trange"):
-                rop.parm("trange").set(0)
-            # Set Karma engine (CPU or GPU/XPU)
-            if rop.parm("engine"):
-                engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
-                rop.parm("engine").set(engine_value)
-            rop.render()
+        # Position camera along Z axis (it will be rotated by null)
+        if camera_position:
+            camera.parmTuple("t").set(camera_position)
         else:
-            return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+            camera.parmTuple("t").set([0, 0, distance])
 
-        # Read rendered image from REMOTE MACHINE and encode as base64
-        if remote_os.path.exists(output_path):
-            with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
-                image_data = f.read()
-            image_base64 = base64.b64encode(image_data).decode("utf-8")
+        # Set resolution
+        camera.parm("resx").set(width)
+        camera.parm("resy").set(height)
 
-            result = {
-                "status": "success",
-                "image_base64": image_base64,
-                "format": output_format,
-                "resolution": [width, height],
-                "camera_path": camera.path(),
-                "renderer": renderer,
-            }
-            if bbox_info:
-                result["bounding_box"] = bbox_info
-            return result
+        # Set projection type
+        if orthographic:
+            camera.parm("projection").set(1)  # Orthographic
+            # Set ortho width to frame geometry
+            camera.parm("orthowidth").set(bbox_size * padding)
         else:
-            return {"status": "error", "message": "Render completed but output file not found"}
+            camera.parm("projection").set(0)  # Perspective
 
-    finally:
-        # Clean up temp file on remote machine
-        if remote_os.path.exists(output_path):
-            try:
-                remote_os.remove(output_path)
-            except Exception:
-                pass
+        # Get remote modules for file operations on the Houdini machine
+        remote_os, remote_tempfile = _get_remote_modules(host, port)
+
+        # Create temp file for output ON THE REMOTE MACHINE
+        suffix = f".{output_format}"
+        fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
+        remote_os.close(fd)
+
+        try:
+            out_context = hou.node("/out")
+            if out_context is None:
+                return {"status": "error", "message": "Cannot find /out context"}
+
+            # Render using OpenGL or Karma
+            if renderer.lower() == "opengl":
+                rop = create(out_context, "opengl", "_mcp_opengl_rop")
+
+                rop.parm("camera").set(camera.path())
+                rop.parm("picture").set(output_path)
+                if rop.parm("tres"):
+                    rop.parm("tres").set(True)
+                if rop.parm("res1"):
+                    rop.parm("res1").set(width)
+                if rop.parm("res2"):
+                    rop.parm("res2").set(height)
+                if rop.parm("trange"):
+                    rop.parm("trange").set(0)  # Current frame only
+                rop.render()
+
+            elif renderer.lower() == "karma":
+                rop = create(out_context, "karma", "_mcp_karma_rop")
+
+                rop.parm("camera").set(camera.path())
+                rop.parm("picture").set(output_path)
+                if rop.parm("resolutionx"):
+                    rop.parm("resolutionx").set(width)
+                if rop.parm("resolutiony"):
+                    rop.parm("resolutiony").set(height)
+                if rop.parm("trange"):
+                    rop.parm("trange").set(0)
+                # Set Karma engine (CPU or GPU/XPU)
+                if rop.parm("engine"):
+                    engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
+                    rop.parm("engine").set(engine_value)
+                rop.render()
+            else:
+                return {"status": "error", "message": f"Unknown renderer: {renderer}"}
+
+            # Read rendered image from REMOTE MACHINE and encode as base64
+            if remote_os.path.exists(output_path):
+                with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
+                    image_data = f.read()
+                image_base64 = base64.b64encode(image_data).decode("utf-8")
+
+                result: dict[str, Any] = {
+                    "status": "success",
+                    "image_base64": image_base64,
+                    "format": output_format,
+                    "resolution": [width, height],
+                    "renderer": renderer,
+                }
+                if bbox_info:
+                    result["bounding_box"] = bbox_info
+                return result
+            else:
+                return {"status": "error", "message": "Render completed but output file not found"}
+
+        finally:
+            # Clean up temp file on remote machine
+            if remote_os.path.exists(output_path):
+                try:
+                    remote_os.remove(output_path)
+                except Exception:
+                    pass
 
 
 @handle_connection_errors("render_quad_view")
@@ -334,6 +345,8 @@ def render_quad_view(
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
 
     Creates a camera rig and renders standardized views for spatial understanding.
+    The rig and render node are removed again before returning, whatever the
+    outcome: the scene is as it was before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
     calling render_viewport 4 times as it reuses the camera rig and calculates
     the bounding box only once.
@@ -471,154 +484,136 @@ def render_quad_view(
                 "size": bbox_size,
             }
 
-    # Create camera rig (null + camera) - reused for all views
-    null_name = "_mcp_quad_cam_center"
-    cam_name = "_mcp_quad_render_cam"
+    with _temporary_nodes() as create:
+        # Camera rig (null + camera) at bbox center, reused for all views
+        null = create(obj_context, "null", "_mcp_quad_cam_center")
+        null.parmTuple("t").set(bbox_center)
 
-    # Delete existing nodes
-    existing_null = obj_context.node(null_name)
-    if existing_null:
-        existing_null.destroy()
-    existing_cam = obj_context.node(cam_name)
-    if existing_cam:
-        existing_cam.destroy()
+        camera = create(obj_context, "cam", "_mcp_quad_render_cam")
+        camera.setFirstInput(null)
 
-    # Create null at bbox center
-    null = obj_context.createNode("null", null_name)
-    null.parmTuple("t").set(bbox_center)
+        # Set camera resolution
+        camera.parm("resx").set(width)
+        camera.parm("resy").set(height)
 
-    # Create camera as child of null
-    camera = obj_context.createNode("cam", cam_name)
-    camera.setFirstInput(null)
+        # Calculate camera distance to frame geometry
+        fov_degrees = 45.0
+        padding = 1.2  # 20% padding
+        distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
+        distance = max(5.0, distance + bbox_size / 2)
 
-    # Set camera resolution
-    camera.parm("resx").set(width)
-    camera.parm("resy").set(height)
+        # Get/create render context
+        out_context = hou.node("/out")
+        if out_context is None:
+            return {"status": "error", "message": "Cannot find /out context"}
 
-    # Calculate camera distance to frame geometry
-    fov_degrees = 45.0
-    padding = 1.2  # 20% padding
-    distance = (bbox_size * padding / 2) / math.tan(math.radians(fov_degrees / 2))
-    distance = max(5.0, distance + bbox_size / 2)
+        # Render ROP for the chosen renderer
+        if renderer.lower() == "opengl":
+            rop = create(out_context, "opengl", "_mcp_quad_opengl_rop")
+        elif renderer.lower() == "karma":
+            rop = create(out_context, "karma", "_mcp_quad_karma_rop")
+        else:
+            return {"status": "error", "message": f"Unknown renderer: {renderer}"}
 
-    # Get/create render context
-    out_context = hou.node("/out")
-    if out_context is None:
-        return {"status": "error", "message": "Cannot find /out context"}
+        # Render each view
+        view_results = []
 
-    # Create/get render ROP based on renderer
-    if renderer.lower() == "opengl":
-        rop_name = "_mcp_quad_opengl_rop"
-        rop = out_context.node(rop_name)
-        if rop is None:
-            rop = out_context.createNode("opengl", rop_name)
-    elif renderer.lower() == "karma":
-        rop_name = "_mcp_quad_karma_rop"
-        rop = out_context.node(rop_name)
-        if rop is None:
-            rop = out_context.createNode("karma", rop_name)
-    else:
-        return {"status": "error", "message": f"Unknown renderer: {renderer}"}
-
-    # Render each view
-    view_results = []
-
-    for view_config in views_config:
-        view_name = view_config["name"]
-        rotation = view_config["rotation"]
-        is_ortho = view_config["ortho"]
-
-        try:
-            # Set null rotation for this view
-            null.parmTuple("r").set(rotation)
-
-            # Position camera along Z axis
-            camera.parmTuple("t").set([0, 0, distance])
-
-            # Set projection type
-            if is_ortho:
-                camera.parm("projection").set(1)  # Orthographic
-                camera.parm("orthowidth").set(bbox_size * padding)
-            else:
-                camera.parm("projection").set(0)  # Perspective
-
-            # Create temp file for output ON THE REMOTE MACHINE
-            suffix = f".{output_format}"
-            fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
-            remote_os.close(fd)
+        for view_config in views_config:
+            view_name = view_config["name"]
+            rotation = view_config["rotation"]
+            is_ortho = view_config["ortho"]
 
             try:
-                # Configure and render
-                if renderer.lower() == "opengl":
-                    rop.parm("camera").set(camera.path())
-                    rop.parm("picture").set(output_path)
-                    if rop.parm("tres"):
-                        rop.parm("tres").set(True)
-                    if rop.parm("res1"):
-                        rop.parm("res1").set(width)
-                    if rop.parm("res2"):
-                        rop.parm("res2").set(height)
-                    if rop.parm("trange"):
-                        rop.parm("trange").set(0)
-                    rop.render()
-                elif renderer.lower() == "karma":
-                    rop.parm("camera").set(camera.path())
-                    rop.parm("picture").set(output_path)
-                    if rop.parm("resolutionx"):
-                        rop.parm("resolutionx").set(width)
-                    if rop.parm("resolutiony"):
-                        rop.parm("resolutiony").set(height)
-                    if rop.parm("trange"):
-                        rop.parm("trange").set(0)
-                    # Set Karma engine (CPU or GPU/XPU)
-                    if rop.parm("engine"):
-                        engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
-                        rop.parm("engine").set(engine_value)
-                    rop.render()
+                # Set null rotation for this view
+                null.parmTuple("r").set(rotation)
 
-                # Read and encode image from REMOTE MACHINE
-                if remote_os.path.exists(output_path):
-                    with remote_os.fdopen(
-                        remote_os.open(output_path, remote_os.O_RDONLY), "rb"
-                    ) as f:
-                        image_data = f.read()
-                    image_base64 = base64.b64encode(image_data).decode("utf-8")
+                # Position camera along Z axis
+                camera.parmTuple("t").set([0, 0, distance])
 
-                    view_results.append(
-                        {
-                            "name": view_name,
-                            "rotation": rotation,
-                            "image_base64": image_base64,
-                            "format": output_format,
-                            "resolution": [width, height],
-                            "orthographic": is_ortho,
-                        }
-                    )
+                # Set projection type
+                if is_ortho:
+                    camera.parm("projection").set(1)  # Orthographic
+                    camera.parm("orthowidth").set(bbox_size * padding)
                 else:
-                    view_results.append(
-                        {
-                            "name": view_name,
-                            "rotation": rotation,
-                            "error": "Render completed but output file not found",
-                        }
-                    )
+                    camera.parm("projection").set(0)  # Perspective
 
-            finally:
-                # Clean up temp file on remote machine
-                if remote_os.path.exists(output_path):
-                    try:
-                        remote_os.remove(output_path)
-                    except Exception:
-                        pass
+                # Create temp file for output ON THE REMOTE MACHINE
+                suffix = f".{output_format}"
+                fd, output_path = remote_tempfile.mkstemp(suffix=suffix)
+                remote_os.close(fd)
 
-        except Exception as e:
-            view_results.append(
-                {
-                    "name": view_name,
-                    "rotation": rotation,
-                    "error": str(e),
-                }
-            )
+                try:
+                    # Configure and render
+                    if renderer.lower() == "opengl":
+                        rop.parm("camera").set(camera.path())
+                        rop.parm("picture").set(output_path)
+                        if rop.parm("tres"):
+                            rop.parm("tres").set(True)
+                        if rop.parm("res1"):
+                            rop.parm("res1").set(width)
+                        if rop.parm("res2"):
+                            rop.parm("res2").set(height)
+                        if rop.parm("trange"):
+                            rop.parm("trange").set(0)
+                        rop.render()
+                    elif renderer.lower() == "karma":
+                        rop.parm("camera").set(camera.path())
+                        rop.parm("picture").set(output_path)
+                        if rop.parm("resolutionx"):
+                            rop.parm("resolutionx").set(width)
+                        if rop.parm("resolutiony"):
+                            rop.parm("resolutiony").set(height)
+                        if rop.parm("trange"):
+                            rop.parm("trange").set(0)
+                        # Set Karma engine (CPU or GPU/XPU)
+                        if rop.parm("engine"):
+                            engine_value = "xpu" if karma_engine.lower() == "gpu" else "cpu"
+                            rop.parm("engine").set(engine_value)
+                        rop.render()
+
+                    # Read and encode image from REMOTE MACHINE
+                    if remote_os.path.exists(output_path):
+                        with remote_os.fdopen(
+                            remote_os.open(output_path, remote_os.O_RDONLY), "rb"
+                        ) as f:
+                            image_data = f.read()
+                        image_base64 = base64.b64encode(image_data).decode("utf-8")
+
+                        view_results.append(
+                            {
+                                "name": view_name,
+                                "rotation": rotation,
+                                "image_base64": image_base64,
+                                "format": output_format,
+                                "resolution": [width, height],
+                                "orthographic": is_ortho,
+                            }
+                        )
+                    else:
+                        view_results.append(
+                            {
+                                "name": view_name,
+                                "rotation": rotation,
+                                "error": "Render completed but output file not found",
+                            }
+                        )
+
+                finally:
+                    # Clean up temp file on remote machine
+                    if remote_os.path.exists(output_path):
+                        try:
+                            remote_os.remove(output_path)
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                view_results.append(
+                    {
+                        "name": view_name,
+                        "rotation": rotation,
+                        "error": str(e),
+                    }
+                )
 
     # Calculate total render time
     total_time_ms = (time.time() - start_time) * 1000

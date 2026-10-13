@@ -1,5 +1,6 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
+import copy
 from collections.abc import Callable, Generator
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
@@ -92,6 +93,25 @@ class MockNodeConnection:
 
     def inputIndex(self) -> int:
         return self._input_index
+
+
+# Default parameters a freshly created node of each type carries, beyond the
+# translate every node has. A type absent here has no extras.
+_TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
+    "material": {"shop_materialpath1": "", "group1": ""},
+    "principledshader": {"basecolor": [1.0, 1.0, 1.0], "rough": 0.3, "metallic": 0.0},
+    "null": {"t": [0.0, 0.0, 0.0], "r": [0.0, 0.0, 0.0]},
+    "cam": {
+        "t": [0.0, 0.0, 0.0],
+        "r": [0.0, 0.0, 0.0],
+        "resx": 1280,
+        "resy": 720,
+        "projection": 0,
+        "orthowidth": 1.0,
+    },
+    "opengl": {"camera": "", "picture": ""},
+    "karma": {"camera": "", "picture": ""},
+}
 
 
 class MockHouNode:
@@ -316,25 +336,10 @@ class MockHouNode:
         new_name = name if name and self.node(name) is None else next(free)
         new_path = join_path(self._path, new_name)
 
-        # Create node with type-specific default parameters
+        # [LAW:dataflow-not-control-flow] a type's defaults are data looked up
+        # once, not a branch per type.
         params: dict[str, Any] = {"tx": 0.0, "ty": 0.0, "tz": 0.0}
-
-        # Add type-specific parameters
-        if node_type == "material":
-            params.update(
-                {
-                    "shop_materialpath1": "",
-                    "group1": "",
-                }
-            )
-        elif node_type == "principledshader":
-            params.update(
-                {
-                    "basecolor": [1.0, 1.0, 1.0],
-                    "rough": 0.3,
-                    "metallic": 0.0,
-                }
-            )
+        params.update(copy.deepcopy(_TYPE_DEFAULT_PARAMS.get(node_type, {})))
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type, params=params)
         self.attach(new_node)

@@ -496,7 +496,6 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - camera_path: Path to the temporary camera used
         - bounding_box: Scene bounding box if auto_frame was used
 
     Examples:
