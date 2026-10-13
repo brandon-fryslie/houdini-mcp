@@ -12,7 +12,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
-from .parms import ParmNotFound, read_present, resolve, write, write_all
+from .parms import ParmNotFound, read_present, resolve, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.materials")
 
@@ -50,13 +50,12 @@ def create_material(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a parameter failed) or "error"
         - material_path: Path to the created material node
         - material_name: Name of the material
         - material_type: Type of material created
         - updated: The parameters that were set, as {name, value}
-        - failed: The parameters that were not, as {name, reason}; status is
-          "partial" when there are any
+        - failed: The parameters that were not, as {name, reason}
 
     Examples:
         create_material()  # Create default principled shader
@@ -166,13 +165,12 @@ def assign_material(
     # Method 1: Try setting shop_materialpath on the OBJ node directly
     if not group:
         try:
-            mat_parm = resolve(geo_node, "shop_materialpath")
+            resolve(geo_node, "shop_materialpath")
         except ParmNotFound:
             pass
         else:
-            write(mat_parm, material_path)
             return {
-                "status": "success",
+                **write_all(geo_node, {"shop_materialpath": material_path}).fields(),
                 "geometry_path": geometry_path,
                 "material_path": material_path,
                 "method": "shop_materialpath",

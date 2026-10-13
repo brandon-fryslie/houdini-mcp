@@ -14,7 +14,6 @@ from houdini_mcp.tools.parms import (
     ParmNotFound,
     ParmValueError,
     evaluated,
-    read,
     read_present,
     resolve,
     write,
@@ -50,11 +49,11 @@ class TestResolve:
 class TestReadAndWrite:
     def test_tuple_reads_as_a_list(self):
         node = node_with(t=[1.0, 2.0, 3.0])
-        assert read(MagicMock(), resolve(node, "t")) == [1.0, 2.0, 3.0]
+        assert read_present(MagicMock(), node, ["t"]) == {"t": [1.0, 2.0, 3.0]}
 
     def test_scalar_reads_as_itself(self):
         node = node_with(radx=2.5)
-        assert read(MagicMock(), resolve(node, "radx")) == 2.5
+        assert read_present(MagicMock(), node, ["radx"]) == {"radx": 2.5}
 
     def test_write_lands_on_the_node(self):
         node = node_with(radx=2.5, t=[0.0, 0.0, 0.0])
@@ -78,10 +77,12 @@ class TestReadPresent:
             "t": [1.0, 2.0, 3.0],
         }
 
-    def test_a_present_parm_that_cannot_evaluate_is_marked(self):
+    def test_a_present_parm_that_cannot_evaluate_is_marked(self, caplog):
         node = node_with(radx=2.5)
         node.parm("radx").eval = MagicMock(side_effect=RuntimeError("no cook"))
-        assert read_present(MagicMock(), node, ["radx"]) == {"radx": UNEVALUABLE}
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.parms"):
+            assert read_present(MagicMock(), node, ["radx"]) == {"radx": UNEVALUABLE}
+        assert "parameter unevaluable name=radx reason=no cook" in caplog.text
 
 
 class TestEvaluated:

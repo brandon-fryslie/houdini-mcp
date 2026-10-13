@@ -818,10 +818,10 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a parameter failed) or "error"
         - rop_path: Path to the ROP
-        - updated: List of parameters that were updated
-        - failed: List of parameters that failed to update
+        - updated: The parameters that were written, as {name, value}
+        - failed: The parameters that were not, as {name, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -857,12 +857,11 @@ def create_render_node(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a setting failed) or "error"
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
         - updated: The settings that were applied, as {name, value}
-        - failed: The settings that were not, as {name, reason}; status is
-          "partial" when there are any
+        - failed: The settings that were not, as {name, reason}
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})

@@ -24,7 +24,6 @@ __all__ = [
     "Writes",
     "evaluated",
     "json_safe_hou_value",
-    "read",
     "read_present",
     "resolve",
     "write",
@@ -77,11 +76,6 @@ def resolve(node: Any, name: str) -> Parm:
     raise ParmNotFound(node.path(), name)
 
 
-def read(hou: Any, parm: Parm) -> Any:
-    """The parameter's evaluated value as JSON; a tuple reads as a list."""
-    return json_safe_hou_value(hou, parm.target.eval())
-
-
 def write(parm: Parm, value: Any) -> None:
     """Set the parameter; a tuple takes only a list or tuple of components."""
     if parm.is_tuple and not isinstance(value, (list, tuple)):
@@ -116,6 +110,8 @@ def _evaluated_or_marker(hou: Any, target: Any) -> Any:
         return json_safe_hou_value(hou, target.eval())
     except Exception as e:
         _reraise_transport_failure(e)
+        # [LAW:no-silent-failure] the answer carries the marker; the log carries why.
+        logger.warning("parameter unevaluable name=%s reason=%s", target.name(), e)
         return UNEVALUABLE
 
 
