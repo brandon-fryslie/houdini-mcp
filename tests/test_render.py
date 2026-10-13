@@ -1459,6 +1459,22 @@ class TestRenderFraming:
         assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
 
     @pytest.mark.parametrize("tool", TOOLS)
+    def test_displayed_objects_without_geometry_are_not_framed(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        """A null, a light and a camera show in the viewport but have no box to frame."""
+        import houdini_mcp.tools as tools
+
+        obj = framed_scene.node("/obj")
+        for node_type in ("null", "light", "cam"):
+            obj.createNode(node_type, f"user_{node_type}").parm("tx").set(1000.0)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+
+    @pytest.mark.parametrize("tool", TOOLS)
     def test_empty_geometry_contributes_nothing_to_the_frame(
         self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
     ) -> None:

@@ -227,7 +227,9 @@ def _shapes(node: Any, anchor: Any) -> list[_Shape]:
                 source=display.path(), geometry=display.geometry(), transform=node.worldTransform()
             )
         ]
-    if str(node.childTypeCategory().name()) == "Object":
+    # A node that is not a network has no child category; one of objects shows them all.
+    contained = node.childTypeCategory()
+    if contained is not None and str(contained.name()) == "Object":
         return _displayed_shapes(node)
     return []
 

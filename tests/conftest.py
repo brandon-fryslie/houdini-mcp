@@ -265,9 +265,12 @@ class MockHouNode:
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
         return self._indirect_inputs
 
-    def childTypeCategory(self) -> MagicMock:
+    def childTypeCategory(self) -> MagicMock | None:
         """The category of this network's children: SOPs inside a geo, objects under
-        /obj, ROPs under /out; any other network holds its own kind."""
+        /obj, ROPs under /out, any other network's own kind; None for a node that is
+        not a network, as hou.Node.childTypeCategory returns."""
+        if self._node_type in ("cam", "light", "null"):
+            return None
         contained = {"geo": "Sop", "obj": "Object", "out": "Driver"}.get(self._node_type)
         if contained is None:
             return self.type().category()
@@ -497,7 +500,8 @@ class MockHouNode:
     def displayNode(self) -> Optional["MockHouNode"]:
         """The SOP inside this object whose display flag is set, as hou.ObjNode.displayNode:
         None for an object whose children are not SOPs, and for one with no children."""
-        if self.childTypeCategory().name() != "Sop":
+        contained = self.childTypeCategory()
+        if contained is None or contained.name() != "Sop":
             return None
         for child in self._children:
             if child._display_flag:
