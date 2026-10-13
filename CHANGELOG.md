@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Render tools leave the scene as they found it** (houdini-laws-etg.jfl):
+  `render_viewport` and `render_quad_view` destroy the camera rig and render
+  ROP they create before returning, on success and on failure alike, instead
+  of leaving `_mcp_*` nodes in `/obj` and `/out` for the next call to find.
+  Temporary nodes are destroyed by reference, never looked up by name, so a
+  user's node that happens to be called `_mcp_render_cam` is no longer
+  destroyed by a render. `render_viewport`'s result no longer carries
+  `camera_path`: there is no camera after the call.
+
 ### Changed
 
 - **Connection failure has one definition each of classification, retry and error**

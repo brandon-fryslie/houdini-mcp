@@ -1,6 +1,13 @@
 """Tests for the render_viewport function."""
 
+import base64
+import os
+import pathlib
+import tempfile
+from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 
 class TestRenderViewportValidation:
@@ -785,3 +792,267 @@ class TestRenderViewportMinimalValidExamples:
 
         result = render_viewport(renderer="karma", karma_engine="gpu", resolution=[512, 512])
         assert "status" in result
+
+
+class TestRenderLeavesSceneUnchanged:
+    """A render is read-only to the scene: whatever it creates, it removes.
+
+    Both outcomes are pinned. With a ROP that writes its picture the render
+    succeeds; with a ROP whose render raises it fails after the camera rig and
+    the ROP exist. Either way the scene after the call is the scene before it,
+    and a user's node that carries one of the temporary names is untouched.
+    """
+
+    TOOLS = ["render_viewport", "render_quad_view"]
+
+    @staticmethod
+    def _scene(hou: Any) -> dict[str, list[tuple[int, str]]]:
+        """Every context's children by identity and name: the scene as a value."""
+        return {
+            path: [(id(child), child.name()) for child in context.children()]
+            for path in ("/obj", "/out")
+            if (context := hou.node(path)) is not None
+        }
+
+    @pytest.fixture
+    def renders_locally(self, mock_connection: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """Houdini's files are this machine's, and a ROP's render writes its picture."""
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            pathlib.Path(self.parm("picture").eval()).write_bytes(b"png")
+
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        monkeypatch.setattr(
+            "houdini_mcp.tools.rendering._get_remote_modules", lambda *_: (os, tempfile)
+        )
+        return mock_connection
+
+    @pytest.fixture
+    def rendering_scene(self, renders_locally: Any) -> Any:
+        """A scene with /out and a user's geo, so a render can succeed."""
+        from tests.conftest import MockHouNode
+
+        renders_locally.add_node(MockHouNode(path="/out", name="out", node_type="out"))
+        renders_locally.node("/obj").createNode("geo", "user_geo")
+        return renders_locally
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_success_leaves_scene_unchanged(self, rendering_scene: Any, tool: str) -> None:
+        import houdini_mcp.tools as tools
+
+        before = self._scene(rendering_scene)
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert "camera_path" not in result
+        assert self._scene(rendering_scene) == before
+
+    def test_viewport_success_returns_the_rendered_image(self, rendering_scene: Any) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert base64.b64decode(result["image_base64"]) == b"png"
+
+    def test_removal_is_logged_with_the_nodes_removed(
+        self, rendering_scene: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        with caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"):
+            result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert [
+            r.getMessage() for r in caplog.records if "temporary render nodes" in r.getMessage()
+        ] == [
+            "Removed temporary render nodes: "
+            "['/out/_mcp_opengl_rop', '/obj/_mcp_render_cam', '/obj/_mcp_cam_center']"
+        ]
+
+    @pytest.fixture
+    def render_raises(self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """A scene whose ROP fails mid-render, after every temporary node exists."""
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            raise RuntimeError("OpenGL ROP: no display")
+
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        return rendering_scene
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_failure_leaves_scene_unchanged(self, render_raises: Any, tool: str) -> None:
+        import houdini_mcp.tools as tools
+
+        before = self._scene(render_raises)
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        # The render's failure reaches the caller; which status quad view reports
+        # for it is houdini-laws-etg.tmx's.
+        assert "OpenGL ROP: no display" in str(result), result
+        assert self._scene(render_raises) == before
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_link_that_fails_under_a_destroy_is_sent_nothing_more(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """The first destroy kills the link: the call ends as connection loss after that one."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode
+
+        destroyed: list[str] = []
+
+        def destroy(self: Any) -> None:
+            destroyed.append(self.path())
+            raise EOFError("stream has been closed")
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["error_type"] == "connection_error", result
+        assert len(destroyed) == 1, destroyed
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"resolution": [0, 0]}])
+    def test_a_bad_input_creates_nothing(
+        self, rendering_scene: Any, tool: str, bad: dict[str, Any]
+    ) -> None:
+        """Input is checked before any node exists: nothing is made and unmade."""
+        import houdini_mcp.tools as tools
+
+        created: list[str] = []
+        original = type(rendering_scene.node("/obj")).createNode
+
+        def createNode(self: Any, node_type: str, name: str | None = None) -> Any:
+            created.append(node_type)
+            return original(self, node_type, name)
+
+        with patch.object(type(rendering_scene.node("/obj")), "createNode", createNode):
+            result = getattr(tools, tool)(host="localhost", port=18811, **bad)
+
+        assert result["status"] == "error", result
+        assert created == []
+
+    @pytest.fixture
+    def camera_refuses_to_go(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Destroying the temporary camera fails; every other node destroys normally."""
+        from tests.conftest import MockHouNode
+
+        original = MockHouNode.destroy
+
+        def destroy(self: Any) -> None:
+            if self.type().name() == "cam":
+                raise RuntimeError("camera is locked")
+            original(self)
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+    @staticmethod
+    def _names(scene: dict[str, list[tuple[int, str]]]) -> dict[str, list[str]]:
+        return {ctx: [name for _, name in nodes] for ctx, nodes in scene.items()}
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_every_node_is_destroyed_even_when_one_destroy_fails(
+        self,
+        rendering_scene: Any,
+        camera_refuses_to_go: None,
+        tool: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """One destroy raising spares none of the others; the failure is the result and an event."""
+        import houdini_mcp.tools as tools
+
+        prefix = {"render_viewport": "_mcp_", "render_quad_view": "_mcp_quad_"}[tool]
+        cam = f"{prefix}render_cam"
+        before = self._names(self._scene(rendering_scene))
+        with caplog.at_level("DEBUG", logger="houdini_mcp.tools.rendering"):
+            result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "error", result
+        assert result["message"] == "camera is locked", result
+        # The locked camera is the one node left behind; null and ROP are gone.
+        after = self._names(self._scene(rendering_scene))
+        assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
+        events = [r for r in caplog.records if "temporary render node" in r.getMessage()]
+        assert [(r.levelname, r.getMessage()) for r in events] == [
+            (
+                "ERROR",
+                f"Failed to destroy temporary render node /obj/{cam}: RuntimeError('camera is locked')",
+            ),
+            (
+                "DEBUG",
+                f"Removed temporary render nodes: ['/out/{prefix}opengl_rop', '/obj/{prefix}cam_center']",
+            ),
+        ]
+
+    def test_the_render_failure_outranks_a_destroy_failure(
+        self, render_raises: Any, camera_refuses_to_go: None
+    ) -> None:
+        """The caller hears what broke the render; the node that refused to go is a note on it."""
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "error", result
+        assert result["message"] == "OpenGL ROP: no display", result
+        assert (
+            "also failed to destroy temporary render node /obj/_mcp_render_cam: "
+            "RuntimeError('camera is locked')"
+        ) in result["traceback"]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_nothing_is_sent_over_a_failed_link(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """A render that dies with the link ends as connection loss and attempts no destroy."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode
+
+        def render(self: Any) -> None:
+            raise EOFError("stream has been closed")
+
+        destroyed: list[str] = []
+        monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        monkeypatch.setattr(MockHouNode, "destroy", lambda self: destroyed.append(self.path()))
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["error_type"] == "connection_error", result
+        assert result["operation"] == tool
+        assert destroyed == []
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("outcome", ["success", "failure"])
+    def test_a_user_node_with_a_temporary_name_survives(
+        self, request: pytest.FixtureRequest, renders_locally: Any, tool: str, outcome: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+
+        if outcome == "success":
+            request.getfixturevalue("rendering_scene")
+        obj = renders_locally.node("/obj")
+        users = [
+            obj.createNode("geo", name)
+            for name in (
+                "_mcp_cam_center",
+                "_mcp_render_cam",
+                "_mcp_quad_cam_center",
+                "_mcp_quad_render_cam",
+            )
+        ]
+        out = renders_locally.node("/out")
+        if out is not None:
+            users += [
+                out.createNode("geo", name) for name in ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")
+            ]
+        before = self._scene(renders_locally)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert (result["status"] == "success") is (outcome == "success"), result
+        assert self._scene(renders_locally) == before
+        assert [user.parent().node(user.name()) for user in users] == users
