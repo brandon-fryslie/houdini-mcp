@@ -80,6 +80,21 @@ class TestWorkerBlocksMutation:
 
         assert screenshot()["status"] == "success"
 
+    @pytest.mark.parametrize("render_tool", ["render_viewport", "render_quad_view"])
+    def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render_tool):
+        """A render tool adds a camera rig and a ROP to the scene for the call, so it
+        must not run beside a program still mutating it (TOOL_POLICIES says why)."""
+        _time_out(stalled_program)
+
+        @handle_connection_errors(render_tool)
+        def render():
+            return {"status": "success"}
+
+        result = render()
+
+        assert result["error_type"] == "worker_still_running"
+        assert result["operation"] == render_tool
+
     def test_program_running_read_is_refused_naming_itself(
         self, mock_connection, stalled_program, caplog
     ):

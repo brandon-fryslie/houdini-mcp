@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import logging
 import socket
-import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +25,7 @@ from houdini_mcp_plugin.listener import (
     probe_host,
 )
 
+from tests.conftest import await_rpyc_client_threads
 from tests.plugin.conftest import FakeHrpycModule
 
 
@@ -40,19 +39,6 @@ def _ipv6_loopback_available() -> bool:
 
 
 needs_ipv6 = pytest.mark.skipif(not _ipv6_loopback_available(), reason="no IPv6 loopback")
-
-
-def _await_rpyc_client_threads(timeout: float = 2.0) -> None:
-    """Wait for rpyc's per-client threads to notice the client's close.
-
-    rpyc serves each client on its own thread and re-raises, after logging,
-    when the server closes that client's socket under a poll. Stopping once
-    those threads have exited is what a clean stop needs, so wait on that.
-    """
-    deadline = time.monotonic() + timeout
-    while any(t.name.startswith("RpycSpawnThread") for t in threading.enumerate()):
-        assert time.monotonic() < deadline, "rpyc client thread did not exit"
-        time.sleep(0.01)
 
 
 def real_hrpyc() -> SimpleNamespace:
@@ -121,7 +107,7 @@ class TestListenerAgainstRealRpyc:
                 assert conn.modules.math.sqrt(16.0) == 4.0
             finally:
                 conn.close()
-                _await_rpyc_client_threads()
+                await_rpyc_client_threads()
         finally:
             listener.stop()
 

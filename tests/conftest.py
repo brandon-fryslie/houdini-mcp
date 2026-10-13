@@ -1,6 +1,8 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
 import copy
+import threading
+import time
 from collections.abc import Callable, Generator
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
@@ -773,6 +775,19 @@ class MockUndoGroupContext:
         return False
 
 
+def await_rpyc_client_threads(timeout: float = 2.0) -> None:
+    """Wait for rpyc's per-client threads to notice the client's close.
+
+    rpyc serves each client on its own thread and re-raises, after logging,
+    when the server closes that client's socket under a poll. Stopping once
+    those threads have exited is what a clean stop needs, so wait on that.
+    """
+    deadline = time.monotonic() + timeout
+    while any(t.name.startswith("RpycSpawnThread") for t in threading.enumerate()):
+        assert time.monotonic() < deadline, "rpyc client thread did not exit"
+        time.sleep(0.01)
+
+
 class MockEnumValue:
     """One member of a hou enum: ``hou.paneTabType.NetworkEditor.name()``."""
 
@@ -791,7 +806,7 @@ class MockPaneTabType:
     NetworkEditor = MockEnumValue("NetworkEditor")
     Parm = MockEnumValue("Parm")
     SceneViewer = MockEnumValue("SceneViewer")
-    thisown = True
+    thisown = property(lambda _self: True)
 
 
 class MockPaneTab:

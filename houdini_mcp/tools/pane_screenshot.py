@@ -50,10 +50,15 @@ def pane_type_names(hou: Any) -> list[str]:
     behind. A pane type is a member whose value is a ``hou.EnumValue``; the
     class's other attributes (SWIG's ``thisown`` flag, the dunders) are not.
     """
+    # Bound once: over rpyc each attribute read is a round trip. The dunders go
+    # by name because rpyc 5.3 cannot ``isinstance`` a value it passed by value
+    # (``__doc__`` is None) against a netref class; a member's class id matches
+    # the netref's locally, and ``thisown`` is asked of Houdini once.
+    enum, member = hou.paneTabType, hou.EnumValue
     return [
         name
-        for name in dir(hou.paneTabType)
-        if isinstance(getattr(hou.paneTabType, name), hou.EnumValue)
+        for name in dir(enum)
+        if not name.startswith("_") and isinstance(getattr(enum, name), member)
     ]
 
 
@@ -118,10 +123,16 @@ def _capture_pane_to_bytes(
     # answer an unknown name, not on every capture.
     pane_type = getattr(hou.paneTabType, pane_type_name, None)
     if not isinstance(pane_type, hou.EnumValue):
+        names = pane_type_names(hou)
+        logger.warning(
+            "Unknown pane type %r refused; this Houdini has %d pane types",
+            pane_type_name,
+            len(names),
+        )
         return {
             "status": "error",
             "message": f"Unknown pane type: {pane_type_name}",
-            "available_types": pane_type_names(hou),
+            "available_types": names,
         }
 
     pane = hou.ui.paneTabOfType(pane_type)

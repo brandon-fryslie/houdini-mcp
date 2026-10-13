@@ -7,15 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
+  (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
+  `available_types`.
+
 ### Fixed
 
 - **Pane types have one source** (houdini-laws-etg.8tg): `list_visible_panes`'s
   `available_types`, the names `capture_pane_screenshot` and
   `capture_multiple_panes` accept, and the list an unknown-type error offers are
   all read from the connected Houdini's `hou.paneTabType`. The hand copy of that
-  enum, `houdini_mcp.tools.VALID_PANE_TYPES`, is gone; it already lacked the
-  `GenericGraphEditor` and `UsdShadeEditor` panes Houdini 22 ships, and it
-  answered in place of the live enum whenever the live read failed. A name that
+  enum (see Removed) already lacked the `GenericGraphEditor` and
+  `UsdShadeEditor` panes Houdini 22 ships, and it answered in place of the live
+  enum whenever the live read failed. A name that
   is an attribute of the enum class but not a pane type (`thisown`) is now
   refused as unknown instead of being handed to `hou.ui.paneTabOfType`, which
   raised on it.
