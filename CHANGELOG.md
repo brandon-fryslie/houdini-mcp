@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HoudiniOperationTimeout`, `HoudiniOperationError`, the module thread pool, and the
   unused `DEFAULT_TIMEOUT` / `DEFAULT_OPERATION_TIMEOUT` constants.
 
+- **Parameter read and write have one owner** (houdini-laws-etg.dq2):
+  `houdini_mcp/tools/parms.py` resolves a parameter name the way Houdini does
+  (`parm()` for a scalar or component, else `parmTuple()` for a vector), reads it
+  into one JSON shape (a vector is a list), and writes it with one failure shape.
+  `set_parameter`, `create_material`, `assign_material`, `set_render_settings` and
+  `create_render_node` all write through it: every batch tool now answers with
+  `updated` (`{name, value}`) and `failed` (`{name, reason}`) and status `partial`
+  when any failed; `create_material`'s `parameters_set` and `create_render_node`'s
+  `settings_applied` are replaced by those, and a parameter the material or ROP
+  lacks is reported instead of logged and dropped. `get_parameter_schema`,
+  `get_material_info`, `get_render_settings`, `list_render_nodes`, `get_node_info`
+  and `serialize_scene` read through it: a present parameter that fails to evaluate
+  reads as the one `UNEVALUABLE` marker everywhere. `get_parameter_schema` no longer
+  branches on the test double's `_params`. The converter is `parms.json_safe_hou_value`
+  (`_common._json_safe_hou_value` is gone), and its cycle guard now tracks only
+  containers, so a vector with a repeated component (`[1.0, 0.0, 0.0]`) no longer
+  reads its second `0.0` as `<recursion>`.
 - **Connection state has one owner** (houdini-laws-etg.bfq): `connection.py`'s
   module globals (`_connection`, `_hou`, `_target`, `_executor`) are replaced by
   `HoudiniConnection`, which holds the target and at most one `Link` (target, host,

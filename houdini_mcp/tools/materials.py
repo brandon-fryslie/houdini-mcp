@@ -12,6 +12,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
+from .parms import ParmNotFound, read_present, resolve, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.materials")
 
@@ -49,11 +50,12 @@ def create_material(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a parameter failed) or "error"
         - material_path: Path to the created material node
         - material_name: Name of the material
         - material_type: Type of material created
-        - parameters_set: List of parameters that were set
+        - updated: The parameters that were set, as {name, value}
+        - failed: The parameters that were not, as {name, reason}
 
     Examples:
         create_material()  # Create default principled shader
@@ -95,34 +97,13 @@ def create_material(
             f"Check if this material type is available in your Houdini installation.",
         }
 
-    # Set parameters if provided
-    parameters_set = []
-    if parameters:
-        for param_name, value in parameters.items():
-            try:
-                parm = mat_node.parm(param_name)
-                if parm:
-                    parm.set(value)
-                    parameters_set.append(param_name)
-                else:
-                    # Try as tuple parameter
-                    parm_tuple = mat_node.parmTuple(param_name)
-                    if parm_tuple and isinstance(value, (list, tuple)):
-                        parm_tuple.set(value)
-                        parameters_set.append(param_name)
-                    else:
-                        logger.warning(
-                            f"Parameter '{param_name}' not found on material {mat_node.path()}"
-                        )
-            except Exception as e:
-                logger.warning(f"Failed to set parameter '{param_name}': {e}")
+    writes = write_all(mat_node, parameters or {})
 
     return {
-        "status": "success",
+        **writes.fields(),
         "material_path": mat_node.path(),
         "material_name": mat_node.name(),
         "material_type": material_type,
-        "parameters_set": parameters_set,
     }
 
 
@@ -147,11 +128,12 @@ def assign_material(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a Material SOP write failed) or "error"
         - geometry_path: Path to the geometry node
         - material_path: Path to the assigned material
         - material_sop_path: Path to the Material SOP that was created/modified
         - method: "material_sop" or "shop_materialpath"
+        - updated / failed: each Material SOP write, as {name, value} / {name, reason}
 
     Examples:
         assign_material("/obj/geo1", "/mat/red_metal")
@@ -181,15 +163,18 @@ def assign_material(
         return {"status": "error", "message": f"Material not found: {material_path}"}
 
     # Method 1: Try setting shop_materialpath on the OBJ node directly
-    mat_parm = geo_node.parm("shop_materialpath")
-    if mat_parm and not group:
-        mat_parm.set(material_path)
-        return {
-            "status": "success",
-            "geometry_path": geometry_path,
-            "material_path": material_path,
-            "method": "shop_materialpath",
-        }
+    if not group:
+        try:
+            resolve(geo_node, "shop_materialpath")
+        except ParmNotFound:
+            pass
+        else:
+            return {
+                **write_all(geo_node, {"shop_materialpath": material_path}).fields(),
+                "geometry_path": geometry_path,
+                "material_path": material_path,
+                "method": "shop_materialpath",
+            }
 
     # Method 2: Create/update Material SOP inside the geometry
     # Find the display node to connect to
@@ -220,24 +205,13 @@ def assign_material(
         mat_sop.setDisplayFlag(True)
         mat_sop.setRenderFlag(True)
 
-    # Set material path
-    mat_path_parm = mat_sop.parm("shop_materialpath1")
-    if mat_path_parm:
-        mat_path_parm.set(material_path)
-    else:
-        return {
-            "status": "error",
-            "message": "Cannot find shop_materialpath1 parameter on Material SOP",
-        }
-
-    # Set group if provided
+    values = {"shop_materialpath1": material_path}
     if group:
-        group_parm = mat_sop.parm("group1")
-        if group_parm:
-            group_parm.set(group)
-
+        values["group1"] = group
+    # [LAW:no-silent-failure] the SOP exists and is wired whatever the writes
+    # did, so the answer names it and reports each write like every batch tool.
     return {
-        "status": "success",
+        **write_all(mat_sop, values).fields(),
         "geometry_path": geometry_path,
         "material_path": material_path,
         "material_sop_path": mat_sop.path(),
@@ -335,36 +309,13 @@ def get_material_info(
         "emission_color",
     ]
 
-    textures = []
-
-    for parm_name in common_params:
-        try:
-            parm = mat_node.parm(parm_name)
-            if parm:
-                value = parm.eval()
-                result["parameters"][parm_name] = value
-                # Check if it's a texture path
-                if (
-                    isinstance(value, str)
-                    and value
-                    and any(
-                        ext in value.lower()
-                        for ext in [".jpg", ".png", ".exr", ".hdr", ".tif", ".tex"]
-                    )
-                ):
-                    textures.append({"parameter": parm_name, "path": value})
-            else:
-                # Try as tuple
-                parm_tuple = mat_node.parmTuple(parm_name)
-                if parm_tuple:
-                    value = parm_tuple.eval()
-                    result["parameters"][parm_name] = (
-                        list(value) if hasattr(value, "__iter__") else value
-                    )
-        except Exception:
-            pass
-
-    result["textures"] = textures
+    result["parameters"] = read_present(hou, mat_node, common_params)
+    result["textures"] = [
+        {"parameter": parm_name, "path": value}
+        for parm_name, value in result["parameters"].items()
+        if isinstance(value, str)
+        and any(ext in value.lower() for ext in [".jpg", ".png", ".exr", ".hdr", ".tif", ".tex"])
+    ]
     result["parameter_count"] = len(result["parameters"])
 
     return _add_response_metadata(result)

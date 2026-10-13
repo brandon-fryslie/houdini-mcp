@@ -16,7 +16,6 @@ from typing import Any, Literal, get_args
 
 from ._common import (
     _add_response_metadata,
-    _json_safe_hou_value,
     ensure_connected,
     handle_connection_errors,
     join_warnings,
@@ -26,6 +25,7 @@ from ._common import (
 )
 from .cache import node_type_cache
 from .connections import input_connections, input_paths
+from .parms import evaluated
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -179,15 +179,10 @@ def _standard_record(node: Any) -> dict[str, Any]:
 
 def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
     """Evaluated parameter values, at most ``max_params`` of them."""
-    params: dict[str, Any] = {}
-    for i, parm in enumerate(node.parms()):
-        if i >= max_params:
-            params["_truncated"] = True
-            break
-        try:
-            params[parm.name()] = _json_safe_hou_value(hou, parm.eval())
-        except Exception:
-            params[parm.name()] = "<unable to evaluate>"
+    parms = node.parms()
+    params = dict(evaluated(hou, parms[:max_params]))
+    if len(parms) > max_params:
+        params["_truncated"] = True
     return params
 
 

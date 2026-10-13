@@ -12,11 +12,11 @@ import logging
 from typing import Any
 
 from ._common import (
-    _json_safe_hou_value,
     ensure_connected,
     handle_connection_errors,
 )
 from .cache import invalidate_all_caches
+from .parms import evaluated
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -146,13 +146,7 @@ def serialize_scene(
         }
 
         if include_params:
-            params: dict[str, Any] = {}
-            for parm in node.parms():
-                try:
-                    params[parm.name()] = _json_safe_hou_value(hou, parm.eval())
-                except Exception:
-                    params[parm.name()] = "<unevaluable>"
-            result["parameters"] = params
+            result["parameters"] = dict(evaluated(hou, node.parms()))
 
         result["children"] = [node_to_dict_recursive(child, depth + 1) for child in node.children()]
 

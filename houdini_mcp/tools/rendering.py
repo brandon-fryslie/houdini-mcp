@@ -18,6 +18,7 @@ from ._common import (
     handle_connection_errors,
     validate_resolution,
 )
+from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
 
@@ -766,15 +767,13 @@ def list_render_nodes(
             "bypassed": node.isBypassed() if hasattr(node, "isBypassed") else False,
         }
 
-        # Get camera path
-        camera_parm = node.parm("camera")
-        if camera_parm:
-            node_info["camera"] = camera_parm.eval()
-
-        # Get output path (different parameter names for different ROPs)
-        output_parm = node.parm("picture") or node.parm("vm_picture")
-        if output_parm:
-            node_info["output"] = output_parm.eval()
+        # Output path lives under a different name per ROP type
+        values = read_present(hou, node, ["camera", "picture", "vm_picture"])
+        if "camera" in values:
+            node_info["camera"] = values["camera"]
+        outputs = [values[name] for name in ("picture", "vm_picture") if name in values]
+        if outputs:
+            node_info["output"] = outputs[0]
 
         render_nodes.append(node_info)
 
@@ -822,25 +821,8 @@ def get_render_settings(
     # Get the schema for this ROP type
     schema = RENDER_SETTINGS_SCHEMA.get(node_type, {})
 
-    # Read current values for known settings
-    settings_dict = {}
-    for parm_name in schema:
-        parm = node.parm(parm_name)
-        if parm:
-            try:
-                settings_dict[parm_name] = parm.eval()
-            except Exception:
-                settings_dict[parm_name] = None
-
-    # Also get some common settings not in schema
-    common_parms = ["trange", "f1", "f2", "f3"]  # Frame range
-    for parm_name in common_parms:
-        parm = node.parm(parm_name)
-        if parm:
-            try:
-                settings_dict[parm_name] = parm.eval()
-            except Exception:
-                pass
+    # Known settings for this ROP type, plus the frame range every ROP has
+    settings_dict = read_present(hou, node, [*schema, "trange", "f1", "f2", "f3"])
 
     return {
         "status": "success",
@@ -867,10 +849,10 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a parameter failed) or "error"
         - rop_path: Path to the ROP
-        - updated: List of parameters that were updated
-        - failed: List of parameters that failed to update
+        - updated: The parameters that were written, as {name, value}
+        - failed: The parameters that were not, as {name, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -882,27 +864,7 @@ def set_render_settings(
     if node is None:
         return {"status": "error", "message": f"ROP not found: {rop_path}"}
 
-    updated = []
-    failed = []
-
-    for parm_name, value in settings.items():
-        parm = node.parm(parm_name)
-        if parm is None:
-            failed.append({"name": parm_name, "reason": "Parameter not found"})
-            continue
-
-        try:
-            parm.set(value)
-            updated.append({"name": parm_name, "value": value})
-        except Exception as e:
-            failed.append({"name": parm_name, "reason": str(e)})
-
-    return {
-        "status": "success" if not failed else "partial",
-        "rop_path": rop_path,
-        "updated": updated,
-        "failed": failed,
-    }
+    return {**write_all(node, settings).fields(), "rop_path": rop_path}
 
 
 @handle_connection_errors("create_render_node")
@@ -926,10 +888,11 @@ def create_render_node(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
+        - status: "success", "partial" (a setting failed) or "error"
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
-        - settings_applied: List of settings that were applied
+        - updated: The settings that were applied, as {name, value}
+        - failed: The settings that were not, as {name, reason}
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})
@@ -951,23 +914,9 @@ def create_render_node(
             "message": f"Failed to create ROP of type '{rop_type}'",
         }
 
-    settings_applied = []
-
-    # Apply settings if provided
-    if settings:
-        for parm_name, value in settings.items():
-            parm = node.parm(parm_name)
-            if parm:
-                try:
-                    parm.set(value)
-                    settings_applied.append({"name": parm_name, "value": value})
-                except Exception as e:
-                    logger.warning(f"Failed to set {parm_name}: {e}")
-
     return {
-        "status": "success",
+        **write_all(node, settings or {}).fields(),
         "rop_path": node.path(),
         "rop_name": node.name(),
         "rop_type": rop_type,
-        "settings_applied": settings_applied,
     }
