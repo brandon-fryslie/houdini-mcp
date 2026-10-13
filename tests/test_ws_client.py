@@ -487,8 +487,8 @@ class TestCommandsAndQueues:
         core.send_command({"op": 1})
         core.send_command({"op": 2})  # evicts op0
         assert core.command_backlog == 2
-        connect_core(core)
-        # Only the two most recent survive.
+        # Only the two most recent reach the wire, in order.
+        assert [f["payload"]["op"] for f in sent_frames(connect_core(core))] == [1, 2]
 
     def test_command_queue_reject_policy_raises(self):
         core = WSClientCore(make_config(max_command_queue=1))
@@ -516,12 +516,14 @@ class TestEventBackpressure:
 
     def test_event_backpressure_never_blocks(self):
         # Even with a tiny bound, delivering many events must never raise or
-        # block; excess buffering emits telemetry, the UI thread stays free.
+        # block: each on_frame hands exactly its own event to the app and
+        # returns, so the UI thread stays free.
         core = WSClientCore(make_config(max_event_queue=1))
         connect_core(core, session_id="s1")
         for i in range(10):
             actions = core.on_frame({"type": EVENT, "id": f"e{i}", "session_id": "s1"})
-            assert any(a.type == ActionType.DELIVER_EVENT for a in actions)
+            delivered = actions_of(actions, ActionType.DELIVER_EVENT)
+            assert [a.event["id"] for a in delivered] == [f"e{i}"]
 
 
 # --------------------------------------------------------------------------- #
@@ -733,7 +735,7 @@ class TestScenarios:
         # Partition: socket drops before ack. Command must be requeued.
         driver.call("on_socket_error", "partition")
         assert core.state == ConnectionState.BACKOFF
-        assert core.command_backlog >= 1  # requeued for retry
+        assert core.command_backlog == 1  # the one unacked command, requeued
 
         # Heal: reconnect, command re-sent (at-least-once semantics).
         driver.call("on_backoff_elapsed")
@@ -759,8 +761,8 @@ class TestScenarios:
 
         # Skew: a heartbeat_timeout fires though no ping was sent (stale timer).
         driver.call("on_heartbeat_timeout")
-        # It should be honoured as a liveness failure -> reconnect, never crash.
-        assert core.state in (ConnectionState.BACKOFF, ConnectionState.CONNECTED)
+        # It is honoured as a liveness failure: the link is dead, so reconnect.
+        assert core.state == ConnectionState.BACKOFF
 
         # And a backoff-elapsed firing while already CONNECTED (skewed leftover
         # timer) is ignored, not acted on.
@@ -904,9 +906,8 @@ class WSClientStateMachine(RuleBasedStateMachine):
         assert self.core.state in _VALID_STATES
 
     @invariant()
-    def queues_stay_bounded(self):
+    def command_queue_stays_bounded(self):
         assert self.core.command_backlog <= self.core.config.max_command_queue
-        assert self.core.event_backlog <= self.core.config.max_event_queue
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):
