@@ -260,7 +260,9 @@ class MockHouNode:
         return mock_parms
 
     def parm(self, name: str) -> MagicMock | None:
-        if name not in self._params:
+        # As in Houdini: a vector lives under parmTuple(); parm() does not answer
+        # to its name, only to its components.
+        if name not in self._params or isinstance(self._params[name], (list, tuple)):
             return None
 
         # Return stable mock objects so tests can patch attributes.

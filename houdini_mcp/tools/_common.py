@@ -23,6 +23,7 @@ from ..connection import (
     transport_failure,
 )
 from .hscript import HscriptBatch
+from .parms import evaluated
 from .transactions import TOOL_POLICIES
 from .workers import WORKERS, WorkerStillRunning
 
@@ -58,7 +59,6 @@ __all__ = [
     "apply_response_cap",
     "DEFAULT_RESPONSE_CAP_BYTES",
     # Serialization utilities
-    "_json_safe_hou_value",
     "_node_to_dict",
     "_serialize_scene_state",
     "_get_scene_diff",
@@ -400,116 +400,6 @@ def _add_response_metadata(
     return apply_response_cap(result, max_bytes=max_bytes) if apply_cap else result
 
 
-def _json_safe_hou_value(
-    hou: Any, value: Any, *, max_depth: int = 10, _seen: set[int] | None = None
-) -> Any:
-    """Convert Houdini (hou) values into JSON-serializable structures."""
-    if max_depth <= 0:
-        return str(value)
-
-    if _seen is None:
-        _seen = set()
-
-    # Prevent infinite recursion
-    try:
-        value_id = id(value)
-        if value_id in _seen:
-            return "<recursion>"
-        _seen.add(value_id)
-    except Exception:
-        pass
-
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-
-    if isinstance(value, bytes):
-        try:
-            return value.decode("utf-8")
-        except Exception:
-            return value.decode("utf-8", errors="replace")
-
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe_hou_value(hou, v, max_depth=max_depth - 1, _seen=_seen) for v in value]
-
-    if isinstance(value, dict):
-        return {
-            str(k): _json_safe_hou_value(hou, v, max_depth=max_depth - 1, _seen=_seen)
-            for k, v in value.items()
-        }
-
-    # Common hou objects (Node, Parm, etc.)
-    path_attr = getattr(value, "path", None)
-    if callable(path_attr):
-        try:
-            path = path_attr()
-            if isinstance(path, str):
-                return path
-        except Exception:
-            pass
-
-    # Ramp parameters are a common source of non-serializable values.
-    try:
-        if hasattr(hou, "Ramp") and isinstance(value, hou.Ramp):
-            try:
-                basis = list(value.basis())
-            except Exception:
-                basis = []
-
-            try:
-                keys = list(value.keys())
-            except Exception:
-                keys = []
-
-            try:
-                values = list(value.values())
-            except Exception:
-                values = []
-
-            return {
-                "type": "hou.Ramp",
-                "basis": [
-                    _json_safe_hou_value(hou, b, max_depth=max_depth - 1, _seen=_seen)
-                    for b in basis
-                ],
-                "keys": [
-                    _json_safe_hou_value(hou, k, max_depth=max_depth - 1, _seen=_seen) for k in keys
-                ],
-                "values": [
-                    _json_safe_hou_value(hou, v, max_depth=max_depth - 1, _seen=_seen)
-                    for v in values
-                ],
-            }
-    except Exception:
-        pass
-
-    try:
-        module_name = type(value).__module__
-        type_name = type(value).__name__
-
-        if module_name.startswith("hou"):
-            if type_name in {"Vector2", "Vector3", "Vector4", "Color"}:
-                try:
-                    return [float(x) for x in value]
-                except Exception:
-                    pass
-
-            if type_name == "EnumValue":
-                try:
-                    name = value.name()
-                    if isinstance(name, str):
-                        return name
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    # Fallback: represent as string instead of throwing
-    try:
-        return str(value)
-    except Exception:
-        return "<unserializable>"
-
-
 class ExecutionTimeoutError(Exception):
     """Raised when code execution exceeds the timeout."""
 
@@ -542,13 +432,10 @@ def _node_to_dict(
 
     if include_params:
         params: dict[str, Any] = {}
-        for i, parm in enumerate(node.parms()):
+        for i, (name, value) in enumerate(evaluated(hou, node)):
             if i >= max_params:
                 break
-            try:
-                params[parm.name()] = _json_safe_hou_value(hou, parm.eval())
-            except Exception:
-                params[parm.name()] = "<unevaluable>"
+            params[name] = value
         result["parameters"] = params
 
     # Recursively serialize children

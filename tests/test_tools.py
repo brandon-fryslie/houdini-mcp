@@ -2686,7 +2686,8 @@ class TestMaterialTools:
         assert result["status"] == "success"
         assert "red_metal" in result["material_path"]
         # Side effects: parameters actually landed on the created node.
-        assert sorted(result["parameters_set"]) == ["basecolor", "metallic"]
+        assert sorted(u["name"] for u in result["updated"]) == ["basecolor", "metallic"]
+        assert result["failed"] == []
         created = mat_context.children()[-1]
         assert created.name() == "red_metal"
         assert created._params["metallic"] == 1.0

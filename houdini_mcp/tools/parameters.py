@@ -12,6 +12,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
 )
+from .parms import ParmNotFound, read_present, resolve, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.parameters")
 
@@ -37,25 +38,9 @@ def set_parameter(
     if node is None:
         return {"status": "error", "message": f"Node not found: {node_path}"}
 
-    parm = node.parm(param_name)
-    if parm is None:
-        # Try parmTuple for vector parameters
-        parm_tuple = node.parmTuple(param_name)
-        if parm_tuple is None:
-            return {
-                "status": "error",
-                "message": f"Parameter not found: {param_name} on {node_path}",
-            }
-        # Set tuple value
-        if isinstance(value, (list, tuple)):
-            parm_tuple.set(value)
-        else:
-            return {
-                "status": "error",
-                "message": f"Parameter {param_name} is a tuple, provide a list/tuple value",
-            }
-    else:
-        parm.set(value)
+    writes = write_all(node, {param_name: value})
+    if writes.failed:
+        return {"status": "error", "message": writes.failed[0]["reason"]}
 
     return {
         "status": "success",
@@ -134,7 +119,7 @@ def get_parameter_schema(
         }
     """
     # Import helper to flatten parameter templates
-    from ._common import _flatten_parm_templates, _json_safe_hou_value
+    from ._common import _flatten_parm_templates
 
     hou = ensure_connected(host, port)
 
@@ -146,38 +131,10 @@ def get_parameter_schema(
 
     # Get parameter templates - either specific one or all
     if parm_name is not None:
-        # Get specific parameter template.
-        #
-        # Unit tests use MockHouNode which stores values in `_params`. For tuple-valued
-        # entries, we need to prefer parmTuple(). For MagicMock-based nodes (no `_params`),
-        # prefer parm() to avoid placeholder parmTuple() mocks.
-        prefers_tuple = False
         try:
-            if hasattr(node, "_params") and isinstance(node._params.get(parm_name), (list, tuple)):
-                prefers_tuple = True
-        except Exception:
-            prefers_tuple = False
-
-        if prefers_tuple:
-            parm_tuple = node.parmTuple(parm_name)
-            if parm_tuple is None:
-                return {
-                    "status": "error",
-                    "message": f"Parameter not found: {parm_name} on node {node_path}",
-                }
-            parm_template = parm_tuple.parmTemplate()
-        else:
-            parm = node.parm(parm_name)
-            if parm is not None:
-                parm_template = parm.parmTemplate()
-            else:
-                parm_tuple = node.parmTuple(parm_name)
-                if parm_tuple is None:
-                    return {
-                        "status": "error",
-                        "message": f"Parameter not found: {parm_name} on node {node_path}",
-                    }
-                parm_template = parm_tuple.parmTemplate()
+            parm_template = resolve(node, parm_name).template()
+        except ParmNotFound as e:
+            return {"status": "error", "message": str(e)}
 
         # When we only requested one parameter, we expect to include it even if
         # its template is folder-like (rare but possible).
@@ -200,7 +157,7 @@ def get_parameter_schema(
             break
 
         try:
-            param_info = _extract_parameter_info(hou, node, parm_template, _json_safe_hou_value)
+            param_info = _extract_parameter_info(hou, node, parm_template)
             if param_info is not None:
                 parameters.append(param_info)
         except Exception as e:
@@ -218,9 +175,7 @@ def get_parameter_schema(
     return _add_response_metadata(result)
 
 
-def _extract_parameter_info(
-    hou: Any, node: Any, parm_template: Any, json_safe_fn: Any
-) -> dict[str, Any] | None:
+def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any] | None:
     """
     Extract parameter information from a parameter template.
 
@@ -267,23 +222,7 @@ def _extract_parameter_info(
 
     is_tuple = num_components > 1
 
-    # Get current value
-    try:
-        if is_tuple:
-            parm_tuple = node.parmTuple(param_name)
-            if parm_tuple is not None:
-                param_info["current_value"] = json_safe_fn(hou, list(parm_tuple.eval()))
-            else:
-                param_info["current_value"] = None
-        else:
-            parm = node.parm(param_name)
-            if parm is not None:
-                param_info["current_value"] = json_safe_fn(hou, parm.eval())
-            else:
-                param_info["current_value"] = None
-    except Exception as e:
-        logger.debug(f"Could not get current value for {param_name}: {e}")
-        param_info["current_value"] = None
+    param_info["current_value"] = read_present(hou, node, [param_name]).get(param_name)
 
     # Map Houdini parameter type to friendly string
     type_str = _map_parm_type_to_string(hou, parm_type, is_tuple)

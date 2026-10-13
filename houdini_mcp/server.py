@@ -678,7 +678,8 @@ def create_render_node(
         - status: "success" or "error"
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
-        - settings_applied: List of settings that were applied
+        - updated: The settings that were applied, as {name, value}
+        - failed: The settings that were not, as {name, reason}; status "partial" when any
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})
@@ -1078,7 +1079,8 @@ def create_material(
             - metallic: float metallic (0-1)
 
     Returns:
-        Dict with material_path, material_name, material_type, parameters_set
+        Dict with material_path, material_name, material_type, updated and failed
+        (status "partial" when any parameter failed)
 
     Examples:
         create_material()  # Create default principled shader
