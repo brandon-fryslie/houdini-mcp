@@ -92,7 +92,6 @@ def make_config(**overrides) -> WSConfig:
         "backoff_multiplier": 2.0,
         "jitter_ratio": 0.2,
         "max_command_queue": 4,
-        "max_event_queue": 4,
     }
     base.update(overrides)
     return WSConfig(**base)
@@ -503,7 +502,7 @@ class TestCommandsAndQueues:
         ack = AckFrame("s1", rid, {})
         actions = core.on_frame(ack)
         assert rid not in core.pending_request_ids
-        assert outcomes_of(actions) == [Acked(rid, ack)]
+        assert outcomes_of(actions) == [Acked(ack)]
 
     def test_command_queue_full_rejects_without_allocating_an_id(self):
         core = WSClientCore(make_config(max_command_queue=2))
@@ -973,8 +972,16 @@ class TestTerminalOutcomes:
         connect_core(core, session_id="s1")
         buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": {"n": 1}}
         (outcome,) = outcomes_of(core.on_frame(parse_frame(buffer)))
-        buffer["result"] = {"n": 2}
+        buffer["result"]["n"] = 2
         assert isinstance(outcome, Acked) and outcome.ack.result == {"n": 1}
+
+    def test_delivered_event_does_not_alias_the_drivers_frame(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        buffer = {"type": EVENT, "session_id": "s1", "id": "e1", "payload": {"n": 1}}
+        (delivered,) = [a for a in core.on_frame(parse_frame(buffer)) if a.event]
+        buffer["payload"]["n"] = 2
+        assert delivered.event is not None and delivered.event.payload == {"n": 1}
 
 
 # --------------------------------------------------------------------------- #
@@ -1166,9 +1173,7 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
         super().__init__()
-        self.core = WSClientCore(
-            make_config(max_command_queue=8, max_event_queue=8), rng=random.Random(0)
-        )
+        self.core = WSClientCore(make_config(max_command_queue=8), rng=random.Random(0))
         self._sent_secret = "super-secret-key"
         # Every id send_command returned, and every id an outcome was delivered for.
         self.allocated: list[int] = []
@@ -1283,12 +1288,6 @@ class WSClientStateMachine(RuleBasedStateMachine):
     @invariant()
     def command_queue_stays_bounded(self):
         assert self.core.command_backlog <= self.core.config.max_command_queue
-
-    @invariant()
-    def no_event_is_retained_past_on_frame(self):
-        # Each event is handed to the app inside the on_frame that received it;
-        # a retained event is a leak in a long-lived Houdini session.
-        assert self.core.event_backlog == 0
 
     @invariant()
     def backoff_never_exceeds_ceiling(self):

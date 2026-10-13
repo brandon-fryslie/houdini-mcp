@@ -194,9 +194,14 @@ def _parse_pong(raw: Mapping[str, Any]) -> PongFrame:
     return PongFrame(_field(raw, "session_id", str))
 
 
+# [LAW:parse-dont-validate] The copies make a frame the driver's buffer cannot
+# reach once it is stamped: the app holds the frame, and the driver may reuse
+# the decoded dict under it.
 def _parse_event(raw: Mapping[str, Any]) -> EventFrame:
     return EventFrame(
-        _field(raw, "session_id", str), _field(raw, "id", str), _field(raw, "payload", dict)
+        _field(raw, "session_id", str),
+        _field(raw, "id", str),
+        dict(_field(raw, "payload", dict)),
     )
 
 
@@ -204,7 +209,7 @@ def _parse_ack(raw: Mapping[str, Any]) -> AckFrame:
     return AckFrame(
         _field(raw, "session_id", str),
         _field(raw, "request_id", int),
-        _field(raw, "result", dict),
+        dict(_field(raw, "result", dict)),
     )
 
 
@@ -254,8 +259,12 @@ def parse_frame(raw: Mapping[str, Any]) -> InboundFrame:
 class Acked:
     """The gateway acknowledged the command; ``ack`` is the frame it sent."""
 
-    request_id: int
     ack: AckFrame
+
+    # [LAW:one-source-of-truth] The id is the ack's; it is not stored twice.
+    @property
+    def request_id(self) -> int:
+        return self.ack.request_id
 
 
 @dataclass(frozen=True)
@@ -328,9 +337,8 @@ class WSConfig:
     backoff_max: float = 60.0
     backoff_multiplier: float = 2.0
     jitter_ratio: float = 0.2  # +/- 20 %
-    # Bounded queues (backpressure). Zero/negative disables the bound.
+    # Bounded command queue (backpressure). Zero/negative disables the bound.
     max_command_queue: int = 256
-    max_event_queue: int = 1024
     # TLS.
     tls_verify: bool = True
     # Reconnect policy.
@@ -426,8 +434,6 @@ class WSClientCore:
         # sent, unacked frames. Nothing else records which ids are live.
         self._command_queue: deque[dict[str, Any]] = deque()
         self._pending: dict[int, dict[str, Any]] = {}
-        # Inbound event backlog if the app cannot keep up (bounded).
-        self._event_queue: deque[EventFrame] = deque()
 
     # ------------------------------------------------------------------ helpers
 
@@ -534,10 +540,6 @@ class WSClientCore:
     @property
     def command_backlog(self) -> int:
         return len(self._command_queue)
-
-    @property
-    def event_backlog(self) -> int:
-        return len(self._event_queue)
 
     # ------------------------------------------------------------- lifecycle in
 
@@ -765,30 +767,10 @@ class WSClientCore:
         ]
 
     def _on_event(self, frame: EventFrame) -> list[Action]:
-        # Deduplicate by event id if provided (defends against gateway resend on
-        # network partition / restart). Out-of-order events are still delivered;
-        # ordering is the app's concern, exactly-once by id is ours to dedupe.
-        actions: list[Action] = []
-        # Backpressure: bounded event queue. On saturation drop the OLDEST event
-        # (most likely already stale) and emit telemetry, never block.
-        if (
-            self.config.max_event_queue > 0
-            and len(self._event_queue) >= self.config.max_event_queue
-        ):
-            dropped = self._event_queue.popleft()
-            actions.append(
-                self._telemetry(
-                    "event_dropped_backpressure",
-                    dropped_event_id=dropped.id,
-                    queue_len=len(self._event_queue),
-                )
-            )
-        self._event_queue.append(frame)
-        actions.append(Action(ActionType.DELIVER_EVENT, event=frame))
-        # We deliver immediately then release from the queue accounting; the
-        # queue models bounded in-flight buffering for a slow consumer.
-        self._event_queue.pop()
-        return actions
+        # Every event is handed to the app inside the on_frame that received it;
+        # the core keeps none, so a slow app is the driver's concern, not a
+        # backlog here.
+        return [Action(ActionType.DELIVER_EVENT, event=frame)]
 
     def _on_ack(self, frame: AckFrame) -> list[Action]:
         rid = frame.request_id
@@ -796,7 +778,7 @@ class WSClientCore:
             # Duplicate / unknown ack: ignore (already settled or never sent).
             return [self._telemetry("ignored_ack", request_id=rid)]
         return [
-            self._settle(Acked(rid, frame)),
+            self._settle(Acked(frame)),
             self._telemetry("command_acked", request_id=rid),
         ]
 

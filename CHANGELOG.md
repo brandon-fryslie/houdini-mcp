@@ -34,9 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame is ignored with an `ignored_frame` record. An event can no longer be delivered
   during BACKOFF or HANDSHAKING, and omitting `session_id` no longer bypasses
   stale-session rejection. `Action.event` carries the `EventFrame`, `Acked.ack` the
-  `AckFrame` (it was `Acked.frame`, a dict). The `ignored_welcome`, `ignored_pong` and
-  `unknown_frame` telemetry records are gone, and so is `StaleSessionError`, which
-  nothing ever raised.
+  `AckFrame` (it was `Acked.frame`, a dict), and `Acked.request_id` reads from it. The
+  parser copies an event's `payload` and an ack's `result`, so the frame the app holds
+  does not change when the driver reuses its decoded dict. The `ignored_welcome`,
+  `ignored_pong` and `unknown_frame` telemetry records are gone, and so is
+  `StaleSessionError`, which nothing ever raised. `WSConfig.max_event_queue`,
+  `WSClientCore.event_backlog` and the `event_dropped_backpressure` record are gone:
+  every event is delivered inside the `on_frame` that received it, so the queue they
+  described never held one.
 - **Every ws_client request id reaches exactly one terminal outcome**
   (houdini-laws-etg.jyr): `WSClientCore.send_command` returns an id that is live until
   the core emits one `DELIVER_OUTCOME` action for it, carrying `Acked` (with the ack
