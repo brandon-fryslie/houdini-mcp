@@ -12,7 +12,8 @@ state transitions and emitted actions, covering:
 * every request id reaches exactly one terminal outcome (acked, cancelled, failed)
 * TLS verification config invariants
 * reconnect exponential backoff with capped, deterministic seeded jitter
-* stale-session rejection
+* every inbound frame is parsed once into a typed frame with its required fields
+* only the frames a state admits reach a handler; stale-session rejection
 * duplicate / out-of-order frames
 * gateway restart / network partition / clock skew
 * secret redaction (api_key never appears in telemetry)
@@ -52,17 +53,24 @@ from houdini_mcp_plugin.ws_client import (  # noqa: E402
     PONG,
     WELCOME,
     Acked,
+    AckFrame,
     Action,
     ActionType,
     Cancelled,
     ClientClosedError,
     CloseReason,
     ConnectionState,
+    ErrorFrame,
+    EventFrame,
     Failed,
+    FrameParseError,
+    PongFrame,
     QueueFullError,
     RequestOutcome,
+    WelcomeFrame,
     WSClientCore,
     WSConfig,
+    parse_frame,
     redact,
 )
 
@@ -122,9 +130,7 @@ def connect_core(core: WSClientCore, *, session_id="s1", capabilities=("events",
     """Drive a core from DISCONNECTED to CONNECTED deterministically."""
     core.start()
     core.on_socket_open()
-    return core.on_frame(
-        {"type": WELCOME, "session_id": session_id, "capabilities": list(capabilities)}
-    )
+    return core.on_frame(WelcomeFrame(session_id, tuple(capabilities)))
 
 
 class Driver:
@@ -139,7 +145,7 @@ class Driver:
         self.core = core
         self.sent: list[dict] = []
         self.telemetry: list[dict] = []
-        self.events: list[dict] = []
+        self.events: list[EventFrame] = []
         self.outcomes: list[RequestOutcome] = []
         self.timers: dict[str, float] = {}
         self.open_count = 0
@@ -258,9 +264,7 @@ class TestLifecycleTransitions:
         core = WSClientCore(make_config())
         core.start()
         core.on_socket_open()
-        actions = core.on_frame(
-            {"type": WELCOME, "session_id": "sess-42", "capabilities": ["events"]}
-        )
+        actions = core.on_frame(WelcomeFrame("sess-42", ("events",)))
         assert core.state == ConnectionState.CONNECTED
         assert core.session_id == "sess-42"
         assert core.negotiated_capabilities == ("events",)
@@ -274,7 +278,7 @@ class TestLifecycleTransitions:
         assert core.state == ConnectionState.CONNECTING
         core.on_socket_open()
         assert core.state == ConnectionState.HANDSHAKING
-        core.on_frame({"type": WELCOME, "session_id": "s"})
+        core.on_frame(WelcomeFrame("s", ()))
         assert core.state == ConnectionState.CONNECTED
 
     def test_stop_from_connected_sends_bye_and_closes(self):
@@ -398,7 +402,7 @@ class TestBackoffAndJitter:
         assert core.backoff_attempt >= 2
         core.on_backoff_elapsed()
         core.on_socket_open()
-        core.on_frame({"type": WELCOME, "session_id": "s"})
+        core.on_frame(WelcomeFrame("s", ()))
         assert core.backoff_attempt == 0  # reset after a healthy handshake
 
     def test_reconnect_attempt_budget_closes_after_exhaustion(self):
@@ -435,7 +439,7 @@ class TestHeartbeat:
         core = WSClientCore(make_config())
         connect_core(core, session_id="hb")
         core.on_heartbeat_tick()
-        actions = core.on_frame({"type": PONG, "session_id": "hb"})
+        actions = core.on_frame(PongFrame("hb"))
         cancelled = [a.timer for a in actions if a.type == ActionType.CANCEL_TIMER]
         assert "heartbeat_timeout" in cancelled
         assert "heartbeat" in timers_scheduled(actions)
@@ -496,7 +500,7 @@ class TestCommandsAndQueues:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        ack = {"type": ACK, "request_id": rid, "session_id": "s1"}
+        ack = AckFrame("s1", rid, {})
         actions = core.on_frame(ack)
         assert rid not in core.pending_request_ids
         assert outcomes_of(actions) == [Acked(rid, ack)]
@@ -546,10 +550,10 @@ class TestEventBackpressure:
     def test_events_delivered_to_app(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": EVENT, "id": "e1", "session_id": "s1"})
+        actions = core.on_frame(EventFrame("s1", "e1", {}))
         delivered = [a for a in actions if a.type == ActionType.DELIVER_EVENT]
         assert len(delivered) == 1
-        assert delivered[0].event["id"] == "e1"
+        assert delivered[0].event.id == "e1"
 
 
 # --------------------------------------------------------------------------- #
@@ -596,7 +600,7 @@ class TestCancellation:
         ]
         assert rid not in core.pending_request_ids
         # A late ack for the cancelled command cannot produce a second outcome.
-        late = core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
+        late = core.on_frame(AckFrame("s1", rid, {}))
         assert outcomes_of(late) == []
         assert "ignored_ack" in telemetry_events(late)
 
@@ -636,7 +640,7 @@ class TestStaleSessionAndOrdering:
     def test_stale_session_event_rejected(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="current")
-        actions = core.on_frame({"type": EVENT, "id": "e", "session_id": "OLD"})
+        actions = core.on_frame(EventFrame("OLD", "e", {}))
         assert not any(a.type == ActionType.DELIVER_EVENT for a in actions)
         assert "stale_session_rejected" in telemetry_events(actions)
 
@@ -644,52 +648,166 @@ class TestStaleSessionAndOrdering:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="current")
-        actions = core.on_frame({"type": ACK, "request_id": rid, "session_id": "OLD"})
+        actions = core.on_frame(AckFrame("OLD", rid, {}))
         assert outcomes_of(actions) == []
         assert rid in core.pending_request_ids  # not terminated by stale ack
 
-    def test_session_agnostic_frame_accepted(self):
+    def test_error_without_a_session_id_is_stale_once_a_session_exists(self):
+        # Omitting the session id is not a way past the stale-session gate.
         core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
         connect_core(core, session_id="current")
-        actions = core.on_frame({"type": EVENT, "id": "e"})  # no session id
-        assert any(a.type == ActionType.DELIVER_EVENT for a in actions)
+        actions = core.on_frame(ErrorFrame("auth_failed", True, None))
+        assert core.state == ConnectionState.CONNECTED
+        assert outcomes_of(actions) == []
+        assert core.pending_request_ids == (rid,)
+        assert "stale_session_rejected" in telemetry_events(actions)
 
     def test_duplicate_welcome_ignored(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": WELCOME, "session_id": "s2"})
+        actions = core.on_frame(WelcomeFrame("s2", ()))
         assert core.state == ConnectionState.CONNECTED
         assert core.session_id == "s1"  # unchanged
-        assert "ignored_welcome" in telemetry_events(actions)
+        assert "ignored_frame" in telemetry_events(actions)
 
     def test_duplicate_ack_ignored(self):
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
-        actions = core.on_frame({"type": ACK, "request_id": rid, "session_id": "s1"})
+        core.on_frame(AckFrame("s1", rid, {}))
+        actions = core.on_frame(AckFrame("s1", rid, {}))
         assert "ignored_ack" in telemetry_events(actions)
 
     def test_out_of_order_pong_before_tick_ignored(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         # A pong arriving with no outstanding ping: harmless, just re-arms.
-        actions = core.on_frame({"type": PONG, "session_id": "s1"})
+        actions = core.on_frame(PongFrame("s1"))
         assert core.state == ConnectionState.CONNECTED
         assert "heartbeat" in timers_scheduled(actions)
-
-    def test_unknown_frame_type_ignored(self):
-        core = WSClientCore(make_config())
-        connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": "bogus"})
-        assert "unknown_frame" in telemetry_events(actions)
 
     def test_welcome_before_socket_open_ignored(self):
         # Out-of-order: a welcome cannot arrive before we even connect.
         core = WSClientCore(make_config())
-        actions = core.on_frame({"type": WELCOME, "session_id": "s"})
+        actions = core.on_frame(WelcomeFrame("s", ()))
         assert core.state == ConnectionState.DISCONNECTED
-        assert "ignored_welcome" in telemetry_events(actions)
+        assert "ignored_frame" in telemetry_events(actions)
+
+
+# --------------------------------------------------------------------------- #
+# The parsing boundary: a raw wire frame becomes a typed frame or fails loudly
+# --------------------------------------------------------------------------- #
+
+
+class TestFrameParsing:
+    def test_each_frame_type_parses_to_its_typed_frame(self):
+        assert parse_frame(
+            {"type": WELCOME, "session_id": "s1", "capabilities": ["events", "commands"]}
+        ) == WelcomeFrame("s1", ("events", "commands"))
+        assert parse_frame({"type": PONG, "session_id": "s1"}) == PongFrame("s1")
+        assert parse_frame(
+            {"type": EVENT, "session_id": "s1", "id": "e1", "payload": {"k": 1}}
+        ) == EventFrame("s1", "e1", {"k": 1})
+        assert parse_frame(
+            {"type": ACK, "session_id": "s1", "request_id": 7, "result": {"ok": True}}
+        ) == AckFrame("s1", 7, {"ok": True})
+        assert parse_frame(
+            {"type": ERROR, "code": "rate_limited", "fatal": False, "session_id": "s1"}
+        ) == ErrorFrame("rate_limited", False, "s1")
+
+    def test_error_before_a_session_has_no_session_id(self):
+        assert parse_frame({"type": ERROR, "code": "auth_failed", "fatal": True}) == ErrorFrame(
+            "auth_failed", True, None
+        )
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            ({}, "'type' is missing"),
+            ({"type": "bogus"}, "unknown frame type 'bogus'"),
+            ({"type": EVENT, "id": "e", "payload": {}}, "event frame: 'session_id' is missing"),
+            ({"type": WELCOME, "session_id": "s1"}, "welcome frame: 'capabilities' is missing"),
+            (
+                {"type": WELCOME, "session_id": "s1", "capabilities": ["events", 1]},
+                "welcome frame: 'capabilities' must be a list of str",
+            ),
+            (
+                {"type": ACK, "session_id": "s1", "request_id": "7", "result": {}},
+                "ack frame: 'request_id' must be int, got str",
+            ),
+            (
+                {"type": ACK, "session_id": "s1", "request_id": True, "result": {}},
+                "ack frame: 'request_id' must be int, got bool",
+            ),
+            ({"type": ERROR, "code": "x"}, "error frame: 'fatal' is missing"),
+            (
+                {"type": ERROR, "code": "x", "fatal": True, "session_id": 3},
+                "error frame: 'session_id' must be str, got int",
+            ),
+        ],
+    )
+    def test_malformed_frame_is_rejected_naming_the_field(self, raw, message):
+        with pytest.raises(FrameParseError, match=f"^{message}$"):
+            parse_frame(raw)
+
+
+# --------------------------------------------------------------------------- #
+# The state gate: a frame the current state does not admit never reaches a handler
+# --------------------------------------------------------------------------- #
+
+
+class TestStateGate:
+    @staticmethod
+    def _ignored(actions: list[Action], frame_type: str, state: ConnectionState) -> bool:
+        return telemetry_records(actions, "ignored_frame") == [
+            {"event": "ignored_frame", "state": state.value, "frame_type": frame_type}
+        ]
+
+    def test_event_during_handshake_is_not_delivered(self):
+        core = WSClientCore(make_config())
+        core.start()
+        core.on_socket_open()
+        actions = core.on_frame(EventFrame("s1", "early", {}))
+        assert not actions_of(actions, ActionType.DELIVER_EVENT)
+        assert self._ignored(actions, EVENT, ConnectionState.HANDSHAKING)
+
+    def test_event_during_backoff_is_not_delivered(self):
+        core = WSClientCore(make_config())
+        connect_core(core, session_id="s1")
+        core.on_socket_error("partition")
+        actions = core.on_frame(EventFrame("s1", "late", {}))
+        assert not actions_of(actions, ActionType.DELIVER_EVENT)
+        assert self._ignored(actions, EVENT, ConnectionState.BACKOFF)
+
+    def test_pong_during_handshake_does_not_arm_the_heartbeat(self):
+        core = WSClientCore(make_config())
+        core.start()
+        core.on_socket_open()
+        actions = core.on_frame(PongFrame("s1"))
+        assert timers_scheduled(actions) == []
+        assert self._ignored(actions, PONG, ConnectionState.HANDSHAKING)
+
+    def test_ack_during_handshake_settles_nothing(self):
+        core = WSClientCore(make_config())
+        rid = core.send_command({"op": "x"})
+        core.start()
+        core.on_socket_open()
+        actions = core.on_frame(AckFrame("s1", rid, {}))
+        assert outcomes_of(actions) == []
+        assert core.command_backlog == 1
+        assert self._ignored(actions, ACK, ConnectionState.HANDSHAKING)
+
+    def test_welcome_names_the_session_every_later_frame_must_match(self):
+        core = WSClientCore(make_config())
+        core.start()
+        core.on_socket_open()
+        core.on_frame(WelcomeFrame("assigned", ()))
+        assert core.session_id == "assigned"
+        assert actions_of(core.on_frame(EventFrame("assigned", "e", {})), ActionType.DELIVER_EVENT)
+        assert "stale_session_rejected" in telemetry_events(
+            core.on_frame(EventFrame("other", "e", {}))
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -701,7 +819,7 @@ class TestErrors:
     def test_fatal_error_closes_permanently(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        actions = core.on_frame(ErrorFrame("auth_failed", True, "s1"))
         assert core.state == ConnectionState.CLOSED
         assert "fatal_error" in telemetry_events(actions)
 
@@ -709,9 +827,7 @@ class TestErrors:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        actions = core.on_frame(
-            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "OLD"}
-        )
+        actions = core.on_frame(ErrorFrame("auth_failed", True, "OLD"))
         assert core.state == ConnectionState.CONNECTED
         assert outcomes_of(actions) == []
         assert core.pending_request_ids == (rid,)
@@ -721,7 +837,7 @@ class TestErrors:
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         core.stop()
-        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        actions = core.on_frame(ErrorFrame("auth_failed", True, "s1"))
         assert actions == [
             Action(
                 ActionType.TELEMETRY,
@@ -736,16 +852,14 @@ class TestErrors:
         rid = core.send_command({"op": "x"})
         core.start()
         core.on_socket_open()
-        actions = core.on_frame(
-            {"type": ERROR, "code": "auth_failed", "fatal": True, "session_id": "assigned"}
-        )
+        actions = core.on_frame(ErrorFrame("auth_failed", True, "assigned"))
         assert core.state == ConnectionState.CLOSED
         assert outcomes_of(actions) == [Failed(rid, CloseReason.FATAL_ERROR)]
 
     def test_nonfatal_error_stays_connected(self):
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
-        actions = core.on_frame({"type": ERROR, "code": "rate_limited", "fatal": False})
+        actions = core.on_frame(ErrorFrame("rate_limited", False, "s1"))
         assert core.state == ConnectionState.CONNECTED
         assert "gateway_error" in telemetry_events(actions)
 
@@ -796,7 +910,7 @@ class TestTerminalOutcomes:
     def test_fatal_error_fails_every_live_request_with_its_code(self):
         core = WSClientCore(make_config())
         pending, queued = _one_pending_one_queued(core)
-        actions = core.on_frame({"type": ERROR, "code": "auth_failed", "fatal": True})
+        actions = core.on_frame(ErrorFrame("auth_failed", True, "s1"))
         assert outcomes_of(actions) == [
             Failed(pending, CloseReason.FATAL_ERROR),
             Failed(queued, CloseReason.FATAL_ERROR),
@@ -815,7 +929,7 @@ class TestTerminalOutcomes:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_frame", WelcomeFrame("s1", ()))
         rid = driver.call("send_command", {"op": "critical"})
         driver.call("drain")
         driver.call("on_socket_error", "partition")
@@ -831,17 +945,17 @@ class TestTerminalOutcomes:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_frame", WelcomeFrame("s1", ()))
         driver.call("on_heartbeat_tick")
         assert driver.timers
-        driver.call("on_frame", {"type": ERROR, "code": "auth_failed", "fatal": True})
+        driver.call("on_frame", ErrorFrame("auth_failed", True, "s1"))
         assert driver.timers == {}
 
     def test_ack_after_close_yields_no_second_outcome(self):
         core = WSClientCore(make_config())
         pending, _ = _one_pending_one_queued(core)
         core.stop()
-        late = core.on_frame({"type": ACK, "request_id": pending, "session_id": "s1"})
+        late = core.on_frame(AckFrame("s1", pending, {}))
         assert outcomes_of(late) == []
         assert "ignored_frame" in telemetry_events(late)
 
@@ -849,7 +963,7 @@ class TestTerminalOutcomes:
         core = WSClientCore(make_config())
         connect_core(core, session_id="s1")
         core.stop()
-        late = core.on_frame({"type": EVENT, "id": 7, "session_id": "s1"})
+        late = core.on_frame(EventFrame("s1", "7", {}))
         assert not [a for a in late if a.type == ActionType.DELIVER_EVENT]
         assert "ignored_frame" in telemetry_events(late)
 
@@ -857,10 +971,10 @@ class TestTerminalOutcomes:
         core = WSClientCore(make_config())
         rid = core.send_command({"op": "x"})
         connect_core(core, session_id="s1")
-        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": 1}
-        (outcome,) = outcomes_of(core.on_frame(buffer))
-        buffer["result"] = 2
-        assert isinstance(outcome, Acked) and outcome.frame["result"] == 1
+        buffer = {"type": ACK, "request_id": rid, "session_id": "s1", "result": {"n": 1}}
+        (outcome,) = outcomes_of(core.on_frame(parse_frame(buffer)))
+        buffer["result"] = {"n": 2}
+        assert isinstance(outcome, Acked) and outcome.ack.result == {"n": 1}
 
 
 # --------------------------------------------------------------------------- #
@@ -891,9 +1005,9 @@ class TestRedaction:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_frame", WelcomeFrame("s1", ()))
         driver.call("on_heartbeat_tick")
-        driver.call("on_frame", {"type": PONG, "session_id": "s1"})
+        driver.call("on_frame", PongFrame("s1"))
         driver.call("send_command", {"op": "x"})
         driver.call("drain")
         blob = repr(driver.telemetry)
@@ -916,7 +1030,7 @@ class TestScenarios:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "sess-A"})
+        driver.call("on_frame", WelcomeFrame("sess-A", ()))
         assert core.session_id == "sess-A"
 
         # Gateway restarts: our socket drops.
@@ -926,10 +1040,10 @@ class TestScenarios:
         # A late frame from the OLD session must be rejected once we reconnect.
         driver.call("on_backoff_elapsed")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "sess-B"})
+        driver.call("on_frame", WelcomeFrame("sess-B", ()))
         assert core.session_id == "sess-B"
         before = len(driver.events)
-        driver.call("on_frame", {"type": EVENT, "id": "late", "session_id": "sess-A"})
+        driver.call("on_frame", EventFrame("sess-A", "late", {}))
         assert len(driver.events) == before  # stale, not delivered
         assert "stale_session_rejected" in [t["event"] for t in driver.telemetry]
 
@@ -938,7 +1052,7 @@ class TestScenarios:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_frame", WelcomeFrame("s1", ()))
         rid = driver.call("send_command", {"op": "critical"})
         driver.call("drain")
         # Command was sent, not yet acked.
@@ -952,12 +1066,12 @@ class TestScenarios:
         # Heal: reconnect, command re-sent (at-least-once semantics).
         driver.call("on_backoff_elapsed")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s2"})
+        driver.call("on_frame", WelcomeFrame("s2", ()))
         resent = [f for f in driver.sent if f["type"] == COMMAND and f["request_id"] == rid]
         assert len(resent) == 2  # original + retry
 
         # Finally acked exactly once terminates it.
-        driver.call("on_frame", {"type": ACK, "request_id": rid, "session_id": "s2"})
+        driver.call("on_frame", AckFrame("s2", rid, {}))
         assert rid not in core.pending_request_ids
 
     def test_clock_skew_does_not_affect_logical_transitions(self):
@@ -969,7 +1083,7 @@ class TestScenarios:
         driver = Driver(core)
         driver.call("start")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s1"})
+        driver.call("on_frame", WelcomeFrame("s1", ()))
 
         # Skew: a heartbeat_timeout fires though no ping was sent (stale timer).
         driver.call("on_heartbeat_timeout")
@@ -980,7 +1094,7 @@ class TestScenarios:
         # timer) is ignored, not acted on.
         driver.call("on_backoff_elapsed")
         driver.call("on_socket_open")
-        driver.call("on_frame", {"type": WELCOME, "session_id": "s2"})
+        driver.call("on_frame", WelcomeFrame("s2", ()))
         stray = core.on_backoff_elapsed()  # stray timer while connected
         assert core.state == ConnectionState.CONNECTED
         assert "ignored_backoff_elapsed" in [
@@ -1062,6 +1176,10 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     def _run(self, actions: list[Action]) -> None:
         self.settled.extend(o.request_id for o in outcomes_of(actions))
+        # An event reaches the app only from the session the core is in.
+        for a in actions_of(actions, ActionType.DELIVER_EVENT):
+            assert self.core.state == ConnectionState.CONNECTED
+            assert a.event is not None and a.event.session_id == self.core.session_id
 
     @rule()
     def start(self):
@@ -1087,12 +1205,9 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def handshake_timeout(self):
         self._run(self.core.on_handshake_timeout())
 
-    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD"]))
     def welcome(self, sid):
-        frame = {"type": WELCOME}
-        if sid is not None:
-            frame["session_id"] = sid
-        self._run(self.core.on_frame(frame))
+        self._run(self.core.on_frame(WelcomeFrame(sid, ())))
 
     @rule()
     def heartbeat_tick(self):
@@ -1102,12 +1217,9 @@ class WSClientStateMachine(RuleBasedStateMachine):
     def heartbeat_timeout(self):
         self._run(self.core.on_heartbeat_timeout())
 
-    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]), eid=st.integers(min_value=0, max_value=5))
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD"]), eid=st.integers(min_value=0, max_value=5))
     def event(self, sid, eid):
-        frame = {"type": EVENT, "id": eid}
-        if sid is not None:
-            frame["session_id"] = sid
-        self._run(self.core.on_frame(frame))
+        self._run(self.core.on_frame(EventFrame(sid, str(eid), {})))
 
     @rule(payload=st.dictionaries(st.text(max_size=3), st.integers(), max_size=2))
     def send_command(self, payload):
@@ -1138,13 +1250,10 @@ class WSClientStateMachine(RuleBasedStateMachine):
         )
         self._run(self.core.cancel_command(rid))
 
-    @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
+    @rule(sid=st.sampled_from(["s1", "s2", "OLD"]))
     @precondition(lambda self: self.core.pending_request_ids)
     def ack_pending(self, sid):
-        frame = {"type": ACK, "request_id": self.core.pending_request_ids[-1]}
-        if sid is not None:
-            frame["session_id"] = sid
-        self._run(self.core.on_frame(frame))
+        self._run(self.core.on_frame(AckFrame(sid, self.core.pending_request_ids[-1], {})))
 
     @rule()
     def drain(self):
@@ -1152,10 +1261,7 @@ class WSClientStateMachine(RuleBasedStateMachine):
 
     @rule(sid=st.sampled_from(["s1", "s2", "OLD", None]))
     def fatal_error(self, sid):
-        frame: dict = {"type": ERROR, "code": "auth_failed", "fatal": True}
-        if sid is not None:
-            frame["session_id"] = sid
-        self._run(self.core.on_frame(frame))
+        self._run(self.core.on_frame(ErrorFrame("auth_failed", True, sid)))
 
     def teardown(self):
         # Closing for good settles whatever is still live; after that every id

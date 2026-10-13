@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Inbound ws_client frames are parsed into typed frames gated by state and session**
+  (houdini-laws-etg.qhj): `parse_frame` is the one boundary between the wire and
+  `WSClientCore`. It turns a decoded frame into `WelcomeFrame`, `PongFrame`,
+  `EventFrame`, `AckFrame` or `ErrorFrame`, each with its required fields typed
+  (`session_id` on every frame once a session exists, `capabilities` on `welcome`,
+  `id` and `payload` on `event`, `request_id` and `result` on `ack`, `code` and `fatal`
+  on `error`), and raises `FrameParseError` naming the frame and field for anything
+  else, including an unknown type; the driver reports that where it reports
+  undecodable JSON. `on_frame` takes the parsed frame and admits it from one table:
+  HANDSHAKING takes `welcome` and `error` whatever session they name, CONNECTED takes
+  `pong`, `event`, `ack` and `error` carrying the active session id, and every other
+  frame is ignored with an `ignored_frame` record. An event can no longer be delivered
+  during BACKOFF or HANDSHAKING, and omitting `session_id` no longer bypasses
+  stale-session rejection. `Action.event` carries the `EventFrame`, `Acked.ack` the
+  `AckFrame` (it was `Acked.frame`, a dict). The `ignored_welcome`, `ignored_pong` and
+  `unknown_frame` telemetry records are gone, and so is `StaleSessionError`, which
+  nothing ever raised.
 - **Every ws_client request id reaches exactly one terminal outcome**
   (houdini-laws-etg.jyr): `WSClientCore.send_command` returns an id that is live until
   the core emits one `DELIVER_OUTCOME` action for it, carrying `Acked` (with the ack

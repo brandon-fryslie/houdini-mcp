@@ -34,12 +34,16 @@ Outbound (client -> gateway):
     ``cancel``  request cancellation of a previously-sent command
     ``bye``     graceful close
 
-Inbound (gateway -> client):
-    ``welcome`` handshake accepted; carries negotiated capabilities + session id
-    ``pong``    heartbeat reply
-    ``event``   an application event pushed by the gateway
-    ``ack``     command acknowledgement (terminates a request id)
-    ``error``   protocol/auth error (may be fatal)
+Inbound (gateway -> client), each parsed by :func:`parse_frame` into the typed
+frame :meth:`WSClientCore.on_frame` takes:
+    ``welcome`` handshake accepted: ``session_id``, ``capabilities``
+    ``pong``    heartbeat reply: ``session_id``
+    ``event``   an application event pushed by the gateway: ``session_id``,
+                ``id``, ``payload``
+    ``ack``     command acknowledgement (terminates a request id):
+                ``session_id``, ``request_id``, ``result``
+    ``error``   protocol/auth error: ``code``, ``fatal``, and ``session_id``
+                once a session exists
 """
 
 from __future__ import annotations
@@ -47,8 +51,9 @@ from __future__ import annotations
 import enum
 import random
 from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 PROTOCOL_VERSION = 1
 
@@ -103,12 +108,154 @@ CONNECTION_TIMERS = (TIMER_HEARTBEAT, TIMER_HEARTBEAT_TIMEOUT, TIMER_HANDSHAKE_T
 ALL_TIMERS = (*CONNECTION_TIMERS, TIMER_BACKOFF)
 
 
+# ---------------------------------------------------------------- inbound frames
+
+
+@dataclass(frozen=True)
+class WelcomeFrame:
+    """Handshake accepted: the session the gateway assigned and what it negotiated."""
+
+    session_id: str
+    capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PongFrame:
+    """Heartbeat reply."""
+
+    session_id: str
+
+
+@dataclass(frozen=True)
+class EventFrame:
+    """An application event pushed by the gateway."""
+
+    session_id: str
+    id: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AckFrame:
+    """The gateway finished the command ``request_id`` with ``result``."""
+
+    session_id: str
+    request_id: int
+    result: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ErrorFrame:
+    """A protocol or auth error; ``fatal`` means the gateway will not go on.
+
+    ``session_id`` is None only for an error sent before a session exists,
+    such as the gateway rejecting the ``hello``.
+    """
+
+    code: str
+    fatal: bool
+    session_id: str | None
+
+
+# [LAW:types-are-the-program] A parsed frame carries every field its type requires,
+# so a handler cannot meet an event without a session or an ack without an id.
+InboundFrame = WelcomeFrame | PongFrame | EventFrame | AckFrame | ErrorFrame
+
+
+class FrameParseError(ValueError):
+    """A raw inbound frame is not a well-formed protocol frame."""
+
+
+_T = TypeVar("_T")
+
+
+def _field(raw: Mapping[str, Any], key: str, kind: type[_T]) -> _T:
+    if key not in raw:
+        raise FrameParseError(f"{key!r} is missing")
+    value = raw[key]
+    # bool is an int to isinstance; the wire never means True by 1.
+    if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+        raise FrameParseError(f"{key!r} must be {kind.__name__}, got {type(value).__name__}")
+    return value
+
+
+def _capabilities(raw: Mapping[str, Any]) -> tuple[str, ...]:
+    capabilities = _field(raw, "capabilities", list)
+    if not all(isinstance(c, str) for c in capabilities):
+        raise FrameParseError("'capabilities' must be a list of str")
+    return tuple(capabilities)
+
+
+def _parse_welcome(raw: Mapping[str, Any]) -> WelcomeFrame:
+    return WelcomeFrame(_field(raw, "session_id", str), _capabilities(raw))
+
+
+def _parse_pong(raw: Mapping[str, Any]) -> PongFrame:
+    return PongFrame(_field(raw, "session_id", str))
+
+
+def _parse_event(raw: Mapping[str, Any]) -> EventFrame:
+    return EventFrame(
+        _field(raw, "session_id", str), _field(raw, "id", str), _field(raw, "payload", dict)
+    )
+
+
+def _parse_ack(raw: Mapping[str, Any]) -> AckFrame:
+    return AckFrame(
+        _field(raw, "session_id", str),
+        _field(raw, "request_id", int),
+        _field(raw, "result", dict),
+    )
+
+
+def _parse_error(raw: Mapping[str, Any]) -> ErrorFrame:
+    session_id = _field(raw, "session_id", str) if "session_id" in raw else None
+    return ErrorFrame(_field(raw, "code", str), _field(raw, "fatal", bool), session_id)
+
+
+# [LAW:one-source-of-truth] Wire type, frame type and parser are one row each; the
+# parse table and the telemetry name of a frame both derive from it.
+_INBOUND: tuple[tuple[str, type[InboundFrame], Callable[[Mapping[str, Any]], InboundFrame]], ...]
+_INBOUND = (
+    (WELCOME, WelcomeFrame, _parse_welcome),
+    (PONG, PongFrame, _parse_pong),
+    (EVENT, EventFrame, _parse_event),
+    (ACK, AckFrame, _parse_ack),
+    (ERROR, ErrorFrame, _parse_error),
+)
+_PARSERS = {wire: parse for wire, _, parse in _INBOUND}
+_WIRE_TYPE = {frame_type: wire for wire, frame_type, _ in _INBOUND}
+
+
+def parse_frame(raw: Mapping[str, Any]) -> InboundFrame:
+    """Parse a decoded wire frame into the typed frame the core takes.
+
+    [LAW:parse-dont-validate] This is the one boundary between the wire and the
+    state machine. The driver calls it where it decodes JSON, and a
+    :class:`FrameParseError` is the gateway breaking the protocol, which the
+    driver reports exactly as it reports undecodable JSON.
+    """
+
+    wire = _field(raw, "type", str)
+    try:
+        parse = _PARSERS[wire]
+    except KeyError:
+        raise FrameParseError(f"unknown frame type {wire!r}") from None
+    try:
+        return parse(raw)
+    except FrameParseError as e:
+        raise FrameParseError(f"{wire} frame: {e}") from None
+
+
+# ------------------------------------------------------------ request outcomes
+
+
 @dataclass(frozen=True)
 class Acked:
-    """The gateway acknowledged the command; ``frame`` is the ack it sent."""
+    """The gateway acknowledged the command; ``ack`` is the frame it sent."""
 
     request_id: int
-    frame: dict[str, Any]
+    ack: AckFrame
 
 
 @dataclass(frozen=True)
@@ -155,7 +302,7 @@ class Action:
     frame: dict[str, Any] | None = None
     timer: str | None = None
     delay: float | None = None
-    event: dict[str, Any] | None = None
+    event: EventFrame | None = None
     outcome: RequestOutcome | None = None
     telemetry: dict[str, Any] | None = None
 
@@ -234,10 +381,6 @@ class ClientClosedError(Exception):
     """Raised when a command is submitted to a client that has closed for good."""
 
 
-class StaleSessionError(Exception):
-    """Raised/emitted when a frame carries a stale/unknown session id."""
-
-
 class WSClientCore:
     """Sans-I/O outbound WSS connection state machine.
 
@@ -284,7 +427,7 @@ class WSClientCore:
         self._command_queue: deque[dict[str, Any]] = deque()
         self._pending: dict[int, dict[str, Any]] = {}
         # Inbound event backlog if the app cannot keep up (bounded).
-        self._event_queue: deque[dict[str, Any]] = deque()
+        self._event_queue: deque[EventFrame] = deque()
 
     # ------------------------------------------------------------------ helpers
 
@@ -545,48 +688,51 @@ class WSClientCore:
 
     # -------------------------------------------------------------- inbound msg
 
-    def on_frame(self, frame: dict[str, Any]) -> list[Action]:
-        """Handle an inbound protocol frame from the gateway.
+    def on_frame(self, frame: InboundFrame) -> list[Action]:
+        """Handle a parsed inbound frame from the gateway.
 
-        Dispatches on ``frame['type']``. Unknown/duplicate/out-of-order frames
-        are handled defensively (ignored or rejected) rather than crashing.
+        [LAW:single-enforcer] The one table of which frames a state admits.
+        HANDSHAKING takes the welcome or the gateway's rejection of the hello,
+        whatever session id that names: no session exists yet to be stale
+        against. CONNECTED takes the session's own frames and rejects any that
+        name another session. Every other frame is a leftover of a socket that
+        is not open, since the driver delivers a socket's frames before its
+        close, and has nothing left to act on.
         """
 
-        ftype = frame.get("type")
-        if self.state == ConnectionState.CLOSED:
-            # The socket is being closed and every live id has its outcome;
-            # a frame the driver still had buffered has nothing left to act on.
-            return [self._telemetry("ignored_frame", frame_type=ftype)]
-        handler = {
-            WELCOME: self._on_welcome,
-            PONG: self._on_pong,
-            EVENT: self._on_event,
-            ACK: self._on_ack,
-            ERROR: self._on_error,
-        }.get(ftype)
-        if handler is None:
-            return [self._telemetry("unknown_frame", frame_type=ftype)]
-        return handler(frame)
+        wire = _WIRE_TYPE[type(frame)]
+        match self.state, frame:
+            case ConnectionState.HANDSHAKING, WelcomeFrame():
+                return self._on_welcome(frame)
+            case ConnectionState.HANDSHAKING, ErrorFrame():
+                return self._on_error(frame)
+            case (
+                ConnectionState.CONNECTED,
+                PongFrame() | EventFrame() | AckFrame() | ErrorFrame(),
+            ) if frame.session_id != self._session_id:
+                return [
+                    self._telemetry(
+                        "stale_session_rejected",
+                        frame_type=wire,
+                        frame_session_id=frame.session_id,
+                        active_session_id=self._session_id,
+                    )
+                ]
+            case ConnectionState.CONNECTED, PongFrame():
+                return self._on_pong()
+            case ConnectionState.CONNECTED, EventFrame():
+                return self._on_event(frame)
+            case ConnectionState.CONNECTED, AckFrame():
+                return self._on_ack(frame)
+            case ConnectionState.CONNECTED, ErrorFrame():
+                return self._on_error(frame)
+            case _:
+                return [self._telemetry("ignored_frame", frame_type=wire)]
 
-    def _validate_session(self, frame: dict[str, Any]) -> bool:
-        """Return True unless the frame belongs to a session other than the active one.
-
-        Frames without a session id are accepted (session-agnostic), and so is
-        every frame while no session is established yet: before ``welcome``
-        there is nothing for a frame to be stale against, and a fatal rejection
-        of the ``hello`` must reach the client whatever session id it carries.
-        """
-
-        sid = frame.get("session_id")
-        return sid is None or self._session_id is None or bool(sid == self._session_id)
-
-    def _on_welcome(self, frame: dict[str, Any]) -> list[Action]:
-        if self.state != ConnectionState.HANDSHAKING:
-            # Duplicate welcome (e.g. after we already handshook): ignore.
-            return [self._telemetry("ignored_welcome", frame_type=WELCOME)]
+    def _on_welcome(self, frame: WelcomeFrame) -> list[Action]:
         self.state = ConnectionState.CONNECTED
-        self._session_id = frame.get("session_id")
-        self._negotiated_capabilities = tuple(frame.get("capabilities", ()) or ())
+        self._session_id = frame.session_id
+        self._negotiated_capabilities = frame.capabilities
         self._reset_backoff()
         self._awaiting_pong = False
 
@@ -607,11 +753,7 @@ class WSClientCore:
         actions.extend(self._flush_command_queue())
         return actions
 
-    def _on_pong(self, frame: dict[str, Any]) -> list[Action]:
-        if self.state != ConnectionState.CONNECTED:
-            return [self._telemetry("ignored_pong")]
-        if not self._validate_session(frame):
-            return self._reject_stale(frame)
+    def _on_pong(self) -> list[Action]:
         self._awaiting_pong = False
         return [
             Action(ActionType.CANCEL_TIMER, timer=TIMER_HEARTBEAT_TIMEOUT),
@@ -622,9 +764,7 @@ class WSClientCore:
             ),
         ]
 
-    def _on_event(self, frame: dict[str, Any]) -> list[Action]:
-        if not self._validate_session(frame):
-            return self._reject_stale(frame)
+    def _on_event(self, frame: EventFrame) -> list[Action]:
         # Deduplicate by event id if provided (defends against gateway resend on
         # network partition / restart). Out-of-order events are still delivered;
         # ordering is the app's concern, exactly-once by id is ours to dedupe.
@@ -639,7 +779,7 @@ class WSClientCore:
             actions.append(
                 self._telemetry(
                     "event_dropped_backpressure",
-                    dropped_event_id=dropped.get("id"),
+                    dropped_event_id=dropped.id,
                     queue_len=len(self._event_queue),
                 )
             )
@@ -650,42 +790,24 @@ class WSClientCore:
         self._event_queue.pop()
         return actions
 
-    def _on_ack(self, frame: dict[str, Any]) -> list[Action]:
-        if not self._validate_session(frame):
-            return self._reject_stale(frame)
-        rid = frame.get("request_id")
+    def _on_ack(self, frame: AckFrame) -> list[Action]:
+        rid = frame.request_id
         if rid not in self._pending:
             # Duplicate / unknown ack: ignore (already settled or never sent).
             return [self._telemetry("ignored_ack", request_id=rid)]
         return [
-            # A copy: the outcome the app holds must not change under it when
-            # the driver reuses its receive buffer.
-            self._settle(Acked(rid, dict(frame))),
+            self._settle(Acked(rid, frame)),
             self._telemetry("command_acked", request_id=rid),
         ]
 
-    def _on_error(self, frame: dict[str, Any]) -> list[Action]:
-        if not self._validate_session(frame):
-            return self._reject_stale(frame)
-        fatal = bool(frame.get("fatal"))
-        code = frame.get("code")
-        if fatal:
+    def _on_error(self, frame: ErrorFrame) -> list[Action]:
+        if frame.fatal:
             prev = self.state
             return [
                 *self._enter_closed(reason=CloseReason.FATAL_ERROR),
-                self._telemetry("fatal_error", code=code, previous=prev.value),
+                self._telemetry("fatal_error", code=frame.code, previous=prev.value),
             ]
-        return [self._telemetry("gateway_error", code=code)]
-
-    def _reject_stale(self, frame: dict[str, Any]) -> list[Action]:
-        return [
-            self._telemetry(
-                "stale_session_rejected",
-                frame_type=frame.get("type"),
-                frame_session_id=frame.get("session_id"),
-                active_session_id=self._session_id,
-            )
-        ]
+        return [self._telemetry("gateway_error", code=frame.code)]
 
     # -------------------------------------------------------------- heartbeats
 
