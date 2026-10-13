@@ -7,15 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Input connections have one record shape** (houdini-laws-etg.7xv): every
+  tool that reports a wire reports `{input_index, source_node,
+  source_output_index}`, built once by `InputConnection.as_record`.
+  `list_children` full-mode `inputs` entries rename `index` → `input_index` and
+  `output_index` → `source_output_index`. `connect_nodes` returns `node_path`
+  and the wire it made as `connection`, replacing `source_node`,
+  `destination_node`, `source_output_index` and `destination_input_index`.
+  `disconnect_node_input` returns the wire it cut as `disconnected` (or `None`
+  when the input was already unwired), replacing `was_connected` and
+  `previous_source`; its range check reads the wired span from the same
+  connection records instead of `inputs()`. Each `reorder_inputs` reconnection
+  is the wire at its new input plus `previous_input_index`, replacing
+  `new_input_index` / `old_input_index`. `connect_nodes` reads `connection`
+  back from Houdini after the write and resolves `src_path` with `hou.item`,
+  so a record naming a subnet indirect input (`/obj/subnet1/1`) goes back as
+  reported.
+
 ### Fixed
 
 - **The token handshake's bound is a deadline, not an idle timeout**
   (houdini-laws-etg.ml7): `HANDSHAKE_TIMEOUT` is counted once, from the moment
   the listener starts reading, for the whole framed token (and likewise for the
   client's wait for the acknowledgement), so a client that keeps one byte
-  trickling can no longer hold a listener thread past it. Previously each read restarted the timer, so
-  a client announcing a long token and sending it slowly pinned the listener's
-  per-connection thread for as long as it kept sending.
+  trickling can no longer hold a listener thread past it. Previously each read
+  restarted the timer, so a client announcing a long token and sending it
+  slowly pinned the listener's per-connection thread for as long as it kept
+  sending.
+- **HscriptBatch executes no Python outside code.py's gate**
+  (houdini-laws-etg.cg2): the node-type cache used to fill itself by sending a
+  Python program over the RPyC connection (`conn.execute`) or `exec`-ing it in
+  the server process, through `HscriptBatch._exec_python`, with none of the
+  policy scan, bypass gates or audit that `execute_code` applies. The cache now
+  reads node types through the `hou` proxy, `HscriptBatch` holds only its
+  hscript commands (its four unused exec-backed readers, the `conn` plumbing
+  and the convenience wrappers are gone), and the in-process connection no
+  longer offers `execute`/`namespace`. The one place a program runs in Houdini
+  is the gate in `tools/code.py`.
 - **Input connections report the real source output; reorder_inputs preserves
   it** (houdini-laws-etg.kmz): `get_node_info`, `list_children` and
   `reorder_inputs` read the source output index from Houdini's
@@ -133,6 +163,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `list_node_types` no longer emits `total_matched` (use `total`).
 
 ### Fixed
+
+- **Only transport failures are classified as connection loss**
+  (houdini-laws-etg.8b3): a `FileNotFoundError`, `PermissionError` or other
+  `OSError` raised by a tool (a bad save or render path, a denied file) no longer
+  disconnects from Houdini or reports `connection_error` / `recoverable: True`;
+  it reaches the caller as its own kind with the connection left standing.
+  Connection loss is decided in one place, `connection.transport_failure()`, by
+  the installed `HoudiniTarget`: over rpyc it admits only what the channel raises
+  (`EOFError`, which is also how rpyc surfaces a reset or broken pipe, and
+  `TimeoutError`) and only when Houdini's own code
+  did not raise it; in-process (the plugin's stdio server) nothing is connection
+  loss. Opening a connection still retries on any socket-layer `OSError`. `safe_execute`
+  drops its substring sniff for "connection"/"timeout" in error text and no longer
+  mistakes a `TimeoutError` raised by the operation for its own deadline: one it
+  raised itself is now its own kind, and one rpyc's sync timeout raised is
+  connection loss (the link stopped answering) rather than `timed_out`.
+  `execute_with_timeout` had the same deadline bug and shares the one fix.
+  `CONNECTION_ERRORS` is removed from `houdini_mcp.tools`.
 
 - **Listener start no longer races its own serve thread**: `start()` listens
   on the server socket before spawning the accept thread (rpyc's own readiness

@@ -24,6 +24,20 @@ class InputConnection:
     source: Any
     output_index: int
 
+    def as_record(self) -> dict[str, Any]:
+        """The wire as every tool reports it.
+
+        [LAW:one-source-of-truth] ``get_node_info``, ``list_children``,
+        ``connect_nodes``, ``disconnect_node_input`` and ``reorder_inputs`` all emit
+        this shape and nothing else names these fields, so an agent learns one record
+        and can hand any of them back to ``connect_nodes`` as is.
+        """
+        return {
+            "input_index": self.input_index,
+            "source_node": self.source.path(),
+            "source_output_index": self.output_index,
+        }
+
 
 class InputConnectionsUnreadable(RuntimeError):
     """Houdini could not report a node's input connections; the message names the node."""
@@ -54,6 +68,31 @@ def input_connections(node: Any) -> list[InputConnection]:
         ),
         key=lambda conn: conn.input_index,
     )
+
+
+def wire_source(hou: Any, path: str) -> Any | None:
+    """What a wire can be drawn from at ``path``: a ``hou.Node`` or a
+    ``hou.SubnetIndirectInput``, the two items ``setInput`` accepts.
+
+    [LAW:parse-dont-validate] ``hou.item`` also resolves network boxes, sticky
+    notes and dots; none is a source, so they resolve to None here exactly as an
+    empty path does, and nothing downstream re-asks what kind of item it holds.
+    """
+    item = hou.item(path)
+    return item if isinstance(item, (hou.Node, hou.SubnetIndirectInput)) else None
+
+
+def source_category(hou: Any, source: Any) -> str:
+    """The node category a wire source belongs to: a node's own type category, or
+    for a subnet indirect input, the category of the subnet's children it feeds."""
+    if isinstance(source, hou.Node):
+        return str(source.type().category().name())
+    return str(source.parent().childTypeCategory().name())
+
+
+def wire_at(connections: list[InputConnection], input_index: int) -> InputConnection | None:
+    """The wire into ``input_index``, or None when that input is unwired."""
+    return next((conn for conn in connections if conn.input_index == input_index), None)
 
 
 def input_span(connections: list[InputConnection]) -> range:

@@ -214,105 +214,14 @@ class NodeTypeCache(BaseCache):
         """
         Populate the cache with all node types.
 
-        This is called internally when cache is invalid.
-        Uses batch fetching for performance.
+        This is called internally when cache is invalid. The types are read
+        through the hou proxy; no program is sent to Houdini for it.
+        [LAW:single-enforcer] the only program execution in this server is the
+        gate in ``code.py``, and a cache fill is not a program.
         """
         start_time = time.time()
         logger.info("Populating node type cache...")
 
-        all_types: list[dict[str, str]] = []
-        by_category: dict[str, list[dict[str, str]]] = {}
-        categories: list[str] = []
-
-        try:
-            # Try fast batch approach first (using remote exec)
-            all_types, by_category, categories = self._populate_fast(hou)
-
-            if not all_types:
-                # Fallback to standard approach
-                all_types, by_category, categories = self._populate_standard(hou)
-
-        except Exception as e:
-            logger.warning(f"Cache population failed: {e}")
-            all_types, by_category, categories = [], {}, []
-
-        self._all_types = all_types
-        self._by_category = by_category
-        self._categories = categories
-        self._valid = True
-        self._stats.entry_count = len(all_types)
-
-        elapsed_ms = (time.time() - start_time) * 1000
-        self._stats.last_populate_time_ms = elapsed_ms
-        logger.info(
-            f"Node type cache populated: {len(all_types)} types in "
-            f"{len(categories)} categories ({elapsed_ms:.1f}ms)"
-        )
-
-    def _populate_fast(
-        self, hou: Any
-    ) -> tuple[list[dict[str, str]], dict[str, list[dict[str, str]]], list[str]]:
-        """
-        Fast population using remote Python execution.
-
-        Runs entirely on Houdini side to avoid per-type RPC calls.
-        """
-        from .hscript import HscriptBatch
-
-        batch = HscriptBatch(hou)
-
-        if not batch.has_remote_exec():
-            logger.debug("Remote exec not available, using standard method")
-            return [], {}, []
-
-        # Execute Python on Houdini side to collect all node types
-        code = """
-import json
-
-result = {"types": [], "by_category": {}, "categories": []}
-
-for cat_name, cat in hou.nodeTypeCategories().items():
-    result["categories"].append(cat_name)
-    cat_types = []
-
-    for type_name, type_obj in cat.nodeTypes().items():
-        try:
-            desc = type_obj.description()
-        except:
-            desc = ""
-
-        entry = {"category": cat_name, "name": type_name, "description": desc}
-        result["types"].append(entry)
-        cat_types.append(entry)
-
-    result["by_category"][cat_name.lower()] = cat_types
-
-print(json.dumps(result))
-"""
-        import json
-
-        output = batch._exec_python(code)
-        if not output:
-            return [], {}, []
-
-        try:
-            data = json.loads(output.strip())
-            all_types = data.get("types", [])
-            by_category = data.get("by_category", {})
-            categories = data.get("categories", [])
-            return all_types, by_category, categories
-        except json.JSONDecodeError as e:
-            logger.debug(f"Failed to parse node type JSON: {e}")
-            return [], {}, []
-
-    def _populate_standard(
-        self, hou: Any
-    ) -> tuple[list[dict[str, str]], dict[str, list[dict[str, str]]], list[str]]:
-        """
-        Standard population using RPyC proxy calls.
-
-        Slower but works in all environments.
-        """
         all_types: list[dict[str, str]] = []
         by_category: dict[str, list[dict[str, str]]] = {}
         categories: list[str] = []
@@ -335,9 +244,21 @@ print(json.dumps(result))
                 by_category[cat_name.lower()] = cat_types
 
         except Exception as e:
-            logger.warning(f"Standard population failed: {e}")
+            logger.warning(f"Cache population failed: {e}")
+            all_types, by_category, categories = [], {}, []
 
-        return all_types, by_category, categories
+        self._all_types = all_types
+        self._by_category = by_category
+        self._categories = categories
+        self._valid = True
+        self._stats.entry_count = len(all_types)
+
+        elapsed_ms = (time.time() - start_time) * 1000
+        self._stats.last_populate_time_ms = elapsed_ms
+        logger.info(
+            f"Node type cache populated: {len(all_types)} types in "
+            f"{len(categories)} categories ({elapsed_ms:.1f}ms)"
+        )
 
 
 class ParameterSchemaCache(BaseCache):

@@ -29,7 +29,9 @@
             "path": "/obj/geo1/noise1",
             "name": "noise1",
             "type": "noise",
-            "inputs": [{"index": 0, "source_node": "/obj/geo1/grid1", "output_index": 0}],
+            "inputs": [
+                {"input_index": 0, "source_node": "/obj/geo1/grid1", "source_output_index": 0}
+            ],
             "outputs": [],
         },
     ],
