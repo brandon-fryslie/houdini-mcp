@@ -402,6 +402,154 @@ class TestExecuteCodeTimeout:
         assert result["status"] == "success"
 
 
+class TestExecuteCodeOutputCapture:
+    """A program's capture holds what the program wrote and nothing else."""
+
+    def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
+        """A write from another thread while a program runs reaches its own stream, not the capture."""
+        import sys
+        import threading
+
+        from houdini_mcp.tools import execute_code
+
+        mock_connection.reached = threading.Event()
+        mock_connection.stall_gate = threading.Event()
+        streams_before = (sys.stdout, sys.stderr)
+        results = []
+        runner = threading.Thread(
+            target=lambda: results.append(
+                execute_code(
+                    "import sys\n"
+                    "print('program out')\n"
+                    "sys.stderr.write('program err')\n"
+                    "hou.reached.set()\n"
+                    "hou.stall_gate.wait()\n",
+                    timeout=10,
+                    host="localhost",
+                    port=18811,
+                )
+            )
+        )
+        runner.start()
+        try:
+            assert mock_connection.reached.wait(5), "program never ran"
+            print("bystander out")
+            sys.stderr.write("bystander err")
+        finally:
+            mock_connection.stall_gate.set()
+            runner.join(10)
+
+        [result] = results
+        assert result["status"] == "success"
+        assert result["stdout"] == "program out\n"
+        assert result["stderr"] == "program err"
+        bystander = capsys.readouterr()
+        assert bystander.out == "bystander out\n"
+        assert bystander.err == "bystander err"
+        assert (sys.stdout, sys.stderr) == streams_before
+
+    def test_a_stream_the_program_swaps_is_restored_and_reported(self, caplog):
+        """A program's own sys.stdout swap does not outlive it, and the output it diverted is reported."""
+        import io
+        import logging
+        import sys
+
+        from houdini_mcp.tools.program_output import captured
+
+        original = sys.stdout
+        swapped = io.StringIO()
+        capture = io.StringIO()
+        try:
+            with (
+                caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.program_output"),
+                captured(capture, io.StringIO()),
+            ):
+                print("before")
+                sys.stdout = swapped
+                print("after")
+            assert sys.stdout is original
+        finally:
+            sys.stdout = original
+
+        assert capture.getvalue() == "before\n"
+        assert swapped.getvalue() == "after\n"
+        [record] = caplog.records
+        assert record.getMessage().startswith("sys.stdout was replaced by")
+
+    def test_the_swap_warning_reaches_the_server_not_the_capture(self, capsys):
+        """With no log handler configured, the warning goes to the real stderr, never the program's capture."""
+        import io
+        import logging
+        import sys
+
+        from houdini_mcp.tools.program_output import captured
+
+        logger = logging.getLogger("houdini_mcp.tools.program_output")
+        error_capture = io.StringIO()
+        original, propagate = sys.stdout, logger.propagate
+        logger.propagate = False  # no handler anywhere: logging.lastResort writes to sys.stderr
+        try:
+            with captured(io.StringIO(), error_capture):
+                sys.stdout = io.StringIO()
+        finally:
+            sys.stdout, logger.propagate = original, propagate
+
+        assert error_capture.getvalue() == ""
+        assert "sys.stdout was replaced by" in capsys.readouterr().err
+
+    def test_other_threads_write_past_a_timed_out_program(
+        self, mock_connection, stalled_program, capsys
+    ):
+        """After a timeout the program keeps its routers; other threads' writes still reach their streams."""
+        import sys
+
+        from houdini_mcp.tools import execute_code
+        from houdini_mcp.tools.workers import WORKERS
+
+        streams_before = (sys.stdout, sys.stderr)
+        result = execute_code(stalled_program, timeout=1, host="localhost", port=18811)
+        assert result["audit"]["timed_out"] is True
+
+        print("bystander out")
+        assert capsys.readouterr().out == "bystander out\n"
+
+        mock_connection.stall_gate.set()
+        WORKERS.running().thread.join(5)
+        assert (sys.stdout, sys.stderr) == streams_before
+
+    def test_a_thread_the_program_starts_writes_past_the_capture(self, capsys):
+        """Capture follows the program's thread: a child thread's output reaches the process's stream."""
+        import io
+        import threading
+
+        from houdini_mcp.tools.program_output import captured
+
+        capture = io.StringIO()
+        with captured(capture, io.StringIO()):
+            print("program")
+            child = threading.Thread(target=print, args=("child",))
+            child.start()
+            child.join()
+
+        assert capture.getvalue() == "program\n"
+        assert capsys.readouterr().out == "child\n"
+
+    def test_a_router_kept_past_the_run_captures_nothing(self, capsys):
+        """A stream reference taken mid-run sends everything past once the run ends, even from its thread."""
+        import io
+        import sys
+
+        from houdini_mcp.tools.program_output import captured
+
+        capture = io.StringIO()
+        with captured(capture, io.StringIO()):
+            kept = sys.stdout
+        print("later", file=kept)
+
+        assert capture.getvalue() == ""
+        assert capsys.readouterr().out == "later\n"
+
+
 class TestExecuteCodeEdgeCases:
     """Edge case tests for execute_code."""
 
