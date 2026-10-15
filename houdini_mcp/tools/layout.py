@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from ._common import (
+    RGB,
     InvalidInput,
     ensure_connected,
     handle_connection_errors,
@@ -15,6 +16,11 @@ from ._common import (
 )
 
 logger = logging.getLogger("houdini_mcp.tools.layout")
+
+
+def _clamped(color: RGB) -> list[float]:
+    """The ``[r, g, b]`` a node or box is given, each channel clamped to 0-1."""
+    return [max(0.0, min(1.0, c)) for c in color]
 
 
 @handle_connection_errors("layout_children")
@@ -81,7 +87,7 @@ def layout_children(
 @handle_connection_errors("set_node_color")
 def set_node_color(
     node_path: str,
-    color: list[float],
+    color: RGB,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -114,17 +120,9 @@ def set_node_color(
     hou = ensure_connected(host, port)
 
     node = node_at(hou, node_path)
-
-    # Validate color values
-    if len(color) != 3:
-        raise InvalidInput("Color must be [r, g, b] with 3 values", color=color)
-
-    # Clamp values to 0-1 range
-    clamped_color = [max(0.0, min(1.0, c)) for c in color]
-
-    # Create hou.Color and set it
-    hou_color = hou.Color(clamped_color)
-    node.setColor(hou_color)
+    clamped_color = _clamped(color)
+    node.setColor(hou.Color(clamped_color))
+    logger.info("node color set path=%s color=%s", node_path, clamped_color)
 
     return {
         "status": "success",
@@ -181,7 +179,7 @@ def create_network_box(
     parent_path: str,
     node_paths: list[str],
     label: str = "",
-    color: list[float] | None = None,
+    color: RGB | None = None,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -205,6 +203,7 @@ def create_network_box(
         - network_box_path: Path to the created network box
         - nodes_contained: List of nodes in the box
         - label: The label set on the box
+        - color: The color the box was given, clamped to 0-1, or None
 
     Examples:
         create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform Setup")
@@ -212,6 +211,7 @@ def create_network_box(
     """
     hou = ensure_connected(host, port)
 
+    applied_color = None if color is None else _clamped(color)
     parent = node_at(hou, parent_path, "Parent node")
 
     # Validate all nodes exist and are children of parent
@@ -233,11 +233,8 @@ def create_network_box(
     if label:
         netbox.setComment(label)
 
-    # Set color if provided
-    if color and len(color) == 3:
-        clamped_color = [max(0.0, min(1.0, c)) for c in color]
-        hou_color = hou.Color(clamped_color)
-        netbox.setColor(hou_color)
+    if applied_color is not None:
+        netbox.setColor(hou.Color(applied_color))
 
     # Add nodes to the box
     for node in nodes:
@@ -245,12 +242,20 @@ def create_network_box(
 
     # Fit box to contents
     netbox.fitAroundContents()
+    box_name = netbox.name()
+    logger.info(
+        "network box created parent=%s name=%s nodes=%d color=%s",
+        parent_path,
+        box_name,
+        len(nodes),
+        applied_color,
+    )
 
     return {
         "status": "success",
-        "network_box_name": netbox.name(),
+        "network_box_name": box_name,
         "parent_path": parent_path,
         "nodes_contained": node_paths,
         "label": label,
-        "color": color,
+        "color": applied_color,
     }

@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import logging
 import traceback
-from typing import Annotated, Any, Literal
+from collections.abc import Sequence, Sized
+from typing import Annotated, Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -50,6 +51,9 @@ __all__ = [
     "tool_error",
     "failure_for",
     "failure_response",
+    "BatchStatus",
+    "Undone",
+    "batch_status",
 ]
 
 FailureKind = Literal[
@@ -165,6 +169,44 @@ ToolFailure = Annotated[
 
 FAILURE: TypeAdapter[Any] = TypeAdapter(ToolFailure)
 """Parses a response back into exactly one arm, or refuses it. This is the test net."""
+
+BatchStatus = Literal["success", "partial"]
+"""The status of a tool that acts on several items and did at least one thing."""
+
+
+class Undone(NamedTuple):
+    """One item a multi-item tool did not do, and why."""
+
+    name: str
+    kind: FailureKind
+    message: str
+
+
+def batch_status(
+    operation: str, done: Sized, failed: Sequence[Undone], /, **report: Any
+) -> BatchStatus:
+    """``"partial"`` while any item of ``operation`` failed, else ``"success"``;
+    raised when items failed and nothing was done, carrying ``report``.
+
+    [LAW:single-enforcer] Every multi-item tool reads its status here, so
+    ``"success"`` never stands over an item whose effect did not happen and
+    ``"partial"`` never stands over a call that did nothing. A call whose every
+    item was refused as ``invalid_input`` is the caller's to fix; any other is
+    ``operation_failed``.
+    """
+    logger.info(
+        "batch outcome operation=%s done=%d failed=%s",
+        operation,
+        len(done),
+        [(u.name, u.kind) for u in failed],
+    )
+    if failed and not len(done):
+        refused = all(u.kind == "invalid_input" for u in failed)
+        raise (InvalidInput if refused else OperationFailed)(
+            "Nothing was done: " + "; ".join(f"{u.name}: {u.message}" for u in failed),
+            **report,
+        )
+    return "partial" if failed else "success"
 
 
 # =============================================================================

@@ -59,7 +59,7 @@ def create_material(
         - material_name: Name of the material
         - material_type: Type of material created
         - updated: The parameters that were set, as {name, value}
-        - failed: The parameters that were not, as {name, reason}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         create_material()  # Create default principled shader
@@ -98,14 +98,13 @@ def create_material(
             material_type=material_type,
         ) from e
 
-    writes = write_all(mat_node, parameters or {})
-
-    return {
-        **writes.fields(),
-        "material_path": mat_node.path(),
-        "material_name": mat_node.name(),
-        "material_type": material_type,
-    }
+    return write_all(mat_node, parameters or {}).fields(
+        "create_material",
+        created=[mat_node],
+        material_path=mat_node.path(),
+        material_name=mat_node.name(),
+        material_type=material_type,
+    )
 
 
 @handle_connection_errors("assign_material")
@@ -129,12 +128,13 @@ def assign_material(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a Material SOP write failed) or "error"
+        - status: "success", "partial" (a write failed beside a write or a newly
+          created Material SOP) or "error" (nothing changed; the fields ride on it)
         - geometry_path: Path to the geometry node
         - material_path: Path to the assigned material
         - material_sop_path: Path to the Material SOP that was created/modified
         - method: "material_sop" or "shop_materialpath"
-        - updated / failed: each Material SOP write, as {name, value} / {name, reason}
+        - updated / failed: each write, as {name, value} / {name, kind, reason}
 
     Examples:
         assign_material("/obj/geo1", "/mat/red_metal")
@@ -166,12 +166,12 @@ def assign_material(
         except ParmNotFound:
             pass
         else:
-            return {
-                **write_all(geo_node, {"shop_materialpath": material_path}).fields(),
-                "geometry_path": geometry_path,
-                "material_path": material_path,
-                "method": "shop_materialpath",
-            }
+            return write_all(geo_node, {"shop_materialpath": material_path}).fields(
+                "assign_material",
+                geometry_path=geometry_path,
+                material_path=material_path,
+                method="shop_materialpath",
+            )
 
     # Method 2: Create/update Material SOP inside the geometry
     # Find the display node to connect to
@@ -192,6 +192,7 @@ def assign_material(
             existing_mat_sop = child
             break
 
+    created: list[Any] = []
     if existing_mat_sop:
         mat_sop = existing_mat_sop
     else:
@@ -200,20 +201,22 @@ def assign_material(
         mat_sop.setFirstInput(display_node)
         mat_sop.setDisplayFlag(True)
         mat_sop.setRenderFlag(True)
+        created.append(mat_sop)
 
     values = {"shop_materialpath1": material_path}
     if group:
         values["group1"] = group
-    # [LAW:no-silent-failure] the SOP exists and is wired whatever the writes
-    # did, so the answer names it and reports each write like every batch tool.
-    return {
-        **write_all(mat_sop, values).fields(),
-        "geometry_path": geometry_path,
-        "material_path": material_path,
-        "material_sop_path": mat_sop.path(),
-        "method": "material_sop",
-        "group": group if group else None,
-    }
+    # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
+    # writes did, so it counts as done; an existing one written nothing did nothing.
+    return write_all(mat_sop, values).fields(
+        "assign_material",
+        created=created,
+        geometry_path=geometry_path,
+        material_path=material_path,
+        material_sop_path=mat_sop.path(),
+        method="material_sop",
+        group=group if group else None,
+    )
 
 
 @handle_connection_errors("get_material_info")

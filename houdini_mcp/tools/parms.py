@@ -8,11 +8,12 @@ Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
 """
 
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from ..connection import transport_failure
+from .failure import Undone, batch_status
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
 
@@ -122,12 +123,19 @@ class Writes:
     updated: list[dict[str, Any]]
     failed: list[dict[str, Any]]
 
-    @property
-    def status(self) -> str:
-        return "partial" if self.failed else "success"
+    def fields(
+        self, operation: str, /, *, created: Sequence[Any] = (), **report: Any
+    ) -> dict[str, Any]:
+        """``operation``'s response: its status, these writes, and ``report``.
 
-    def fields(self) -> dict[str, Any]:
-        return {"status": self.status, "updated": self.updated, "failed": self.failed}
+        ``created`` is what the call created before writing, so every write
+        failing over a new node is ``partial``, and over nothing is raised with
+        the same report the response would have carried.
+        """
+        report = {"updated": self.updated, "failed": self.failed, **report}
+        undone = [Undone(f["name"], f["kind"], f["reason"]) for f in self.failed]
+        status = batch_status(operation, [*created, *self.updated], undone, **report)
+        return {"status": status, **report}
 
 
 def write_all(node: Any, values: Mapping[str, Any]) -> Writes:

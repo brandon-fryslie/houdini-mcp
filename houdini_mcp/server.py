@@ -12,6 +12,7 @@ from . import tools
 from .connection import describe_target, ensure_connected, ensure_link, ping
 from .tools._common import (
     DEFAULT_RESOLUTION,
+    RGB,
     Resolution,
     Vec3,
     apply_response_cap,
@@ -566,7 +567,7 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" when at least one view rendered
+        - status: "success", or "partial" when a view did not render
         - views: List of view results, each with name (front, left, top,
           perspective) and rotation ([rx, ry, rz] camera rotation used), and
           either a picture:
@@ -667,10 +668,11 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success", "partial", or "error"
+        - status: "success", or "partial" when a parameter failed; when none
+          was written the call is an error carrying the same fields
         - rop_path: Path to the ROP
-        - updated: List of parameters that were updated
-        - failed: List of parameters that failed to update
+        - updated: The parameters that were written, as {name, value}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -702,7 +704,7 @@ def create_render_node(
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
         - updated: The settings that were applied, as {name, value}
-        - failed: The settings that were not, as {name, reason}
+        - failed: The settings that were not, as {name, kind, reason}
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})
@@ -1132,7 +1134,9 @@ def assign_material(
 
     Returns:
         Dict with geometry_path, material_path, material_sop_path, method, updated
-        and failed (status "partial" when a write failed)
+        and failed (status "partial" when a write failed beside a write or a newly
+        created Material SOP; when nothing changed the call is an error carrying
+        the same fields)
 
     Examples:
         assign_material("/obj/geo1", "/mat/red_metal")
@@ -1195,7 +1199,7 @@ def layout_children(
 
 
 @mcp.tool()
-def set_node_color(node_path: str, color: list[float]) -> dict[str, Any]:
+def set_node_color(node_path: str, color: RGB) -> dict[str, Any]:
     """
     Set the display color of a node in the network editor.
 
@@ -1238,7 +1242,7 @@ def create_network_box(
     parent_path: str,
     node_paths: list[str],
     label: str = "",
-    color: list[float] | None = None,
+    color: RGB | None = None,
 ) -> dict[str, Any]:
     """
     Create a network box around a group of nodes.
@@ -1252,7 +1256,8 @@ def create_network_box(
         color: Optional RGB color [r, g, b] for the box (0.0-1.0 each)
 
     Returns:
-        Dict with network_box_name, nodes_contained, label
+        Dict with network_box_name, nodes_contained, label, and the color the
+        box was given (clamped to 0-1).
 
     Examples:
         create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform")
@@ -1414,7 +1419,8 @@ def capture_multiple_panes(
 
     Returns:
         Dict with:
-        - status: "success", whether none, some or all of the captures worked
+        - status: "success", "partial" (a pane was not captured) or "error"
+          (none was; the report rides on the error)
         - success_count: Number of successful captures
         - total_requested: Number of pane types requested
         - results: Per-pane results with image_base64 or file_path

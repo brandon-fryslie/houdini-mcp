@@ -19,7 +19,9 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     Resolution,
+    Undone,
     Vec3,
+    batch_status,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
@@ -572,7 +574,7 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" when at least one view rendered
+        - status: "success", or "partial" when a view did not render
         - views: List of view results, each with name (front, left, top,
           perspective) and rotation ([rx, ry, rz] camera rotation used), and
           either a picture:
@@ -640,15 +642,13 @@ def render_quad_view(
     }
     if (box := framing.report()) is not None:
         report["bounding_box"] = box
-    # A call that produced no picture did not do what was asked: it is raised to
-    # the one boundary that shapes failures, carrying the same report.
-    if all(view["status"] == "error" for view in view_results):
-        raise OperationFailed(
-            "No view rendered: "
-            + "; ".join(f"{view['name']}: {view['message']}" for view in view_results),
-            **report,
-        )
-    return {"status": "success", **report}
+    rendered = [view for view in view_results if view["status"] == "success"]
+    failed = [
+        Undone(view["name"], view["kind"], view["message"])
+        for view in view_results
+        if view["status"] == "error"
+    ]
+    return {"status": batch_status("render_quad_view", rendered, failed, **report), **report}
 
 
 # =============================================================================
@@ -828,10 +828,11 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a parameter failed) or "error"
+        - status: "success", "partial" (a parameter failed) or "error" (none was
+          written; the fields ride on it)
         - rop_path: Path to the ROP
         - updated: The parameters that were written, as {name, value}
-        - failed: The parameters that were not, as {name, reason}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -841,7 +842,7 @@ def set_render_settings(
 
     node = node_at(hou, rop_path, "ROP")
 
-    return {**write_all(node, settings).fields(), "rop_path": rop_path}
+    return write_all(node, settings).fields("set_render_settings", rop_path=rop_path)
 
 
 @handle_connection_errors("create_render_node")
@@ -869,7 +870,7 @@ def create_render_node(
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
         - updated: The settings that were applied, as {name, value}
-        - failed: The settings that were not, as {name, reason}
+        - failed: The settings that were not, as {name, kind, reason}
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})
@@ -886,9 +887,10 @@ def create_render_node(
     if node is None:
         raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
-    return {
-        **write_all(node, settings or {}).fields(),
-        "rop_path": node.path(),
-        "rop_name": node.name(),
-        "rop_type": rop_type,
-    }
+    return write_all(node, settings or {}).fields(
+        "create_render_node",
+        created=[node],
+        rop_path=node.path(),
+        rop_name=node.name(),
+        rop_type=rop_type,
+    )

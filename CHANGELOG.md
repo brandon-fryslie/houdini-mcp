@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: a multi-item tool never says `"success"` over an item it
+  did not do (houdini-laws-etg.tmx). `render_quad_view` and
+  `capture_multiple_panes` return `status: "partial"` when a view or pane failed,
+  as the parameter-writing tools already did. A multi-item call that did none of
+  its items is an error carrying its report, its message starting "Nothing was
+  done:": `invalid_input` when every item was refused as the caller's input,
+  else `operation_failed`. That now includes `set_render_settings` and
+  `assign_material` when no write landed, which were `"partial"`; a node the call
+  created still makes it `"partial"`. `capture_multiple_panes` captures a pane
+  named twice once, and a pane `save_dir` cannot take is that pane's failure
+  instead of aborting the call. `set_node_color` and `create_network_box` take `color` as
+  three finite numbers in the served schema, so any other length is refused on
+  the wire; `create_network_box` no longer creates the box uncolored on a bad
+  color, and reports the color it applied.
+
 - **BREAKING (wire)**: a render's resolution has one default and no null spelling
   (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish
   `[512, 512]` as the `resolution` default in their schemas, and an omitted
@@ -101,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (wait for that worker), while `timeout` is reserved for a request or link
   that never answered; a live link to a different Houdini than the one named says which
   (`connection_mismatch`, not "start Houdini"); a timeout says whether the
-  connection was reset. `capture_multiple_panes` always succeeds by reporting
+  connection was reset. `capture_multiple_panes` reports
   every pane, each slot a capture or that pane's failure arm. `check_connection`
   and `ping_houdini` report that same failure instead of `status: "disconnected"`
   or `reachable: false`, and a tool result the server cannot serialize is an

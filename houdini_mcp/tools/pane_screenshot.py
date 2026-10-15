@@ -19,6 +19,8 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     ToolError,
+    Undone,
+    batch_status,
     ensure_connected,
     ensure_link,
     failure_for,
@@ -487,6 +489,24 @@ def render_node_network(
     return result
 
 
+def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> dict[str, Any]:
+    """A captured PNG as the response carries it: saved to ``save_dir`` and
+    named by path, or inline as base64. A save the disk refuses is this pane's
+    failure, not the call's."""
+    picture: dict[str, Any] = {"image_format": "png", "image_size_bytes": len(raw_bytes)}
+    if not save_dir:
+        return {**picture, "image_base64": base64.b64encode(raw_bytes).decode("utf-8")}
+    path = Path(save_dir) / f"{pane_type_name}.png"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw_bytes)
+    except OSError as e:
+        # Not chained: _classify reads a ToolError's cause as the link's failure,
+        # and a disk timeout is not the link's; the message carries the error.
+        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from None
+    return {**picture, "file_path": str(path.absolute())}
+
+
 @handle_connection_errors("capture_multiple_panes")
 def capture_multiple_panes(
     pane_types: list[str],
@@ -510,7 +530,8 @@ def capture_multiple_panes(
 
     Returns:
         Dict containing:
-        - status: "success", whether none, some or all of the captures worked
+        - status: "success", "partial" (a pane was not captured) or "error"
+          (none was; the report rides on the error)
         - success_count: Number of successful captures
         - total_requested: Total number of pane types requested
         - results: Dict mapping pane type names to their capture results
@@ -534,16 +555,19 @@ def capture_multiple_panes(
 
     QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
+    # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
+    # captured once, so the slots, the counts and the status all count the same panes.
+    requested = list(dict.fromkeys(pane_types))
     results: dict[str, dict[str, Any]] = {}
-    success_count = 0
 
-    for pane_type_name in pane_types:
+    for pane_type_name in requested:
         # A pane's own failure (unknown type, not in the layout, could not be
-        # captured) is recorded in its slot, in the same shape every tool failure
-        # takes, and the next pane is still tried. Anything else - a torn link, a
-        # bug - is the whole call's and reaches the boundary.
+        # captured or saved) is recorded in its slot, in the same shape every tool
+        # failure takes, and the next pane is still tried. Anything else - a torn
+        # link, a bug - is the whole call's and reaches the boundary.
         try:
             result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+            result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
         except ToolError as e:
             failure = failure_for(e, "capture_multiple_panes")
             logger.warning(
@@ -552,27 +576,23 @@ def capture_multiple_panes(
             results[pane_type_name] = failure.model_dump()
             continue
 
-        raw_bytes: bytes = result.pop("raw_bytes")
-        result["image_format"] = "png"
-        result["image_size_bytes"] = len(raw_bytes)
-
-        if save_dir:
-            path = Path(save_dir) / f"{pane_type_name}.png"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(raw_bytes)
-            result["file_path"] = str(path.absolute())
-        else:
-            result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
-
-        success_count += 1
         results[pane_type_name] = result
 
-    # [LAW:dataflow-not-control-flow] the call succeeds by reporting every pane
-    # it could try; each slot is a capture or the failure arm for that pane, so
-    # the aggregate has one shape whether none, some or all of the captures worked.
-    return {
-        "status": "success",
-        "success_count": success_count,
-        "total_requested": len(pane_types),
+    # [LAW:one-source-of-truth] the slots are the record; the counts and the
+    # status are read off them.
+    captured = [name for name, slot in results.items() if slot["status"] == "success"]
+    failed = [
+        Undone(name, slot["kind"], slot["message"])
+        for name, slot in results.items()
+        if slot["status"] == "error"
+    ]
+    report: dict[str, Any] = {
+        "success_count": len(captured),
+        "total_requested": len(requested),
         "results": results,
+    }
+    # Each slot is a capture or the failure arm for that pane.
+    return {
+        "status": batch_status("capture_multiple_panes", captured, failed, **report),
+        **report,
     }

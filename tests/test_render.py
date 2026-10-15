@@ -1264,7 +1264,7 @@ class TestRenderFraming:
         failure = FAILURE.validate_python(result)
         assert isinstance(failure, OperationFailure), result
         assert failure.message.startswith(
-            "No view rendered: front: Render completed but produced no image; left: "
+            "Nothing was done: front: Render completed but produced no image; left: "
         )
         assert result["renderer"] == "opengl"
         assert "total_render_time_ms" in result and "bounding_box" in result
@@ -1310,7 +1310,7 @@ class TestRenderFraming:
         with caplog.at_level("WARNING", logger="houdini_mcp.tools"):
             result = render_quad_view(host="localhost", port=18811)
 
-        assert result["status"] == "success", result
+        assert result["status"] == "partial", result
         front, left, top, perspective = result["views"]
         failure = FAILURE.validate_python(left)
         assert isinstance(failure, OperationFailure), left
@@ -1346,7 +1346,7 @@ class TestRenderFraming:
 
         result = render_quad_view(host="localhost", port=18811)
 
-        assert result["status"] == "success", result
+        assert result["status"] == "partial", result
         top = result["views"][2]
         assert (top["name"], top["kind"], top["exception"]) == (
             "top",

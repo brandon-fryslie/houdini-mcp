@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -89,12 +90,14 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     )
 
 
-def test_capture_multiple_panes_reports_every_pane_in_its_slot(
+def test_capture_multiple_panes_that_captures_nothing_is_an_error_carrying_every_slot(
     mock_connection: MockHouModule,
 ) -> None:
-    """The aggregate has one shape whether the captures worked or not: each slot
-    is a capture or that pane's own failure arm, so a client reads the slots."""
+    """No pane captured is not a success: the call is an error naming each pane's
+    cause, refused as the caller's to fix when every pane was, and still carries
+    each pane's own failure arm."""
     from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import InvalidInputFailure
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
     with patch(
@@ -103,9 +106,165 @@ def test_capture_multiple_panes_reports_every_pane_in_its_slot(
     ):
         result = capture_multiple_panes(["ChannelEditor", "thisown"])
 
-    assert result["status"] == "success"
+    call = FAILURE.validate_python(result)
+    assert isinstance(call, InvalidInputFailure), result
+    assert call.message == (
+        "Nothing was done: ChannelEditor: Unknown pane type: ChannelEditor; "
+        "thisown: Unknown pane type: thisown"
+    )
     assert (result["success_count"], result["total_requested"]) == (0, 2)
     for name in ("ChannelEditor", "thisown"):
         slot = FAILURE.validate_python(result["results"][name])
         assert (slot.kind, slot.operation) == ("invalid_input", "capture_multiple_panes")
         assert slot.message == f"Unknown pane type: {name}"
+
+
+def test_capture_multiple_panes_of_nothing_is_success_over_no_slots(
+    mock_connection: MockHouModule,
+) -> None:
+    """Nothing asked is nothing failed: not an error with an empty cause."""
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    with patch(
+        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+        return_value=(object(), object(), object()),
+    ):
+        result = capture_multiple_panes([])
+
+    assert result == {"status": "success", "success_count": 0, "total_requested": 0, "results": {}}
+
+
+def test_capture_multiple_panes_captures_a_pane_named_twice_once(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One slot per pane: the counts, the slots and the status describe the same
+    panes, so a repeated name cannot hide a failure behind a later capture."""
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    attempts: list[str] = []
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        attempts.append(name)
+        return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+
+    with (
+        caplog.at_level(logging.INFO, logger="houdini_mcp.tools"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+    ):
+        result = capture_multiple_panes(["SceneViewer", "NetworkEditor", "SceneViewer"])
+
+    assert attempts == ["SceneViewer", "NetworkEditor"]
+    assert result["status"] == "success"
+    assert (result["success_count"], result["total_requested"]) == (2, 2)
+    assert list(result["results"]) == ["SceneViewer", "NetworkEditor"]
+    assert "batch outcome operation=capture_multiple_panes done=2 failed=[]" in caplog.text
+
+
+def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
+    mock_connection: MockHouModule, tmp_path: Path
+) -> None:
+    """A save the disk refuses is that pane's failure, in its slot; the pane
+    already saved stays reported, instead of the whole call aborting."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import OperationFailure
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+
+    (tmp_path / "SceneViewer.png").mkdir()  # a directory where the file must go
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
+
+    assert result["status"] == "partial", result
+    assert result["results"]["NetworkEditor"]["file_path"] == str(tmp_path / "NetworkEditor.png")
+    assert (tmp_path / "NetworkEditor.png").read_bytes() == b"png"
+    slot = FAILURE.validate_python(result["results"]["SceneViewer"])
+    assert isinstance(slot, OperationFailure)
+    assert slot.message.startswith("Could not save SceneViewer to ")
+
+
+def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
+    mock_connection: MockHouModule, tmp_path: Path
+) -> None:
+    """A save that times out on the disk is that pane's operation_failed: the
+    link to Houdini is not torn down, so the next pane is still captured."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import OperationFailure
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+
+    real_write = Path.write_bytes
+
+    def write_bytes(self: Path, data: bytes) -> int:
+        if self.name == "NetworkEditor.png":
+            raise TimeoutError(60, "Operation timed out")
+        return real_write(self, data)
+
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+        patch("houdini_mcp.tools.failure.disconnect") as disconnect,
+        patch.object(Path, "write_bytes", write_bytes),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
+
+    disconnect.assert_not_called()
+    assert result["status"] == "partial", result
+    slot = FAILURE.validate_python(result["results"]["NetworkEditor"])
+    assert isinstance(slot, OperationFailure), slot
+    assert (tmp_path / "SceneViewer.png").read_bytes() == b"png"
+
+
+def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A capture beside a failure is reported as partial, never as success,
+    with the capture in its slot and the failure arm in the other."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.pane_screenshot import _capture_pane_to_bytes, capture_multiple_panes
+
+    def capture_only_the_network_editor(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        if name == "NetworkEditor":
+            return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+        return _capture_pane_to_bytes(hou, name, QtWidgets, QtCore)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes",
+            capture_only_the_network_editor,
+        ),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "ChannelEditor"])
+
+    assert result["status"] == "partial", result
+    assert (result["success_count"], result["total_requested"]) == (1, 2)
+    assert result["results"]["NetworkEditor"]["image_size_bytes"] == 3
+    slot = FAILURE.validate_python(result["results"]["ChannelEditor"])
+    assert slot.kind == "invalid_input"
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.pane_screenshot"
+    ] == [
+        "Unknown pane type 'ChannelEditor' refused; this Houdini has 3 pane types",
+        "ChannelEditor not captured (invalid_input): Unknown pane type: ChannelEditor",
+    ]
