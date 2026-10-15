@@ -95,15 +95,18 @@ class TestConnect:
         assert isinstance(exc_info.value.__cause__, HandshakeError)
 
     def test_a_link_that_fails_validation_is_closed_and_not_installed(
-        self, reset_connection_state, mock_hou
+        self, reset_connection_state, mock_hou, caplog
     ):
         """Houdini answers the socket but not the import of ``hou``: the attempt is
         retried, the half-open link is closed, and nothing is left behind for
-        is_connected()."""
+        is_connected() - or logged as connected."""
         busy = MockRpycConnection(mock_hou)
         type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
 
-        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
             mock_rpyc.connect.return_value = busy
             with pytest.raises(HoudiniConnectionError):
                 connect("localhost", 18811, max_retries=2, retry_delay=0.01)
@@ -112,6 +115,7 @@ class TestConnect:
         assert busy.closed is True
         assert is_connected() is False
         assert get_connection() is None
+        assert "Connected to Houdini at localhost:18811" not in caplog.messages
 
     def test_a_proven_link_is_logged_by_the_houdini_it_reached(
         self, reset_connection_state, mock_hou, caplog
@@ -126,21 +130,6 @@ class TestConnect:
             connect("render-farm", 19999, max_retries=1)
 
         assert "Connected to Houdini at render-farm:19999" in caplog.messages
-
-    def test_a_link_that_fails_its_proof_is_not_logged_as_connected(
-        self, reset_connection_state, mock_hou, caplog
-    ):
-        busy = MockRpycConnection(mock_hou)
-        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
-        with (
-            patch("houdini_mcp.connection.handshake") as mock_rpyc,
-            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
-            pytest.raises(HoudiniConnectionError),
-        ):
-            mock_rpyc.connect.return_value = busy
-            connect("render-farm", 19999, max_retries=1)
-
-        assert "Connected to Houdini at render-farm:19999" not in caplog.messages
 
     def test_a_close_that_fails_does_not_replace_the_validation_error(
         self, reset_connection_state, mock_hou
@@ -538,7 +527,9 @@ class TestPing:
         assert result["hip_file"] == mock_hou.hipFile.path()
         assert mock_conn.closed is True  # Connection should be closed
 
-    def test_ping_does_not_log_the_server_as_connected(self, mock_hou, caplog):
+    def test_ping_does_not_log_the_server_as_connected(
+        self, reset_connection_state, mock_hou, caplog
+    ):
         """The probe's link is never the server's, so it is not announced as one."""
         with (
             patch("houdini_mcp.connection.handshake") as mock_rpyc,

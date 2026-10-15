@@ -432,11 +432,12 @@ class HoudiniConnection:
                 self._target, host, port, max_retries, retry_delay, sync_timeout, jitter
             )
             previous, self._link = self._link, link
-        if previous is not None:
-            previous.close()
-        # The event is the server holding a link, so it follows the close of the one
-        # replaced and is not the probe's: ``ping`` opens a link it never installs.
-        logger.info(f"Connected to Houdini at {link.name}")
+            # [LAW:no-ambient-temporal-coupling] The event is the server holding a
+            # link: it follows the close of the one replaced, under the lock, so no
+            # later replace can log between them; ``ping`` never installs, so never logs it.
+            if previous is not None:
+                previous.close()
+            logger.info(f"Connected to Houdini at {link.name}")
         return link
 
     def close(self) -> None:
