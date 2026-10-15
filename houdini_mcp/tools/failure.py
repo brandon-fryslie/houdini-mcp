@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Sized
-from typing import Annotated, Any, Literal
+from collections.abc import Sequence, Sized
+from typing import Annotated, Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -52,6 +52,7 @@ __all__ = [
     "failure_for",
     "failure_response",
     "BatchStatus",
+    "Undone",
     "batch_status",
 ]
 
@@ -173,13 +174,32 @@ BatchStatus = Literal["success", "partial"]
 """The status of a tool that acts on several items and did at least one thing."""
 
 
-def batch_status(failed: Sized) -> BatchStatus:
-    """``"partial"`` while any item has a failure in its slot, else ``"success"``.
+class Undone(NamedTuple):
+    """One item a multi-item tool did not do, and why."""
 
-    [LAW:one-source-of-truth] Every multi-item tool reads its status here, so
-    ``"success"`` never stands over an item whose effect did not happen.
+    name: str
+    kind: FailureKind
+    message: str
+
+
+def batch_status(done: Sized, failed: Sequence[Undone], /, **report: Any) -> BatchStatus:
+    """``"partial"`` while any item failed, else ``"success"``; raised when items
+    failed and nothing was done, carrying ``report``.
+
+    [LAW:single-enforcer] Every multi-item tool reads its status here, so
+    ``"success"`` never stands over an item whose effect did not happen and
+    ``"partial"`` never stands over a call that did nothing. A call whose every
+    item was refused as ``invalid_input`` is the caller's to fix; any other is
+    ``operation_failed``.
     """
-    return "partial" if len(failed) else "success"
+    logger.info("batch outcome done=%d failed=%s", len(done), [(u.name, u.kind) for u in failed])
+    if failed and not len(done):
+        refused = all(u.kind == "invalid_input" for u in failed)
+        raise (InvalidInput if refused else OperationFailed)(
+            "Nothing was done: " + "; ".join(f"{u.name}: {u.message}" for u in failed),
+            **report,
+        )
+    return "partial" if failed else "success"
 
 
 # =============================================================================

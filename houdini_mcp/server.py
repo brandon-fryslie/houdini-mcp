@@ -12,6 +12,7 @@ from . import tools
 from .connection import describe_target, ensure_connected, ensure_link, ping
 from .tools._common import (
     DEFAULT_RESOLUTION,
+    RGB,
     Resolution,
     Vec3,
     apply_response_cap,
@@ -1195,7 +1196,7 @@ def layout_children(
 
 
 @mcp.tool()
-def set_node_color(node_path: str, color: list[float]) -> dict[str, Any]:
+def set_node_color(node_path: str, color: RGB) -> dict[str, Any]:
     """
     Set the display color of a node in the network editor.
 
@@ -1238,7 +1239,7 @@ def create_network_box(
     parent_path: str,
     node_paths: list[str],
     label: str = "",
-    color: list[float] | None = None,
+    color: RGB | None = None,
 ) -> dict[str, Any]:
     """
     Create a network box around a group of nodes.
@@ -1253,7 +1254,7 @@ def create_network_box(
 
     Returns:
         Dict with network_box_name, nodes_contained, label, and the color the
-        box was given (clamped to 0-1). A color that is not [r, g, b] is refused.
+        box was given (clamped to 0-1).
 
     Examples:
         create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform")

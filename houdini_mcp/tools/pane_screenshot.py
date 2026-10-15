@@ -19,13 +19,14 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     ToolError,
+    Undone,
+    batch_status,
     ensure_connected,
     ensure_link,
     failure_for,
     handle_connection_errors,
     node_at,
 )
-from .failure import batch_status
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -536,10 +537,14 @@ def capture_multiple_panes(
 
     QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 
+    # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
+    # captured once, so the slots, the counts and the status all count the same panes.
+    requested = list(dict.fromkeys(pane_types))
     results: dict[str, dict[str, Any]] = {}
-    failed: list[str] = []
+    captured: list[str] = []
+    failed: list[Undone] = []
 
-    for pane_type_name in pane_types:
+    for pane_type_name in requested:
         # A pane's own failure (unknown type, not in the layout, could not be
         # captured) is recorded in its slot, in the same shape every tool failure
         # takes, and the next pane is still tried. Anything else - a torn link, a
@@ -552,7 +557,7 @@ def capture_multiple_panes(
                 "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
             )
             results[pane_type_name] = failure.model_dump()
-            failed.append(pane_type_name)
+            failed.append(Undone(pane_type_name, failure.kind, failure.message))
             continue
 
         raw_bytes: bytes = result.pop("raw_bytes")
@@ -568,19 +573,12 @@ def capture_multiple_panes(
             result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
 
         results[pane_type_name] = result
+        captured.append(pane_type_name)
 
     report: dict[str, Any] = {
-        "success_count": len(pane_types) - len(failed),
-        "total_requested": len(pane_types),
+        "success_count": len(captured),
+        "total_requested": len(requested),
         "results": results,
     }
-    # Each slot is a capture or the failure arm for that pane. A call that
-    # captured nothing did not do what was asked: it is raised to the one
-    # boundary that shapes failures, carrying the same report.
-    if len(failed) == len(pane_types):
-        raise OperationFailed(
-            "No pane captured: "
-            + "; ".join(f"{name}: {results[name]['message']}" for name in failed),
-            **report,
-        )
-    return {"status": batch_status(failed), **report}
+    # Each slot is a capture or the failure arm for that pane.
+    return {"status": batch_status(captured, failed, **report), **report}

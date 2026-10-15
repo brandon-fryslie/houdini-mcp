@@ -19,14 +19,15 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     Resolution,
+    Undone,
     Vec3,
+    batch_status,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
     node_at,
     node_category,
 )
-from .failure import batch_status
 from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
@@ -641,16 +642,13 @@ def render_quad_view(
     }
     if (box := framing.report()) is not None:
         report["bounding_box"] = box
-    failed = [view for view in view_results if view["status"] == "error"]
-    # A call that produced no picture did not do what was asked: it is raised to
-    # the one boundary that shapes failures, carrying the same report.
-    if len(failed) == len(view_results):
-        raise OperationFailed(
-            "No view rendered: "
-            + "; ".join(f"{view['name']}: {view['message']}" for view in failed),
-            **report,
-        )
-    return {"status": batch_status(failed), **report}
+    rendered = [view for view in view_results if view["status"] == "success"]
+    failed = [
+        Undone(view["name"], view["kind"], view["message"])
+        for view in view_results
+        if view["status"] == "error"
+    ]
+    return {"status": batch_status(rendered, failed, **report), **report}
 
 
 # =============================================================================
@@ -889,7 +887,7 @@ def create_render_node(
         raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
     return {
-        **write_all(node, settings or {}).fields(),
+        **write_all(node, settings or {}).fields(node),
         "rop_path": node.path(),
         "rop_name": node.name(),
         "rop_type": rop_type,

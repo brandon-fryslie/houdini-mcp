@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..connection import transport_failure
-from .failure import BatchStatus, batch_status
+from .failure import Undone, batch_status
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
 
@@ -123,12 +123,13 @@ class Writes:
     updated: list[dict[str, Any]]
     failed: list[dict[str, Any]]
 
-    @property
-    def status(self) -> BatchStatus:
-        return batch_status(self.failed)
-
-    def fields(self) -> dict[str, Any]:
-        return {"status": self.status, "updated": self.updated, "failed": self.failed}
+    def fields(self, *done_before: Any) -> dict[str, Any]:
+        """The writes' report under the call's status. ``done_before`` is what the
+        call did before writing (a node it created), so all writes failing over a
+        new node is ``partial``, and over nothing is raised."""
+        report = {"updated": self.updated, "failed": self.failed}
+        undone = [Undone(f["name"], f["kind"], f["reason"]) for f in self.failed]
+        return {"status": batch_status([*done_before, *self.updated], undone, **report), **report}
 
 
 def write_all(node: Any, values: Mapping[str, Any]) -> Writes:

@@ -198,6 +198,34 @@ class TestServedSchemas:
                     value,
                 )
 
+    async def test_a_color_is_three_finite_numbers(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """The [r, g, b] shape is a fact of the schema: a wrong-length color never
+        reaches Houdini, and out-of-range channels are accepted to be clamped."""
+        calls = {
+            "set_node_color": {"node_path": "/obj"},
+            "create_network_box": {"parent_path": "/obj", "node_paths": []},
+        }
+        for name, base in calls.items():
+            assert await accepts(client, served, name, {**base, "color": [2, -1, 0.5]}), name
+            for color in ([1, 0], [], [0.1, 0.2, 0.3, 0.4], ["1", "0", "0"]):
+                assert not await accepts(client, served, name, {**base, "color": color}), (
+                    name,
+                    color,
+                )
+        assert await accepts(client, served, "create_network_box", calls["create_network_box"])
+
+    def test_a_color_channel_is_finite(self) -> None:
+        """NaN would clamp to 1.0 and be reported as if it were asked for."""
+        from pydantic import TypeAdapter, ValidationError
+
+        from houdini_mcp.tools._common import RGB
+
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValidationError):
+                TypeAdapter(RGB).validate_python([bad, 0, 0])
+
     async def test_render_quad_view_parameters(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:

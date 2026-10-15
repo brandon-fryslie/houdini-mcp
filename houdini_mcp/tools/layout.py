@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from ._common import (
+    RGB,
     InvalidInput,
     ensure_connected,
     handle_connection_errors,
@@ -17,14 +18,8 @@ from ._common import (
 logger = logging.getLogger("houdini_mcp.tools.layout")
 
 
-def _parsed_color(color: list[float]) -> list[float]:
-    """The ``[r, g, b]`` a node or box is given, each clamped to 0-1, or refused.
-
-    [LAW:single-enforcer] Every tool that colors something reads its color here,
-    so one bad color is refused the same way wherever it is passed.
-    """
-    if len(color) != 3:
-        raise InvalidInput("Color must be [r, g, b] with 3 values", color=color)
+def _clamped(color: RGB) -> list[float]:
+    """The ``[r, g, b]`` a node or box is given, each channel clamped to 0-1."""
     return [max(0.0, min(1.0, c)) for c in color]
 
 
@@ -92,7 +87,7 @@ def layout_children(
 @handle_connection_errors("set_node_color")
 def set_node_color(
     node_path: str,
-    color: list[float],
+    color: RGB,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -125,7 +120,7 @@ def set_node_color(
     hou = ensure_connected(host, port)
 
     node = node_at(hou, node_path)
-    clamped_color = _parsed_color(color)
+    clamped_color = _clamped(color)
     node.setColor(hou.Color(clamped_color))
 
     return {
@@ -183,7 +178,7 @@ def create_network_box(
     parent_path: str,
     node_paths: list[str],
     label: str = "",
-    color: list[float] | None = None,
+    color: RGB | None = None,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -215,7 +210,7 @@ def create_network_box(
     """
     hou = ensure_connected(host, port)
 
-    applied_color = None if color is None else _parsed_color(color)
+    applied_color = None if color is None else _clamped(color)
     parent = node_at(hou, parent_path, "Parent node")
 
     # Validate all nodes exist and are children of parent
@@ -246,6 +241,13 @@ def create_network_box(
 
     # Fit box to contents
     netbox.fitAroundContents()
+    logger.info(
+        "network box created parent=%s name=%s nodes=%d color=%s",
+        parent_path,
+        netbox.name(),
+        len(nodes),
+        applied_color,
+    )
 
     return {
         "status": "success",

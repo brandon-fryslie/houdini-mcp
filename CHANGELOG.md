@@ -12,10 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (wire)**: a multi-item tool never says `"success"` over an item it
   did not do (houdini-laws-etg.tmx). `render_quad_view` and
   `capture_multiple_panes` return `status: "partial"` when a view or pane failed,
-  as the parameter-writing tools already did; `capture_multiple_panes` that
-  captured nothing is an `operation_failed` error carrying every pane's slot.
-  `create_network_box` refuses a `color` that is not `[r, g, b]` before creating
-  the box, instead of creating it uncolored, and reports the color it applied.
+  as the parameter-writing tools already did. A multi-item call that did none of
+  its items is an error carrying its report, its message starting "Nothing was
+  done:": `invalid_input` when every item was refused as the caller's input,
+  else `operation_failed`. That now includes `set_render_settings` and
+  `assign_material` when no write landed, which were `"partial"`; a node the call
+  created still makes it `"partial"`. `capture_multiple_panes` captures a pane
+  named twice once. `set_node_color` and `create_network_box` take `color` as
+  three finite numbers in the served schema, so any other length is refused on
+  the wire; `create_network_box` no longer creates the box uncolored on a bad
+  color, and reports the color it applied.
 
 - **BREAKING (wire)**: a render's resolution has one default and no null spelling
   (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish

@@ -98,10 +98,8 @@ def create_material(
             material_type=material_type,
         ) from e
 
-    writes = write_all(mat_node, parameters or {})
-
     return {
-        **writes.fields(),
+        **write_all(mat_node, parameters or {}).fields(mat_node),
         "material_path": mat_node.path(),
         "material_name": mat_node.name(),
         "material_type": material_type,
@@ -192,6 +190,7 @@ def assign_material(
             existing_mat_sop = child
             break
 
+    created = []
     if existing_mat_sop:
         mat_sop = existing_mat_sop
     else:
@@ -200,14 +199,15 @@ def assign_material(
         mat_sop.setFirstInput(display_node)
         mat_sop.setDisplayFlag(True)
         mat_sop.setRenderFlag(True)
+        created.append(mat_sop)
 
     values = {"shop_materialpath1": material_path}
     if group:
         values["group1"] = group
-    # [LAW:no-silent-failure] the SOP exists and is wired whatever the writes
-    # did, so the answer names it and reports each write like every batch tool.
+    # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
+    # writes did, so it counts as done; an existing one written nothing did nothing.
     return {
-        **write_all(mat_sop, values).fields(),
+        **write_all(mat_sop, values).fields(*created),
         "geometry_path": geometry_path,
         "material_path": material_path,
         "material_sop_path": mat_sop.path(),

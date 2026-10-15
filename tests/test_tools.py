@@ -2623,6 +2623,37 @@ class TestMaterialTools:
         assert result["material_sop_path"] == mat_sop.path()
         assert mat_sop._params.get("shop_materialpath1") == "/mat/test_mat"
 
+    def test_assign_material_that_writes_nothing_to_an_existing_sop_is_an_error(
+        self, mock_connection
+    ):
+        """An existing Material SOP that took no write was not changed: no material
+        was assigned, so the answer is an error, not "partial"."""
+        from houdini_mcp.tools import assign_material
+        from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
+
+        mock_connection.node("/").createNode("matnet", "mat")
+        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mat_sop = MockHouNode(path="/obj/geo1/material1", name="material1", node_type="material")
+        mat_sop._display_flag = True
+        mock_connection.add_node(geo)
+        mock_connection.add_node(mat_sop)
+        mock_connection.add_node(
+            MockHouNode(path="/mat/test_mat", name="test_mat", node_type="principledshader")
+        )
+
+        result = assign_material(
+            geometry_path="/obj/geo1",
+            material_path="/mat/test_mat",
+            group="top",
+            host="localhost",
+            port=18811,
+        )
+
+        failure = FAILURE.validate_python(result)
+        assert isinstance(failure, InvalidInputFailure), result
+        assert failure.message.startswith("Nothing was done: shop_materialpath1: ")
+        assert [f["name"] for f in result["failed"]] == ["shop_materialpath1", "group1"]
+
     def test_assign_material_partial_write_still_names_the_sop(self, mock_connection):
         """A group the Material SOP cannot take is reported, not hidden behind an error."""
         from houdini_mcp.tools import assign_material
@@ -2702,23 +2733,6 @@ class TestLayoutTools:
 
         assert result["status"] == "error"
         assert "not found" in result["message"].lower()
-
-    def test_set_node_color_invalid_color(self, mock_connection):
-        """Test error with invalid color format."""
-        from houdini_mcp.tools import set_node_color
-
-        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        mock_connection.add_node(geo)
-
-        result = set_node_color(
-            node_path="/obj/geo1",
-            color=[1, 0],  # Only 2 values instead of 3
-            host="localhost",
-            port=18811,
-        )
-
-        assert result["status"] == "error"
-        assert "3 values" in result["message"]
 
     def test_set_node_position_not_found(self, mock_connection):
         """Test error when node doesn't exist."""
@@ -2922,41 +2936,24 @@ class TestLayoutTools:
         assert netbox._color.rgb() == (0.2, 0.6, 0.2)
         assert result["color"] == [0.2, 0.6, 0.2]
 
-    def test_create_network_box_reports_the_clamped_color_it_applied(self, mock_connection):
+    def test_create_network_box_reports_the_clamped_color_it_applied(self, mock_connection, caplog):
         from houdini_mcp.tools import create_network_box
 
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo)
         mock_connection.add_node(MockHouNode(path="/obj/geo1/a", name="a", node_type="null"))
 
-        result = create_network_box(
-            parent_path="/obj/geo1", node_paths=["/obj/geo1/a"], color=[2.0, -1.0, 0.5]
-        )
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.layout"):
+            result = create_network_box(
+                parent_path="/obj/geo1", node_paths=["/obj/geo1/a"], color=(2.0, -1.0, 0.5)
+            )
 
         assert result["color"] == [1.0, 0.0, 0.5]
         assert geo._network_boxes[0]._color.rgb() == (1.0, 0.0, 0.5)
-
-    @pytest.mark.parametrize("color", [[1, 0], [], [0.1, 0.2, 0.3, 0.4]])
-    def test_create_network_box_refuses_a_color_that_is_not_rgb_and_creates_nothing(
-        self, mock_connection, color
-    ):
-        """A bad color is refused before the box exists, never dropped from a box
-        that is then reported as created."""
-        from houdini_mcp.tools import create_network_box
-        from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
-
-        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        mock_connection.add_node(geo)
-        mock_connection.add_node(MockHouNode(path="/obj/geo1/a", name="a", node_type="null"))
-
-        result = create_network_box(
-            parent_path="/obj/geo1", node_paths=["/obj/geo1/a"], color=color
+        assert (
+            f"network box created parent=/obj/geo1 name={result['network_box_name']} "
+            "nodes=1 color=[1.0, 0.0, 0.5]" in caplog.text
         )
-
-        failure = FAILURE.validate_python(result)
-        assert isinstance(failure, InvalidInputFailure), result
-        assert failure.message == "Color must be [r, g, b] with 3 values"
-        assert geo._network_boxes == []
 
 
 class TestResponseSizeMetadata:

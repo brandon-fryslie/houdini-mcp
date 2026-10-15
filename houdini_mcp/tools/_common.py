@@ -31,6 +31,8 @@ from .failure import (
     TimedOut,
     ToolError,
     ToolFailure,
+    Undone,
+    batch_status,
     failure_for,
     failure_response,
     tool_error,
@@ -61,6 +63,8 @@ __all__ = [
     "TimedOut",
     "ProgramStillRunning",
     "tool_error",
+    "Undone",
+    "batch_status",
     "node_at",
     # Output utilities
     "_truncate_output",
@@ -96,6 +100,7 @@ __all__ = [
     "Resolution",
     "DEFAULT_RESOLUTION",
     "Vec3",
+    "RGB",
 ]
 
 logger = logging.getLogger("houdini_mcp.tools")
@@ -222,6 +227,9 @@ Resolution = tuple[Dimension, Dimension]
 # [LAW:parse-dont-validate] parsed, since a default is served unchecked: out of bounds fails import.
 DEFAULT_RESOLUTION: Resolution = TypeAdapter(Resolution).validate_python((512, 512))
 Vec3 = tuple[float, float, float]
+Channel = Annotated[float, Field(allow_inf_nan=False)]
+RGB = tuple[Channel, Channel, Channel]
+"""A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:
