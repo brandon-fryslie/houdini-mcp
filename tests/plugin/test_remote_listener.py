@@ -210,8 +210,8 @@ class TestStartStop:
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
 
-        result = started(listener.reload(ListenerConfig(host="127.0.0.1", port=0, reuse_addr=False)))
-        assert fake_hrpyc.servers[1].reuse_addr is False
+        result = started(listener.reload(ListenerConfig(host="localhost", port=0)))
+        assert result["host"] == fake_hrpyc.servers[1].hostname == "localhost"
         assert result["bound_port"] == fake_hrpyc.servers[1].port
         assert listener.is_running() is True
         # First server closed, second server open.
@@ -270,6 +270,7 @@ class TestStartAwaitsReadiness:
         die with EBADF; the thread body serves only while active, so a server
         closed first is finished before the loop begins.
         """
+
         class CountingServer(FakeThreadedServer):
             accepts = 0
 

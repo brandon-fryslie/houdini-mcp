@@ -28,7 +28,8 @@ def houdini_process(monkeypatch, fake_hrpyc, fake_hou):
 
 
 class TestModuleApi:
-    def test_start_and_stop_roundtrip(self):
+    def test_start_and_stop_roundtrip(self, monkeypatch):
+        monkeypatch.setenv("HOUDINI_RPC_BIND_PORT", "18899")
         status = started(remote.start_hrpyc_server(port=0))
         # port= overrides HOUDINI_RPC_BIND_PORT and the default.
         assert status["port"] == 0

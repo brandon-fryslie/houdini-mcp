@@ -21,8 +21,8 @@ import contextlib
 import logging
 import socket
 import sys
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
