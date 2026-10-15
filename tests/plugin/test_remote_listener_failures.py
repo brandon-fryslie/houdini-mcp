@@ -20,15 +20,17 @@ from houdini_mcp_plugin.listener import (
 )
 from rpyc.utils.authenticators import AuthenticationError
 
+from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer, started
+
 # ---------------------------------------------------------------------------
 # Bind failures
 # ---------------------------------------------------------------------------
 
 
 class TestBindFailure:
-    def test_start_reports_error_on_bind_failure(self, fake_hrpyc_bind_fail, fake_hou, free_port):
+    def test_start_reports_error_on_bind_failure(self, fake_hrpyc_bind_fail, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc_bind_fail, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
 
         assert result["status"] == "error"
         assert result["running"] is False
@@ -53,15 +55,13 @@ class TestBindFailure:
         finally:
             holder.close()
 
-    def test_listen_failure_releases_the_bound_socket(self, fake_hou, free_port):
+    def test_listen_failure_releases_the_bound_socket(self, fake_hou):
         """A failure after the bind closes the server: the port is free again.
 
         rpyc binds in ``__init__`` and listens in ``_listen()``; a failure in
         the second phase is reported like any bind error and leaves nothing
         behind, so the next start on the same port succeeds.
         """
-        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
-
         closed: list[FakeThreadedServer] = []
 
         class ListenFails(FakeThreadedServer):
@@ -75,7 +75,7 @@ class TestBindFailure:
         hrpyc = FakeHrpycModule()
         hrpyc.ThreadedServer = lambda *a, **kw: ListenFails(*a, **kw)
         listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
         assert result["status"] == "error"
         assert result["error_type"] == "bind"
         assert listener.is_running() is False
@@ -83,15 +83,16 @@ class TestBindFailure:
 
         # Same port, a server whose listen works: nothing is holding it.
         hrpyc.ThreadedServer = lambda *a, **kw: FakeThreadedServer(*a, **kw)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port, reuse_addr=False))
-        assert result["status"] == "success"
+        result = started(
+            listener.start(ListenerConfig(host="127.0.0.1", port=closed[0].port, reuse_addr=False))
+        )
+        assert result["bound_port"] == closed[0].port
         listener.stop()
 
-    def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou, free_port):
+    def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou):
         """rpyc's close() closes the listening socket and every client socket
         unguarded; the error is stop()'s result, and the listener no longer holds
         the server, so start() is not answered already_running."""
-        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
 
         class CloseFails(FakeThreadedServer):
             # stop()'s close, from the test's thread, fails as a client socket
@@ -105,21 +106,19 @@ class TestBindFailure:
         hrpyc = FakeHrpycModule()
         hrpyc.ThreadedServer = lambda *a, **kw: CloseFails(*a, **kw)
         listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
-        assert (
-            listener.start(ListenerConfig(host="127.0.0.1", port=free_port))["status"] == "success"
-        )
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         result = listener.stop()
         assert result["status"] == "error"
         assert result["error_type"] == "close"
         assert listener.is_running() is False
         assert listener.stop()["status"] == "not_running"
 
-    def test_missing_hrpyc_module_is_reported(self, fake_hou, free_port, monkeypatch):
+    def test_missing_hrpyc_module_is_reported(self, fake_hou, monkeypatch):
         # No injected hrpyc means the listener imports Houdini's; None in
         # sys.modules makes that import raise ImportError, as outside Houdini.
         monkeypatch.setitem(sys.modules, "hrpyc", None)
         listener = RemoteListener(hou=fake_hou)
-        result = listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
         assert result["status"] == "error"
         assert "hrpyc" in result["message"].lower()
 
@@ -130,9 +129,9 @@ class TestBindFailure:
 
 
 class TestSecurityEnforcement:
-    def test_wildcard_bind_refused_without_opt_in(self, fake_hrpyc, fake_hou, free_port):
+    def test_wildcard_bind_refused_without_opt_in(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="0.0.0.0", port=free_port))
+        result = listener.start(ListenerConfig(host="0.0.0.0", port=0))
 
         assert result["status"] == "error"
         assert result["error_type"] == "security"
@@ -140,31 +139,27 @@ class TestSecurityEnforcement:
         # No server was ever created -> no silent exposure.
         assert fake_hrpyc.servers == []
 
-    def test_wildcard_bind_raises_when_strict(self, fake_hrpyc, fake_hou, free_port):
+    def test_wildcard_bind_raises_when_strict(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         with pytest.raises(SecurityError):
-            listener.start(ListenerConfig(host="0.0.0.0", port=free_port), raise_on_policy=True)
+            listener.start(ListenerConfig(host="0.0.0.0", port=0), raise_on_policy=True)
 
-    def test_wildcard_bind_allowed_with_trusted_network(self, fake_hrpyc, fake_hou, free_port):
+    def test_wildcard_bind_allowed_with_trusted_network(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        result = listener.start(
-            ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True)
+        result = started(
+            listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True))
         )
-        assert result["status"] == "success"
         assert result["security"]["loopback_only"] is False
         assert result["security"]["exposure"] == "network"
 
-    def test_wildcard_bind_allowed_with_token(self, fake_hrpyc, fake_hou, free_port):
+    def test_wildcard_bind_allowed_with_token(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2"))
-        assert result["status"] == "success"
+        result = started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token="hunter2")))
         assert result["security"]["authenticated"] is True
 
-    def test_configured_token_is_enforced_by_the_wired_server(
-        self, fake_hrpyc, fake_hou, free_port
-    ):
+    def test_configured_token_is_enforced_by_the_wired_server(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2"))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token="hunter2")))
         authenticate = fake_hrpyc.servers[0].authenticator
 
         client, server_side = socket.socketpair()
@@ -179,23 +174,21 @@ class TestSecurityEnforcement:
             with pytest.raises(AuthenticationError):
                 authenticate(server_side)
 
-    def test_trusted_network_without_token_reports_unauthenticated(
-        self, fake_hrpyc, fake_hou, free_port
-    ):
+    def test_trusted_network_without_token_reports_unauthenticated(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True)))
 
         assert fake_hrpyc.servers[0].authenticator is None
         assert listener.status()["authenticated"] is False
         assert listener.self_test()["authenticated"] is False
 
     def test_token_that_cannot_be_enforced_refuses_start(
-        self, fake_hrpyc, fake_hou, free_port, monkeypatch, caplog
+        self, fake_hrpyc, fake_hou, monkeypatch, caplog
     ):
         # A None entry in sys.modules makes the import raise ImportError.
         monkeypatch.setitem(sys.modules, "rpyc.utils.authenticators", None)
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        cfg = ListenerConfig(host="0.0.0.0", port=free_port, token="hunter2")
+        cfg = ListenerConfig(host="0.0.0.0", port=0, token="hunter2")
 
         with caplog.at_level("WARNING"):
             result = listener.start(cfg)
@@ -225,18 +218,19 @@ class TestSelfTestAndStatus:
         status = listener.status()
         assert status["running"] is False
 
-    def test_status_when_running_reports_endpoint(self, fake_hrpyc, fake_hou, free_port):
+    def test_status_when_running_reports_endpoint(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         status = listener.status()
         assert status["running"] is True
         assert status["host"] == "127.0.0.1"
-        assert status["port"] == free_port
-        assert status["bound_port"] == free_port
+        # The configured port, and the one the kernel bound for it.
+        assert status["port"] == 0
+        assert status["bound_port"] == fake_hrpyc.servers[0].port != 0
 
-    def test_self_test_reports_reachable_and_versions(self, fake_hrpyc, fake_hou, free_port):
+    def test_self_test_reports_reachable_and_versions(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         report = listener.self_test()
 
         assert report["reachable"] is True
@@ -246,9 +240,9 @@ class TestSelfTestAndStatus:
         assert report["protocol"]  # e.g. rpyc/hrpyc protocol descriptor
         assert "bound_endpoints" in report
 
-    def test_self_test_warns_on_loopback_only(self, fake_hrpyc, fake_hou, free_port):
+    def test_self_test_warns_on_loopback_only(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         report = listener.self_test()
 
         assert report["loopback_only"] is True
@@ -257,9 +251,9 @@ class TestSelfTestAndStatus:
         # Remote clients (e.g. Docker gateway) cannot reach loopback.
         assert any("firewall" in g.lower() or "bind" in g.lower() for g in report["guidance"])
 
-    def test_self_test_no_loopback_warning_when_wildcard(self, fake_hrpyc, fake_hou, free_port):
+    def test_self_test_no_loopback_warning_when_wildcard(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True)))
         report = listener.self_test()
         assert report["loopback_only"] is False
         # Firewall guidance still present (port must be open).
@@ -271,10 +265,10 @@ class TestSelfTestAndStatus:
         assert report["reachable"] is False
         assert report["running"] is False
 
-    def test_self_test_detects_stale_listener(self, fake_hrpyc, fake_hou, free_port):
+    def test_self_test_detects_stale_listener(self, fake_hrpyc, fake_hou):
         """A listener whose socket died out from under us is detected."""
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
 
         # Simulate the underlying server dying (stale reference).
         fake_hrpyc.servers[0].close()
@@ -283,17 +277,15 @@ class TestSelfTestAndStatus:
         assert report["reachable"] is False
         assert report["stale"] is True
 
-    def test_every_report_agrees_a_dead_server_is_not_running(
-        self, fake_hrpyc, fake_hou, free_port, caplog
-    ):
+    def test_every_report_agrees_a_dead_server_is_not_running(self, fake_hrpyc, fake_hou, caplog):
         """status() needs no probe: a server that stopped serving is not running, and stale.
 
         self_test() and is_running() say the same of the same record, and
         start() replaces it rather than answering already_running.
         """
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        cfg = ListenerConfig(host="127.0.0.1", port=free_port)
-        listener.start(cfg)
+        cfg = ListenerConfig(host="127.0.0.1", port=0)
+        port = started(listener.start(cfg))["bound_port"]
         assert listener.status()["stale"] is False
 
         fake_hrpyc.servers[0].close()
@@ -301,7 +293,7 @@ class TestSelfTestAndStatus:
         status = listener.status()
         assert status["running"] is False
         assert status["stale"] is True
-        assert status["bound_port"] == free_port
+        assert status["bound_port"] == port
         assert "start it again" in status["message"]
         assert listener.is_running() is False
 
@@ -312,12 +304,11 @@ class TestSelfTestAndStatus:
         assert report["message"] == status["message"]
 
         with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
-            again = listener.start(cfg)
-        assert again["status"] == "success", again
+            again = started(listener.start(cfg))
         assert again["stale"] is False
         assert len(fake_hrpyc.servers) == 2
         assert listener.is_running() is True
-        assert f"hrpyc listener on 127.0.0.1:{free_port} had stopped serving; let go of it" in (
+        assert f"hrpyc listener on 127.0.0.1:{port} had stopped serving; let go of it" in (
             caplog.text
         )
 
@@ -333,15 +324,15 @@ class TestSelfTestAndStatus:
         assert listener.self_test()["message"] == "hrpyc listener is not running; start it."
 
     def test_a_dead_server_is_let_go_of_even_when_the_restart_is_refused(
-        self, fake_hrpyc, fake_hou, free_port, caplog
+        self, fake_hrpyc, fake_hou, caplog
     ):
         """start() lets go of the dead server before it checks the new config."""
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         fake_hrpyc.servers[0].close()
 
         with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
-            refused = listener.start(ListenerConfig(host="0.0.0.0", port=free_port))
+            refused = listener.start(ListenerConfig(host="0.0.0.0", port=0))
         assert refused["status"] == "error"
         assert refused["error_type"] == "security"
         assert "had stopped serving; let go of it" in caplog.text
@@ -357,14 +348,12 @@ class TestSelfTestAndStatus:
 class TestReportedCauses:
     """A report never substitutes a value for something it could not find out."""
 
-    def test_self_test_without_hou_reports_the_import_failure(
-        self, fake_hrpyc, free_port, monkeypatch
-    ):
+    def test_self_test_without_hou_reports_the_import_failure(self, fake_hrpyc, monkeypatch):
         # No ``hou`` injected and none importable: the version is unknown, and
         # the report says why rather than leaving None unexplained.
         monkeypatch.setitem(sys.modules, "hou", None)
         listener = RemoteListener(hrpyc=fake_hrpyc)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
 
         report = listener.self_test()
 
@@ -374,14 +363,16 @@ class TestReportedCauses:
         assert any("Could not read Houdini version" in w and "hou" in w for w in report["warnings"])
 
     def test_local_ip_detection_failure_is_reported_not_substituted(
-        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+        self, fake_hrpyc, fake_hou, monkeypatch
     ):
         def no_route() -> str:
             raise OSError(101, "Network is unreachable")
 
         monkeypatch.setattr(listener_module, "detect_local_ip", no_route)
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+        port = started(
+            listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True))
+        )["bound_port"]
 
         status = listener.status()
         assert status["local_ip"] is None
@@ -391,36 +382,38 @@ class TestReportedCauses:
         assert report["local_ip"] is None
         assert any("Network is unreachable" in w for w in report["warnings"])
         # Nothing an operator could mistake for an address to connect to.
-        assert report["bound_endpoints"] == [f"0.0.0.0:{free_port}"]
+        assert report["bound_endpoints"] == [f"0.0.0.0:{port}"]
         assert "localhost" not in str(report)
 
-    def test_local_ip_names_the_wildcard_bind_it_reaches(
-        self, fake_hrpyc, fake_hou, free_port, monkeypatch
-    ):
+    def test_local_ip_names_the_wildcard_bind_it_reaches(self, fake_hrpyc, fake_hou, monkeypatch):
         monkeypatch.setattr(listener_module, "detect_local_ip", lambda: "192.0.2.7")
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, trusted_network=True))
+        port = started(
+            listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True))
+        )["bound_port"]
 
         report = listener.self_test()
         assert report["local_ip"] == "192.0.2.7"
         assert report["bound_endpoints"] == [
-            f"0.0.0.0:{free_port}",
-            f"192.0.2.7:{free_port} (via 0.0.0.0)",
+            f"0.0.0.0:{port}",
+            f"192.0.2.7:{port} (via 0.0.0.0)",
         ]
         assert report["local_ip_error"] is None
 
     def test_local_ip_is_not_claimed_for_an_ipv6_wildcard_bind(
-        self, fake_hrpyc, fake_hou, free_port, monkeypatch
+        self, fake_hrpyc, fake_hou, monkeypatch
     ):
         # detect_local_ip() is IPv4; whether a "::" socket also serves IPv4 is
         # the platform's choice, so the report does not claim it.
         monkeypatch.setattr(listener_module, "detect_local_ip", lambda: "192.0.2.7")
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="::", port=free_port, trusted_network=True))
+        port = started(listener.start(ListenerConfig(host="::", port=0, trusted_network=True)))[
+            "bound_port"
+        ]
 
         report = listener.self_test()
         assert report["local_ip"] == "192.0.2.7"
-        assert report["bound_endpoints"] == [f":::{free_port}"]
+        assert report["bound_endpoints"] == [f":::{port}"]
 
 
 # ---------------------------------------------------------------------------
@@ -429,27 +422,21 @@ class TestReportedCauses:
 
 
 class TestReconnect:
-    def test_restart_after_stale_listener_succeeds(self, fake_hrpyc, fake_hou, free_port):
+    def test_restart_after_stale_listener_succeeds(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
 
         # Underlying listener dies.
         fake_hrpyc.servers[0].close()
         assert listener.self_test()["stale"] is True
 
-        # A reload should recover cleanly on a fresh port.
-        s = socket.socket()
-        s.bind(("127.0.0.1", 0))
-        new_port = s.getsockname()[1]
-        s.close()
-
-        result = listener.reload(ListenerConfig(host="127.0.0.1", port=new_port))
-        assert result["status"] == "success"
+        # A reload recovers cleanly.
+        started(listener.reload(ListenerConfig(host="127.0.0.1", port=0)))
         assert listener.self_test()["reachable"] is True
 
-    def test_stop_clears_stale_state(self, fake_hrpyc, fake_hou, free_port, caplog):
+    def test_stop_clears_stale_state(self, fake_hrpyc, fake_hou, caplog):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port))
+        port = started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))["bound_port"]
         fake_hrpyc.servers[0].close()
 
         with caplog.at_level(logging.INFO, logger=listener_module.logger.name):
@@ -458,8 +445,8 @@ class TestReconnect:
         assert result["status"] == "success"
         assert result["was_serving"] is False
         assert result["message"] == (
-            f"hrpyc listener on 127.0.0.1:{free_port} had already stopped serving; let go of it."
+            f"hrpyc listener on 127.0.0.1:{port} had already stopped serving; let go of it."
         )
-        assert f"Stopped hrpyc listener (127.0.0.1:{free_port}, was_serving=False)" in caplog.text
+        assert f"Stopped hrpyc listener (127.0.0.1:{port}, was_serving=False)" in caplog.text
         assert listener.is_running() is False
         assert listener.status()["stale"] is False
