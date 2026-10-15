@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not read is listed in `uninspected` as `{path, kind, reason}` and the call is
   `"partial"`; it was skipped, and the call said `"success"` with an
   `error_count` that left it out. `path` is null for a node deleted mid-scan.
-  Uninspected nodes count toward `max_results`, which is refused below 1. A call that inspected no node, or could not
+  Uninspected nodes count toward `max_results`, which is refused below 1.
+  A multi-item tool's nothing-done error names its first failure and how many
+  more; the response lists them all. A failure trimmed by the response cap still
+  parses as its `kind`. A call that inspected no node, or could not
   list the nodes under `root_path`, is an `operation_failed` error. A link lost
   mid-scan is `connection_lost` (or `timeout`) and resets the connection, where
   it read as a clean scan. The root node is inspected when `root_path` is `"/"`

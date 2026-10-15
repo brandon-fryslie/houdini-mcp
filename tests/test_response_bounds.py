@@ -502,6 +502,20 @@ class TestCappedFailure:
         assert 0 < capped["uninspected_preserved_count"] < len(uninspected)
         assert capped["uninspected"][0]["path"] == "/obj/n0"
 
+    def test_a_failure_whose_message_alone_overflows_still_parses_as_its_arm(self):
+        from houdini_mcp.tools._common import apply_response_cap
+        from houdini_mcp.tools.failure import FAILURE, OperationFailed
+
+        response = OperationFailed("x" * 20000, uninspected=[{"path": "/obj/n0"}]).failure(
+            "find_error_nodes"
+        )
+
+        capped = apply_response_cap(response.model_dump(), max_bytes=8000)
+
+        failure = FAILURE.validate_python(capped)
+        assert (failure.kind, failure.operation) == ("operation_failed", "find_error_nodes")
+        assert failure.message.startswith("Response too large")
+
 
 class TestPropertyBasedBounds:
     """Property tests that no response exceeds configured cap."""

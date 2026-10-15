@@ -208,9 +208,12 @@ def batch_status(
     )
     if failed and not len(done):
         refused = all(u.kind == "invalid_input" for u in failed)
+        # every item is in ``report``; the message names the first, so it stays
+        # one item long however many failed
+        first, *rest = failed
+        more = f" (and {len(rest)} more, listed in the response)" if rest else ""
         raise (InvalidInput if refused else OperationFailed)(
-            "Nothing was done: " + "; ".join(f"{u.name}: {u.message}" for u in failed),
-            **report,
+            f"Nothing was done: {first.name}: {first.message}{more}", **report
         )
     return "partial" if failed else "success"
 

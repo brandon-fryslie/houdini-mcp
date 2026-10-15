@@ -4,6 +4,7 @@ This module provides tools for finding nodes with cook errors
 and warnings in the Houdini scene.
 """
 
+import logging
 from typing import Any
 
 from ..connection import transport_failure
@@ -15,6 +16,8 @@ from ._common import (
     node_at,
 )
 from .failure import OperationFailed, Undone, batch_status
+
+logger = logging.getLogger("houdini_mcp.tools.errors")
 
 
 @handle_connection_errors("find_error_nodes")
@@ -107,8 +110,17 @@ def find_error_nodes(
         report["warning_nodes"] = warning_nodes
         report["warning_count"] = len(warning_nodes)
 
-    # Add warning if results were limited
-    if len(error_nodes) + len(warning_nodes) + len(uninspected) >= max_results:
+    # [LAW:one-source-of-truth] limited is read off what the scan reached, not re-derived
+    # from the cap: a scan that ends exactly at max_results was not cut short
+    present = 1 + len(descendants)
+    logger.info(
+        "error scan root=%s scanned=%d present=%d uninspected=%d",
+        root_path,
+        total_scanned,
+        present,
+        len(uninspected),
+    )
+    if total_scanned < present:
         report["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
 
     # [LAW:single-enforcer] success means every node scanned was inspected

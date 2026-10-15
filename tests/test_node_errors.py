@@ -412,6 +412,8 @@ class TestFindErrorNodesUninspected:
         assert result["total_scanned"] == 3
         assert "batch outcome operation=find_error_nodes done=2" in caplog.text
         assert "('/obj/broken', 'operation_failed')" in caplog.text
+        assert "error scan root=/obj scanned=3 present=3 uninspected=1" in caplog.text
+        assert "warning" not in result
 
     def test_a_clean_scan_lists_nothing_uninspected(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
@@ -439,7 +441,7 @@ class TestFindErrorNodesUninspected:
         assert (unread["path"], unread["kind"]) == (None, "operation_failed")
         assert unread["reason"].startswith("Attempt to access an object that no longer exists")
 
-    def test_uninspected_nodes_count_toward_max_results(self, mock_connection):
+    def test_uninspected_nodes_count_toward_max_results(self, mock_connection, caplog):
         from houdini_mcp.tools import find_error_nodes
 
         for i in range(5):
@@ -447,12 +449,26 @@ class TestFindErrorNodesUninspected:
                 self._unreadable(f"/obj/broken{i}", raised_inside_houdini(RuntimeError("no cook")))
             )
 
-        result = find_error_nodes(root_path="/obj", max_results=3, host="localhost", port=18811)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            result = find_error_nodes(root_path="/obj", max_results=3, host="localhost", port=18811)
 
         assert result["status"] == "partial"
         assert len(result["uninspected"]) == 3
         assert result["total_scanned"] == 4
         assert result["warning"].startswith("Results limited to 3")
+        assert "error scan root=/obj scanned=4 present=6 uninspected=3" in caplog.text
+
+    def test_a_scan_ending_exactly_at_max_results_is_not_limited(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        failing = MockHouNode(path="/obj/failing", name="failing", node_type="geo")
+        failing._errors = ["Missing input"]
+        mock_connection.add_node(failing)
+
+        result = find_error_nodes(root_path="/obj", max_results=1, host="localhost", port=18811)
+
+        assert (result["status"], result["error_count"]) == ("success", 1)
+        assert "warning" not in result
 
     def test_a_scan_that_read_no_node_is_an_error(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes

@@ -1263,8 +1263,9 @@ class TestRenderFraming:
 
         failure = FAILURE.validate_python(result)
         assert isinstance(failure, OperationFailure), result
-        assert failure.message.startswith(
-            "Nothing was done: front: Render completed but produced no image; left: "
+        assert failure.message == (
+            "Nothing was done: front: Render completed but produced no image"
+            " (and 3 more, listed in the response)"
         )
         assert result["renderer"] == "opengl"
         assert "total_render_time_ms" in result and "bounding_box" in result

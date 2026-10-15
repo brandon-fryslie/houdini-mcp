@@ -109,8 +109,8 @@ def test_capture_multiple_panes_that_captures_nothing_is_an_error_carrying_every
     call = FAILURE.validate_python(result)
     assert isinstance(call, InvalidInputFailure), result
     assert call.message == (
-        "Nothing was done: ChannelEditor: Unknown pane type: ChannelEditor; "
-        "thisown: Unknown pane type: thisown"
+        "Nothing was done: ChannelEditor: Unknown pane type: ChannelEditor"
+        " (and 1 more, listed in the response)"
     )
     assert (result["success_count"], result["total_requested"]) == (0, 2)
     for name in ("ChannelEditor", "thisown"):
