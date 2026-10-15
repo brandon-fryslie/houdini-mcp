@@ -118,9 +118,14 @@ def _cook():
 
 
 def _attrib(attrib):
+    # each part is its own read, so an attribute whose type will not read still
+    # says which attribute it is
+    return {{"name": _read(attrib.name), "type": _read(lambda: _type_name(attrib)), "size": _read(attrib.size)}}
+
+
+def _type_name(attrib):
     dt = attrib.dataType()
-    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-    return {{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}}
+    return (dt.name() if hasattr(dt, "name") else str(dt)).lower()
 
 
 def _bounding_box(geo):
@@ -172,7 +177,7 @@ else:
 
         if include_attributes:
             result["attributes"] = {{
-                kind: [_read(lambda a=a: _attrib(a)) for a in attribs]
+                kind: [_attrib(a) for a in attribs]
                 for kind, attribs in (
                     ("point", geo.pointAttribs()),
                     ("primitive", geo.primAttribs()),

@@ -703,7 +703,7 @@ class TestTheProgramHoudiniRuns:
 
         assert result["attributes"]["point"] == [
             {"name": "P", "type": "float", "size": 3},
-            {"unread": "RuntimeError: no type"},
+            {"name": "Cd", "type": {"unread": "RuntimeError: no type"}, "size": 3},
         ]
         assert result["groups"]["point"] == [{"unread": "RuntimeError: no name"}]
 
