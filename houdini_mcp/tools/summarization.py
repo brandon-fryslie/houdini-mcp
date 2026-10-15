@@ -1,30 +1,77 @@
 """AI Summarization for Houdini MCP Server.
 
-This module provides server-side AI summarization using Claude to compress
-large responses into high-signal, actionable summaries. This reduces token
-usage for client AIs while preserving key information.
+This module provides server-side AI summarization that compresses large
+responses into high-signal, actionable summaries. This reduces token usage for
+client AIs while preserving key information.
 
-Uses the Claude API proxy at localhost:8082 for efficient small-model inference.
+Summaries come from an OpenAI-compatible chat-completions server. By default
+that is the local omlx server on the tailnet, so summarization works with no
+configuration; ``SUMMARIZATION_BASE_URL``, ``SUMMARIZATION_API_KEY`` and
+``SUMMARIZATION_MODEL`` point it elsewhere.
 """
 
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger("houdini_mcp.summarization")
 
-# Configuration
-CLAUDE_PROXY_URL = os.getenv("CLAUDE_PROXY_URL", "http://localhost:8082")
-SUMMARIZATION_MODEL = os.getenv("SUMMARIZATION_MODEL", "claude-3-5-haiku-latest")
+# Configuration. The SUMMARIZATION_ prefix keeps an OPENAI_* key or URL set for some
+# other tool in the user's shell from redirecting these summaries.
+SUMMARIZATION_BASE_URL = os.getenv("SUMMARIZATION_BASE_URL", "http://100.66.66.66:8000/v1")
+SUMMARIZATION_API_KEY = os.getenv("SUMMARIZATION_API_KEY", "1234")
+# An instruct model with no thinking phase: measured 2026-10-15 on that server at
+# 12-15s per summary including a cold load, where the reasoning models took 56s warm.
+SUMMARIZATION_MODEL = os.getenv(
+    "SUMMARIZATION_MODEL", "mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit"
+)
 SUMMARIZATION_ENABLED = os.getenv("SUMMARIZATION_ENABLED", "true").lower() == "true"
 
 # Thresholds for automatic summarization (in estimated tokens)
 AUTO_SUMMARIZE_THRESHOLD = int(os.getenv("AUTO_SUMMARIZE_THRESHOLD", "5000"))
 # Target summary size
 TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
+
+# Room for a cold model load (about 7.5s) plus a full-length summary.
+REQUEST_TIMEOUT_SECONDS = 60.0
+
+
+# [LAW:effects-at-boundaries] The one place the summarizer's HTTP client is built. Tests
+# replace it with a client over a fake transport, so the request put on the wire is
+# what gets asserted.
+def summarizer_client() -> httpx.AsyncClient:
+    """Build the client the summarizer talks to the completions server through."""
+    return httpx.AsyncClient(
+        base_url=SUMMARIZATION_BASE_URL,
+        headers={"Authorization": f"Bearer {SUMMARIZATION_API_KEY}"},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class Completion:
+    """The part of an OpenAI chat completion the summarizer reads."""
+
+    text: str
+    finish_reason: str
+
+
+# [LAW:parse-dont-validate] The one checkpoint between the server's JSON and the
+# summarizer: past here, a completion has its text and the reason it stopped.
+def parse_completion(body: Any) -> Completion:
+    """Read a chat-completions response body, or raise ``ValueError`` naming what is wrong."""
+    try:
+        choice = body["choices"][0]
+        return Completion(
+            text=choice["message"]["content"] or "", finish_reason=choice["finish_reason"]
+        )
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError(f"not a chat completion ({exc!r}): {str(body)[:200]}") from exc
 
 
 def estimate_tokens(data: Any) -> int:
@@ -89,7 +136,7 @@ Geometry Data:
 
 Summary:"""
 
-    summary = await _call_claude(prompt)
+    summary = await _complete(prompt)
 
     if summary:
         geo_data["ai_summary"] = summary
@@ -136,7 +183,7 @@ Provide:
 
 Summary:"""
 
-    summary = await _call_claude(prompt)
+    summary = await _complete(prompt)
 
     if summary:
         error_data["ai_summary"] = summary
@@ -178,7 +225,7 @@ Scene Data:
 
 Summary:"""
 
-    summary = await _call_claude(prompt)
+    summary = await _complete(prompt)
 
     if summary:
         scene_data["ai_summary"] = summary
@@ -219,7 +266,7 @@ Render Settings:
 
 Summary:"""
 
-    summary = await _call_claude(prompt)
+    summary = await _complete(prompt)
 
     if summary:
         render_data["ai_summary"] = summary
@@ -228,64 +275,77 @@ Summary:"""
     return render_data
 
 
-async def _call_claude(prompt: str) -> str | None:
-    """Call Claude API via proxy for summarization.
+async def _complete(prompt: str) -> str | None:
+    """Ask the completions server for a summary.
 
     Args:
         prompt: The prompt to send
 
     Returns:
-        Claude's response text, or None on error
+        The summary text, or None when summarization is off or no finished summary
+        came back. Every way of getting None while enabled is logged as a warning.
     """
     if not SUMMARIZATION_ENABLED:
-        logger.debug("Summarization disabled, skipping Claude call")
+        logger.debug("Summarization disabled, skipping completion request")
         return None
 
+    started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with summarizer_client() as client:
             response = await client.post(
-                f"{CLAUDE_PROXY_URL}/v1/messages",
-                headers={
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
+                "chat/completions",
                 json={
                     "model": SUMMARIZATION_MODEL,
                     "max_tokens": TARGET_SUMMARY_TOKENS * 2,  # Allow some buffer
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
-
-            if response.status_code != 200:
-                logger.warning(f"Claude API error: {response.status_code} - {response.text[:200]}")
-                return None
-
-            result = response.json()
-
-            # Extract text from response
-            if "content" in result and len(result["content"]) > 0:
-                return result["content"][0].get("text", "")
-
-            return None
-
-    except httpx.TimeoutException:
-        logger.warning("Claude API timeout during summarization")
+            response.raise_for_status()
+            completion = parse_completion(response.json())
+    except httpx.HTTPStatusError as exc:
+        # The server's own message says what to fix (an unloadable model names the
+        # memory it needs), so it goes in the log with the status.
+        logger.warning(
+            "Summarization failed: %s answered %d: %s",
+            exc.request.url,
+            exc.response.status_code,
+            exc.response.text[:500],
+        )
         return None
-    except Exception as e:
-        logger.warning(f"Claude API error: {e}")
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Summarization failed: %s: %s", type(exc).__name__, exc)
         return None
+
+    elapsed = time.monotonic() - started
+    # [LAW:no-silent-failure] A completion the model did not finish is not a summary.
+    if completion.finish_reason != "stop" or not completion.text:
+        logger.warning(
+            "Summarization returned no finished summary: finish_reason=%s, %d chars after %.1fs",
+            completion.finish_reason,
+            len(completion.text),
+            elapsed,
+        )
+        return None
+
+    logger.info(
+        "Summarized with %s in %.1fs: %d chars",
+        SUMMARIZATION_MODEL,
+        elapsed,
+        len(completion.text),
+    )
+    return completion.text
 
 
 def get_summarization_status() -> dict[str, Any]:
     """Get current summarization configuration status.
 
     Returns:
-        Dict with configuration and health status
+        Dict with the configuration summaries are made with
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,
         "model": SUMMARIZATION_MODEL,
-        "proxy_url": CLAUDE_PROXY_URL,
+        "base_url": SUMMARIZATION_BASE_URL,
         "auto_threshold_tokens": AUTO_SUMMARIZE_THRESHOLD,
         "target_summary_tokens": TARGET_SUMMARY_TOKENS,
     }

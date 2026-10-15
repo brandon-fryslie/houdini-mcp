@@ -1326,20 +1326,13 @@ def get_summarization_status() -> dict[str, Any]:
     """
     Get AI summarization configuration and status.
 
-    Returns current summarization settings including:
-    - Whether summarization is enabled
-    - Which model is being used
-    - Proxy URL
-    - Token thresholds for automatic summarization
-
-    Use this to verify AI summarization is properly configured
-    before using summarize=True on other tools.
+    Summaries come from an OpenAI-compatible chat-completions server.
 
     Returns:
         Dict with summarization configuration including:
         - enabled: Whether AI summarization is active
-        - model: Claude model used for summarization
-        - proxy_url: URL of the Claude API proxy
+        - model: Model the summaries are requested from
+        - base_url: The chat-completions server (OpenAI API base, ending in /v1)
         - auto_threshold_tokens: Token count that triggers auto-summarization
         - target_summary_tokens: Target size for generated summaries
     """
