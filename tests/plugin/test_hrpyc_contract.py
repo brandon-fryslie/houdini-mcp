@@ -8,6 +8,7 @@ runs the listener against it with no Houdini.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
 import threading
@@ -89,18 +90,20 @@ class TestContract:
     def test_close_releases_the_port_while_accept_is_in_flight(self, hrpyc):
         """``close()`` releases the socket: once it returns, the port binds
         again, even with the serve thread still waiting in ``accept()``. That
-        is what lets ``start()`` rebind the port ``stop()`` just closed while
-        ``_serve`` was blocked in ``accept()``."""
+        is what lets ``start()`` rebind the port of a server closed under its
+        accept loop, as test_every_report_agrees_a_dead_server_is_not_running
+        does through the listener."""
         server = build(hrpyc, 0)
         server._listen()
         looping = threading.Event()
         raised: list[BaseException] = []
 
         def serve() -> None:
-            # [LAW:no-ambient-temporal-coupling] ``looping`` is set just before
-            # each accept(), so close() lands with accept() in flight, not before
-            # the loop starts. Only EOFError is the contract's; anything else is
-            # kept for the assertion below instead of reaching threading.excepthook.
+            # ``looping`` is set just before each accept(), which blocks for a
+            # whole listener tick, so close() almost surely lands mid-accept;
+            # Python cannot observe a thread blocked in the syscall itself.
+            # Only EOFError is the contract's; anything else is kept for the
+            # assertion below instead of reaching threading.excepthook.
             try:
                 while server.active:
                     looping.set()
@@ -111,14 +114,17 @@ class TestContract:
                 raised.append(exc)
 
         serving = threading.Thread(target=serve, daemon=True)
-        serving.start()
-        try:
+        # closing(): the server is closed on every path; on the passing one
+        # that second close() is the no-op the contract test asserts.
+        with contextlib.closing(server):
+            serving.start()
             assert looping.wait(timeout=5)
             server.close()
             build(hrpyc, server.port).close()
-        finally:
-            serving.join(timeout=5)
-        assert not serving.is_alive(), "close() did not wake the accept() in flight"
+        serving.join(timeout=5)
+        # The servers poll accept() on a timeout, so this catches a hang, not
+        # a close() that failed to wake accept(); the rebind above is the wake.
+        assert not serving.is_alive(), "serve thread did not exit after close()"
         assert raised == []
 
 
