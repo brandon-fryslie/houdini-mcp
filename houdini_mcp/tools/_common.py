@@ -25,6 +25,7 @@ from ..connection import (
 )
 from .failure import (
     FAILURE,
+    FAILURE_FIELDS,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
@@ -221,6 +222,8 @@ def node_at(hou: Any, path: str, what: str = "Node") -> Any:
 # is shaped, so the served schema refuses a one-element resolution, a 32-pixel
 # render or a two-component camera vector on the wire, and nothing inland checks.
 Dimension = Annotated[int, Field(ge=64, le=4096)]
+ResultLimit = Annotated[int, Field(ge=1)]
+"""How many results a call may list: a call allowed none would report nothing as success."""
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
@@ -717,6 +720,7 @@ CAPPED_LIST_FIELDS: list[tuple[str, str]] = [
     ("groups", "group"),
     ("error_nodes", "error_node"),
     ("warning_nodes", "warning_node"),
+    ("uninspected", "uninspected_node"),
     ("inputs", "input"),
     ("outputs", "output"),
     ("methods", "method"),
@@ -798,7 +802,8 @@ def apply_response_cap(
         "message",
         "scene_changes_error",
     ]
-    for field in essential_fields:
+    # [LAW:one-source-of-truth] a capped failure still parses as the arm it was
+    for field in [*essential_fields, *sorted(FAILURE_FIELDS)]:
         if field in data:
             result[field] = data[field]
 

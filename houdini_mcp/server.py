@@ -14,6 +14,7 @@ from .tools._common import (
     DEFAULT_RESOLUTION,
     RGB,
     Resolution,
+    ResultLimit,
     Vec3,
     apply_response_cap,
     handle_connection_errors,
@@ -719,7 +720,7 @@ def create_render_node(
 async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
-    max_results: int = 100,
+    max_results: ResultLimit = 100,
     summarize: bool = False,
 ) -> dict[str, Any]:
     """
@@ -1022,9 +1023,8 @@ async def get_geo_summary(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if response is very large; a failure
-    # read no errors, so there is nothing to triage
-    if result["status"] != "error" and (summarize or tools.should_summarize(result)):
+    # Apply AI summarization if requested or if response is very large
+    if summarize or tools.should_summarize(result):
         result = await tools.summarize_geometry(result)
 
     return apply_response_cap(result)

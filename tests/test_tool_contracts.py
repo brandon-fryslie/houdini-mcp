@@ -186,6 +186,13 @@ class TestServedSchemas:
             assert not await accepts(client, served, name, {"resolution": [32, 512]}), name
             assert not await accepts(client, served, name, {"resolution": [512, 8000]}), name
 
+    async def test_find_error_nodes_lists_at_least_one_result(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A limit of zero would scan nothing and call it success; the wire refuses it."""
+        assert not await accepts(client, served, "find_error_nodes", {"max_results": 0})
+        assert await accepts(client, served, "find_error_nodes", {"max_results": 1})
+
     async def test_render_viewport_camera_vectors_are_three_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:

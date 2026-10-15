@@ -8,6 +8,7 @@ from typing import Any
 
 from ..connection import transport_failure
 from ._common import (
+    ResultLimit,
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
@@ -20,7 +21,7 @@ from .failure import OperationFailed, Undone, batch_status
 def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
-    max_results: int = 100,
+    max_results: ResultLimit = 100,
     host: str = "localhost",
     port: int = 18811,
     *,

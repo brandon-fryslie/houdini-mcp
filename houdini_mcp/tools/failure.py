@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import traceback
 from collections.abc import Sequence, Sized
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -34,6 +34,7 @@ logger = logging.getLogger("houdini_mcp.tools")
 __all__ = [
     "ToolFailure",
     "FAILURE",
+    "FAILURE_FIELDS",
     "FailureKind",
     "Retry",
     "ConnectionUnavailableFailure",
@@ -166,6 +167,11 @@ ToolFailure = Annotated[
     | WorkerBusyFailure,
     Field(discriminator="kind"),
 ]
+
+FAILURE_FIELDS: frozenset[str] = frozenset(
+    field for arm in get_args(get_args(ToolFailure)[0]) for field in arm.model_fields
+)
+"""Every field some failure arm declares: what a failure cannot lose and still parse."""
 
 FAILURE: TypeAdapter[Any] = TypeAdapter(ToolFailure)
 """Parses a response back into exactly one arm, or refuses it. This is the test net."""

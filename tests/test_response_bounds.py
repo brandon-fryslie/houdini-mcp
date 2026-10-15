@@ -480,6 +480,29 @@ class TestResponseTruncation:
 # compact=True parameters (e.g., get_node_info, list_children) which is tested elsewhere.
 
 
+class TestCappedFailure:
+    """A failure the cap trims is still the failure it was."""
+
+    def test_a_capped_failure_parses_as_its_arm_and_keeps_a_page_of_uninspected(self):
+        from houdini_mcp.tools._common import apply_response_cap
+        from houdini_mcp.tools.failure import FAILURE, OperationFailed
+
+        uninspected = [
+            {"path": f"/obj/n{i}", "kind": "operation_failed", "reason": "x" * 200}
+            for i in range(200)
+        ]
+        response = OperationFailed("Nothing was done", uninspected=uninspected).failure(
+            "find_error_nodes"
+        )
+
+        capped = apply_response_cap(response.model_dump(), max_bytes=8000)
+
+        failure = FAILURE.validate_python(capped)
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert 0 < capped["uninspected_preserved_count"] < len(uninspected)
+        assert capped["uninspected"][0]["path"] == "/obj/n0"
+
+
 class TestPropertyBasedBounds:
     """Property tests that no response exceeds configured cap."""
 
