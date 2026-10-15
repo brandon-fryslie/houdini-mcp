@@ -8,8 +8,10 @@ runs the listener against it with no Houdini.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -78,6 +80,39 @@ class TestContract:
         # reports success, so a second close must be a no-op, not an error.
         server.close()
         assert server.active is False
+
+    @pytest.mark.parametrize("hrpyc", [FakeHrpycModule(), real_hrpyc()], ids=["fake", "rpyc"])
+    def test_close_releases_the_port_while_accept_is_in_flight(self, hrpyc):
+        """``close()`` releases the socket: once it returns, the port binds
+        again, even with the serve thread still waiting in ``accept()``. That
+        is what lets ``start()`` take back the port of a server that died."""
+
+        def build(port: int) -> HrpycServer:
+            return hrpyc.ThreadedServer(
+                hrpyc.SlaveService,
+                hostname="127.0.0.1",
+                ipv6=False,
+                port=port,
+                reuse_addr=True,
+                auto_register=False,
+                authenticator=None,
+                logger=logging.getLogger("test_hrpyc_contract"),
+            )
+
+        def serve(server: HrpycServer) -> None:
+            with contextlib.suppress(EOFError):
+                while server.active:
+                    server.accept()
+
+        server = build(0)
+        server._listen()
+        serving = threading.Thread(target=serve, args=(server,))
+        serving.start()
+        try:
+            server.close()
+            build(server.port).close()
+        finally:
+            serving.join()
 
 
 class TestListenerAgainstRealRpyc:
