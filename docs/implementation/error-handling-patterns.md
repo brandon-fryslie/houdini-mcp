@@ -167,8 +167,8 @@ def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
 ```
 
 `is_connected()` and `get_connection_info()` are queries: they read the link and
-never tear it down. `get_connection_info` reports the host, port and target of the
-Houdini actually reached when connected, not the ones it was asked about.
+never tear it down. `get_connection_info` reports the target of the Houdini
+actually reached when connected, not the one it was asked about.
 
 ## Standard Response Format
 

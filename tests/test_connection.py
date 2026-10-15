@@ -96,11 +96,11 @@ class TestConnect:
     def test_a_link_that_fails_validation_is_closed_and_not_installed(
         self, reset_connection_state, mock_hou
     ):
-        """Houdini answers the socket but not the version call: the attempt is retried,
-        the half-open link is closed, and nothing is left behind for is_connected()."""
+        """Houdini answers the socket but not the import of ``hou``: the attempt is
+        retried, the half-open link is closed, and nothing is left behind for
+        is_connected()."""
         busy = MockRpycConnection(mock_hou)
-        busy.modules = MagicMock()
-        busy.modules.hou.applicationVersionString.side_effect = TimeoutError("sync request")
+        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = busy
@@ -116,8 +116,7 @@ class TestConnect:
         self, reset_connection_state, mock_hou
     ):
         busy = MockRpycConnection(mock_hou)
-        busy.modules = MagicMock()
-        busy.modules.hou.applicationVersionString.side_effect = TimeoutError("sync request")
+        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
         busy.close = MagicMock(side_effect=ValueError("half-torn channel"))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
@@ -431,6 +430,18 @@ class TestGetConnectionInfo:
         assert info["connected"] is False
         assert info["target"] == "localhost:18811"
         assert info["houdini_version"] is None
+
+    def test_get_connection_info_reports_one_record_shape_in_both_arms(
+        self, mock_connection, reset_connection_state
+    ):
+        """Connected or not, the report has the same fields; only their values say
+        which arm it is, so a reader never meets a field that one arm lacks."""
+        connected = get_connection_info("localhost", 18811)
+        disconnect()
+        disconnected = get_connection_info("localhost", 18811)
+
+        assert (connected["connected"], disconnected["connected"]) == (True, False)
+        assert set(connected) == set(disconnected)
 
     def test_get_connection_info_raises_when_the_link_cannot_answer(self, mock_connection):
         """A link that cannot report its version is a failure, not a success

@@ -264,22 +264,19 @@ class Link:
 
 
 def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
-    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini."""
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini.
+
+    The proof is ``hou`` imported across the link: a sync request, so a Houdini
+    too busy to answer fails it like one that is not there. [LAW:single-enforcer]
+    Nothing Houdini's ``hou`` answers is read here: a fault it raises is its own,
+    classified at the tool boundary like every other, never "not reached".
+    """
     conn = target.open(host, port, sync_timeout)
     # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
-    # proved it reaches Houdini; a link that fails validation is closed, so a failed
+    # proved it reaches Houdini; a link that fails the proof is closed, so a failed
     # attempt leaves neither an open socket nor a half-connected state behind.
     try:
         hou = conn.modules.hou
-
-        # Validate connection by checking Houdini version
-        version = hou.applicationVersionString()
-        logger.info(f"Connected to Houdini version: {version}")
-
-        # Additional validation - ensure we can access common nodes
-        obj_node = hou.node("/obj")
-        if obj_node is None:
-            logger.warning("Connected but /obj node not accessible - unusual state")
     except BaseException as validation_error:
         logger.warning(
             f"Closing link to {target.describe(host, port)}: failed validation: "
@@ -346,7 +343,7 @@ def _open_link_with_retries(
         f"{target.remedy} "
         f"Last error: {last_error}",
         target=target.describe(host, port),
-    )
+    ) from last_error
 
 
 class HoudiniConnection:
@@ -594,35 +591,32 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
             and leaves as itself for the tool boundary to classify as it does for
             every tool.
     """
-    # [LAW:one-source-of-truth] the target is read once: naming, opening and
-    # classifying all describe the one Houdini this probe tried, even if another
-    # target is installed meanwhile.
-    houdini = _houdini.target
-    target = houdini.describe(host, port)
-
-    def unanswered(e: Exception) -> HoudiniConnectionError:
-        return HoudiniConnectionError(
-            f"No Houdini answered at {target}: {type(e).__name__}: {e}. {houdini.remedy}",
-            target=target,
-        )
-
-    # [LAW:single-enforcer] opening and proving a link is _open_link's, so the probe
-    # reaches Houdini exactly when every tool's connect would: a link that fails its
-    # proof is no Houdini reached, and leaves no socket open.
-    try:
-        link = _open_link(houdini, host, port, timeout)
-    except Exception as e:
-        raise unanswered(e) from e
+    # [LAW:single-enforcer] opening, proving and naming an unreached Houdini are the
+    # connect path's, one attempt, so the probe reaches Houdini exactly when a tool's
+    # connect would and fails in the same words; the target is read once, so the
+    # probe classifies by the Houdini it tried even if another is installed meanwhile.
+    link = _open_link_with_retries(
+        _houdini.target,
+        host,
+        port,
+        max_retries=1,
+        retry_delay=0.0,
+        sync_timeout=timeout,
+        jitter=False,
+    )
     # The probe's link closes like any other: a close that fails is logged, and
     # the record Houdini already gave is still the answer.
     try:
         return link.info()
     except Exception as e:
-        # [LAW:parse-dont-validate] the installed target says which exceptions are
-        # the link's. Those are the probe's "no answer"; the server's own link is
-        # not torn down for a probe link that failed. The rest are the code's.
-        if link.target.transport_failure(e) is not None:
-            raise unanswered(e) from e
-        raise
+        # [LAW:parse-dont-validate] the link's target says which exceptions are the
+        # link's. Those are the probe's "no answer", not the loss of the server's own
+        # link, which a raw transport failure would tear down. The rest are the code's.
+        if link.target.transport_failure(e) is None:
+            raise
+        raise HoudiniConnectionError(
+            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {link.target.remedy}",
+            target=link.name,
+        ) from e
     finally:
         link.close()

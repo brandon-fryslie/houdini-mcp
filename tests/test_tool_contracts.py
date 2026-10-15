@@ -448,11 +448,24 @@ class TestServedFailures:
         def cannot_answer() -> str:
             raise RuntimeError("hou is mid-shutdown")
 
-        monkeypatch.setattr(in_process_houdini.hipFile, "path", cannot_answer)
+        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
         failure = await self.failure_of(client, "ping_houdini", {})
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.exception == "RuntimeError"
         assert "hou is mid-shutdown" in failure.message
+
+    async def test_a_fresh_connect_whose_houdini_cannot_answer_is_the_fault_it_raised(
+        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no link yet, opening one reads nothing Houdini answers, so the
+        version read's fault is still the fault it is, not "not reached"."""
+
+        def cannot_answer() -> str:
+            raise RuntimeError("hou is mid-shutdown")
+
+        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        failure = await self.failure_of(client, "check_connection", {})
+        assert (failure.kind, failure.exception) == ("operation_failed", "RuntimeError")
 
     async def test_a_probe_whose_houdini_cannot_answer_is_not_connected(
         self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
