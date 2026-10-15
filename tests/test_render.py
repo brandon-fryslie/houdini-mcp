@@ -394,16 +394,13 @@ class TestRenderQuadViewRenderers:
 class TestRenderQuadViewOutputFormats:
     """Tests for different output formats in quad view."""
 
-    def test_png_format(self, mock_connection):
+    def test_png_format(self, rendering_scene):
         """Test PNG output format."""
         from houdini_mcp.tools import render_quad_view
 
         result = render_quad_view(output_format="png", host="localhost", port=18811)
-        assert "status" in result
-        if result["status"] == "success":
-            for view in result["views"]:
-                if view["status"] == "success":
-                    assert view["format"] == "png"
+        assert result["status"] == "success", result
+        assert [view["format"] for view in result["views"]] == ["png"] * 4
 
     def test_jpg_format(self, mock_connection):
         """Test JPG output format."""
@@ -437,15 +434,13 @@ class TestRenderQuadViewResolutions:
         result = render_quad_view(resolution=[4096, 4096], host="localhost", port=18811)
         assert "4096" not in result.get("message", "")
 
-    def test_default_resolution_is_512(self, mock_connection):
+    def test_default_resolution_is_512(self, rendering_scene):
         """Test default resolution is 512x512."""
         from houdini_mcp.tools import render_quad_view
 
         result = render_quad_view(resolution=None, host="localhost", port=18811)
-        if result["status"] == "success":
-            for view in result["views"]:
-                if view["status"] == "success":
-                    assert view["resolution"] == [512, 512]
+        assert result["status"] == "success", result
+        assert [view["resolution"] for view in result["views"]] == [[512, 512]] * 4
 
 
 class TestRenderQuadViewTiming:
@@ -1313,25 +1308,42 @@ class TestRenderFraming:
 
         monkeypatch.setattr(MockHouNode, "render", lambda _self: None, raising=False)
 
-        with caplog.at_level("ERROR", logger="houdini_mcp.tools.rendering"):
+        with caplog.at_level("WARNING", logger="houdini_mcp.tools.rendering"):
             result = render_quad_view(host="localhost", port=18811)
 
         from houdini_mcp.tools.failure import FAILURE, OperationFailure
 
         failure = FAILURE.validate_python(result)
         assert isinstance(failure, OperationFailure), result
-        assert failure.message.startswith("No view rendered: front: ")
+        assert failure.message.startswith(
+            "No view rendered: front: Render completed but produced no image; left: "
+        )
+        assert result["renderer"] == "opengl"
+        assert "total_render_time_ms" in result and "bounding_box" in result
         assert [v["name"] for v in result["views"]] == ["front", "left", "top", "perspective"]
         assert all(
             isinstance(FAILURE.validate_python(v), OperationFailure) for v in result["views"]
         )
-        failed = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
-        assert [m.split(":")[0] for m in failed] == [
-            f"Quad view {name} failed" for name in ("front", "left", "top", "perspective")
+        # the tool's own classification reaches the view: no bug alarm, no traceback
+        assert not any("traceback" in v for v in result["views"])
+        assert [
+            (r.levelname, r.getMessage())
+            for r in caplog.records
+            if r.name == "houdini_mcp.tools.rendering"
+        ] == [
+            (
+                "WARNING",
+                f"Quad view {name} not rendered (operation_failed): "
+                "Render completed but produced no image",
+            )
+            for name in ("front", "left", "top", "perspective")
         ]
 
     def test_a_view_that_fails_is_its_failure_arm_and_the_rest_still_render(
-        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+        self,
+        frames: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from houdini_mcp.tools import render_quad_view
         from houdini_mcp.tools.failure import FAILURE, OperationFailure
@@ -1348,7 +1360,8 @@ class TestRenderFraming:
 
         monkeypatch.setattr(MockHouNode, "render", render_all_but_the_second)
 
-        result = render_quad_view(host="localhost", port=18811)
+        with caplog.at_level("WARNING", logger="houdini_mcp.tools"):
+            result = render_quad_view(host="localhost", port=18811)
 
         assert result["status"] == "success", result
         front, left, top, perspective = result["views"]
@@ -1358,6 +1371,16 @@ class TestRenderFraming:
         assert "karma ran out of memory" in failure.message
         assert [v["status"] for v in (front, top, perspective)] == ["success"] * 3
         assert all("image_base64" in v for v in (front, top, perspective))
+        # an exception nobody classified is the enforcer's bug alarm: the
+        # traceback travels with the view and the ERROR names it
+        assert "RuntimeError: karma ran out of memory" in left["traceback"]
+        assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+            ("ERROR", "render_quad_view raised RuntimeError: karma ran out of memory"),
+            (
+                "WARNING",
+                "Quad view left not rendered (operation_failed): karma ran out of memory",
+            ),
+        ]
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_displayed_object_subnet_is_framed_by_what_it_displays(

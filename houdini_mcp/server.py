@@ -566,12 +566,13 @@ def render_quad_view(
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
-          or the operation_failed failure arm for that view
+          or the failure arm for that view
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
         - total_render_time_ms: Total time for all renders
         When no view rendered, the call is an operation_failed failure whose
-        message names each view's cause and whose views lists every view's arm.
+        message names each view's cause, carrying the same views, renderer,
+        bounding_box and total_render_time_ms.
 
     Examples:
         render_quad_view()  # All 4 views with orthographic projection

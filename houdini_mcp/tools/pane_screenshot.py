@@ -510,7 +510,7 @@ def capture_multiple_panes(
 
     Returns:
         Dict containing:
-        - status: "success" if at least one capture succeeded, "error" if all failed
+        - status: "success", whether none, some or all of the captures worked
         - success_count: Number of successful captures
         - total_requested: Total number of pane types requested
         - results: Dict mapping pane type names to their capture results
