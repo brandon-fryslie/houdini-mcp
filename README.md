@@ -524,7 +524,7 @@ houdini_mcp/
 └── tools/                 # Modular tool implementations
     ├── _common.py         # Shared utilities, error handling
     ├── cache.py           # Node type caching with TTL
-    ├── code.py            # Python/HScript execution
+    ├── code.py            # Python execution
     ├── errors.py          # Error node detection
     ├── geometry.py        # Geometry introspection
     ├── help.py            # Houdini help access

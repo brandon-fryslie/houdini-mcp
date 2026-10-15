@@ -421,7 +421,7 @@ def execute_code(
         capture_diff: If True, captures before/after scene state for comparison.
         max_stdout_size: Maximum stdout size in bytes (default: 100000 = 100KB).
         max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB).
-        max_diff_nodes: Maximum number of nodes in scene diff added_nodes (default: 1000).
+        max_diff_nodes: Maximum number of nodes in each scene diff list (default: 1000).
         timeout: Execution timeout in seconds (default: 30).
         allow_dangerous: Request-side opt-in to run dangerous patterns.
             Only honored under policy "normal" when the server bypass config is enabled.
@@ -740,10 +740,12 @@ def _execute_with_grant(
             result["scene_changes_error"] = failure.model_dump()
         else:
             scene_changes = scene_diff(_before_scene, _after_scene)
-            if len(scene_changes["added_nodes"]) > max_diff_nodes:
-                scene_changes["added_nodes"] = scene_changes["added_nodes"][:max_diff_nodes]
+            lists = ("added", "removed", "modified", "added_nodes")
+            over = [key for key in lists if len(scene_changes[key]) > max_diff_nodes]
+            scene_changes.update({key: scene_changes[key][:max_diff_nodes] for key in lists})
+            if over:
                 result["diff_truncated"] = True
-                result["diff_warning"] = f"added_nodes truncated to {max_diff_nodes} nodes"
+                result["diff_warning"] = f"{', '.join(over)} truncated to {max_diff_nodes} nodes"
             result["scene_changes"] = scene_changes
 
     if detected.dangerous:

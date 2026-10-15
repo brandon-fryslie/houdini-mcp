@@ -19,21 +19,23 @@ from .failure import OperationFailed
 logger = logging.getLogger("houdini_mcp.tools.snapshot")
 
 SceneSnapshot = dict[str, str]
-"""Node path -> type name (``geo``, ``box``): the root first, then every node
-below it, hidden ones included, in the order Houdini lists them."""
+"""Node path -> type name (``geo``, ``box``) for every node below a root, hidden
+ones included, in the order Houdini lists them. The root itself is not in it:
+its caller already holds it, and ``optype -N`` prints no name for ``/``."""
 
 
 def scene_snapshot(hou: Any, root_path: str) -> SceneSnapshot:
-    """The snapshot of ``root_path`` and everything under it.
+    """The snapshot of everything below ``root_path``.
 
     Raises:
         OperationFailed: hscript reported an error (a root that does not exist),
             or a listed node had no type to read (it was deleted mid-read).
     """
-    # `opls` of a leaf or an empty network lists the root itself and nothing
-    # else, so the root leads the list once whatever the listing holds.
+    # `opls` lists a network's header ("/obj:") before its children, and a leaf
+    # as its own path; the nodes below the root are the paths under its prefix.
+    below = root_path.rstrip("/") + "/"
     listing = _hscript(hou, f"opls -R -f -a {root_path}").splitlines()
-    paths = list(dict.fromkeys([root_path, *(p for p in listing if p and not p.endswith(":"))]))
+    paths = [p for p in listing if p.startswith(below) and not p.endswith(":")]
     # `optype -N -t` prints name then type for each path it finds, in order, and
     # silently skips one it does not; the names say which answer is whose.
     typed = _hscript(hou, "optype -N -t " + " ".join(paths)).splitlines()

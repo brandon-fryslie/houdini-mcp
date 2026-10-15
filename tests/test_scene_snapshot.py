@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
+from houdini_mcp.tools import scene as scene_module
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
 from tests.conftest import MockHouModule, MockHouNode
@@ -15,8 +16,8 @@ from tests.conftest import MockHouModule, MockHouNode
 # null) and an empty geo, recorded verbatim from hython.
 RECORDED = {
     "opls -R -f -a /obj": "\n/obj:\n/obj/geo1\n/obj/empty\n\n/obj/geo1:\n/obj/geo1/box1\n/obj/geo1/hid\n",
-    "optype -N -t /obj /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid": (
-        "obj\nobj\ngeo1\ngeo\nempty\ngeo\nbox1\nbox\nhid\nnull\n"
+    "optype -N -t /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid": (
+        "geo1\ngeo\nempty\ngeo\nbox1\nbox\nhid\nnull\n"
     ),
 }
 
@@ -45,27 +46,40 @@ class TestSceneSnapshot:
     ) -> None:
         caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.snapshot")
         assert scene_snapshot(_RecordedHou(RECORDED), "/obj") == {
-            "/obj": "obj",
             "/obj/geo1": "geo",
             "/obj/empty": "geo",
             "/obj/geo1/box1": "box",
             "/obj/geo1/hid": "null",
         }
-        assert caplog.messages == ["scene snapshot of /obj: 5 nodes"]
+        assert caplog.messages == ["scene snapshot of /obj: 4 nodes"]
 
-    def test_a_leaf_root_is_its_own_snapshot(self) -> None:
+    def test_a_leaf_root_has_nothing_below_it(self) -> None:
+        hou = _RecordedHou(
+            {"opls -R -f -a /obj/geo1/box1": "/obj/geo1/box1\n", "optype -N -t ": ""}
+        )
+        assert scene_snapshot(hou, "/obj/geo1/box1") == {}
+
+    def test_the_scene_root_reads_like_any_other(self) -> None:
+        # Recorded from hython. `optype -N -t /` prints a type and no name, so the
+        # root is never asked for; every node below it is.
+        managers = ["obj", "out", "ch", "shop", "img", "vex", "mat", "stage", "tasks"]
         hou = _RecordedHou(
             {
-                "opls -R -f -a /obj/geo1/box1": "/obj/geo1/box1\n",
-                "optype -N -t /obj/geo1/box1": "box1\nbox\n",
+                "opls -R -f -a /": "\n/:\n"
+                + "".join(f"/{m}\n" for m in managers)
+                + "\n/obj:\n/obj/g1\n",
+                "optype -N -t " + " ".join([*(f"/{m}" for m in managers), "/obj/g1"]): "".join(
+                    f"{m}\n{m}\n" for m in managers
+                )
+                + "g1\ngeo\n",
             }
         )
-        assert scene_snapshot(hou, "/obj/geo1/box1") == {"/obj/geo1/box1": "box"}
+        assert scene_snapshot(hou, "/") == {**{f"/{m}": m for m in managers}, "/obj/g1": "geo"}
 
     def test_the_fake_hou_answers_as_a_walk_of_its_own_nodes(self) -> None:
         hou = _scene(MockHouModule())
         obj = hou.node("/obj")
-        walked = {n.path(): n.type().name() for n in [obj, *obj.allSubChildren()]}
+        walked = {n.path(): n.type().name() for n in obj.allSubChildren()}
         assert scene_snapshot(hou, "/obj") == walked
 
     def test_a_missing_root_is_an_error_not_an_empty_scene(self) -> None:
@@ -74,10 +88,10 @@ class TestSceneSnapshot:
 
     def test_a_node_gone_before_its_type_was_read_is_an_error(self) -> None:
         answers = {**RECORDED}
-        answers["optype -N -t /obj /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid"] = (
-            "obj\nobj\ngeo1\ngeo\nbox1\nbox\nhid\nnull\n"
+        answers["optype -N -t /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid"] = (
+            "geo1\ngeo\nbox1\nbox\nhid\nnull\n"
         )
-        with pytest.raises(OperationFailed, match="listed 5 nodes, found the type of 4"):
+        with pytest.raises(OperationFailed, match="listed 4 nodes, found the type of 3"):
             scene_snapshot(_RecordedHou(answers), "/obj")
 
 
@@ -131,13 +145,34 @@ class TestExecuteCodeDiff:
         assert result["scene_changes"]["modified"] == []
         assert get_last_scene_diff()["diff"] == result["scene_changes"]
 
+    def test_every_list_in_the_diff_is_capped_at_max_diff_nodes(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        _scene(mock_connection)
+        result = execute_code(
+            "hou.node('/obj/geo1').destroy()\n"
+            "for i in range(3): hou.node('/obj').createNode('null', f'n{i}')",
+            capture_diff=True,
+            max_diff_nodes=2,
+            host="localhost",
+            port=18811,
+        )
+        changes = result["scene_changes"]
+        assert (len(changes["added"]), len(changes["added_nodes"]), len(changes["removed"])) == (
+            2,
+            2,
+            2,
+        )
+        assert result["diff_truncated"] is True
+        assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
+
     def test_a_diff_that_could_not_be_read_leaves_the_run_a_success_and_says_why(
         self,
         mock_connection: MockHouModule,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        reads = iter([("\n/obj:\n", ""), ("obj\nobj\n", ""), ("", "Error:  hscript is busy\n")])
+        reads = iter([("/obj\n", ""), ("", ""), ("", "Error:  hscript is busy\n")])
         monkeypatch.setattr(mock_connection, "hscript", lambda _command: next(reads))
         result = execute_code("print('ran')", capture_diff=True, host="localhost", port=18811)
         assert result["status"] == "success"
@@ -205,3 +240,31 @@ class TestSerializeScene:
         )
         result = serialize_scene("/obj", True, 10, host="localhost", port=18811)
         assert result["structure"]["children"][0]["parameters"] == {"tx": 1.5}
+
+    def test_the_scene_root_is_named_and_typed_by_its_node(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        result = serialize_scene("/", False, 0, host="localhost", port=18811)
+        root = mock_connection.node("/")
+        assert (result["structure"]["name"], result["structure"]["type"]) == (
+            root.name(),
+            root.type().name(),
+        )
+        assert result["structure"]["children"][0]["path"] == "/obj"
+
+    def test_a_node_deleted_before_its_parameters_were_read_fails_the_read(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scene(mock_connection)
+
+        def snapshot_then_delete(hou: Any, root_path: str) -> dict[str, str]:
+            snapshot = scene_snapshot(hou, root_path)
+            hou.node("/obj/cam1").destroy()
+            return snapshot
+
+        monkeypatch.setattr(scene_module, "scene_snapshot", snapshot_then_delete)
+        result = serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        assert (result["kind"], result["message"]) == (
+            "operation_failed",
+            "Scene changed while it was read: /obj/cam1 was deleted",
+        )
