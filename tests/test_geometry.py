@@ -6,6 +6,7 @@ via the trusted-grant execution door and parses JSON from stdout. These tests mo
 
 import io
 import json
+import logging
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 from typing import Any
@@ -712,3 +713,24 @@ class TestTheProgramHoudiniRuns:
         result = self._run(self._node(geo), max_sample_points=1)
 
         assert result["sample_points"] == [{"index": 0, "P": {"unread": "RuntimeError: no value"}}]
+
+    def test_each_field_the_program_could_not_read_is_logged(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))), max_sample_points=0)
+
+        assert "unread bounding_box of /obj/geo1/box1 reason=RuntimeError: no bounds" in caplog.text
+
+    def test_the_program_spells_a_reason_as_the_server_does(self):
+        from houdini_mcp.tools.reads import format_reason
+
+        class OperationFailed(Exception):
+            __module__ = "hou"
+            __qualname__ = "OperationFailed"
+
+        def no_bounds() -> None:
+            raise OperationFailed("no bounds")
+
+        result = self._run(self._node(self._geo(boundingBox=no_bounds)), max_sample_points=0)
+
+        assert result["bounding_box"] == {"unread": format_reason(OperationFailed("no bounds"))}
+        assert result["bounding_box"] == {"unread": "hou.OperationFailed: no bounds"}

@@ -27,7 +27,7 @@ from ._common import (
     handle_connection_errors,
     node_at,
 )
-from .reads import read
+from .reads import Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -327,63 +327,87 @@ def list_visible_panes(
             - capturable: True if pane can be captured (visible and on current desktop)
         - capturable_count: Number of panes that can be captured
         - total_count: Total number of panes found
+        A field Houdini will not give is {"unread": "<why>"}, and so is a
+        fact that depends on one (is_current_desktop, capturable,
+        capturable_count); the pane stays listed.
         - available_types: List of all valid pane type names
     """
     hou = ensure_connected(host, port)
 
-    panes_info: list[dict[str, Any]] = []
     current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
-
-    # Iterate through all desktops and panes
     try:
-        for desktop in hou.ui.desktops():
-            desktop_name = desktop.name()
-            is_current = (desktop_name == current_desktop_name) if current_desktop_name else False
-
-            for pane_tab in desktop.paneTabs():
-                try:
-                    pane_type = pane_tab.type()
-                    pane_type_name = (
-                        pane_type.name() if hasattr(pane_type, "name") else str(pane_type)
-                    )
-
-                    # Get geometry
-                    geom = pane_tab.qtScreenGeometry()
-                    geom_width = geom.width()
-                    geom_height = geom.height()
-
-                    # Check if visible (geometry > 0, not -1x-1)
-                    is_visible = geom_width > 0 and geom_height > 0
-
-                    panes_info.append(
-                        {
-                            "name": str(pane_tab.name()),
-                            "type": pane_type_name,
-                            "desktop": desktop_name,
-                            "is_current_desktop": is_current,
-                            "is_visible": is_visible,
-                            "geometry": {"width": geom_width, "height": geom_height}
-                            if is_visible
-                            else None,
-                            "capturable": is_visible and is_current,
-                        }
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to get pane info: {e}")
+        panes_info = [
+            _pane_info(
+                pane_tab, f"pane {index} of {desktop.name()}", desktop.name(), current_desktop_name
+            )
+            for desktop in hou.ui.desktops()
+            for index, pane_tab in enumerate(desktop.paneTabs())
+        ]
     except Exception as e:
         raise OperationFailed(f"Failed to enumerate panes: {e}") from e
 
-    # Sort: capturable first, then by type name
-    panes_info.sort(key=lambda p: (not p["capturable"], p["type"]))
+    # Capturable first, then by type name
+    panes_info.sort(key=lambda p: (p["capturable"] is not True, str(p["type"])))
+    capturable = [p["capturable"] for p in panes_info]
 
     return {
         "status": "success",
         "current_desktop": current_desktop_name,
         "panes": panes_info,
-        "capturable_count": sum(1 for p in panes_info if p["capturable"]),
+        # [LAW:no-silent-failure] a count over a pane that may or may not be
+        # capturable is not known either
+        "capturable_count": next(filter(is_unread, capturable), capturable.count(True)),
         "total_count": len(panes_info),
         "available_types": pane_type_names(hou),
     }
+
+
+Fact = bool | Unread
+"""A yes/no about a pane, or why Houdini would not say."""
+
+
+def _pane_info(
+    pane_tab: Any, what: str, desktop_name: str, current: str | None | Unread
+) -> dict[str, Any]:
+    """One pane's row. [LAW:no-silent-failure] A part Houdini will not give is
+    ``Unread``, and so is every fact that depends on it; the pane stays listed."""
+    size = read(f"geometry of {what}", lambda: _screen_size(pane_tab))
+    # a size is a tuple and Unread a dict, so isinstance discriminates both ways
+    is_visible: Fact = size[0] > 0 and size[1] > 0 if isinstance(size, tuple) else size
+    is_current: Fact = current if is_unread(current) else desktop_name == current
+    geometry = (
+        size
+        if not isinstance(size, tuple)
+        else {"width": size[0], "height": size[1]}
+        if is_visible
+        else None
+    )
+    return {
+        "name": read(f"name of {what}", lambda: str(pane_tab.name())),
+        "type": read(f"type of {what}", lambda: _pane_type_name(pane_tab)),
+        "desktop": desktop_name,
+        "is_current_desktop": is_current,
+        "is_visible": is_visible,
+        "geometry": geometry,
+        "capturable": _both(is_visible, is_current),
+    }
+
+
+def _screen_size(pane_tab: Any) -> tuple[int, int]:
+    geom = pane_tab.qtScreenGeometry()
+    return geom.width(), geom.height()
+
+
+def _pane_type_name(pane_tab: Any) -> str:
+    pane_type = pane_tab.type()
+    return pane_type.name() if hasattr(pane_type, "name") else str(pane_type)
+
+
+def _both(a: Fact, b: Fact) -> Fact:
+    """False when either is; otherwise what could not be read, if either was."""
+    if a is False or b is False:
+        return False
+    return a if is_unread(a) else b
 
 
 @handle_connection_errors("render_node_network")

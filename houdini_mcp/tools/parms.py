@@ -90,20 +90,21 @@ def read_present(hou: Any, node: Any, names: list[str]) -> dict[str, Any]:
             parm = resolve(node, name)
         except ParmNotFound:
             continue
-        values[name] = _evaluated(hou, parm.target)
+        values[name] = _evaluated(hou, name, parm.target)
     return values
 
 
 def evaluated(hou: Any, parms: Iterable[Any]) -> Iterator[tuple[str, Any]]:
     """Each parm with its JSON value, ``Unread`` where it fails to evaluate."""
     for parm in parms:
-        yield parm.name(), _evaluated(hou, parm)
+        name = parm.name()
+        yield name, _evaluated(hou, name, parm)
 
 
-def _evaluated(hou: Any, target: Any) -> Any | Unread:
+def _evaluated(hou: Any, name: str, target: Any) -> Any | Unread:
     # [LAW:no-silent-failure] converting is part of reading: a value with no
     # JSON form is as unread as one that would not evaluate
-    return read(f"parameter {target.name()}", lambda: json_safe_hou_value(hou, target.eval()))
+    return read(f"parameter {name}", lambda: json_safe_hou_value(hou, target.eval()))
 
 
 @dataclass(frozen=True)

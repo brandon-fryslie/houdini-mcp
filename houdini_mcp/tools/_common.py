@@ -765,6 +765,8 @@ def apply_response_cap(
         "warning",
         "message",
         "scene_changes_error",
+        # what a partial walk could not enter: the status "partial" stands on it
+        "unwalked",
     ]
     # [LAW:one-source-of-truth] a capped failure still parses as the arm it was
     for field in [*essential_fields, *sorted(FAILURE_FIELDS)]:

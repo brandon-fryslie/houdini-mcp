@@ -194,15 +194,14 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     so a node whose errors could not be read never looks like one with none.
     """
     cook_info: dict[str, Any] = {}
+    path = node.path()
     # Houdini has no direct lastCookTime; after a forced cook, now is it.
     if force:
-        cook_info["last_cook_time"] = read(f"forced cook of {node.path()}", lambda: _cook(node))
-    cook_info["cook_state"] = read(f"cook state of {node.path()}", lambda: _cook_state(node))
-    cook_info["errors"] = read(
-        f"errors of {node.path()}", lambda: _messages("error", node, node.errors())
-    )
+        cook_info["last_cook_time"] = read(f"forced cook of {path}", lambda: _cook(node))
+    cook_info["cook_state"] = read(f"cook state of {path}", lambda: _cook_state(node))
+    cook_info["errors"] = read(f"errors of {path}", lambda: _messages("error", path, node.errors()))
     cook_info["warnings"] = read(
-        f"warnings of {node.path()}", lambda: _messages("warning", node, node.warnings())
+        f"warnings of {path}", lambda: _messages("warning", path, node.warnings())
     )
     return cook_info
 
@@ -223,8 +222,8 @@ def _cook_state(node: Any) -> str:
     return "dirty" if node.needsToCook() else "cooked"
 
 
-def _messages(severity: str, node: Any, messages: Any) -> list[dict[str, str]]:
-    return [{"severity": severity, "message": m, "node_path": node.path()} for m in messages]
+def _messages(severity: str, path: str, messages: Any) -> list[dict[str, str]]:
+    return [{"severity": severity, "message": m, "node_path": path} for m in messages]
 
 
 @handle_connection_errors("delete_node")
@@ -380,7 +379,7 @@ def list_children(
         )
         return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
-    def collect_children(node: Any, depth: int = 0) -> None:
+    def collect_children(node: Any, path: str, depth: int = 0) -> None:
         nonlocal nodes_collected, walked, beyond_depth
 
         if nodes_collected >= max_nodes:
@@ -391,13 +390,14 @@ def list_children(
         # own record raises reaches the tool's error boundary, so a wire whose
         # output cannot be read is reported, not dropped with its siblings.
         # hou is untyped: a node's children are Any, so is_unread is the discriminator
-        children: Any = read(f"children of {node.path()}", node.children)
+        children: Any = read(f"children of {path}", node.children)
+        if is_unread(children):
+            # past max_depth too: there, it is whether there is more that is unknown
+            unwalked.append({"path": path, **children})
+            return
         if depth > max_depth:
             # past the requested depth the walk only asks whether there is more
-            beyond_depth += not is_unread(children) and len(children) > 0
-            return
-        if is_unread(children):
-            unwalked.append({"path": node.path(), **children})
+            beyond_depth += len(children) > 0
             return
         walked += 1
 
@@ -405,18 +405,19 @@ def list_children(
             if nodes_collected >= max_nodes:
                 break
 
+            child_path = child.path()
             # Compact mode: only path, name, type
             if compact:
                 child_info: dict[str, Any] = {
-                    "path": child.path(),
+                    "path": child_path,
                     "name": child.name(),
                     "type": child.type().name(),
-                    "flags": read(f"flags of {child.path()}", partial(compact_flags, child)),
+                    "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
                 }
             else:
                 # Full mode: input wires with their source output, and output nodes
                 child_info = {
-                    "path": child.path(),
+                    "path": child_path,
                     "name": child.name(),
                     "type": child.type().name(),
                     "inputs": [conn.as_record() for conn in input_connections(child)],
@@ -428,9 +429,9 @@ def list_children(
 
             # Recurse if requested
             if recursive:
-                collect_children(child, depth + 1)
+                collect_children(child, child_path, depth + 1)
 
-    collect_children(parent)
+    collect_children(parent, parent.path())
     logger.info(
         "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d",
         node_path,

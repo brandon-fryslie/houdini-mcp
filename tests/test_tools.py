@@ -1310,6 +1310,45 @@ class TestListChildren:
         assert unwalked["path"] == "/obj/geo1/hda"
         assert unwalked["unread"].startswith("RuntimeError: locked asset")
 
+    def test_a_node_past_max_depth_whose_children_will_not_list_is_unwalked(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, max_depth=0)
+
+        # whether it has more below is unknown, not "nothing below"
+        assert result["status"] == "partial"
+        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+        assert "warning" not in result
+
+    def test_a_capped_partial_walk_keeps_what_it_could_not_enter(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        many = [
+            MockHouNode(path=f"/obj/geo1/{'n' * 200}{i}", name=f"{'n' * 200}{i}", node_type="null")
+            for i in range(120)
+        ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked, *many])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, limit=500, compact=True)
+
+        assert result["_truncated"] is True
+        assert result["status"] == "partial"
+        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+
     def test_a_parent_whose_children_will_not_list_fails_the_call(self, mock_connection):
         from houdini_mcp.tools import list_children
 

@@ -4,6 +4,7 @@ This module provides tools for inspecting geometry data in Houdini,
 including point/primitive counts, attributes, groups, and sampling.
 """
 
+import inspect
 import json
 import logging
 from typing import Any
@@ -14,9 +15,13 @@ from ._common import (
     handle_connection_errors,
     tool_error,
 )
-from .reads import UNREAD
+from .reads import UNREAD, format_reason, log_unread, unreads
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
+
+# [LAW:one-source-of-truth] the program run inside Houdini spells a reason
+# with reads.format_reason itself, so one failure reads the same from any tool
+_FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
 
 
 @handle_connection_errors("get_geo_summary")
@@ -85,6 +90,7 @@ def get_geo_summary(
     # This avoids slow RPC iteration over geometry elements
     geo_analysis_code = f"""
 import json
+import traceback
 
 node_path = {repr(node_path)}
 max_sample_points = {max_sample_points}
@@ -94,13 +100,15 @@ include_groups = {include_groups}
 result = {{"status": "success", "node_path": node_path}}
 
 
+{_FORMAT_REASON_SOURCE}
+
 def _read(fetch):
     # [LAW:single-enforcer] the program's spelling of reads.read: what Houdini
     # will not give stands as Unread, never as a value it might have been
     try:
         return fetch()
     except Exception as e:
-        return {{{UNREAD!r}: f"{{type(e).__name__}}: {{e}}"}}
+        return {{{UNREAD!r}: format_reason(e)}}
 
 
 def _cook():
@@ -148,7 +156,7 @@ else:
         try:
             geo = node.geometry()
         except Exception as e:
-            failure = ("operation_failed", f"{{type(e).__name__}}: {{e}}")
+            failure = ("operation_failed", format_reason(e))
         else:
             failure = None if geo is not None else ("operation_failed", "geometry() returned None")
     if failure is not None:
@@ -233,4 +241,8 @@ print(json.dumps(result))
     # crosses back into the one failure type here.
     if result["status"] == "error":
         raise tool_error(result["kind"], result["message"], path=node_path)
+    # the program cannot reach this log; each field it could not read is an
+    # event here, as it would be had the server read it
+    for where, found in unreads(result):
+        log_unread(f"{where} of {node_path}", found)
     return _add_response_metadata(result, apply_cap=not _defer_cap)

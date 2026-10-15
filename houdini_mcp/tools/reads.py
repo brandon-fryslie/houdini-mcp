@@ -13,14 +13,25 @@ key.
 
 import itertools
 import logging
-from collections.abc import Callable
+import traceback
+from collections.abc import Callable, Iterator
 from typing import Any, TypedDict, TypeGuard, TypeVar
 
 from ..connection import transport_failure
 
 logger = logging.getLogger("houdini_mcp.tools.reads")
 
-__all__ = ["UNREAD", "Unread", "is_unread", "read", "reraise_transport_failure", "unread"]
+__all__ = [
+    "UNREAD",
+    "Unread",
+    "format_reason",
+    "is_unread",
+    "log_unread",
+    "read",
+    "reraise_transport_failure",
+    "unread",
+    "unreads",
+]
 
 T = TypeVar("T")
 
@@ -44,20 +55,33 @@ def unread(e: Exception) -> Unread:
     return Unread(unread=_reason(e))
 
 
+def format_reason(e: BaseException) -> str:
+    """``<ExcType>: <message>``, as Python spells an exception it reports.
+
+    [LAW:one-source-of-truth] The one spelling of a reason: Python used it
+    inside Houdini to write a remote traceback's last lines, and programs run
+    inside Houdini define it from this function's source.
+    """
+    return "".join(traceback.format_exception_only(type(e), e)).rstrip()
+
+
 def _reason(e: Exception) -> str:
-    """``<ExcType>: <message>``, as Houdini raised it.
+    """The reason Houdini gave for ``e``.
 
     rpyc rebuilds a remote exception without its arguments (a ``hou`` error
-    keeps its message outside them) and appends the remote traceback to its
-    str, which the log keeps. The traceback's last, unindented lines are the
-    exception as Houdini reported it.
+    keeps its message outside them) and keeps the remote traceback, whose lines
+    after the last frame are the reason; a message's own lines may be indented.
     """
     remote_tb = getattr(e, "_remote_tb", None)
     if remote_tb is None:
-        return f"{type(e).__name__}: {e}"
+        return format_reason(e)
     lines = str(remote_tb).rstrip().splitlines()
-    tail = list(itertools.takewhile(lambda line: not line.startswith(" "), reversed(lines)))
-    return "\n".join(reversed(tail))
+    frames = [i for i, line in enumerate(lines) if line.startswith('  File "')]
+    if not frames:
+        # a server that withholds its traceback leaves only the class name
+        return f"{type(e).__name__}: {remote_tb}"
+    reason = itertools.dropwhile(lambda line: line.startswith("    "), lines[frames[-1] + 1 :])
+    return "\n".join(reason)
 
 
 def read(what: str, fetch: Callable[[], T]) -> T | Unread:
@@ -70,8 +94,26 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
         return fetch()
     except Exception as e:
         reraise_transport_failure(e)
-        logger.warning("unread %s reason=%s: %s", what, type(e).__name__, e)
-        return unread(e)
+        found = unread(e)
+        log_unread(what, found)
+        return found
+
+
+def log_unread(what: str, found: Unread) -> None:
+    """The event for one read Houdini refused, wherever it was refused."""
+    logger.warning("unread %s reason=%s", what, found["unread"])
+
+
+def unreads(value: Any, where: str = "") -> Iterator[tuple[str, Unread]]:
+    """Every ``Unread`` inside ``value``, with the path of keys and indexes to it."""
+    if is_unread(value):
+        yield where, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from unreads(item, f"{where}.{key}" if where else str(key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from unreads(item, f"{where}[{index}]")
 
 
 def reraise_transport_failure(e: Exception) -> None:
