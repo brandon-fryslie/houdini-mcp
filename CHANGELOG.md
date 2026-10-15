@@ -10,14 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A failed quad view and a failed cache call are arms of the one result type**
-  (houdini-laws-etg.60v): in `render_quad_view` a view that did not render is the
-  failure arm the one enforcer makes of its exception, beside its `name` and
-  `rotation` (an unclassified exception carries its `traceback`), and a view that
-  did is marked `status: "success"`; when no view rendered, the call is itself an
-  `operation_failed` failure carrying the same `views`, `renderer`, `bounding_box`
-  and `total_render_time_ms`, in place of a hand-built `status: "error"` with no
-  `kind`. A render that writes no image is now `operation_failed` without a
-  traceback in `render_viewport` too.
+  (houdini-laws-etg.60v): a render Houdini refuses, or one that writes no image,
+  is `operation_failed` with the cause's `exception` in both render tools, in
+  place of an unclassified error with a traceback. In `render_quad_view` such a
+  view is that failure arm beside its `name` and `rotation`, and a view that
+  rendered is marked `status: "success"`; anything else (a dead link, a bug)
+  fails the whole call. When no view rendered, the call is itself an
+  `operation_failed` failure carrying the same `views`, `renderer`,
+  `bounding_box` and `total_render_time_ms`, in place of a hand-built
+  `status: "error"` with no `kind`. A failure's `message` now ends with the
+  notes added on the way out, such as a temporary node that would not go.
   `manage_cache` now enters through the tool boundary: an unknown `action` is
   `invalid_input`, and a warmup that cannot reach Houdini is the connection arm
   that says so, not a bare error message.

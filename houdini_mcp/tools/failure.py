@@ -194,8 +194,14 @@ class ToolError(Exception):
         self.message = message
         self.fields = fields
 
+    @property
+    def told(self) -> str:
+        """The message with any notes added on the way out (a temporary node that
+        would not go), each on its own line, as Python prints them."""
+        return "\n".join([self.message, *getattr(self, "__notes__", ())])
+
     def failure(self, operation: str) -> _Failure:
-        return self.arm(operation=operation, message=self.message, **self.fields)
+        return self.arm(operation=operation, message=self.told, **self.fields)
 
 
 class InvalidInput(ToolError):
@@ -218,7 +224,7 @@ class TimedOut(ToolError):
 
     def failure(self, operation: str) -> _Failure:
         return TimeoutFailure(
-            operation=operation, message=self.message, connection_reset=False, **self.fields
+            operation=operation, message=self.told, connection_reset=False, **self.fields
         )
 
 

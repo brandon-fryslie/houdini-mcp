@@ -421,7 +421,14 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
     remote_os.close(fd)
     try:
         rop.parm("picture").set(output_path)
-        rop.render()
+        try:
+            rop.render()
+        except Exception as e:
+            # [LAW:no-silent-failure] a dead link stays itself, so cleanup knows
+            # to send nothing more; anything else is Houdini refusing the render
+            if transport_failure(e):
+                raise
+            raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
         with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
             image = f.read()
         if not image:
@@ -609,17 +616,17 @@ def render_quad_view(
             try:
                 _aim(rig, rotation, offset, is_ortho, framing)
                 image = _render_picture(rop, prepared, output_format)
-            except Exception as e:
-                # [LAW:no-silent-failure] a dead link is not a view's failure
-                if transport_failure(e):
-                    raise
-                # [LAW:single-enforcer] the view's slot is the arm the one
-                # enforcer makes of its exception, beside the view's own name
+            except OperationFailed as e:
+                # [LAW:single-enforcer] the one enforcer classifies. A view owns
+                # only Houdini's failure to render it; whatever outranks that (a
+                # dead link under it) is the call's, and goes to the boundary.
                 failure = failure_for(e, "render_quad_view")
+                if failure.kind != "operation_failed":
+                    raise
                 logger.warning(
                     "Quad view %s not rendered (%s): %s", name, failure.kind, failure.message
                 )
-                view.update(failure.model_dump())
+                view = {**failure.model_dump(), **view}
             else:
                 logger.info("Rendered quad view %s", name)
                 view.update(
