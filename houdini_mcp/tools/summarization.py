@@ -23,7 +23,11 @@ logger = logging.getLogger("houdini_mcp.summarization")
 
 # Configuration. The SUMMARIZATION_ prefix keeps an OPENAI_* key or URL set for some
 # other tool in the user's shell from redirecting these summaries.
-SUMMARIZATION_BASE_URL = os.getenv("SUMMARIZATION_BASE_URL", "http://100.66.66.66:8000/v1")
+# [LAW:parse-dont-validate] Parsed at import, so a malformed URL stops the server at
+# startup instead of failing whichever tool first asks for a summary.
+SUMMARIZATION_BASE_URL = httpx.URL(
+    os.getenv("SUMMARIZATION_BASE_URL", "http://100.66.66.66:8000/v1")
+)
 SUMMARIZATION_API_KEY = os.getenv("SUMMARIZATION_API_KEY", "1234")
 # An instruct model with no thinking phase: measured 2026-10-15 on that server at
 # 12-15s per summary including a cold load, where the reasoning models took 56s warm.
@@ -39,6 +43,9 @@ TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
 
 # Room for a cold model load (about 7.5s) plus a full-length summary.
 REQUEST_TIMEOUT_SECONDS = 60.0
+# Reaching the server is quick or it is not there: off the tailnet the SYN is dropped,
+# and the full request budget would stall every auto-summarized tool call.
+CONNECT_TIMEOUT_SECONDS = 3.0
 
 
 # [LAW:effects-at-boundaries] The one place the summarizer's HTTP client is built. Tests
@@ -49,7 +56,7 @@ def summarizer_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=SUMMARIZATION_BASE_URL,
         headers={"Authorization": f"Bearer {SUMMARIZATION_API_KEY}"},
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
     )
 
 
@@ -305,27 +312,18 @@ async def _complete(prompt: str) -> str | None:
     except httpx.HTTPStatusError as exc:
         # The server's own message says what to fix (an unloadable model names the
         # memory it needs), so it goes in the log with the status.
-        logger.warning(
-            "Summarization failed: %s answered %d: %s",
-            exc.request.url,
-            exc.response.status_code,
-            exc.response.text[:500],
-        )
-        return None
+        return _failed(started, f"answered {exc.response.status_code}: {exc.response.text[:500]}")
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Summarization failed: %s: %s", type(exc).__name__, exc)
-        return None
+        return _failed(started, f"{type(exc).__name__}: {exc}")
 
     elapsed = time.monotonic() - started
     # [LAW:no-silent-failure] A completion the model did not finish is not a summary.
     if completion.finish_reason != "stop" or not completion.text:
-        logger.warning(
-            "Summarization returned no finished summary: finish_reason=%s, %d chars after %.1fs",
-            completion.finish_reason,
-            len(completion.text),
-            elapsed,
+        return _failed(
+            started,
+            f"no finished summary: finish_reason={completion.finish_reason}, "
+            f"{len(completion.text)} chars",
         )
-        return None
 
     logger.info(
         "Summarized with %s in %.1fs: %d chars",
@@ -334,6 +332,17 @@ async def _complete(prompt: str) -> str | None:
         len(completion.text),
     )
     return completion.text
+
+
+def _failed(started: float, reason: str) -> None:
+    """Log one failed summary with the server, model and time it took, and yield no summary."""
+    logger.warning(
+        "Summarization by %s at %s failed after %.1fs: %s",
+        SUMMARIZATION_MODEL,
+        SUMMARIZATION_BASE_URL,
+        time.monotonic() - started,
+        reason,
+    )
 
 
 def get_summarization_status() -> dict[str, Any]:
@@ -345,7 +354,7 @@ def get_summarization_status() -> dict[str, Any]:
     return {
         "enabled": SUMMARIZATION_ENABLED,
         "model": SUMMARIZATION_MODEL,
-        "base_url": SUMMARIZATION_BASE_URL,
+        "base_url": str(SUMMARIZATION_BASE_URL),
         "auto_threshold_tokens": AUTO_SUMMARIZE_THRESHOLD,
         "target_summary_tokens": TARGET_SUMMARY_TOKENS,
     }

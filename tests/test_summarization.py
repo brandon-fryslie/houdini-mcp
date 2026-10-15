@@ -133,7 +133,7 @@ class TestDefaults:
     def test_enabled_against_the_local_server(self, defaults):
         """The out-of-the-box target is the omlx server and its instruct model."""
         assert defaults.SUMMARIZATION_ENABLED is True
-        assert defaults.SUMMARIZATION_BASE_URL == "http://100.66.66.66:8000/v1"
+        assert str(defaults.SUMMARIZATION_BASE_URL) == "http://100.66.66.66:8000/v1"
         assert defaults.SUMMARIZATION_MODEL == "mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit"
 
     def test_client_authenticates_to_the_local_server(self, defaults):
@@ -142,14 +142,26 @@ class TestDefaults:
         assert str(client.base_url) == "http://100.66.66.66:8000/v1/"
         assert client.headers["Authorization"] == "Bearer 1234"
         assert client.timeout.read == defaults.REQUEST_TIMEOUT_SECONDS
+        assert client.timeout.connect == defaults.CONNECT_TIMEOUT_SECONDS
 
-    def test_no_anthropic_path(self):
-        """Nothing in the module names the Anthropic API, its proxy, or its credential."""
-        import inspect
+    def test_anthropic_settings_change_nothing(self, defaults, monkeypatch):
+        """An Anthropic key or proxy in the environment does not redirect the summarizer."""
+        import importlib
 
-        source = inspect.getsource(summarization)
-        for gone in ("anthropic", "8082", "ANTHROPIC_API_KEY", "CLAUDE_PROXY_URL", "/v1/messages"):
-            assert gone not in source
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("CLAUDE_PROXY_URL", "http://localhost:8082")
+        client = importlib.reload(summarization).summarizer_client()
+
+        assert str(client.base_url) == "http://100.66.66.66:8000/v1/"
+        assert client.headers["Authorization"] == "Bearer 1234"
+
+    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch):
+        """A base URL httpx cannot parse stops the module loading, naming what is wrong."""
+        import importlib
+
+        monkeypatch.setenv("SUMMARIZATION_BASE_URL", "http://host:abc/v1")
+        with pytest.raises(httpx.InvalidURL, match="abc"):
+            importlib.reload(summarization)
 
 
 class TestGetSummarizationStatus:
@@ -162,7 +174,7 @@ class TestGetSummarizationStatus:
         assert status == {
             "enabled": summarization.SUMMARIZATION_ENABLED,
             "model": summarization.SUMMARIZATION_MODEL,
-            "base_url": summarization.SUMMARIZATION_BASE_URL,
+            "base_url": str(summarization.SUMMARIZATION_BASE_URL),
             "auto_threshold_tokens": summarization.AUTO_SUMMARIZE_THRESHOLD,
             "target_summary_tokens": summarization.TARGET_SUMMARY_TOKENS,
         }
@@ -216,7 +228,8 @@ class TestComplete:
             result = await summarization._complete("test prompt")
 
         assert result is None
-        assert f"Summarization returned no finished summary: {reason} chars" in caplog.text
+        assert "failed after " in caplog.text
+        assert f"s: no finished summary: {reason} chars" in caplog.text
 
     async def test_server_error_logs_the_servers_message(self, wire, caplog):
         """An error status is logged with the server's own explanation."""
@@ -229,7 +242,7 @@ class TestComplete:
             result = await summarization._complete("test prompt")
 
         assert result is None
-        assert "/v1/chat/completions answered 507" in caplog.text
+        assert "s: answered 507" in caplog.text
         assert "Cannot load model: projected memory would exceed" in caplog.text
 
     @pytest.mark.parametrize(
@@ -249,7 +262,19 @@ class TestComplete:
             result = await summarization._complete("test prompt")
 
         assert result is None
-        assert f"Summarization failed: {logged}" in caplog.text
+        assert f"s: {logged}" in caplog.text
+
+    async def test_failure_names_the_model_server_and_duration(self, wire, caplog):
+        """A failure's event carries the same facts as a success: model, server, time taken."""
+        wire.response = httpx.ReadTimeout
+
+        with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
+            await summarization._complete("test prompt")
+
+        assert (
+            f"Summarization by {summarization.SUMMARIZATION_MODEL} at "
+            f"{summarization.SUMMARIZATION_BASE_URL} failed after "
+        ) in caplog.text
 
 
 class TestSummarizeGeometry:

@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_summarization_status` returns `base_url` in place of `proxy_url`. A
   completion that was cut off or empty is logged and dropped instead of being
   attached as `ai_summary`, a server error is logged with the server's own
-  message, and each summary logs the model and how long it took.
+  message, and each summary, finished or failed, logs the model, the server
+  and how long it took. An unreachable server gives up after 3s rather than
+  the 60s request budget, and a malformed `SUMMARIZATION_BASE_URL` stops the
+  server at startup.
 
 - **Every tool failure is one arm of one result type** (houdini-laws-etg.2m5):
   an error result carries `kind` (`connection_unavailable`, `connection_mismatch`,
