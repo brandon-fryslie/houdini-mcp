@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`execute_code` captures only its own program's output** (houdini-laws-etg.og9):
   while a program runs, prints and stderr writes from other threads reach their
   own streams instead of the program's `stdout`/`stderr` capture, so a log line
-  or, under the stdio transport, protocol output written meanwhile is no longer
-  swallowed. A stream replaced by someone else during the run is left in place
-  and logged as a warning, since the program's later output went to it.
+  written meanwhile is no longer swallowed. Capture follows the program's thread:
+  output from threads the program starts reaches the process's streams. A stream
+  the program swaps in is replaced by the prior one when it ends, with a warning.
 
 - **A scene has one snapshot** (houdini-laws-etg.6z7, houdini-laws-etg.l5c): the
   `execute_code` diff, `get_last_scene_diff` and `serialize_scene` all read the

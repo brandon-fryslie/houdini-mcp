@@ -448,8 +448,8 @@ class TestExecuteCodeOutputCapture:
         assert bystander.err == "bystander err"
         assert (sys.stdout, sys.stderr) == streams_before
 
-    def test_a_stream_swapped_mid_run_is_left_in_place_and_reported(self, caplog):
-        """Someone else's swap survives the capture's end, and the output it diverted is reported."""
+    def test_a_stream_the_program_swaps_is_restored_and_reported(self, caplog):
+        """A program's own sys.stdout swap does not outlive it, and the output it diverted is reported."""
         import io
         import logging
         import sys
@@ -457,7 +457,7 @@ class TestExecuteCodeOutputCapture:
         from houdini_mcp.tools.program_output import captured
 
         original = sys.stdout
-        stranger = io.StringIO()
+        swapped = io.StringIO()
         capture = io.StringIO()
         try:
             with (
@@ -465,16 +465,37 @@ class TestExecuteCodeOutputCapture:
                 captured(capture, io.StringIO()),
             ):
                 print("before")
-                sys.stdout = stranger
+                sys.stdout = swapped
                 print("after")
-            assert sys.stdout is stranger
+            assert sys.stdout is original
         finally:
             sys.stdout = original
 
         assert capture.getvalue() == "before\n"
-        assert stranger.getvalue() == "after\n"
+        assert swapped.getvalue() == "after\n"
         [record] = caplog.records
         assert record.getMessage().startswith("sys.stdout was replaced by")
+
+    def test_the_swap_warning_reaches_the_server_not_the_capture(self, capsys):
+        """With no log handler configured, the warning goes to the real stderr, never the program's capture."""
+        import io
+        import logging
+        import sys
+
+        from houdini_mcp.tools.program_output import captured
+
+        logger = logging.getLogger("houdini_mcp.tools.program_output")
+        error_capture = io.StringIO()
+        original, propagate = sys.stdout, logger.propagate
+        logger.propagate = False  # no handler anywhere: logging.lastResort writes to sys.stderr
+        try:
+            with captured(io.StringIO(), error_capture):
+                sys.stdout = io.StringIO()
+        finally:
+            sys.stdout, logger.propagate = original, propagate
+
+        assert error_capture.getvalue() == ""
+        assert "sys.stdout was replaced by" in capsys.readouterr().err
 
 
 class TestExecuteCodeEdgeCases:
