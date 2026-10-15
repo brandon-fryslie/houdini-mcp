@@ -566,7 +566,7 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" when at least one view rendered
+        - status: "success", or "partial" when a view did not render
         - views: List of view results, each with name (front, left, top,
           perspective) and rotation ([rx, ry, rz] camera rotation used), and
           either a picture:
@@ -1252,7 +1252,8 @@ def create_network_box(
         color: Optional RGB color [r, g, b] for the box (0.0-1.0 each)
 
     Returns:
-        Dict with network_box_name, nodes_contained, label
+        Dict with network_box_name, nodes_contained, label, and the color the
+        box was given (clamped to 0-1). A color that is not [r, g, b] is refused.
 
     Examples:
         create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform")
@@ -1414,7 +1415,8 @@ def capture_multiple_panes(
 
     Returns:
         Dict with:
-        - status: "success", whether none, some or all of the captures worked
+        - status: "success", "partial" (a pane was not captured) or "error"
+          (none was; the report rides on the error)
         - success_count: Number of successful captures
         - total_requested: Number of pane types requested
         - results: Per-pane results with image_base64 or file_path

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..connection import transport_failure
+from .failure import BatchStatus, batch_status
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
 
@@ -123,8 +124,8 @@ class Writes:
     failed: list[dict[str, Any]]
 
     @property
-    def status(self) -> str:
-        return "partial" if self.failed else "success"
+    def status(self) -> BatchStatus:
+        return batch_status(self.failed)
 
     def fields(self) -> dict[str, Any]:
         return {"status": self.status, "updated": self.updated, "failed": self.failed}

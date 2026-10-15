@@ -89,12 +89,13 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     )
 
 
-def test_capture_multiple_panes_reports_every_pane_in_its_slot(
+def test_capture_multiple_panes_that_captures_nothing_is_an_error_carrying_every_slot(
     mock_connection: MockHouModule,
 ) -> None:
-    """The aggregate has one shape whether the captures worked or not: each slot
-    is a capture or that pane's own failure arm, so a client reads the slots."""
+    """No pane captured is not a success: the call is the operation_failed arm,
+    naming each pane's cause, and still carries each pane's own failure arm."""
     from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import OperationFailure
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
     with patch(
@@ -103,9 +104,53 @@ def test_capture_multiple_panes_reports_every_pane_in_its_slot(
     ):
         result = capture_multiple_panes(["ChannelEditor", "thisown"])
 
-    assert result["status"] == "success"
+    call = FAILURE.validate_python(result)
+    assert isinstance(call, OperationFailure), result
+    assert call.message == (
+        "No pane captured: ChannelEditor: Unknown pane type: ChannelEditor; "
+        "thisown: Unknown pane type: thisown"
+    )
     assert (result["success_count"], result["total_requested"]) == (0, 2)
     for name in ("ChannelEditor", "thisown"):
         slot = FAILURE.validate_python(result["results"][name])
         assert (slot.kind, slot.operation) == ("invalid_input", "capture_multiple_panes")
         assert slot.message == f"Unknown pane type: {name}"
+
+
+def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A capture beside a failure is reported as partial, never as success,
+    with the capture in its slot and the failure arm in the other."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.pane_screenshot import _capture_pane_to_bytes, capture_multiple_panes
+
+    def capture_only_the_network_editor(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        if name == "NetworkEditor":
+            return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+        return _capture_pane_to_bytes(hou, name, QtWidgets, QtCore)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes",
+            capture_only_the_network_editor,
+        ),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "ChannelEditor"])
+
+    assert result["status"] == "partial", result
+    assert (result["success_count"], result["total_requested"]) == (1, 2)
+    assert result["results"]["NetworkEditor"]["image_size_bytes"] == 3
+    slot = FAILURE.validate_python(result["results"]["ChannelEditor"])
+    assert slot.kind == "invalid_input"
+    assert [
+        r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.pane_screenshot"
+    ] == [
+        "Unknown pane type 'ChannelEditor' refused; this Houdini has 3 pane types",
+        "ChannelEditor not captured (invalid_input): Unknown pane type: ChannelEditor",
+    ]

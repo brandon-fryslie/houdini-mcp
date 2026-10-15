@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Sized
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -50,6 +51,8 @@ __all__ = [
     "tool_error",
     "failure_for",
     "failure_response",
+    "BatchStatus",
+    "batch_status",
 ]
 
 FailureKind = Literal[
@@ -165,6 +168,18 @@ ToolFailure = Annotated[
 
 FAILURE: TypeAdapter[Any] = TypeAdapter(ToolFailure)
 """Parses a response back into exactly one arm, or refuses it. This is the test net."""
+
+BatchStatus = Literal["success", "partial"]
+"""The status of a tool that acts on several items and did at least one thing."""
+
+
+def batch_status(failed: Sized) -> BatchStatus:
+    """``"partial"`` while any item has a failure in its slot, else ``"success"``.
+
+    [LAW:one-source-of-truth] Every multi-item tool reads its status here, so
+    ``"success"`` never stands over an item whose effect did not happen.
+    """
+    return "partial" if len(failed) else "success"
 
 
 # =============================================================================
