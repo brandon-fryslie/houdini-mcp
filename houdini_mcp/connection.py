@@ -288,11 +288,7 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    link = Link(target, host, port, conn, hou)
-    # The opener announces an attempt; this is the event that the attempt became a
-    # proven link, named by the Houdini it reached.
-    logger.info(f"Connected to Houdini at {link.name}")
-    return link
+    return Link(target, host, port, conn, hou)
 
 
 def _open_link_with_retries(
@@ -438,6 +434,9 @@ class HoudiniConnection:
             previous, self._link = self._link, link
         if previous is not None:
             previous.close()
+        # The event is the server holding a link, so it follows the close of the one
+        # replaced and is not the probe's: ``ping`` opens a link it never installs.
+        logger.info(f"Connected to Houdini at {link.name}")
         return link
 
     def close(self) -> None:

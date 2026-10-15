@@ -138,9 +138,9 @@ class TestConnect:
             pytest.raises(HoudiniConnectionError),
         ):
             mock_rpyc.connect.return_value = busy
-            connect("render-farm", 19999, max_retries=1, retry_delay=0.01)
+            connect("render-farm", 19999, max_retries=1)
 
-        assert not any(m.startswith("Connected to Houdini") for m in caplog.messages)
+        assert "Connected to Houdini at render-farm:19999" not in caplog.messages
 
     def test_a_close_that_fails_does_not_replace_the_validation_error(
         self, reset_connection_state, mock_hou
@@ -394,6 +394,29 @@ class TestEnsureConnected:
         assert get_connection() is not first
         assert is_connected() is True
 
+    def test_a_reconnect_is_logged_connected_after_the_lost_link_disconnected(
+        self, mock_rpyc_with_reset, caplog
+    ):
+        """The last word on a target is the link the server now holds, not the
+        close of the one it replaced."""
+        ensure_connected("localhost", 18811)
+        get_connection().close()
+
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_rpyc_with_reset)
+            ensure_connected("localhost", 18811)
+
+        link_events = [
+            m for m in caplog.messages if m.startswith(("Connected to", "Disconnected from"))
+        ]
+        assert link_events == [
+            "Disconnected from Houdini at localhost:18811",
+            "Connected to Houdini at localhost:18811",
+        ]
+
     def test_concurrent_callers_share_one_reconnect(self, reset_connection_state, mock_hou):
         """Eight tool calls arrive with no link: one connection is opened, and every
         caller gets the hou it exposes. Reconnects are serialized by the owner, not
@@ -514,6 +537,17 @@ class TestPing:
         assert result["houdini_build"]["major"] == mock_hou.applicationVersion()[0]
         assert result["hip_file"] == mock_hou.hipFile.path()
         assert mock_conn.closed is True  # Connection should be closed
+
+    def test_ping_does_not_log_the_server_as_connected(self, mock_hou, caplog):
+        """The probe's link is never the server's, so it is not announced as one."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            ping("localhost", 18811)
+
+        assert "Connected to Houdini at localhost:18811" not in caplog.messages
 
     def test_ping_bounds_its_requests_by_its_timeout(self, mock_hou):
         """The timeout the probe advertises is the sync bound of the connection it
