@@ -1,5 +1,6 @@
 """Tests for the Houdini connection manager."""
 
+import logging
 import socket
 import threading
 from typing import Any
@@ -111,6 +112,35 @@ class TestConnect:
         assert busy.closed is True
         assert is_connected() is False
         assert get_connection() is None
+
+    def test_a_proven_link_is_logged_by_the_houdini_it_reached(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        """A connect that succeeds says so, naming its target, apart from the
+        attempt the opener announced."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            connect("render-farm", 19999, max_retries=1)
+
+        assert "Connected to Houdini at render-farm:19999" in caplog.messages
+
+    def test_a_link_that_fails_its_proof_is_not_logged_as_connected(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        busy = MockRpycConnection(mock_hou)
+        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+            pytest.raises(HoudiniConnectionError),
+        ):
+            mock_rpyc.connect.return_value = busy
+            connect("render-farm", 19999, max_retries=1, retry_delay=0.01)
+
+        assert not any(m.startswith("Connected to Houdini") for m in caplog.messages)
 
     def test_a_close_that_fails_does_not_replace_the_validation_error(
         self, reset_connection_state, mock_hou

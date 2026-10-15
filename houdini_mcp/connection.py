@@ -288,7 +288,11 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    return Link(target, host, port, conn, hou)
+    link = Link(target, host, port, conn, hou)
+    # The opener announces an attempt; this is the event that the attempt became a
+    # proven link, named by the Houdini it reached.
+    logger.info(f"Connected to Houdini at {link.name}")
+    return link
 
 
 def _open_link_with_retries(
