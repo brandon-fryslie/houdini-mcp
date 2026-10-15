@@ -313,7 +313,7 @@ class TestSelfTestAndStatus:
 
         with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
             again = listener.start(cfg)
-        assert again["status"] == "success"
+        assert again["status"] == "success", again
         assert again["stale"] is False
         assert len(fake_hrpyc.servers) == 2
         assert listener.is_running() is True
