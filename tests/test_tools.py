@@ -443,14 +443,7 @@ x = 1 + 2
 
     def test_no_diff_truncation_within_limits(self, mock_connection):
         """Test that scene diff is not truncated when within limits."""
-        import houdini_mcp.tools as tools_module
         from houdini_mcp.tools import execute_code
-
-        # Small diff that shouldn't trigger truncation
-        tools_module._before_scene = []
-        tools_module._after_scene = [
-            {"path": "/obj/node1", "type": "geo", "name": "node1", "children": []}
-        ]
 
         result = execute_code(
             "x = 1", host="localhost", port=18811, capture_diff=True, max_diff_nodes=1000
@@ -1015,8 +1008,8 @@ class TestSceneDiff:
         from houdini_mcp.tools import get_last_scene_diff
 
         # Reset scene state (these globals live in code.py, not the re-export namespace)
-        code_module._before_scene = []
-        code_module._after_scene = []
+        code_module._before_scene = {}
+        code_module._after_scene = {}
 
         result = get_last_scene_diff()
 
@@ -1029,10 +1022,8 @@ class TestSceneDiff:
         from houdini_mcp.tools import get_last_scene_diff
 
         # Simulate before/after state (these globals live in code.py)
-        code_module._before_scene = []
-        code_module._after_scene = [
-            {"path": "/obj/new_node", "type": "geo", "name": "new_node", "children": []}
-        ]
+        code_module._before_scene = {"/obj": "obj"}
+        code_module._after_scene = {"/obj": "obj", "/obj/new_node": "geo"}
 
         result = get_last_scene_diff()
 
@@ -1202,40 +1193,6 @@ class TestListNodeTypes:
         assert result["returned"] <= 10
         # count should match length of node_types list
         assert result["returned"] == len(result["node_types"])
-
-
-class TestInternalHelpers:
-    """Tests for internal helper functions."""
-
-    def test_node_to_dict(self, mock_connection):
-        """Test _node_to_dict helper."""
-        from houdini_mcp.tools import _node_to_dict
-
-        node = MockHouNode(path="/obj/test", name="test", node_type="geo", params={"tx": 1.0})
-        mock_connection.add_node(node)
-
-        result = _node_to_dict(node, include_params=True)
-
-        assert result["path"] == "/obj/test"
-        assert result["name"] == "test"
-        assert result["type"] == "geo"
-        assert "parameters" in result
-
-    def test_get_scene_diff(self):
-        """Test _get_scene_diff helper."""
-        from houdini_mcp.tools import _get_scene_diff
-
-        before = [{"path": "/obj/existing", "type": "geo", "name": "existing", "children": []}]
-        after = [
-            {"path": "/obj/existing", "type": "geo", "name": "existing", "children": []},
-            {"path": "/obj/new", "type": "null", "name": "new", "children": []},
-        ]
-
-        diff = _get_scene_diff(before, after)
-
-        assert "/obj/new" in diff["added"]
-        assert len(diff["removed"]) == 0
-        assert diff["has_changes"] is True
 
 
 class TestListChildren:

@@ -621,6 +621,33 @@ class MockHouModule:
             raise ValueError(f"the fake hou has no pwd; {path!r} must be absolute")
         return self._root.node(path)
 
+    def hscript(self, command: str) -> tuple[str, str]:
+        """hou.hscript for the two commands the scene snapshot sends, answered from
+        the node tree in the format Houdini 22 prints; any other command is an
+        error, as an unknown one is in Houdini.
+
+        ``opls -R -f -a <root>``: a header per network that has children, then
+        their full paths, networks in depth-first order; a root with no children
+        lists only itself. ``optype -N -t <paths>``: name then type per path,
+        skipping a path that names no node.
+        """
+        verb, *args = command.split()
+        if verb == "opls" and args[:3] == ["-R", "-f", "-a"]:
+            root = self.node(args[3])
+            if root is None:
+                return "", f"\nError:  Cannot find {args[3]}\n"
+            networks = [n for n in [root, *root.allSubChildren()] if n.children()]
+            if not networks:
+                return f"{root.path()}\n", ""
+            return "".join(
+                f"\n{n.path()}:\n" + "".join(f"{c.path()}\n" for c in n.children())
+                for n in networks
+            ), ""
+        if verb == "optype" and args[:2] == ["-N", "-t"]:
+            found = [n for n in map(self.node, args[2:]) if n is not None]
+            return "".join(f"{n.name()}\n{n.type().name()}\n" for n in found), ""
+        return "", f"Unknown command: {verb}\n"
+
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
         """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
         node = self.node(path)

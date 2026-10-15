@@ -3,7 +3,9 @@
 from typing import Any
 from unittest.mock import MagicMock
 
+from houdini_mcp.connection import get_connection
 from houdini_mcp.tools.cache import NodeTypeCache
+from tests.conftest import MockHouModule
 
 
 def _hou_with_types(*names: str) -> MagicMock:
@@ -101,3 +103,27 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         cache.get_categories()
 
         assert (cache.stats.hits, cache.stats.misses) == (0, 1)
+
+
+class TestNodeTypeCacheReadsThroughTheProxy:
+    def test_population_sends_no_program_over_the_connection(self, connected_to: Any) -> None:
+        # [LAW:single-enforcer] The gate in ``tools/code.py`` is the one place a
+        # Python program is executed in Houdini; the cache reads through the proxy.
+        # The two roads the old fill took to a connection: the proxy's own
+        # ``____conn__`` and the installed connection ``get_connection`` returns.
+        # Both lead to this one, which records any program sent over it.
+        hou: Any = MockHouModule()
+        connected_to(hou)
+        connection = get_connection()
+        connection.execute = MagicMock()
+        hou.____conn__ = connection
+
+        cache = NodeTypeCache()
+        types = cache.get_all_types(hou)
+
+        connection.execute.assert_not_called()
+        assert cache.is_valid()
+        assert {t["category"] for t in types} == set(hou.nodeTypeCategories())
+        assert cache.filter_types(category="Object", name_filter="geo") == [
+            {"category": "Object", "name": "geo", "description": "Geo node"}
+        ]

@@ -52,8 +52,6 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
-    _get_scene_diff,
-    _serialize_scene_state,
     _truncate_output,
     ensure_connected,
     handle_connection_errors,
@@ -65,6 +63,8 @@ from .code_policy import (
     _detect_non_inspection_code,
     parse_code,
 )
+from .failure import failure_for
+from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -74,8 +74,9 @@ logger = logging.getLogger("houdini_mcp.tools.code")
 exec = builtins.exec  # noqa: A001 - intentional shadow for testability
 
 # Module-level storage for scene diff tracking
-_before_scene: list[dict[str, Any]] = []
-_after_scene: list[dict[str, Any]] = []
+_DIFF_ROOT = "/obj"
+_before_scene: SceneSnapshot = {}
+_after_scene: SceneSnapshot = {}
 
 # Policy profiles, from strictest to most permissive.
 Policy = Literal["read-only", "normal"]
@@ -597,7 +598,7 @@ def _execute_with_grant(
     undos = _resolve_undo_primitive(hou)
 
     if capture_diff:
-        _before_scene = _serialize_scene_state(hou)
+        _before_scene = scene_snapshot(hou, _DIFF_ROOT)
 
     stdout_capture = StringIO()
     stderr_capture = StringIO()
@@ -729,16 +730,21 @@ def _execute_with_grant(
         result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
     if capture_diff:
-        _after_scene = _serialize_scene_state(hou)
-        scene_changes = _get_scene_diff(_before_scene, _after_scene)
-        diff_truncated = False
-        if "added_nodes" in scene_changes and len(scene_changes["added_nodes"]) > max_diff_nodes:
-            scene_changes["added_nodes"] = scene_changes["added_nodes"][:max_diff_nodes]
-            diff_truncated = True
-        result["scene_changes"] = scene_changes
-        if diff_truncated:
-            result["diff_truncated"] = True
-            result["diff_warning"] = f"added_nodes truncated to {max_diff_nodes} nodes"
+        try:
+            _after_scene = scene_snapshot(hou, _DIFF_ROOT)
+        except Exception as error:  # noqa: BLE001
+            # [LAW:no-silent-failure] The program ran; only its diff is missing,
+            # and the result says why instead of reporting the run as failed.
+            failure = failure_for(error, operation)
+            logger.warning("%s ran but its scene diff failed: %s", operation, failure.message)
+            result["scene_changes_error"] = failure.model_dump()
+        else:
+            scene_changes = scene_diff(_before_scene, _after_scene)
+            if len(scene_changes["added_nodes"]) > max_diff_nodes:
+                scene_changes["added_nodes"] = scene_changes["added_nodes"][:max_diff_nodes]
+                result["diff_truncated"] = True
+                result["diff_warning"] = f"added_nodes truncated to {max_diff_nodes} nodes"
+            result["scene_changes"] = scene_changes
 
     if detected.dangerous:
         result["dangerous_patterns_executed"] = detected.dangerous
@@ -764,4 +770,4 @@ def get_last_scene_diff() -> dict[str, Any]:
             "message": "No scene diff available. Run execute_code with capture_diff=True first.",
         }
 
-    return {"status": "success", "diff": _get_scene_diff(_before_scene, _after_scene)}
+    return {"status": "success", "diff": scene_diff(_before_scene, _after_scene)}
