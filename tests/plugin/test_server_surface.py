@@ -10,8 +10,11 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from fastmcp import Client
@@ -178,6 +181,18 @@ class TestStdioServerSurface:
         )
 
 
+SHELF = Path(__file__).parents[2] / "houdini_plugin" / "toolbar" / "houdini_mcp.shelf"
+
+
+def _click_mcp_status(hou: Any) -> str:
+    """Run the shelf's MCP Status script against ``hou``; return the text it shows."""
+    script = ET.parse(SHELF).find("tool[@name='mcp_status']/script")
+    assert script is not None and script.text is not None
+    hou.ui = MagicMock()
+    exec(script.text, {})
+    return str(hou.ui.displayMessage.call_args.args[0])
+
+
 def _wait_until_stopped(plugin_server: Any, timeout: float = 5.0) -> None:
     """Block until the server reports it is no longer serving."""
     deadline = time.monotonic() + timeout
@@ -262,10 +277,35 @@ class TestPluginStartsTheSharedServer:
         held_serve["stdin"].set()
         _wait_until_stopped(plugin_server)
 
+    def test_mcp_status_shows_the_houdini_served_from_start(
+        self, plugin_server: Any, held_serve: dict[str, Any], in_process_houdini: Any
+    ) -> None:
+        plugin_server.start_server(use_thread=True)
+
+        shown = _click_mcp_status(in_process_houdini)
+
+        assert f"Houdini Version: {in_process_houdini.applicationVersionString()}" in shown
+        assert f"Hip File: {in_process_houdini.hipFile.path()}" in shown
+        held_serve["stdin"].set()
+        _wait_until_stopped(plugin_server)
+
+    def test_mcp_status_with_the_link_closed_says_so_not_none(
+        self, plugin_server: Any, held_serve: dict[str, Any], in_process_houdini: Any
+    ) -> None:
+        plugin_server.start_server(use_thread=True)
+        disconnect()
+
+        shown = _click_mcp_status(in_process_houdini)
+
+        assert "Link: closed (the next tool call reopens it)" in shown
+        assert "None" not in shown
+        held_serve["stdin"].set()
+        _wait_until_stopped(plugin_server)
+
     def test_binding_without_hou_fails_start_and_serves_nothing(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
     ) -> None:
-        """The shelf shows the cause at Start, not on the client's first tool call."""
+        """Start fails with the cause, not the client's first tool call."""
         monkeypatch.delitem(sys.modules, "hou")
         monkeypatch.setattr(sys, "path", [])  # nothing left to import hou from
 
@@ -273,7 +313,6 @@ class TestPluginStartsTheSharedServer:
             plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is False
         assert held_serve["runs"] == 0
-        held_serve["stdin"].set()
 
     def test_failed_foreground_serve_raises_and_is_not_left_running(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
