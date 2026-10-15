@@ -21,7 +21,6 @@ from ._common import (
     Vec3,
     ensure_connected,
     ensure_link,
-    failure_for,
     handle_connection_errors,
     node_at,
     node_category,
@@ -423,14 +422,15 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
         rop.parm("picture").set(output_path)
         try:
             rop.render()
+            with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
+                image = f.read()
         except Exception as e:
             # [LAW:no-silent-failure] a dead link stays itself, so cleanup knows
-            # to send nothing more; anything else is Houdini refusing the render
+            # to send nothing more; anything else is Houdini's machine not
+            # producing the picture
             if transport_failure(e):
                 raise
             raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
-        with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
-            image = f.read()
         if not image:
             raise OperationFailed("Render completed but produced no image")
         return base64.b64encode(image).decode("utf-8")
@@ -617,15 +617,10 @@ def render_quad_view(
                 _aim(rig, rotation, offset, is_ortho, framing)
                 image = _render_picture(rop, prepared, output_format)
             except OperationFailed as e:
-                # [LAW:single-enforcer] the one enforcer classifies. A view owns
-                # only Houdini's failure to render it; whatever outranks that (a
-                # dead link under it) is the call's, and goes to the boundary.
-                failure = failure_for(e, "render_quad_view")
-                if failure.kind != "operation_failed":
-                    raise
-                logger.warning(
-                    "Quad view %s not rendered (%s): %s", name, failure.kind, failure.message
-                )
+                # A view owns only Houdini's failure to produce its picture, which
+                # _render_picture names; a dead link or a bug is the call's.
+                failure = e.failure("render_quad_view")
+                logger.warning("Quad view %s not rendered: %s", name, failure.message)
                 view = {**failure.model_dump(), **view}
             else:
                 logger.info("Rendered quad view %s", name)

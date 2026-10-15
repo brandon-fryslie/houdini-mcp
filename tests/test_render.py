@@ -865,11 +865,17 @@ class TestRenderLeavesSceneUnchanged:
             result = getattr(tools, tool)(host="localhost", port=18811)
 
         assert result["status"] == "error", result
-        assert result["message"] == "camera is locked", result
+        assert result["message"] == (
+            f"camera is locked\ndestroying temporary render node /obj/{cam}"
+        ), result
         # The locked camera is the one node left behind; null and ROP are gone.
         after = self._names(self._scene(rendering_scene))
         assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
-        events = [r for r in caplog.records if "temporary render node" in r.getMessage()]
+        events = [
+            r
+            for r in caplog.records
+            if r.name == "houdini_mcp.tools.rendering" and "temporary render node" in r.getMessage()
+        ]
         assert [(r.levelname, r.getMessage()) for r in events] == [
             (
                 "ERROR",
@@ -1308,8 +1314,7 @@ class TestRenderFraming:
         ] == [
             (
                 "WARNING",
-                f"Quad view {name} not rendered (operation_failed): "
-                "Render completed but produced no image",
+                f"Quad view {name} not rendered: Render completed but produced no image",
             )
             for name in ("front", "left", "top", "perspective")
         ]
@@ -1350,10 +1355,38 @@ class TestRenderFraming:
         assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
             (
                 "WARNING",
-                "Quad view left not rendered (operation_failed): "
-                "Render failed: karma ran out of memory",
+                "Quad view left not rendered: Render failed: karma ran out of memory",
             ),
         ]
+
+    def test_a_picture_that_cannot_be_read_back_is_its_views_failure(
+        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from houdini_mcp.tools import render_quad_view
+
+        opened: list[str] = []
+
+        def open_all_but_the_third(path: str, flags: int) -> int:
+            opened.append(path)
+            if len(opened) == 3:
+                raise PermissionError(f"locked: {path}")
+            return os.open(path, flags)
+
+        monkeypatch.setattr(
+            "houdini_mcp.tools.rendering._get_remote_modules",
+            lambda *_: (_RemoteOs(open=open_all_but_the_third), tempfile),
+        )
+
+        result = render_quad_view(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        top = result["views"][2]
+        assert (top["name"], top["kind"], top["exception"]) == (
+            "top",
+            "operation_failed",
+            "PermissionError",
+        )
+        assert [v["status"] for v in result["views"]] == ["success", "success", "error", "success"]
 
     def test_a_bug_under_a_view_is_the_calls_failure(
         self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch

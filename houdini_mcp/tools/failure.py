@@ -194,14 +194,8 @@ class ToolError(Exception):
         self.message = message
         self.fields = fields
 
-    @property
-    def told(self) -> str:
-        """The message with any notes added on the way out (a temporary node that
-        would not go), each on its own line, as Python prints them."""
-        return "\n".join([self.message, *getattr(self, "__notes__", ())])
-
     def failure(self, operation: str) -> _Failure:
-        return self.arm(operation=operation, message=self.told, **self.fields)
+        return self.arm(operation=operation, message=self.message, **self.fields)
 
 
 class InvalidInput(ToolError):
@@ -224,7 +218,7 @@ class TimedOut(ToolError):
 
     def failure(self, operation: str) -> _Failure:
         return TimeoutFailure(
-            operation=operation, message=self.told, connection_reset=False, **self.fields
+            operation=operation, message=self.message, connection_reset=False, **self.fields
         )
 
 
@@ -254,7 +248,16 @@ def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
 
 
 def failure_for(e: Exception, operation: str) -> _Failure:
-    """The one arm an exception raised during ``operation`` becomes.
+    """The one arm an exception raised during ``operation`` becomes, its message
+    ending with the notes added on the way out (a temporary node that would not
+    go), each on its own line, as Python prints them."""
+    arm = _classify(e, operation)
+    told = "\n".join([arm.message, *getattr(e, "__notes__", ())])
+    return arm.model_copy(update={"message": told})
+
+
+def _classify(e: Exception, operation: str) -> _Failure:
+    """The arm an exception raised during ``operation`` is.
 
     [LAW:single-enforcer] Connection loss is whatever ``transport_failure`` says
     it is, and it is the only failure that tears the connection down. A tool body
