@@ -242,44 +242,41 @@ class Link:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
     def info(self) -> dict[str, Any]:
-        """The Houdini this link reaches: version, build and current hip file.
+        """The Houdini this link reaches: where, version, build and current hip file.
 
         [LAW:no-silent-failure] a link that cannot answer for its version raises;
         the tool boundary classifies that, instead of a success carrying ``error``.
+        [LAW:one-source-of-truth] ``target`` is the one name for where: in-process
+        it is this interpreter, so no ``host``/``port`` field can name a socket the
+        link never used.
         """
         version_tuple = self.hou.applicationVersion()
         return {
-            "host": self.host,
-            "port": self.port,
             "target": self.name,
-            "connected": True,
             "houdini_version": self.hou.applicationVersionString(),
             "houdini_build": {
                 "major": version_tuple[0],
                 "minor": version_tuple[1],
                 "build": version_tuple[2],
             },
-            "hip_file": self.hou.hipFile.path() or "untitled.hip",
+            "hip_file": self.hou.hipFile.path(),
         }
 
 
 def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
-    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini."""
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini.
+
+    The proof is ``hou`` imported across the link: a sync request, so a Houdini
+    too busy to answer fails it like one that is not there. [LAW:single-enforcer]
+    Nothing Houdini's ``hou`` answers is read here: a fault it raises is its own,
+    classified at the tool boundary like every other, never "not reached".
+    """
     conn = target.open(host, port, sync_timeout)
     # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
-    # proved it reaches Houdini; a link that fails validation is closed, so a failed
+    # proved it reaches Houdini; a link that fails the proof is closed, so a failed
     # attempt leaves neither an open socket nor a half-connected state behind.
     try:
         hou = conn.modules.hou
-
-        # Validate connection by checking Houdini version
-        version = hou.applicationVersionString()
-        logger.info(f"Connected to Houdini version: {version}")
-
-        # Additional validation - ensure we can access common nodes
-        obj_node = hou.node("/obj")
-        if obj_node is None:
-            logger.warning("Connected but /obj node not accessible - unusual state")
     except BaseException as validation_error:
         logger.warning(
             f"Closing link to {target.describe(host, port)}: failed validation: "
@@ -346,7 +343,7 @@ def _open_link_with_retries(
         f"{target.remedy} "
         f"Last error: {last_error}",
         target=target.describe(host, port),
-    )
+    ) from last_error
 
 
 class HoudiniConnection:
@@ -449,12 +446,13 @@ class HoudiniConnection:
     def info(self, host: str, port: int) -> dict[str, Any]:
         """Connection state for diagnostics: the Houdini reached when connected, else
         the one a connection to ``host:port`` would reach."""
+        # [LAW:types-are-the-program] ``connected`` discriminates this report's two
+        # arms; a link's own record needs no such field, since it exists only once
+        # the link reached Houdini.
         link = self._live()
         if link is not None:
-            return link.info()
+            return {**link.info(), "connected": True}
         return {
-            "host": host,
-            "port": port,
             "target": self._target.describe(host, port),
             "connected": False,
             "houdini_version": None,
@@ -563,48 +561,62 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     Get detailed information about the current connection state.
 
     Returns:
-        Dict with connection status, the host, port and target actually reached when
-        connected (else the ones a connection would reach), and Houdini info if connected.
+        Dict with connection status, the target actually reached when connected (else
+        the one a connection would reach), and Houdini info if connected.
     """
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> str:
+def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> dict[str, Any]:
     """
     Quick connectivity test without maintaining connection.
 
     Args:
         host: Houdini server hostname
         port: Houdini RPC port
-        timeout: How long each of the probe's sync requests may wait (default: 5.0);
-            the TCP connect and token handshake are bounded by the handshake module
+        timeout: How long each of the probe's sync requests may wait (default: 5.0).
+            Reaching the listener - TCP connect, token, acknowledgement - is bounded
+            by the handshake module's ``HANDSHAKE_TIMEOUT``, one attempt, no retry.
 
     Returns:
-        The version string of the Houdini reached.
+        The Houdini reached, as ``Link.info`` records it: the same record
+        ``check_connection`` reports, whose ``target`` names the Houdini the probe
+        actually reached - in-process, this interpreter.
 
     Raises:
         HoudiniConnectionError: naming the target and the cause, when no Houdini
             answered there. [LAW:no-silent-failure] the cause travels with the
-            failure instead of being logged and collapsed into False.
+            failure instead of being logged and collapsed into False. What a
+            Houdini whose link is proven raises while answering is its own failure,
+            and leaves as itself for the tool boundary to classify as it does for
+            every tool.
     """
-    target = _houdini.target.describe(host, port)
-
-    def unanswered(e: Exception) -> HoudiniConnectionError:
-        return HoudiniConnectionError(
-            f"No Houdini answered at {target}: {type(e).__name__}: {e}. {_houdini.target.remedy}",
-            target=target,
-        )
-
-    try:
-        conn = _houdini.target.open(host, port, timeout)
-        link = Link(_houdini.target, host, port, conn, conn.modules.hou)
-    except Exception as e:
-        raise unanswered(e) from e
+    # [LAW:single-enforcer] opening, proving and naming an unreached Houdini are the
+    # connect path's, one attempt, so the probe reaches Houdini exactly when a tool's
+    # connect would and fails in the same words; the target is read once, so the
+    # probe classifies by the Houdini it tried even if another is installed meanwhile.
+    link = _open_link_with_retries(
+        _houdini.target,
+        host,
+        port,
+        max_retries=1,
+        retry_delay=0.0,
+        sync_timeout=timeout,
+        jitter=False,
+    )
     # The probe's link closes like any other: a close that fails is logged, and
-    # the version Houdini already gave is still the answer.
+    # the record Houdini already gave is still the answer.
     try:
-        return str(link.hou.applicationVersionString())
+        return link.info()
     except Exception as e:
-        raise unanswered(e) from e
+        # [LAW:parse-dont-validate] the link's target says which exceptions are the
+        # link's. Those are the probe's "no answer", not the loss of the server's own
+        # link, which a raw transport failure would tear down. The rest are the code's.
+        if link.target.transport_failure(e) is None:
+            raise
+        raise HoudiniConnectionError(
+            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {link.target.remedy}",
+            target=link.name,
+        ) from e
     finally:
         link.close()

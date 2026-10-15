@@ -22,6 +22,15 @@ class TestGetSceneInfo:
         assert result["hip_file"] == "/path/to/test.hip"
         assert result["houdini_version"] == "20.5.123"
 
+    def test_get_scene_info_reports_the_hip_file_houdini_reports(self, mock_connection):
+        """``hip_file`` is Houdini's own answer, passed through as the connection
+        probes pass it, even an empty one; no name is substituted for it."""
+        from houdini_mcp.tools import get_scene_info
+
+        mock_connection.hipFile.path.return_value = ""
+
+        assert get_scene_info("localhost", 18811)["hip_file"] == ""
+
     def test_get_scene_info_with_nodes(self, mock_connection):
         """Test getting scene info with nodes in /obj."""
         from houdini_mcp.tools import get_scene_info

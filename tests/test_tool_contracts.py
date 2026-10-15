@@ -421,6 +421,69 @@ class TestServedFailures:
             with pytest.raises(ValidationError):
                 FAILURE.validate_python(result.structured_content)
 
+    async def test_the_probes_report_the_one_record_of_the_houdini_reached(
+        self, client: Client[Any], in_process_houdini: Any
+    ) -> None:
+        """Both probes answer with the same record, naming the Houdini actually
+        reached: in-process that is this interpreter, never a configured host:port
+        the connection did not use."""
+        records = {
+            probe: (await client.call_tool(probe, {})).structured_content
+            for probe in ("check_connection", "ping_houdini")
+        }
+        for probe, record in records.items():
+            assert record is not None, probe
+            assert record["target"] == "this interpreter", probe
+            assert record["houdini_version"] == in_process_houdini.applicationVersionString()
+            assert record["hip_file"] == in_process_houdini.hipFile.path(), probe
+        assert set(records["check_connection"]) == set(records["ping_houdini"])
+
+    async def test_a_ping_whose_houdini_cannot_answer_is_the_fault_it_raised(
+        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The probe that opens its own link classifies a fault the same way: what
+        the reached Houdini raises while answering is ``operation_failed`` naming
+        it, never ``connection_unavailable`` with a remedy for reaching Houdini."""
+
+        def cannot_answer() -> str:
+            raise RuntimeError("hou is mid-shutdown")
+
+        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        failure = await self.failure_of(client, "ping_houdini", {})
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.exception == "RuntimeError"
+        assert "hou is mid-shutdown" in failure.message
+
+    async def test_a_fresh_connect_whose_houdini_cannot_answer_is_the_fault_it_raised(
+        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no link yet, opening one reads nothing Houdini answers, so the
+        version read's fault is still the fault it is, not "not reached"."""
+
+        def cannot_answer() -> str:
+            raise RuntimeError("hou is mid-shutdown")
+
+        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        failure = await self.failure_of(client, "check_connection", {})
+        assert (failure.kind, failure.exception) == ("operation_failed", "RuntimeError")
+
+    async def test_a_probe_whose_houdini_cannot_answer_is_not_connected(
+        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A live link whose Houdini raises on the version read is a failure that
+        names what raised - never a success record, and never a bare "disconnected"
+        that hides a programming error behind a connection remedy."""
+        await client.call_tool("check_connection", {})  # the link is live
+
+        def cannot_answer() -> str:
+            raise RuntimeError("hou is mid-shutdown")
+
+        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        failure = await self.failure_of(client, "check_connection", {})
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.exception == "RuntimeError"
+        assert "hou is mid-shutdown" in failure.message
+
 
 class TestServedSummaries:
     """When a served tool asks the summarizer for a summary."""

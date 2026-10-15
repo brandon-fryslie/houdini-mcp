@@ -54,7 +54,11 @@ class TestInProcessConnection:
         assert ensure_connected("render-farm", 19999) is in_process_houdini
 
     def test_ping_reaches_houdini_without_a_network(self, in_process_houdini: Any) -> None:
-        assert ping("some-remote-host", 1) == in_process_houdini.applicationVersionString()
+        """The probe's record names the Houdini it reached - this interpreter - never
+        the socket it was asked about and did not use."""
+        probe = ping("some-remote-host", 1)
+        assert probe["target"] == "this interpreter"
+        assert probe["houdini_version"] == in_process_houdini.applicationVersionString()
 
     def test_connection_info_names_this_interpreter_not_a_socket(
         self, in_process_houdini: Any
@@ -260,18 +264,12 @@ class TestPluginStartsTheSharedServer:
         plugin_server: Any,
         held_serve: dict[str, Any],
         in_process_houdini: Any,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """MCP Status, clicked right after Start MCP, before any tool call."""
-        with caplog.at_level("INFO", logger="houdini_mcp.connection"):
-            plugin_server.start_server(use_thread=True)
+        plugin_server.start_server(use_thread=True)
 
         shown = _click_mcp_status(in_process_houdini)
 
-        assert (
-            f"Connected to Houdini version: {in_process_houdini.applicationVersionString()}"
-            in caplog.text
-        )
         assert "Houdini: this interpreter" in shown
         assert f"Houdini Version: {in_process_houdini.applicationVersionString()}" in shown
         assert f"Hip File: {in_process_houdini.hipFile.path()}" in shown

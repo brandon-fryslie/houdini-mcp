@@ -784,16 +784,13 @@ def ping_houdini() -> dict[str, Any]:
     """
     Quick connectivity test to Houdini.
 
-    Opens a short-lived connection, reads the Houdini version, and closes it;
-    the server's own connection is left as it was. An unreachable Houdini is
-    the ``connection_unavailable`` failure, naming the target and the cause.
+    Opens a short-lived connection, reads the Houdini reached, and closes it;
+    the server's own connection is left as it was. The record is the one
+    ``check_connection`` reports, naming the target the probe used. An
+    unreachable Houdini is the ``connection_unavailable`` failure, naming the
+    target and the cause.
     """
-    return {
-        "status": "success",
-        "host": HOUDINI_HOST,
-        "port": HOUDINI_PORT,
-        "houdini_version": ping(HOUDINI_HOST, HOUDINI_PORT),
-    }
+    return {"status": "success", **ping(HOUDINI_HOST, HOUDINI_PORT)}
 
 
 @mcp.tool()

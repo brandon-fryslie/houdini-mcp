@@ -3,7 +3,7 @@
 import socket
 import threading
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -96,11 +96,11 @@ class TestConnect:
     def test_a_link_that_fails_validation_is_closed_and_not_installed(
         self, reset_connection_state, mock_hou
     ):
-        """Houdini answers the socket but not the version call: the attempt is retried,
-        the half-open link is closed, and nothing is left behind for is_connected()."""
+        """Houdini answers the socket but not the import of ``hou``: the attempt is
+        retried, the half-open link is closed, and nothing is left behind for
+        is_connected()."""
         busy = MockRpycConnection(mock_hou)
-        busy.modules = MagicMock()
-        busy.modules.hou.applicationVersionString.side_effect = TimeoutError("sync request")
+        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = busy
@@ -116,8 +116,7 @@ class TestConnect:
         self, reset_connection_state, mock_hou
     ):
         busy = MockRpycConnection(mock_hou)
-        busy.modules = MagicMock()
-        busy.modules.hou.applicationVersionString.side_effect = TimeoutError("sync request")
+        type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
         busy.close = MagicMock(side_effect=ValueError("half-torn channel"))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
@@ -429,9 +428,20 @@ class TestGetConnectionInfo:
         info = get_connection_info("localhost", 18811)
 
         assert info["connected"] is False
-        assert info["host"] == "localhost"
-        assert info["port"] == 18811
+        assert info["target"] == "localhost:18811"
         assert info["houdini_version"] is None
+
+    def test_get_connection_info_reports_one_record_shape_in_both_arms(
+        self, mock_connection, reset_connection_state
+    ):
+        """Connected or not, the report has the same fields; only their values say
+        which arm it is, so a reader never meets a field that one arm lacks."""
+        connected = get_connection_info("localhost", 18811)
+        disconnect()
+        disconnected = get_connection_info("localhost", 18811)
+
+        assert (connected["connected"], disconnected["connected"]) == (True, False)
+        assert set(connected) == set(disconnected)
 
     def test_get_connection_info_raises_when_the_link_cannot_answer(self, mock_connection):
         """A link that cannot report its version is a failure, not a success
@@ -453,7 +463,6 @@ class TestGetConnectionInfo:
         info = get_connection_info("localhost", 18811)
 
         assert info["connected"] is True
-        assert (info["host"], info["port"]) == ("render-farm", 19999)
         assert info["target"] == "render-farm:19999"
 
 
@@ -461,15 +470,94 @@ class TestPing:
     """Tests for the ping function."""
 
     def test_ping_success(self, mock_hou):
-        """A reachable Houdini answers the probe with its version."""
+        """A reachable Houdini answers the probe with the record of the Houdini
+        reached: the target the probe used, its version, build and hip file."""
         mock_conn = MockRpycConnection(mock_hou)
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = mock_conn
             result = ping("localhost", 18811)
 
-        assert result == mock_hou.applicationVersionString()
+        assert set(result) == {"target", "houdini_version", "houdini_build", "hip_file"}
+        assert result["target"] == "localhost:18811"
+        assert result["houdini_version"] == mock_hou.applicationVersionString()
+        assert result["houdini_build"]["major"] == mock_hou.applicationVersion()[0]
+        assert result["hip_file"] == mock_hou.hipFile.path()
         assert mock_conn.closed is True  # Connection should be closed
+
+    def test_ping_bounds_its_requests_by_its_timeout(self, mock_hou):
+        """The timeout the probe advertises is the sync bound of the connection it
+        opens, so a Houdini that never answers fails the probe instead of hanging it."""
+        seen: list[float] = []
+
+        def connect(host: str, port: int, token: str | None, *, sync_request_timeout: float):
+            seen.append(sync_request_timeout)
+            return MockRpycConnection(mock_hou)
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = connect
+            ping("localhost", 18811, timeout=2.5)
+
+        assert seen == [2.5]
+
+    def test_ping_failure_when_houdini_cannot_answer_names_the_cause(self, mock_hou):
+        """A listener that accepts the link but cannot report its version is not a
+        reachable Houdini: the failure names the target and the cause, and the
+        probe's link is closed."""
+        mock_conn = MockRpycConnection(mock_hou)
+        mock_hou.applicationVersionString = MagicMock(side_effect=EOFError("stream closed"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(HoudiniConnectionError) as raised:
+                ping("localhost", 18811)
+
+        assert raised.value.target == "localhost:18811"
+        assert "stream closed" in str(raised.value)
+        assert isinstance(raised.value.__cause__, EOFError)
+        assert mock_conn.closed is True
+
+    def test_ping_closes_a_link_it_could_not_prove(self, mock_hou):
+        """A listener that accepts the link but exposes no ``hou`` is not a reachable
+        Houdini, and the socket the probe opened does not outlive the failed proof."""
+        mock_conn = MockRpycConnection(mock_hou)
+        type(mock_conn.modules).hou = PropertyMock(side_effect=EOFError("listener went away"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(HoudiniConnectionError, match="listener went away"):
+                ping("localhost", 18811)
+
+        assert mock_conn.closed is True
+
+    def test_ping_lets_the_reached_houdinis_own_fault_leave_as_itself(self, mock_hou):
+        """A proven link whose Houdini raises while answering is not an unreached
+        Houdini: the fault leaves as itself for the boundary to classify, and the
+        probe's link is still closed."""
+        mock_conn = MockRpycConnection(mock_hou)
+        mock_hou.hipFile.path = MagicMock(side_effect=RuntimeError("hip path unavailable"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(RuntimeError, match="hip path unavailable"):
+                ping("localhost", 18811)
+
+        assert mock_conn.closed is True
+
+    def test_ping_reports_a_link_that_fails_while_answering_as_unanswered(self, mock_hou):
+        """A proven link that drops while answering is the probe's own "no answer",
+        naming the target and the cause, not a loss of the server's connection."""
+        mock_conn = MockRpycConnection(mock_hou)
+        mock_hou.hipFile.path = MagicMock(side_effect=EOFError("stream closed"))
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = mock_conn
+            with pytest.raises(HoudiniConnectionError) as raised:
+                ping("localhost", 18811)
+
+        assert raised.value.target == "localhost:18811"
+        assert isinstance(raised.value.__cause__, EOFError)
+        assert mock_conn.closed is True
 
     def test_ping_failure_names_the_target_and_the_cause(self):
         """An unreachable Houdini is a failure that says where and why, not False."""
