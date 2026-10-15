@@ -480,7 +480,7 @@ def render_viewport(
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         auto_frame: If True, automatically frame all visible geometry (default: True)
@@ -562,7 +562,7 @@ def render_quad_view(
     the bounding box only once.
 
     Args:
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         orthographic: If True, use orthographic projection for Front/Left/Top views (default: True)
