@@ -167,7 +167,11 @@ class NodeTypeCache(BaseCache):
                 self._record_hit()
                 return self._all_types
 
+            # [LAW:dataflow-not-control-flow] a miss means what the cache holds was
+            # not read from this ``hou``: it is forgotten before every fill, so a fill
+            # that fails leaves nothing behind that describes another Houdini.
             self._record_miss()
+            self._forget()
             self._populate(hou)
             self._hou = hou
             return self._all_types
@@ -220,9 +224,14 @@ class NodeTypeCache(BaseCache):
         """Forget the types and the ``hou`` they came from; every read is empty until
         ``get_all_types`` fills the cache again."""
         with self._lock:
-            self._all_types, self._by_category, self._categories = [], {}, []
-            self._hou = None
+            self._forget()
             super().invalidate()
+
+    def _forget(self) -> None:
+        self._all_types, self._by_category, self._categories = [], {}, []
+        self._hou = None
+        self._valid = False
+        self._stats.entry_count = 0
 
     def _populate(self, hou: Any) -> None:
         """
@@ -233,36 +242,43 @@ class NodeTypeCache(BaseCache):
         [LAW:single-enforcer] the only program execution in this server is the
         gate in ``code.py``, and a cache fill is not a program.
 
-        [LAW:no-silent-failure] A walk Houdini refuses raises, and the cache is
-        left as it was: "has no types" and "could not read the types" are never
-        the same cached value. The cause rides on the error, so a lost link is
-        still reported as one.
+        [LAW:no-silent-failure] A walk Houdini refuses raises, and the cache holds
+        nothing: "has no types" and "could not read the types" are never the same
+        cached value. The cause rides on the error, so a lost link is still
+        reported as one.
         """
         start_time = time.time()
         logger.info("Populating node type cache...")
 
-        all_types: list[NodeType] = []
-        by_category: dict[str, list[NodeType]] = {}
-        categories: list[str] = []
-
+        # Only Houdini's walk is labelled a refused read; a bug in building the
+        # entries below reaches the tool boundary as the bug it is.
         try:
-            for cat_name, cat in hou.nodeTypeCategories().items():
-                categories.append(cat_name)
-                cat_types: list[NodeType] = []
-
-                for type_name, type_obj in cat.nodeTypes().items():
-                    description = read(
-                        f"description of {cat_name}/{type_name}", type_obj.description
-                    )
-                    entry = NodeType(category=cat_name, name=type_name, description=description)
-                    all_types.append(entry)
-                    cat_types.append(entry)
-
-                by_category[cat_name.lower()] = cat_types
+            walked = [
+                (cat_name, list(cat.nodeTypes().items()))
+                for cat_name, cat in hou.nodeTypeCategories().items()
+            ]
         except Exception as e:
             raise OperationFailed(
                 f"Could not read node types from Houdini: {unread(e)['unread']}"
             ) from e
+
+        all_types: list[NodeType] = []
+        by_category: dict[str, list[NodeType]] = {}
+        categories: list[str] = []
+        for cat_name, types in walked:
+            cat_types = [
+                NodeType(
+                    category=cat_name,
+                    name=type_name,
+                    description=read(
+                        f"description of {cat_name}/{type_name}", type_obj.description
+                    ),
+                )
+                for type_name, type_obj in types
+            ]
+            categories.append(cat_name)
+            all_types.extend(cat_types)
+            by_category[cat_name.lower()] = cat_types
 
         self._all_types = all_types
         self._by_category = by_category
@@ -342,7 +358,8 @@ def manage_cache(
         action: Cache action to perform:
             - "stats": Get cache statistics (hits, misses, entry counts)
             - "invalidate": Clear all caches (forces refresh on next access)
-            - "warmup": Pre-populate caches (may take a few seconds)
+            - "warmup": Pre-populate caches (may take a few seconds); a read
+              Houdini refuses fails with operation_failed and caches nothing
 
     Returns:
         Dict with cache information including:

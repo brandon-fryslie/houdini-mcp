@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `list_node_types` and `manage_cache("warmup")` fail with
+  `operation_failed` when Houdini refuses the node-type walk
+  (houdini-laws-etg.29y); they returned success with no types, and that empty
+  list was cached until invalidated by hand. Nothing is cached after a failed
+  read, so the next call reads Houdini again. A node type's description Houdini
+  would not give is `{"unread": "<ExcType>: <message>"}`; it was `""`.
+
 - **BREAKING (wire)**: a value Houdini would not read is
   `{"unread": "<ExcType>: <message>"}` where the value would be, never a value
   it might have been (houdini-laws-etg.82a). A parameter that will not evaluate

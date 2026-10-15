@@ -1,6 +1,7 @@
 """The node type cache serves data from the Houdini instance it was read from."""
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -8,7 +9,7 @@ import pytest
 
 from houdini_mcp.connection import get_connection
 from houdini_mcp.tools import list_node_types
-from houdini_mcp.tools.cache import NodeTypeCache
+from houdini_mcp.tools.cache import NodeType, NodeTypeCache
 from houdini_mcp.tools.failure import OperationFailed
 from tests.conftest import MockHouModule
 
@@ -27,7 +28,7 @@ def _hou_with_types(*names: str) -> MagicMock:
     return hou
 
 
-def _names(types: list[dict[str, Any]]) -> list[str]:
+def _names(types: Sequence[NodeType]) -> list[str]:
     return [t["name"] for t in types]
 
 
@@ -161,6 +162,37 @@ class TestAFailedReadIsNeverCached:
 
         assert _names(types) == ["box", "scatter"]
         assert hou.nodeTypeCategories.call_count == 2
+
+    def test_a_refused_read_from_another_houdini_forgets_the_old_one(self) -> None:
+        cache = NodeTypeCache()
+        cache.get_all_types(_hou_with_types("box"))
+        restarted = _hou_with_types("box")
+        restarted.nodeTypeCategories.side_effect = RuntimeError("still starting")
+
+        with pytest.raises(OperationFailed):
+            cache.get_all_types(restarted)
+
+        assert not cache.is_valid()
+        assert (cache.filter_types(), cache.get_categories()) == ([], [])
+        assert cache.stats.entry_count == 0
+
+    def test_a_fault_in_building_the_entries_is_not_labelled_a_refused_read(self) -> None:
+        """Only Houdini's walk is a refused read; this server's own fault surfaces
+        as the exception it raised, for the tool boundary to report as a bug."""
+
+        class UnlowerableName(str):
+            def lower(self) -> str:
+                raise TypeError("server fault")
+
+        cache = NodeTypeCache()
+        hou = _hou_with_types("box")
+        category = hou.nodeTypeCategories.return_value["Sop"]
+        hou.nodeTypeCategories.return_value = {UnlowerableName("Sop"): category}
+
+        with pytest.raises(TypeError, match="server fault"):
+            cache.get_all_types(hou)
+
+        assert not cache.is_valid()
 
     def test_a_houdini_with_no_types_is_a_cached_answer(self) -> None:
         cache = NodeTypeCache()
