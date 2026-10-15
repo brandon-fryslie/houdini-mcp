@@ -27,6 +27,7 @@ async def get_geo_summary(
     include_attributes: bool = True,
     include_groups: bool = True,
     summarize: bool = False,
+    *,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:

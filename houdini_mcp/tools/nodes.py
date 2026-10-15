@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from typing import Any, Literal, get_args
 
 from ._common import (
+    Count,
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
@@ -84,7 +85,7 @@ def get_node_info(
     node_path: str,
     detail: Detail = "full",
     cook_info: CookInfo = "none",
-    max_params: int = 50,
+    max_params: Count = 50,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -105,7 +106,8 @@ def get_node_info(
 
     Returns:
         Node information at the requested detail. When cook_info is not "none",
-        also includes cook_info with cook_state, errors, and warnings.
+        also includes cook_info with cook_state, errors, and warnings (and
+        last_cook_time after a forced cook).
 
     Example:
         # Check cook state and errors
@@ -133,6 +135,7 @@ def get_node_info(
     # appended to any record, so no level silently drops it.
     if cook_info != "none":
         info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
+    info = _add_response_metadata(info)
 
     logger.debug(
         "get_node_info path=%s detail=%s cook_info=%s keys=%s",
@@ -314,6 +317,9 @@ def list_node_types(
 ) -> dict[str, Any]:
     """
     List available Houdini node types.
+
+    The first call reads every node type from Houdini into a cache; later
+    calls filter that cache.
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")

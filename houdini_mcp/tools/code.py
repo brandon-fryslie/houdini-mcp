@@ -478,6 +478,8 @@ def execute_code(
         if output exceeded size limits.
         If dangerous patterns detected and not allowed, returns error with detected patterns.
         audit.granted reports the one permission decision the run was made under.
+        On timeout, a rollback block says whether an undo was attempted and
+        whether the scene is known to be consistent.
     """
     grant = ExecutionGrant.resolve(
         policy=policy,

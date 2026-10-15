@@ -19,6 +19,7 @@ each call they show is sent to the server, and each program they hand to
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import logging
 import pathlib
@@ -35,6 +36,7 @@ from fastmcp.client.client import CallToolResult
 from mcp.types import Tool
 from pydantic import ValidationError
 
+from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.server import mcp
 from houdini_mcp.tools._common import FAILURE
@@ -244,6 +246,25 @@ class TestServedSchemas:
                     color,
                 )
         assert await accepts(client, served, "create_network_box", calls["create_network_box"])
+
+    async def test_a_count_is_never_negative(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A negative limit would slice from the end and still report success."""
+        calls = {
+            ("get_node_info", "max_params"): {"node_path": "/obj"},
+            ("serialize_scene", "max_depth"): {},
+        }
+        for (name, limit), base in calls.items():
+            assert await accepts(client, served, name, {**base, limit: 0}), name
+            assert not await accepts(client, served, name, {**base, limit: -1}), name
+
+    @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
+    def test_the_target_after_summarize_is_keyword_only(self, name: str) -> None:
+        """summarize sits where host used to; a positional host must fail, not bind to it."""
+        params = inspect.signature(getattr(tools, name)).parameters
+        assert params["host"].kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert params["port"].kind is inspect.Parameter.KEYWORD_ONLY, name
 
     def test_a_color_channel_is_finite(self) -> None:
         """NaN would clamp to 1.0 and be reported as if it were asked for."""

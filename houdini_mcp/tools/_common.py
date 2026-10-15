@@ -100,6 +100,7 @@ __all__ = [
     "Resolution",
     "DEFAULT_RESOLUTION",
     "Vec3",
+    "Count",
     "RGB",
 ]
 
@@ -230,6 +231,8 @@ Vec3 = tuple[float, float, float]
 Channel = Annotated[float, Field(allow_inf_nan=False)]
 RGB = tuple[Channel, Channel, Channel]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
+Count = Annotated[int, Field(ge=0)]
+"""How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:

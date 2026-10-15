@@ -25,6 +25,7 @@ async def find_error_nodes(
     include_warnings: bool = True,
     max_results: int = 100,
     summarize: bool = False,
+    *,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:

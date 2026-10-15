@@ -12,7 +12,9 @@ import logging
 from typing import Any
 
 from ._common import (
+    Count,
     OperationFailed,
+    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
     node_at,
@@ -119,8 +121,9 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
 async def serialize_scene(
     root_path: str = "/obj",
     include_params: bool = False,
-    max_depth: int = 10,
+    max_depth: Count = 10,
     summarize: bool = False,
+    *,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -145,7 +148,7 @@ async def serialize_scene(
     result = _scene_tree(root_path, include_params, max_depth, host, port)
     if summarize or should_summarize(result):
         result = await summarize_scene(result)
-    return result
+    return apply_response_cap(result)
 
 
 def _scene_tree(

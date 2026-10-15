@@ -109,7 +109,7 @@ def serve(transport: str = "http", port: int = 3055) -> None:
     Entry point for hosts that already own logging - the Houdini plugin runs
     this inside Houdini's interpreter.
     """
-    logger.info(f"Houdini connection target: {describe_target(HOUDINI_HOST, HOUDINI_PORT)}")
+    logger.info(f"Houdini connection target: {describe_target(**TARGET)}")
 
     # Cast transport to literal type for FastMCP
     transport_literal: Literal["stdio", "http", "sse", "streamable-http"] = "http"

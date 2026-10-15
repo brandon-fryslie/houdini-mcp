@@ -473,7 +473,8 @@ def render_viewport(
 
     Creates a temporary camera, positions it to frame the scene geometry,
     renders the scene, and returns the rendered image encoded as base64.
-    Useful for AI vision analysis of the current scene state.
+    The camera and render node are removed again before returning, whatever
+    the outcome: the scene is as it was before the call.
 
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
@@ -555,6 +556,8 @@ def render_quad_view(
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
 
     Creates a camera rig and renders standardized views for spatial understanding.
+    The rig and render node are removed again before returning, whatever the
+    outcome: the scene is as it was before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
     calling render_viewport 4 times as it reuses the camera rig and calculates
     the bounding box only once.
