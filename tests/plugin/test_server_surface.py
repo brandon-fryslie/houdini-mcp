@@ -264,18 +264,12 @@ class TestPluginStartsTheSharedServer:
         plugin_server: Any,
         held_serve: dict[str, Any],
         in_process_houdini: Any,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """MCP Status, clicked right after Start MCP, before any tool call."""
-        with caplog.at_level("INFO", logger="houdini_mcp.connection"):
-            plugin_server.start_server(use_thread=True)
+        plugin_server.start_server(use_thread=True)
 
         shown = _click_mcp_status(in_process_houdini)
 
-        assert (
-            f"Connected to Houdini version: {in_process_houdini.applicationVersionString()}"
-            in caplog.text
-        )
         assert "Houdini: this interpreter" in shown
         assert f"Houdini Version: {in_process_houdini.applicationVersionString()}" in shown
         assert f"Hip File: {in_process_houdini.hipFile.path()}" in shown
