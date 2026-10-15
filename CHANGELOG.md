@@ -45,9 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publishes `max_depth` (default 10), limits that were fixed before; a negative
   one is refused on the wire.
   `list_children` documents `limit` and `cursor`. `find_error_nodes`,
-  `get_geo_summary` and `serialize_scene` are coroutines that take `summarize`
-  before `host` and `port`, which are keyword-only there; `check_connection`,
-  `ping_houdini` and `manage_cache` are importable from `houdini_mcp.tools`.
+  `get_geo_summary` and `serialize_scene` are coroutines whose `summarize`,
+  `host` and `port` are keyword-only, and which summarize a large result for a
+  Python caller as they do for an MCP one; `check_connection`, `ping_houdini`
+  and `manage_cache` are importable from `houdini_mcp.tools`.
 
 - **BREAKING (wire)**: a render's resolution has one default and no null spelling
   (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish

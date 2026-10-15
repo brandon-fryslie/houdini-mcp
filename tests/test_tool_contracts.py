@@ -267,11 +267,11 @@ class TestServedSchemas:
             assert not await accepts(client, served, name, {**base, limit: -1}), name
 
     @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
-    def test_the_target_after_summarize_is_keyword_only(self, name: str) -> None:
+    def test_summarize_and_the_target_are_keyword_only(self, name: str) -> None:
         """summarize sits where host used to; a positional host must fail, not bind to it."""
         params = inspect.signature(getattr(tools, name)).parameters
-        assert params["host"].kind is inspect.Parameter.KEYWORD_ONLY, name
-        assert params["port"].kind is inspect.Parameter.KEYWORD_ONLY, name
+        for keyword in ("summarize", "host", "port"):
+            assert params[keyword].kind is inspect.Parameter.KEYWORD_ONLY, (name, keyword)
 
     def test_a_color_channel_is_finite(self) -> None:
         """NaN would clamp to 1.0 and be reported as if it were asked for."""

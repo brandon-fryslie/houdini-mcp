@@ -26,8 +26,8 @@ async def get_geo_summary(
     max_sample_points: int = 16,
     include_attributes: bool = True,
     include_groups: bool = True,
-    summarize: bool = False,
     *,
+    summarize: bool = False,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:

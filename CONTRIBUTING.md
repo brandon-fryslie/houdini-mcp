@@ -108,7 +108,15 @@ print(get_scene_info('localhost', 18811))
 
 ### Example
 
+A tool's function in `houdini_mcp/tools` is its MCP contract: the server serves
+its signature and docstring as they are, with `host` and `port` bound to the
+server's Houdini and hidden from clients. A new tool gets a policy in
+`TOOL_POLICIES` (`houdini_mcp/tools/transactions.py`) and an entry in
+`SERVED_TOOLS` (`houdini_mcp/server.py`). Clients see the docstring's summary
+and its `Args`, so document every argument but `host` and `port` there.
+
 ```python
+@handle_connection_errors("create_node")
 def create_node(
     node_type: str,
     parent_path: str = "/obj",
@@ -123,8 +131,6 @@ def create_node(
         node_type: The type of node to create (e.g., "geo", "sphere")
         parent_path: The parent node path (default: "/obj")
         name: Optional name for the new node
-        host: Houdini server hostname
-        port: Houdini RPC port
 
     Returns:
         Dict with created node information or error details.

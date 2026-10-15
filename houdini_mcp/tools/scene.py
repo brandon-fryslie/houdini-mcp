@@ -121,8 +121,8 @@ async def serialize_scene(
     root_path: str = "/obj",
     include_params: bool = False,
     max_depth: Count = 10,
-    summarize: bool = False,
     *,
+    summarize: bool = False,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
