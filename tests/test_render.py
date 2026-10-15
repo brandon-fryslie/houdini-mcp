@@ -402,7 +402,7 @@ class TestRenderQuadViewOutputFormats:
         assert "status" in result
         if result["status"] == "success":
             for view in result["views"]:
-                if "error" not in view:
+                if view["status"] == "success":
                     assert view["format"] == "png"
 
     def test_jpg_format(self, mock_connection):
@@ -444,7 +444,7 @@ class TestRenderQuadViewResolutions:
         result = render_quad_view(resolution=None, host="localhost", port=18811)
         if result["status"] == "success":
             for view in result["views"]:
-                if "error" not in view:
+                if view["status"] == "success":
                     assert view["resolution"] == [512, 512]
 
 
@@ -1316,14 +1316,48 @@ class TestRenderFraming:
         with caplog.at_level("ERROR", logger="houdini_mcp.tools.rendering"):
             result = render_quad_view(host="localhost", port=18811)
 
-        assert result["status"] == "error"
-        assert result["message"].startswith("No view rendered: front: ")
+        from houdini_mcp.tools.failure import FAILURE, OperationFailure
+
+        failure = FAILURE.validate_python(result)
+        assert isinstance(failure, OperationFailure), result
+        assert failure.message.startswith("No view rendered: front: ")
         assert [v["name"] for v in result["views"]] == ["front", "left", "top", "perspective"]
-        assert all("error" in v for v in result["views"])
+        assert all(
+            isinstance(FAILURE.validate_python(v), OperationFailure) for v in result["views"]
+        )
         failed = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
         assert [m.split(":")[0] for m in failed] == [
             f"Quad view {name} failed" for name in ("front", "left", "top", "perspective")
         ]
+
+    def test_a_view_that_fails_is_its_failure_arm_and_the_rest_still_render(
+        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from houdini_mcp.tools import render_quad_view
+        from houdini_mcp.tools.failure import FAILURE, OperationFailure
+        from tests.conftest import MockHouNode
+
+        real_render = MockHouNode.render
+        calls: list[int] = []
+
+        def render_all_but_the_second(node: Any) -> None:
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError("karma ran out of memory")
+            real_render(node)
+
+        monkeypatch.setattr(MockHouNode, "render", render_all_but_the_second)
+
+        result = render_quad_view(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        front, left, top, perspective = result["views"]
+        failure = FAILURE.validate_python(left)
+        assert isinstance(failure, OperationFailure), left
+        assert (left["name"], left["exception"]) == ("left", "RuntimeError")
+        assert "karma ran out of memory" in failure.message
+        assert [v["status"] for v in (front, top, perspective)] == ["success"] * 3
+        assert all("image_base64" in v for v in (front, top, perspective))
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_displayed_object_subnet_is_framed_by_what_it_displays(

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A failed quad view and a failed cache call are arms of the one result type**
+  (houdini-laws-etg.60v): in `render_quad_view` a view that did not render is the
+  `operation_failed` arm for that view, carrying its `name`, `rotation` and
+  `exception`, and a view that did is marked `status: "success"`; when no view
+  rendered, the call is itself an `operation_failed` failure whose `views` lists
+  every view's arm, in place of a hand-built `status: "error"` with no `kind`.
+  `manage_cache` now enters through the tool boundary: an unknown `action` is
+  `invalid_input`, and a warmup that cannot reach Houdini is the connection arm
+  that says so, not a bare error message.
+
 - **AI summarization runs by default against the local OpenAI-compatible server**
   (houdini-tuneup-ef3.ktv): summaries are requested over OpenAI chat completions
   from `http://100.66.66.66:8000/v1` with model

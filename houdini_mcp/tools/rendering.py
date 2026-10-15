@@ -564,18 +564,21 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
-        - views: List of view results, each containing:
-            - name: View name (front, left, top, perspective)
-            - rotation: [rx, ry, rz] camera rotation used
+        - status: "success" when at least one view rendered
+        - views: List of view results, each with name (front, left, top,
+          perspective) and rotation ([rx, ry, rz] camera rotation used), and
+          either a picture:
+            - status: "success"
             - image_base64: Base64-encoded image data
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
+          or the operation_failed failure arm for that view
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
-        - message: Why no view rendered, when the status is "error"
         - total_render_time_ms: Total time for all renders
+        When no view rendered, the call is an operation_failed failure whose
+        message names each view's cause and whose views lists every view's arm.
 
     Examples:
         render_quad_view()  # All 4 views with orthographic projection
@@ -609,10 +612,14 @@ def render_quad_view(
                 if transport_failure(e):
                     raise
                 logger.error("Quad view %s failed: %r", name, e)
-                view["error"] = str(e)
+                # [LAW:single-enforcer] the view's slot is the failure arm the
+                # result type builds, named for its view, never a hand-made shape
+                failed = OperationFailed(f"{name}: {e}", exception=type(e).__name__, **view)
+                view = failed.failure("render_quad_view").model_dump()
             else:
                 logger.info("Rendered quad view %s", name)
                 view.update(
+                    status="success",
                     image_base64=image,
                     format=output_format,
                     resolution=[prepared.width, prepared.height],
@@ -620,17 +627,19 @@ def render_quad_view(
                 )
             view_results.append(view)
 
-    rendered = [view for view in view_results if "image_base64" in view]
+    # A call that produced no picture did not do what was asked: it is raised to
+    # the one boundary that shapes failures, carrying every view's own arm.
+    if all(view["status"] == "error" for view in view_results):
+        raise OperationFailed(
+            "No view rendered: " + "; ".join(view["message"] for view in view_results),
+            views=view_results,
+        )
     result: dict[str, Any] = {
-        "status": "success" if rendered else "error",
+        "status": "success",
         "views": view_results,
         "renderer": renderer,
         "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
     }
-    if not rendered:
-        result["message"] = "No view rendered: " + "; ".join(
-            f"{view['name']}: {view['error']}" for view in view_results
-        )
     if (box := framing.report()) is not None:
         result["bounding_box"] = box
     return result
