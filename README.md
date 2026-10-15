@@ -524,11 +524,10 @@ houdini_mcp/
 └── tools/                 # Modular tool implementations
     ├── _common.py         # Shared utilities, error handling
     ├── cache.py           # Node type caching with TTL
-    ├── code.py            # Python/HScript execution
+    ├── code.py            # Python execution
     ├── errors.py          # Error node detection
     ├── geometry.py        # Geometry introspection
     ├── help.py            # Houdini help access
-    ├── hscript.py         # HScript command execution
     ├── layout.py          # Node layout tools
     ├── materials.py       # Material creation/assignment
     ├── nodes.py           # Node CRUD operations
@@ -536,6 +535,7 @@ houdini_mcp/
     ├── parameters.py      # Parameter get/set
     ├── rendering.py       # Viewport/Karma rendering
     ├── scene.py           # Scene management
+    ├── snapshot.py        # Scene snapshot and diff
     ├── summarization.py   # AI response summarization
     └── wiring.py          # Node connection tools
 

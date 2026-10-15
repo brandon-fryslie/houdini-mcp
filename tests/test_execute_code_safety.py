@@ -674,10 +674,10 @@ class TestCapBoundaries:
         """added_nodes must be capped at exactly max_diff_nodes."""
         from houdini_mcp.tools import code as code_mod
 
-        before = []
-        after = [{"path": f"/obj/geo{i}", "type": "geo", "name": f"geo{i}"} for i in range(5)]
+        before = {"/obj": "obj"}
+        after = {**before, **{f"/obj/geo{i}": "geo" for i in range(5)}}
 
-        with patch.object(code_mod, "_serialize_scene_state", side_effect=[before, after]):
+        with patch.object(code_mod, "scene_snapshot", side_effect=[before, after]):
             result = code_mod.execute_code(
                 "print('make nodes')",
                 capture_diff=True,

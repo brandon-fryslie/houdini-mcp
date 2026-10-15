@@ -35,8 +35,6 @@ from .failure import (
     failure_response,
     tool_error,
 )
-from .hscript import HscriptBatch
-from .parms import evaluated
 from .transactions import TOOL_POLICIES
 from .workers import WORKERS
 
@@ -84,9 +82,6 @@ __all__ = [
     "apply_response_cap",
     "DEFAULT_RESPONSE_CAP_BYTES",
     # Serialization utilities
-    "_node_to_dict",
-    "_serialize_scene_state",
-    "_get_scene_diff",
     "_flatten_parm_templates",
     # Parallel execution utilities
     "SEMAPHORE_LIMIT",
@@ -375,109 +370,6 @@ class ExecutionTimeoutError(Exception):
     """Raised when code execution exceeds the timeout."""
 
     pass
-
-
-def _node_to_dict(
-    node: Any, include_params: bool = True, max_params: int = 100, hou: Any = None
-) -> dict[str, Any]:
-    """
-    Serialize a node to a dictionary.
-
-    Args:
-        node: Houdini node object
-        include_params: Whether to include parameter values
-        max_params: Maximum number of parameters to include
-        hou: The hou module (optional, for value conversion)
-
-    Returns:
-        Dict representation of the node
-    """
-    result: dict[str, Any] = {
-        "path": node.path(),
-        "type": node.type().name(),
-        "name": node.name(),
-    }
-
-    if hou is None:
-        hou = type("_HouSentinel", (), {})()
-
-    if include_params:
-        result["parameters"] = dict(evaluated(hou, node.parms()[:max_params]))
-
-    # Recursively serialize children
-    result["children"] = [
-        _node_to_dict(
-            child, include_params=False, hou=hou
-        )  # Don't include params for children to reduce size
-        for child in node.children()
-    ]
-
-    return result
-
-
-def _serialize_scene_state(hou: Any, root_path: str = "/obj") -> list[dict[str, Any]]:
-    """
-    Serialize the scene state for comparison.
-
-    Uses hscript commands for fast path enumeration (800x faster than
-    per-node RPC calls), falling back to the slow method for mocks.
-
-    Args:
-        hou: The hou module
-        root_path: Root node path to serialize from
-
-    Returns:
-        List of node dictionaries with path, type, name, children
-    """
-    # [LAW:single-enforcer] whether hou offers hscript is decided once, by
-    # HscriptBatch's constructor; a hou without it (a mock) takes the proxy walk.
-    # [LAW:no-silent-failure] an hscript failure on a real hou propagates.
-    try:
-        batch = HscriptBatch(hou)
-    except AttributeError:
-        batch = None
-    if batch is not None:
-        return batch.get_scene_tree(root_path)
-
-    obj = hou.node(root_path)
-    if obj is None:
-        return []
-    return [_node_to_dict(child, hou=hou) for child in obj.children()]
-
-
-def _get_scene_diff(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> dict[str, Any]:
-    """
-    Compare scene states and return the differences.
-
-    Args:
-        before: Scene state before operation
-        after: Scene state after operation
-
-    Returns:
-        Dict with added, removed, and modified nodes
-    """
-    before_paths: set[str] = {node["path"] for node in before}
-    after_paths: set[str] = {node["path"] for node in after}
-
-    added = after_paths - before_paths
-    removed = before_paths - after_paths
-
-    # Find modified nodes (same path but different content)
-    modified: list[str] = []
-    before_by_path = {node["path"]: node for node in before}
-    after_by_path = {node["path"]: node for node in after}
-
-    for path in before_paths & after_paths:
-        if before_by_path[path] != after_by_path[path]:
-            modified.append(path)
-
-    return {
-        "added": list(added),
-        "removed": list(removed),
-        "modified": modified,
-        "added_nodes": [n for n in after if n["path"] in added],
-        "has_changes": bool(added or removed or modified),
-    }
 
 
 def _flatten_parm_templates(hou: Any, parm_templates: list[Any], max_depth: int = 20) -> list[Any]:
@@ -892,6 +784,7 @@ def apply_response_cap(
         "url",
         "warning",
         "message",
+        "scene_changes_error",
     ]
     for field in essential_fields:
         if field in data:

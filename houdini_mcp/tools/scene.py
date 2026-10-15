@@ -12,12 +12,14 @@ import logging
 from typing import Any
 
 from ._common import (
+    OperationFailed,
     ensure_connected,
     handle_connection_errors,
     node_at,
 )
 from .cache import invalidate_all_caches
 from .parms import evaluated
+from .snapshot import scene_snapshot
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -135,24 +137,37 @@ def serialize_scene(
         Dict with serialized scene structure.
     """
     hou = ensure_connected(host, port)
-
-    def node_to_dict_recursive(node: Any, depth: int = 0) -> dict[str, Any]:
-        if depth > max_depth:
-            return {"path": node.path(), "truncated": True}
-
-        result: dict[str, Any] = {
-            "path": node.path(),
-            "type": node.type().name(),
-            "name": node.name(),
-        }
-
-        if include_params:
-            result["parameters"] = dict(evaluated(hou, node.parms()))
-
-        result["children"] = [node_to_dict_recursive(child, depth + 1) for child in node.children()]
-
-        return result
-
     root = node_at(hou, root_path, "Root node")
+    snapshot = scene_snapshot(hou, root.path())
 
-    return {"status": "success", "root": root_path, "structure": node_to_dict_recursive(root)}
+    # [LAW:one-source-of-truth] The tree is the snapshot nested under the root:
+    # each path in it is a child of its parent's path.
+    types = {root.path(): root.type().name(), **snapshot}
+    children: dict[str, list[str]] = {path: [] for path in types}
+    for path in snapshot:
+        children[path.rsplit("/", 1)[0] or "/"].append(path)
+
+    def tree(path: str, name: str, depth: int) -> dict[str, Any]:
+        if depth > max_depth:
+            return {"path": path, "truncated": True}
+        node: dict[str, Any] = {"path": path, "type": types[path], "name": name}
+        if include_params:
+            node["parameters"] = dict(evaluated(hou, _still_there(hou, path).parms()))
+        node["children"] = [
+            tree(child, child.rsplit("/", 1)[1], depth + 1) for child in children[path]
+        ]
+        return node
+
+    return {
+        "status": "success",
+        "root": root_path,
+        "structure": tree(root.path(), root.name(), 0),
+    }
+
+
+def _still_there(hou: Any, path: str) -> Any:
+    """The node at a path the snapshot listed, which a deletion since then fails."""
+    node = hou.node(path)
+    if node is None:
+        raise OperationFailed(f"Scene changed while it was read: {path} was deleted")
+    return node

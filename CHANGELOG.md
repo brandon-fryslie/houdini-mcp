@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A scene has one snapshot** (houdini-laws-etg.6z7, houdini-laws-etg.l5c): the
+  `execute_code` diff, `get_last_scene_diff` and `serialize_scene` all read the
+  scene through two hscript calls into one record of every node's path and type.
+  Diffs now name a node added or removed inside a network at its own path, in
+  place of marking the top-level network "modified", and carry the real type of
+  every node in place of `"unknown"` below `/obj`; `modified` means the path now
+  holds a node of another type. Hidden nodes are included. A root that does not
+  exist, or a node deleted while the scene was read, is an `operation_failed`
+  error in place of an empty scene. When the scene cannot be read after the code
+  ran, `execute_code` still reports the run and adds `scene_changes_error`.
+  `serialize_scene` builds its tree from the same snapshot. `max_diff_nodes`
+  caps each list in the diff (`added`, `removed`, `modified`, `added_nodes`),
+  and `get_last_scene_diff` returns that capped diff as the last capture returned
+  it, or no diff when that capture produced none. `scene_changes_error` survives
+  the response size cap.
+
 - **A failed quad view and a failed cache call are arms of the one result type**
   (houdini-laws-etg.60v): a render whose picture Houdini's machine does not
   produce is `operation_failed` in both render tools (with the cause's

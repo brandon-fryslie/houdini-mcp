@@ -117,7 +117,7 @@ def execute_code(
         capture_diff: If True, captures before/after scene state and returns changes (default: False)
         max_stdout_size: Maximum stdout size in bytes (default: 100000 = 100KB)
         max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB)
-        max_diff_nodes: Maximum nodes in scene diff added_nodes list (default: 1000)
+        max_diff_nodes: Maximum nodes in each scene diff list (default: 1000)
         timeout: Execution timeout in seconds (default: 30)
         allow_dangerous: Request-side opt-in to run dangerous patterns.
             Only honored under policy "normal" when HOUDINI_MCP_ALLOW_BYPASS is enabled server-side.
@@ -149,7 +149,10 @@ def execute_code(
         ''')
 
     Returns:
-        Dict with status, stdout, stderr, and scene_changes (if capture_diff=True).
+        Dict with status, stdout, stderr, and scene_changes (if capture_diff=True):
+        the nodes under /obj added, removed, or replaced by another type, at any
+        depth. When the scene could not be read after the code ran, the code's
+        result stands and scene_changes_error says why in place of scene_changes.
         May include truncation flags (stdout_truncated, stderr_truncated, diff_truncated)
         if output exceeded size limits.
         If dangerous patterns detected and not allowed, returns error with detected patterns.
@@ -328,8 +331,8 @@ def get_last_scene_diff() -> dict[str, Any]:
     """
     Get the scene diff from the last execute_code call.
 
-    Shows what nodes were added, removed, or modified during the last
-    code execution. Useful for understanding what changes were made.
+    Shows the nodes under /obj that were added, removed, or replaced by a node
+    of another type ("modified") during the last code execution, at any depth.
     """
     return tools.get_last_scene_diff()
 

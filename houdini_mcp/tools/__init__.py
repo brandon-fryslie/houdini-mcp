@@ -17,9 +17,6 @@ from ._common import (
     RESPONSE_SIZE_WARNING_THRESHOLD,
     _add_response_metadata,
     _estimate_response_size,
-    _get_scene_diff,
-    _node_to_dict,
-    _serialize_scene_state,
     _truncate_output,
     ensure_connected,
 )
@@ -165,9 +162,6 @@ __all__ = [
     "_add_response_metadata",
     "_detect_dangerous_code",
     "_estimate_response_size",
-    "_get_scene_diff",
-    "_node_to_dict",
-    "_serialize_scene_state",
     "_truncate_output",
     "ensure_connected",
 ]
