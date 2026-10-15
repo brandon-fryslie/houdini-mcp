@@ -43,7 +43,6 @@ import logging
 import os
 import traceback
 from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
 from typing import Any, Literal, get_args
@@ -64,6 +63,7 @@ from .code_policy import (
     parse_code,
 )
 from .failure import failure_for
+from .program_output import captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
@@ -331,7 +331,9 @@ def _run_code_thread(
     """Execute user code, capturing stdout/stderr and any exception."""
     try:
         exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
-        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+        # [LAW:effects-at-boundaries] Only this thread's writes are captured;
+        # other threads keep writing to the streams they always did.
+        with captured(stdout_capture, stderr_capture):
             exec(code, exec_globals)
     except Exception as e:  # noqa: BLE001 - surfaced to caller as an error result
         exec_exception[0] = e
