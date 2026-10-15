@@ -14,6 +14,7 @@ from .tools._common import (
     DEFAULT_RESOLUTION,
     RGB,
     Resolution,
+    ResultLimit,
     Vec3,
     apply_response_cap,
     handle_connection_errors,
@@ -719,7 +720,7 @@ def create_render_node(
 async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
-    max_results: int = 100,
+    max_results: ResultLimit = 100,
     summarize: bool = False,
 ) -> dict[str, Any]:
     """
@@ -732,17 +733,23 @@ async def find_error_nodes(
     Args:
         root_path: Root path to start search from (default: "/" for entire scene)
         include_warnings: Whether to include nodes with warnings (default: True)
-        max_results: Maximum number of results to return (default: 100)
+        max_results: Maximum number of nodes to list, error, warning and uninspected
+            together (default: 100)
         summarize: If True, use AI to triage and prioritize errors (default: False).
                   Provides actionable fix order and identifies root causes.
 
     Returns:
         Dict with error/warning nodes including:
+        - status: "success" when every node scanned was inspected, "partial" when
+          some could not be (they are listed in uninspected), or "error" when none was
         - error_nodes: List of nodes with errors (path, name, type, errors)
         - warning_nodes: List of nodes with warnings (if include_warnings=True)
         - error_count: Number of error nodes found
         - warning_count: Number of warning nodes found
-        - total_scanned: Number of nodes scanned
+        - uninspected: Nodes whose errors or warnings could not be read, as
+          {path, kind, reason}; their errors are not in error_count. path is null
+          when Houdini would not give it (a node deleted mid-scan)
+        - total_scanned: Number of nodes scanned, inspected or not
         - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
@@ -761,8 +768,9 @@ async def find_error_nodes(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if response is very large
-    if summarize or tools.should_summarize(result):
+    # Apply AI summarization if requested or if response is very large; a failure
+    # read no errors, so there is nothing to triage
+    if result["status"] != "error" and (summarize or tools.should_summarize(result)):
         result = await tools.summarize_errors(result)
 
     return apply_response_cap(result)

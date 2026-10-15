@@ -186,6 +186,13 @@ class TestServedSchemas:
             assert not await accepts(client, served, name, {"resolution": [32, 512]}), name
             assert not await accepts(client, served, name, {"resolution": [512, 8000]}), name
 
+    async def test_find_error_nodes_lists_at_least_one_result(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A limit of zero would scan nothing and call it success; the wire refuses it."""
+        assert not await accepts(client, served, "find_error_nodes", {"max_results": 0})
+        assert await accepts(client, served, "find_error_nodes", {"max_results": 1})
+
     async def test_render_viewport_camera_vectors_are_three_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
@@ -543,3 +550,25 @@ class TestServedSummaries:
         assert asked == []
         await client.call_tool("find_error_nodes", {"summarize": True})
         assert len(asked) == 1
+
+    async def test_find_error_nodes_never_summarizes_a_failure(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A call that read no node has no errors to triage, asked or not."""
+        import houdini_mcp.server as server
+
+        def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
+            return {"status": "error", "kind": "operation_failed", "uninspected": [{}]}
+
+        asked: list[dict[str, Any]] = []
+
+        async def record(data: dict[str, Any]) -> dict[str, Any]:
+            asked.append(data)
+            return data
+
+        monkeypatch.setattr(server.tools, "find_error_nodes", nothing_read)
+        monkeypatch.setattr(server.tools, "summarize_errors", record)
+        monkeypatch.setattr(server.tools, "should_summarize", lambda _data: True)
+
+        await client.call_tool("find_error_nodes", {"summarize": True})
+        assert asked == []

@@ -25,6 +25,7 @@ from ..connection import (
 )
 from .failure import (
     FAILURE,
+    FAILURE_FIELDS,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
@@ -221,6 +222,8 @@ def node_at(hou: Any, path: str, what: str = "Node") -> Any:
 # is shaped, so the served schema refuses a one-element resolution, a 32-pixel
 # render or a two-component camera vector on the wire, and nothing inland checks.
 Dimension = Annotated[int, Field(ge=64, le=4096)]
+ResultLimit = Annotated[int, Field(ge=1)]
+"""How many results a call may list: a call allowed none would report nothing as success."""
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
@@ -717,6 +720,7 @@ CAPPED_LIST_FIELDS: list[tuple[str, str]] = [
     ("groups", "group"),
     ("error_nodes", "error_node"),
     ("warning_nodes", "warning_node"),
+    ("uninspected", "uninspected_node"),
     ("inputs", "input"),
     ("outputs", "output"),
     ("methods", "method"),
@@ -798,7 +802,8 @@ def apply_response_cap(
         "message",
         "scene_changes_error",
     ]
-    for field in essential_fields:
+    # [LAW:one-source-of-truth] a capped failure still parses as the arm it was
+    for field in [*essential_fields, *sorted(FAILURE_FIELDS)]:
         if field in data:
             result[field] = data[field]
 
@@ -927,13 +932,19 @@ def apply_response_cap(
     # Ensure the final object, metadata included, is actually under the cap.
     if _serialized_size(result) > max_bytes:
         # Need to be more aggressive - remove data fields and keep only metadata
+        too_large = (
+            f"Response too large ({original_size} bytes), truncated to fit {max_bytes} bytes"
+        )
         minimal = {
             "_truncated": True,
             "original_size_bytes": original_size,
-            "message": f"Response too large ({original_size} bytes), truncated to fit {max_bytes} bytes",
+            "message": too_large,
         }
-        if "status" in data:
-            minimal["status"] = data["status"]
+        # [LAW:one-source-of-truth] a failure still parses as its arm: its declared
+        # fields are small and never optional; its message falls back to too_large
+        for field in sorted(FAILURE_FIELDS - {"message"}):
+            if field in data:
+                minimal[field] = data[field]
 
         # The minimal response delivers no items, and its paging fields say so:
         # the cursor stays at this offset and the message tells the client why.
@@ -955,12 +966,24 @@ def apply_response_cap(
         # the final object itself fits (a long error message is the common case).
         _set_final_serialized_size(minimal)
         while _serialized_size(minimal) > max_bytes:
-            optional = [key for key in essential_fields if key in minimal and key != "status"]
+            optional = [
+                key
+                for key in essential_fields
+                if key in minimal
+                and key not in FAILURE_FIELDS
+                or key == "message"
+                and minimal[key] != too_large
+            ]
             if not optional:
+                # [LAW:single-enforcer] the byte cap outranks the arm: below a
+                # failure's own size, nothing parses, so the cap still holds
                 minimal.pop("message", None)
                 _set_final_serialized_size(minimal)
                 break
-            minimal.pop(optional[-1], None)
+            if optional[-1] == "message":
+                minimal["message"] = too_large
+            else:
+                minimal.pop(optional[-1], None)
             _set_final_serialized_size(minimal)
 
         return minimal
