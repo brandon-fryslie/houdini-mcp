@@ -187,7 +187,8 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
         # which step took too long and where, not rpyc's bare "timed out".
         raise TimeoutError(
             f"listener at {host}:{port} did not accept a connection within "
-            f"{HANDSHAKE_TIMEOUT}s (the port is firewalled or nothing listens there)"
+            f"{HANDSHAKE_TIMEOUT}s (the host is down or unreachable, or a firewall drops "
+            "the connection; a port nothing listens on refuses at once instead)"
         ) from exc
     try:
         # A failed write is a transport error like any other, retried; only the

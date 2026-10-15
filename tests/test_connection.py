@@ -429,8 +429,7 @@ class TestGetConnectionInfo:
         info = get_connection_info("localhost", 18811)
 
         assert info["connected"] is False
-        assert info["host"] == "localhost"
-        assert info["port"] == 18811
+        assert info["target"] == "localhost:18811"
         assert info["houdini_version"] is None
 
     def test_get_connection_info_raises_when_the_link_cannot_answer(self, mock_connection):
@@ -453,7 +452,6 @@ class TestGetConnectionInfo:
         info = get_connection_info("localhost", 18811)
 
         assert info["connected"] is True
-        assert (info["host"], info["port"]) == ("render-farm", 19999)
         assert info["target"] == "render-farm:19999"
 
 
@@ -469,8 +467,8 @@ class TestPing:
             mock_rpyc.connect.return_value = mock_conn
             result = ping("localhost", 18811)
 
+        assert set(result) == {"target", "houdini_version", "houdini_build", "hip_file"}
         assert result["target"] == "localhost:18811"
-        assert result["connected"] is True
         assert result["houdini_version"] == mock_hou.applicationVersionString()
         assert result["houdini_build"]["major"] == mock_hou.applicationVersion()[0]
         assert result["hip_file"] == mock_hou.hipFile.path()
