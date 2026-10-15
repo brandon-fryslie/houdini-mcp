@@ -4,17 +4,16 @@ This module provides tools for finding nodes with cook errors
 and warnings in the Houdini scene.
 """
 
-import logging
 from typing import Any
 
+from ..connection import transport_failure
 from ._common import (
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
     node_at,
 )
-
-logger = logging.getLogger("houdini_mcp.tools.errors")
+from .failure import OperationFailed, Undone, batch_status
 
 
 @handle_connection_errors("find_error_nodes")
@@ -43,9 +42,13 @@ def find_error_nodes(
 
     Returns:
         Dict with error/warning nodes including:
+        - status: "success" when every node scanned was inspected, "partial" when
+          some could not be (they are listed in uninspected), or "error" when none was
         - error_nodes: List of nodes with errors
         - warning_nodes: List of nodes with warnings (if include_warnings=True)
-        - total_scanned: Number of nodes scanned
+        - uninspected: Nodes whose errors or warnings could not be read, as
+          {path, kind, reason}; their errors are not in error_count
+        - total_scanned: Number of nodes scanned, inspected or not
 
     Example:
         find_error_nodes()  # Find all errors in scene
@@ -55,108 +58,56 @@ def find_error_nodes(
     hou = ensure_connected(host, port)
 
     root = node_at(hou, root_path, "Root node")
+    try:
+        descendants = root.allSubChildren()
+    except Exception as e:
+        # [LAW:no-silent-failure] no node list, no scan. Chained so a lost link
+        # is classified as the loss it is, not as this tool's failure.
+        raise OperationFailed(f"Could not list the nodes under {root_path}: {e}") from e
 
     error_nodes: list[dict[str, Any]] = []
     warning_nodes: list[dict[str, Any]] = []
+    uninspected: list[dict[str, Any]] = []
     total_scanned = 0
 
-    def scan_recursive(node: Any) -> None:
-        nonlocal total_scanned
-
-        # Check if we've hit the limit
-        total_results = len(error_nodes) + (len(warning_nodes) if include_warnings else 0)
-        if total_results >= max_results:
-            return
-
-        try:
-            # Get all descendant nodes
-            all_children = node.allSubChildren()
-
-            for child in all_children:
-                total_scanned += 1
-
-                # Check limits again inside loop
-                total_results = len(error_nodes) + (len(warning_nodes) if include_warnings else 0)
-                if total_results >= max_results:
-                    break
-
-                try:
-                    # Get errors
-                    errors = child.errors()
-                    if errors:
-                        error_nodes.append(
-                            {
-                                "path": child.path(),
-                                "name": child.name(),
-                                "type": child.type().name(),
-                                "errors": list(errors) if errors else [],
-                            }
-                        )
-
-                    # Get warnings if requested
-                    if include_warnings:
-                        warnings = child.warnings()
-                        if warnings:
-                            warning_nodes.append(
-                                {
-                                    "path": child.path(),
-                                    "name": child.name(),
-                                    "type": child.type().name(),
-                                    "warnings": list(warnings) if warnings else [],
-                                }
-                            )
-
-                except Exception as e:
-                    logger.debug(f"Could not check errors on {child.path()}: {e}")
-
-        except Exception as e:
-            logger.warning(f"Could not scan children of {node.path()}: {e}")
-
-    # Also check the root node itself if it's not "/"
-    if root_path != "/":
+    for node in [root, *descendants]:
+        if len(error_nodes) + len(warning_nodes) >= max_results:
+            break
         total_scanned += 1
+        path = node.path()
         try:
-            errors = root.errors()
-            if errors:
-                error_nodes.append(
-                    {
-                        "path": root.path(),
-                        "name": root.name(),
-                        "type": root.type().name(),
-                        "errors": list(errors) if errors else [],
-                    }
-                )
-            if include_warnings:
-                warnings = root.warnings()
-                if warnings:
-                    warning_nodes.append(
-                        {
-                            "path": root.path(),
-                            "name": root.name(),
-                            "type": root.type().name(),
-                            "warnings": list(warnings) if warnings else [],
-                        }
-                    )
-        except Exception:
-            pass
+            errors = list(node.errors())
+            warnings = list(node.warnings()) if include_warnings else []
+            identity = {"path": path, "name": node.name(), "type": node.type().name()}
+        except Exception as e:
+            # [LAW:single-enforcer] a lost link is the call's failure, not this node's
+            if transport_failure(e):
+                raise
+            uninspected.append({"path": path, "kind": "operation_failed", "reason": str(e)})
+            continue
+        if errors:
+            error_nodes.append({**identity, "errors": errors})
+        if warnings:
+            warning_nodes.append({**identity, "warnings": warnings})
 
-    scan_recursive(root)
-
-    result: dict[str, Any] = {
-        "status": "success",
+    report: dict[str, Any] = {
         "root_path": root_path,
         "error_nodes": error_nodes,
         "error_count": len(error_nodes),
+        "uninspected": uninspected,
         "total_scanned": total_scanned,
     }
 
     if include_warnings:
-        result["warning_nodes"] = warning_nodes
-        result["warning_count"] = len(warning_nodes)
+        report["warning_nodes"] = warning_nodes
+        report["warning_count"] = len(warning_nodes)
 
     # Add warning if results were limited
-    total_results = len(error_nodes) + (len(warning_nodes) if include_warnings else 0)
-    if total_results >= max_results:
-        result["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
+    if len(error_nodes) + len(warning_nodes) >= max_results:
+        report["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
 
-    return _add_response_metadata(result, apply_cap=not _defer_cap)
+    # [LAW:single-enforcer] success means every node scanned was inspected
+    failed = [Undone(u["path"], u["kind"], u["reason"]) for u in uninspected]
+    inspected = range(total_scanned - len(uninspected))
+    status = batch_status("find_error_nodes", inspected, failed, **report)
+    return _add_response_metadata({"status": status, **report}, apply_cap=not _defer_cap)

@@ -1,8 +1,10 @@
 """Tests for node error/warning introspection (HDMCP-8)."""
 
-from unittest.mock import patch
+import logging
+from unittest.mock import MagicMock, patch
 
-from tests.conftest import MockHouNode
+from houdini_mcp.tools.failure import FAILURE
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 class TestGetNodeInfoWithErrors:
@@ -350,8 +352,7 @@ class TestFindErrorNodes:
         result = find_error_nodes(root_path="/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        # Should find the error in sphere1
-        assert result["error_count"] >= 0
+        assert [n["path"] for n in result["error_nodes"]] == ["/obj/geo1/sphere1"]
 
     def test_find_error_nodes_connection_error(self, reset_connection_state):
         """Test find_error_nodes handles connection errors."""
@@ -380,6 +381,105 @@ class TestFindErrorNodes:
         assert result["status"] == "success"
         assert "total_scanned" in result
         assert result["total_scanned"] >= 0
+
+
+class TestFindErrorNodesUninspected:
+    """A node the scan could not read is never reported as a node without errors."""
+
+    @staticmethod
+    def _unreadable(path: str, exc: BaseException) -> MockHouNode:
+        node = MockHouNode(path=path, name=path.rsplit("/", 1)[1], node_type="geo")
+        node.errors = MagicMock(side_effect=exc)  # type: ignore[method-assign]
+        return node
+
+    def test_a_node_houdini_will_not_read_makes_the_scan_partial(self, mock_connection, caplog):
+        from houdini_mcp.tools import find_error_nodes
+
+        broken = self._unreadable("/obj/broken", raised_inside_houdini(RuntimeError("no cook")))
+        failing = MockHouNode(path="/obj/failing", name="failing", node_type="geo")
+        failing._errors = ["Missing input"]
+        mock_connection.add_node(broken)
+        mock_connection.add_node(failing)
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            result = find_error_nodes(root_path="/obj", host="localhost", port=18811)
+
+        assert result["status"] == "partial"
+        [unread] = result["uninspected"]
+        assert (unread["path"], unread["kind"]) == ("/obj/broken", "operation_failed")
+        assert unread["reason"].startswith("no cook")
+        assert [n["path"] for n in result["error_nodes"]] == ["/obj/failing"]
+        assert result["total_scanned"] == 3
+        assert "batch outcome operation=find_error_nodes done=2" in caplog.text
+        assert "('/obj/broken', 'operation_failed')" in caplog.text
+
+    def test_a_clean_scan_lists_nothing_uninspected(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
+
+        result = find_error_nodes(root_path="/obj", host="localhost", port=18811)
+
+        assert (result["status"], result["uninspected"]) == ("success", [])
+
+    def test_a_scan_that_read_no_node_is_an_error(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        unreadable = raised_inside_houdini(RuntimeError("no cook"))
+        mock_connection.node("/obj").errors = MagicMock(side_effect=unreadable)
+        mock_connection.add_node(self._unreadable("/obj/broken", unreadable))
+
+        result = FAILURE.validate_python(
+            find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        )
+
+        assert result.kind == "operation_failed"
+        assert result.message.startswith("Nothing was done: /obj: no cook")
+        assert [u["path"] for u in result.uninspected] == ["/obj", "/obj/broken"]
+
+    def test_a_subtree_houdini_will_not_list_fails_the_call(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        mock_connection.node("/obj").allSubChildren = MagicMock(
+            side_effect=raised_inside_houdini(RuntimeError("locked HDA"))
+        )
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = FAILURE.validate_python(
+                find_error_nodes(root_path="/obj", host="localhost", port=18811)
+            )
+
+        assert result.kind == "operation_failed"
+        assert result.message.startswith("Could not list the nodes under /obj: locked HDA")
+        disconnect.assert_not_called()
+
+    def test_a_link_lost_reading_a_node_is_connection_loss(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        mock_connection.add_node(self._unreadable("/obj/geo1", EOFError("stream closed")))
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = FAILURE.validate_python(
+                find_error_nodes(root_path="/obj", host="localhost", port=18811)
+            )
+
+        assert (result.kind, result.retry) == ("connection_lost", "call_again")
+        disconnect.assert_called_once()
+
+    def test_a_link_lost_listing_the_subtree_is_connection_loss(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        mock_connection.node("/obj").allSubChildren = MagicMock(
+            side_effect=EOFError("stream closed")
+        )
+
+        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
+            result = FAILURE.validate_python(
+                find_error_nodes(root_path="/obj", host="localhost", port=18811)
+            )
+
+        assert (result.kind, result.retry) == ("connection_lost", "call_again")
+        disconnect.assert_called_once()
 
 
 class TestEdgeCases:

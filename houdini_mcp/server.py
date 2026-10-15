@@ -738,11 +738,15 @@ async def find_error_nodes(
 
     Returns:
         Dict with error/warning nodes including:
+        - status: "success" when every node scanned was inspected, "partial" when
+          some could not be (they are listed in uninspected), or "error" when none was
         - error_nodes: List of nodes with errors (path, name, type, errors)
         - warning_nodes: List of nodes with warnings (if include_warnings=True)
         - error_count: Number of error nodes found
         - warning_count: Number of warning nodes found
-        - total_scanned: Number of nodes scanned
+        - uninspected: Nodes whose errors or warnings could not be read, as
+          {path, kind, reason}; their errors are not in error_count
+        - total_scanned: Number of nodes scanned, inspected or not
         - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
