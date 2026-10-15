@@ -10,7 +10,13 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target, ensure_connected, ensure_link, ping
-from .tools._common import Resolution, Vec3, apply_response_cap, handle_connection_errors
+from .tools._common import (
+    DEFAULT_RESOLUTION,
+    Resolution,
+    Vec3,
+    apply_response_cap,
+    handle_connection_errors,
+)
 from .tools.code import Policy
 from .tools.failure import InvalidInput
 from .tools.nodes import CookInfo, Detail
@@ -475,7 +481,7 @@ def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -534,7 +540,7 @@ def render_viewport(
 
 @mcp.tool()
 def render_quad_view(
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,

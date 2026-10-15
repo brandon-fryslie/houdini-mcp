@@ -159,8 +159,9 @@ class TestServedSchemas:
     async def test_render_viewport_resolution_is_a_pair_of_integers_or_absent(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        legal: list[dict[str, Any]] = [{"resolution": [512, 512]}, {"resolution": None}]
+        legal: list[dict[str, Any]] = [{"resolution": [512, 512]}, {}]
         illegal: list[dict[str, Any]] = [
+            {"resolution": None},
             {"resolution": "512x512"},
             {"resolution": [512.5, 512]},
             {"resolution": ["512", "512"]},

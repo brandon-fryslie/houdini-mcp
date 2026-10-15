@@ -94,6 +94,7 @@ __all__ = [
     "logger",
     # Served vector types
     "Resolution",
+    "DEFAULT_RESOLUTION",
     "Vec3",
 ]
 
@@ -217,6 +218,8 @@ def node_at(hou: Any, path: str, what: str = "Node") -> Any:
 Dimension = Annotated[int, Field(ge=64, le=4096)]
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
+# An omitted resolution is this one; there is no second spelling of "the default".
+DEFAULT_RESOLUTION: Resolution = (512, 512)
 Vec3 = tuple[float, float, float]
 
 

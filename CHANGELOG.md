@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A render's resolution has one default and no null spelling**
+  (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish
+  `[512, 512]` as the `resolution` default in their schemas, and an omitted
+  `resolution` renders at it. `"resolution": null` is now refused on the wire
+  like any other value that is not two integers from 64 to 4096; omit the
+  argument instead.
+
 - **Connection probes report the Houdini they reached, under bounds they own**
   (houdini-laws-etg.eig): `ping_houdini` returns the same record as
   `check_connection` (`target`, `houdini_version`, `houdini_build`, `hip_file`),
