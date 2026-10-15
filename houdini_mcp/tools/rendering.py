@@ -15,6 +15,7 @@ from typing import Any
 
 from ..connection import transport_failure
 from ._common import (
+    DEFAULT_RESOLUTION,
     InvalidInput,
     OperationFailed,
     Resolution,
@@ -51,7 +52,6 @@ _PADDING = 1.2
 _MIN_DISTANCE = 5.0
 _UNFRAMED_SIZE = 10.0
 
-_DEFAULT_RESOLUTION: Resolution = (512, 512)
 _ISOMETRIC: Vec3 = (-30.0, 45.0, 0.0)
 
 # The three axis-aligned views of a quad render, by camera rotation.
@@ -317,7 +317,7 @@ class _Prepared:
 
 
 def _prepare(
-    resolution: Resolution | None, renderer: str, karma_engine: str, host: str, port: int
+    resolution: Resolution, renderer: str, karma_engine: str, host: str, port: int
 ) -> _Prepared:
     """Check every input and resolve every context a render needs, or raise.
 
@@ -326,7 +326,7 @@ def _prepare(
     the first temporary node is made.
     """
     hou = ensure_connected(host, port)
-    width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
+    width, height = resolution
     obj = hou.node("/obj")
     rop_type = renderer.lower()
     if rop_type not in _RENDERERS:
@@ -457,7 +457,7 @@ def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -480,7 +480,7 @@ def render_viewport(
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         auto_frame: If True, automatically frame all visible geometry (default: True)
@@ -542,7 +542,7 @@ def render_viewport(
 
 @handle_connection_errors("render_quad_view")
 def render_quad_view(
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,
@@ -562,7 +562,7 @@ def render_quad_view(
     the bounding box only once.
 
     Args:
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         orthographic: If True, use orthographic projection for Front/Left/Top views (default: True)

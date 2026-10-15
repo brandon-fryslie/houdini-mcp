@@ -10,7 +10,13 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target, ensure_connected, ensure_link, ping
-from .tools._common import Resolution, Vec3, apply_response_cap, handle_connection_errors
+from .tools._common import (
+    DEFAULT_RESOLUTION,
+    Resolution,
+    Vec3,
+    apply_response_cap,
+    handle_connection_errors,
+)
 from .tools.code import Policy
 from .tools.failure import InvalidInput
 from .tools.nodes import CookInfo, Detail
@@ -475,7 +481,7 @@ def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     auto_frame: bool = True,
@@ -495,7 +501,7 @@ def render_viewport(
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         auto_frame: If True, automatically frame all visible geometry (default: True)
@@ -534,7 +540,7 @@ def render_viewport(
 
 @mcp.tool()
 def render_quad_view(
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: str = "opengl",
     output_format: str = "png",
     orthographic: bool = True,
@@ -550,7 +556,7 @@ def render_quad_view(
     the bounding box only once.
 
     Args:
-        resolution: [width, height] in pixels (default: [512, 512])
+        resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
         orthographic: If True, use orthographic projection for Front/Left/Top views (default: True)

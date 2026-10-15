@@ -198,60 +198,23 @@ class TestRenderViewportOutputFormats:
 
 
 class TestRenderViewportResolutions:
-    """Tests for different resolutions."""
+    """The picture is rendered at the resolution asked for, 512x512 when none is."""
 
-    def test_minimum_valid_resolution(self, mock_connection):
-        """Test minimum valid resolution 64x64."""
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ({"resolution": (64, 64)}, [64, 64]),
+            ({"resolution": (4096, 4096)}, [4096, 4096]),
+            ({"resolution": (1920, 1080)}, [1920, 1080]),
+            ({}, [512, 512]),
+        ],
+    )
+    def test_the_render_has_the_resolution(self, rendering_scene, arguments, expected):
         from houdini_mcp.tools import render_viewport
 
-        result = render_viewport(
-            resolution=[64, 64],
-            auto_frame=False,
-            host="localhost",
-            port=18811,
-        )
-        # Should pass validation
-        assert result.get("message", "") != "Resolution must be at least 64x64"
-
-    def test_maximum_valid_resolution(self, mock_connection):
-        """Test maximum valid resolution 4096x4096."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(
-            resolution=[4096, 4096],
-            auto_frame=False,
-            host="localhost",
-            port=18811,
-        )
-        # Should pass validation
-        assert "4096" not in result.get("message", "")
-
-    def test_non_square_resolution(self, mock_connection):
-        """Test non-square resolution."""
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(
-            resolution=[1920, 1080],
-            auto_frame=False,
-            host="localhost",
-            port=18811,
-        )
-        assert "status" in result
-
-    def test_default_resolution_is_512(self, mock_connection):
-        """Test default resolution is 512x512."""
-        from houdini_mcp.tools import render_viewport
-
-        # With None resolution, should use 512x512
-        result = render_viewport(
-            resolution=None,
-            auto_frame=False,
-            host="localhost",
-            port=18811,
-        )
-        # If successful, resolution should be 512x512
-        if result["status"] == "success":
-            assert result["resolution"] == [512, 512]
+        result = render_viewport(**arguments, host="localhost", port=18811)
+        assert result["status"] == "success", result
+        assert result["resolution"] == expected
 
 
 class TestRenderViewportCameraPosition:
@@ -407,13 +370,17 @@ class TestRenderQuadViewResolutions:
     """Every view is rendered at the resolution asked for, 512x512 by default."""
 
     @pytest.mark.parametrize(
-        ("resolution", "expected"),
-        [([64, 64], [64, 64]), ([4096, 4096], [4096, 4096]), (None, [512, 512])],
+        ("arguments", "expected"),
+        [
+            ({"resolution": (64, 64)}, [64, 64]),
+            ({"resolution": (4096, 4096)}, [4096, 4096]),
+            ({}, [512, 512]),
+        ],
     )
-    def test_every_view_has_the_resolution(self, rendering_scene, resolution, expected):
+    def test_every_view_has_the_resolution(self, rendering_scene, arguments, expected):
         from houdini_mcp.tools import render_quad_view
 
-        result = render_quad_view(resolution=resolution, host="localhost", port=18811)
+        result = render_quad_view(**arguments, host="localhost", port=18811)
         assert result["status"] == "success", result
         assert [view["resolution"] for view in result["views"]] == [expected] * 4
 

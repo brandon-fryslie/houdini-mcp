@@ -156,21 +156,25 @@ class TestServedSchemas:
         assert not await accepts(client, served, "render_viewport", {"width": 512, "height": 512})
         assert not await accepts(client, served, "render_viewport", {"camera_path": "/obj/cam1"})
 
-    async def test_render_viewport_resolution_is_a_pair_of_integers_or_absent(
+    async def test_render_resolution_is_a_pair_of_integers_defaulting_to_512(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        legal: list[dict[str, Any]] = [{"resolution": [512, 512]}, {"resolution": None}]
+        legal: list[dict[str, Any]] = [{"resolution": [512, 512]}, {}]
         illegal: list[dict[str, Any]] = [
+            {"resolution": None},
             {"resolution": "512x512"},
             {"resolution": [512.5, 512]},
             {"resolution": ["512", "512"]},
             {"resolution": [512]},
             {"resolution": [512, 512, 512]},
         ]
-        for arguments in legal:
-            assert await accepts(client, served, "render_viewport", arguments), arguments
-        for arguments in illegal:
-            assert not await accepts(client, served, "render_viewport", arguments), arguments
+        for name in ("render_viewport", "render_quad_view"):
+            resolution = served[name].input_schema["properties"]["resolution"]
+            assert resolution["default"] == [512, 512], name
+            for arguments in legal:
+                assert await accepts(client, served, name, arguments), (name, arguments)
+            for arguments in illegal:
+                assert not await accepts(client, served, name, arguments), (name, arguments)
 
     async def test_render_resolution_bounds_are_served(
         self, client: Client[Any], served: dict[str, Tool]

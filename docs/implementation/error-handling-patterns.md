@@ -272,11 +272,11 @@ def list_children(
 ```python
 @handle_connection_errors("render_viewport")
 def render_viewport(
-    resolution: Resolution | None = None,
+    resolution: Resolution = DEFAULT_RESOLUTION,
     ...
 ) -> dict[str, Any]:
     hou = ensure_connected(host, port)
-    width, height = _DEFAULT_RESOLUTION if resolution is None else resolution
+    width, height = resolution
     # ... proceed with rendering: the type already refused anything else
 ```
 
