@@ -6,6 +6,7 @@ server can give is reported.
 """
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -13,7 +14,7 @@ import pytest
 from houdini_mcp.tools import summarization
 
 
-def completion(content: str | None = "Test summary", finish_reason: str = "stop") -> dict:
+def completion(content: Any = "Test summary", finish_reason: str = "stop") -> dict:
     """An OpenAI chat-completions response body, shaped as the omlx server sends it."""
     return {
         "id": "chatcmpl-test",
@@ -155,12 +156,22 @@ class TestDefaults:
         assert str(client.base_url) == "http://100.66.66.66:8000/v1/"
         assert client.headers["Authorization"] == "Bearer 1234"
 
-    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch):
-        """A base URL httpx cannot parse stops the module loading, naming what is wrong."""
+    @pytest.mark.parametrize(
+        ("raw", "error"),
+        [
+            ("http://host:abc/v1", httpx.InvalidURL),
+            ("localhost:8000/v1", ValueError),
+            ("100.66.66.66:8000/v1", ValueError),
+            ("", ValueError),
+            ("ftp://host/v1", ValueError),
+        ],
+    )
+    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch, raw, error):
+        """A base URL that is not http(s) with a host stops the module loading."""
         import importlib
 
-        monkeypatch.setenv("SUMMARIZATION_BASE_URL", "http://host:abc/v1")
-        with pytest.raises(httpx.InvalidURL, match="abc"):
+        monkeypatch.setenv("SUMMARIZATION_BASE_URL", raw)
+        with pytest.raises(error):
             importlib.reload(summarization)
 
 
@@ -184,16 +195,18 @@ class TestComplete:
     """The chat-completions request the summarizer sends, and how each answer is reported."""
 
     async def test_disabled_sends_nothing(self, wire, monkeypatch):
-        """Disabled summarization sends nothing and returns None."""
+        """Disabled summarization sends nothing and says so."""
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        assert await summarization._complete("test prompt") is None
+        assert await summarization._complete("test prompt") == summarization.NoSummary(
+            "summarization is disabled (SUMMARIZATION_ENABLED)"
+        )
         assert wire.sent == []
 
     async def test_sends_a_chat_completions_request(self, wire):
         """The request goes to /v1/chat/completions with the key, model, budget and prompt."""
         result = await summarization._complete("test prompt")
 
-        assert result == "Test summary"
+        assert result == summarization.Summary("Test summary")
         [request] = wire.sent
         assert request.method == "POST"
         assert request.url.path == "/v1/chat/completions"
@@ -227,7 +240,7 @@ class TestComplete:
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
             result = await summarization._complete("test prompt")
 
-        assert result is None
+        assert result == summarization.NoSummary(f"no finished summary: {reason} chars")
         assert "failed after " in caplog.text
         assert f"s: no finished summary: {reason} chars" in caplog.text
 
@@ -241,7 +254,8 @@ class TestComplete:
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
             result = await summarization._complete("test prompt")
 
-        assert result is None
+        assert isinstance(result, summarization.NoSummary)
+        assert result.reason.startswith("answered 507: ")
         assert "s: answered 507" in caplog.text
         assert "Cannot load model: projected memory would exceed" in caplog.text
 
@@ -252,16 +266,21 @@ class TestComplete:
             (httpx.ReadTimeout, "ReadTimeout: boom"),
             (httpx.Response(200, text="not json"), "JSONDecodeError"),
             (httpx.Response(200, json={"choices": []}), "ValueError: not a chat completion"),
+            (
+                httpx.Response(200, json=completion([{"type": "text", "text": "parts"}])),
+                "ValueError: not a text chat completion",
+            ),
         ],
     )
     async def test_unreachable_or_malformed_answer_is_logged(self, wire, caplog, response, logged):
-        """No answer, or one that is not a chat completion, yields None and a warning."""
+        """No answer, or one that is not a chat completion, yields its reason and a warning."""
         wire.response = response
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
             result = await summarization._complete("test prompt")
 
-        assert result is None
+        assert isinstance(result, summarization.NoSummary)
+        assert result.reason.startswith(logged)
         assert f"s: {logged}" in caplog.text
 
     async def test_failure_names_the_model_server_and_duration(self, wire, caplog):
@@ -296,13 +315,13 @@ class TestSummarizeGeometry:
         assert "1000" in json.loads(request.content)["messages"][0]["content"]
 
     async def test_summarize_geometry_no_summary_on_error(self, wire):
-        """Geometry data is unchanged when no summary comes back."""
+        """When no summary comes back, the geometry data carries the reason instead."""
         wire.response = httpx.Response(500, text="Internal error")
         geo_data = {"point_count": 1000}
 
         result = await summarization.summarize_geometry(geo_data)
 
-        assert result == {"point_count": 1000}
+        assert result == {"point_count": 1000, "ai_summary_error": "answered 500: Internal error"}
 
 
 class TestSummarizeErrors:

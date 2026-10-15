@@ -23,9 +23,19 @@ logger = logging.getLogger("houdini_mcp.summarization")
 
 # Configuration. The SUMMARIZATION_ prefix keeps an OPENAI_* key or URL set for some
 # other tool in the user's shell from redirecting these summaries.
+
+
+def parse_base_url(raw: str) -> httpx.URL:
+    """Read an OpenAI API base such as ``http://host:8000/v1``, or raise ``ValueError``."""
+    url = httpx.URL(raw)
+    if url.scheme not in ("http", "https") or not url.host:
+        raise ValueError(f"SUMMARIZATION_BASE_URL must be an http(s) URL with a host: {raw!r}")
+    return url
+
+
 # [LAW:parse-dont-validate] Parsed at import, so a malformed URL stops the server at
 # startup instead of failing whichever tool first asks for a summary.
-SUMMARIZATION_BASE_URL = httpx.URL(
+SUMMARIZATION_BASE_URL = parse_base_url(
     os.getenv("SUMMARIZATION_BASE_URL", "http://100.66.66.66:8000/v1")
 )
 SUMMARIZATION_API_KEY = os.getenv("SUMMARIZATION_API_KEY", "1234")
@@ -61,6 +71,20 @@ def summarizer_client() -> httpx.AsyncClient:
 
 
 @dataclass(frozen=True)
+class Summary:
+    """A finished summary."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class NoSummary:
+    """Why no summary came back, in words the caller can act on."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
 class Completion:
     """The part of an OpenAI chat completion the summarizer reads."""
 
@@ -74,11 +98,13 @@ def parse_completion(body: Any) -> Completion:
     """Read a chat-completions response body, or raise ``ValueError`` naming what is wrong."""
     try:
         choice = body["choices"][0]
-        return Completion(
-            text=choice["message"]["content"] or "", finish_reason=choice["finish_reason"]
-        )
+        content = choice["message"]["content"] or ""
+        finish_reason = choice["finish_reason"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(f"not a chat completion ({exc!r}): {str(body)[:200]}") from exc
+    if not isinstance(content, str) or not isinstance(finish_reason, str):
+        raise ValueError(f"not a text chat completion: {str(body)[:200]}")
+    return Completion(text=content, finish_reason=finish_reason)
 
 
 def estimate_tokens(data: Any) -> int:
@@ -143,13 +169,7 @@ Geometry Data:
 
 Summary:"""
 
-    summary = await _complete(prompt)
-
-    if summary:
-        geo_data["ai_summary"] = summary
-        geo_data["_summarized"] = True
-
-    return geo_data
+    return _annotate(geo_data, await _complete(prompt))
 
 
 async def summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
@@ -190,13 +210,7 @@ Provide:
 
 Summary:"""
 
-    summary = await _complete(prompt)
-
-    if summary:
-        error_data["ai_summary"] = summary
-        error_data["_summarized"] = True
-
-    return error_data
+    return _annotate(error_data, await _complete(prompt))
 
 
 async def summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
@@ -232,13 +246,7 @@ Scene Data:
 
 Summary:"""
 
-    summary = await _complete(prompt)
-
-    if summary:
-        scene_data["ai_summary"] = summary
-        scene_data["_summarized"] = True
-
-    return scene_data
+    return _annotate(scene_data, await _complete(prompt))
 
 
 async def summarize_render_settings(render_data: dict[str, Any]) -> dict[str, Any]:
@@ -273,30 +281,46 @@ Render Settings:
 
 Summary:"""
 
-    summary = await _complete(prompt)
-
-    if summary:
-        render_data["ai_summary"] = summary
-        render_data["_summarized"] = True
-
-    return render_data
+    return _annotate(render_data, await _complete(prompt))
 
 
-async def _complete(prompt: str) -> str | None:
-    """Ask the completions server for a summary.
+def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, Any]:
+    """Attach the summary to the tool result, or the reason there is none."""
+    match outcome:
+        case Summary(text):
+            data["ai_summary"] = text
+            data["_summarized"] = True
+        case NoSummary(reason):
+            # [LAW:no-silent-failure] The caller asked for a summary; it hears why not.
+            data["ai_summary_error"] = reason
+    return data
 
-    Args:
-        prompt: The prompt to send
 
-    Returns:
-        The summary text, or None when summarization is off or no finished summary
-        came back. Every way of getting None while enabled is logged as a warning.
-    """
-    if not SUMMARIZATION_ENABLED:
-        logger.debug("Summarization disabled, skipping completion request")
-        return None
-
+async def _complete(prompt: str) -> Summary | NoSummary:
+    """Ask the completions server for a summary, and log the one event it makes."""
     started = time.monotonic()
+    outcome = await _request(prompt)
+    elapsed = time.monotonic() - started
+    match outcome:
+        case Summary(text):
+            logger.info(
+                "Summarized with %s in %.1fs: %d chars", SUMMARIZATION_MODEL, elapsed, len(text)
+            )
+        case NoSummary(reason):
+            logger.warning(
+                "Summarization by %s at %s failed after %.1fs: %s",
+                SUMMARIZATION_MODEL,
+                SUMMARIZATION_BASE_URL,
+                elapsed,
+                reason,
+            )
+    return outcome
+
+
+async def _request(prompt: str) -> Summary | NoSummary:
+    """One chat-completions round trip, read as a summary or the reason there is none."""
+    if not SUMMARIZATION_ENABLED:
+        return NoSummary("summarization is disabled (SUMMARIZATION_ENABLED)")
     try:
         async with summarizer_client() as client:
             response = await client.post(
@@ -311,38 +335,18 @@ async def _complete(prompt: str) -> str | None:
             completion = parse_completion(response.json())
     except httpx.HTTPStatusError as exc:
         # The server's own message says what to fix (an unloadable model names the
-        # memory it needs), so it goes in the log with the status.
-        return _failed(started, f"answered {exc.response.status_code}: {exc.response.text[:500]}")
+        # memory it needs), so it travels with the status.
+        return NoSummary(f"answered {exc.response.status_code}: {exc.response.text[:500]}")
     except (httpx.HTTPError, ValueError) as exc:
-        return _failed(started, f"{type(exc).__name__}: {exc}")
+        return NoSummary(f"{type(exc).__name__}: {exc}")
 
-    elapsed = time.monotonic() - started
     # [LAW:no-silent-failure] A completion the model did not finish is not a summary.
     if completion.finish_reason != "stop" or not completion.text:
-        return _failed(
-            started,
+        return NoSummary(
             f"no finished summary: finish_reason={completion.finish_reason}, "
-            f"{len(completion.text)} chars",
+            f"{len(completion.text)} chars"
         )
-
-    logger.info(
-        "Summarized with %s in %.1fs: %d chars",
-        SUMMARIZATION_MODEL,
-        elapsed,
-        len(completion.text),
-    )
-    return completion.text
-
-
-def _failed(started: float, reason: str) -> None:
-    """Log one failed summary with the server, model and time it took, and yield no summary."""
-    logger.warning(
-        "Summarization by %s at %s failed after %.1fs: %s",
-        SUMMARIZATION_MODEL,
-        SUMMARIZATION_BASE_URL,
-        time.monotonic() - started,
-        reason,
-    )
+    return Summary(completion.text)
 
 
 def get_summarization_status() -> dict[str, Any]:

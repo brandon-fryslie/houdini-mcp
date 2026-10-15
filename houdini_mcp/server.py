@@ -310,7 +310,8 @@ async def serialize_scene(
 
     Returns:
         Dict with scene structure, optionally with ai_summary field containing
-        insights about organization, complexity, and optimization opportunities.
+        insights about organization, complexity, and optimization opportunities,
+        or ai_summary_error saying why no summary could be made.
     """
     result = tools.serialize_scene(root_path, include_params, 10, HOUDINI_HOST, HOUDINI_PORT)
 
@@ -727,6 +728,7 @@ async def find_error_nodes(
         - warning_count: Number of warning nodes found
         - total_scanned: Number of nodes scanned
         - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Examples:
         find_error_nodes()  # Find all errors in scene
@@ -971,6 +973,7 @@ async def get_geo_summary(
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
         - ai_summary: (if summarize=True) AI-generated insights about the geometry
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
