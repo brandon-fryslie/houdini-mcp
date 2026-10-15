@@ -8,15 +8,15 @@ This document describes the error handling patterns used throughout the Houdini 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         MCP Tool                                │
-│  @mcp.tool()                                                    │
-│  def some_tool(...):                                            │
-│      return tools.some_tool(...)                                │
+│                         MCP Server                              │
+│  server.py: SERVED_TOOLS = (tools.some_tool, ...)               │
+│  each served from its own signature and docs, with host/port    │
+│  bound to the server's target and hidden from clients           │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Tool Implementation                          │
+│               Tool (houdini_mcp/tools)                          │
 │  @handle_connection_errors("some_tool")  ◄── Decorator          │
 │  def some_tool(...):                                            │
 │      hou = ensure_connected(host, port)  ◄── Connection         │

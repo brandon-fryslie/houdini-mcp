@@ -41,7 +41,6 @@ def create_material(
             - "principledshader": Houdini's standard PBR shader (recommended)
             - "mtlxstandard_surface": MaterialX Standard Surface
             - "classicshader": Classic Mantra shader
-            - "arnold::standard_surface": Arnold Standard Surface (if Arnold installed)
         name: Optional name for the material. Auto-generated if not provided.
         parent_path: Parent context path (default: "/mat", alternative: "/shop")
         parameters: Optional dict of parameter values to set on the material.
@@ -49,8 +48,6 @@ def create_material(
             - basecolor: [r, g, b] base color
             - rough: float roughness (0-1)
             - metallic: float metallic (0-1)
-            - ior: float index of refraction
-            - basecolor_texture: string path to texture file
 
     Returns:
         Dict with:
@@ -65,7 +62,6 @@ def create_material(
         create_material()  # Create default principled shader
         create_material("principledshader", "red_metal",
                        parameters={"basecolor": [1, 0, 0], "metallic": 1.0})
-        create_material("mtlxstandard_surface", "gold_mtlx")
     """
     hou = ensure_connected(host, port)
 
@@ -118,8 +114,8 @@ def assign_material(
     """
     Assign a material to geometry.
 
-    Creates a Material SOP inside the geometry node to apply the material.
-    If a Material SOP already exists, updates it instead.
+    Creates a Material SOP inside the geometry node to apply the material,
+    or sets the shop_materialpath parameter directly.
 
     Args:
         geometry_path: Path to the geometry OBJ node (e.g., "/obj/geo1")
@@ -235,16 +231,14 @@ def get_material_info(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
         - material_path: Path to the material
         - material_name: Name of the material
         - material_type: Type of material (e.g., "principledshader")
         - parameters: Dict of parameter names to current values
-        - textures: List of texture file references found in parameters
+        - textures: List of texture file references found
 
     Examples:
         get_material_info("/mat/principledshader1")
-        get_material_info("/mat/mtlxstandard_surface1")
     """
     hou = ensure_connected(host, port)
 

@@ -157,11 +157,12 @@ class TestStdioServerSurface:
         self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
     ) -> None:
         import houdini_mcp.server as shared_server
+        from houdini_mcp.tools import link
 
         def refuse(*_a: Any, **_k: Any) -> None:
             raise conn_module.HoudiniConnectionError("no hou here", target="this interpreter")
 
-        monkeypatch.setattr(shared_server, "ensure_link", refuse)
+        monkeypatch.setattr(link, "ensure_link", refuse)
         async with Client(shared_server.mcp) as client:
             payload = (await client.call_tool("check_connection", {})).structured_content
 

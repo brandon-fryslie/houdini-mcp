@@ -492,13 +492,12 @@ def render_viewport(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
         - bounding_box: The world-space box that was framed, when geometry was
 
-    Example:
+    Examples:
         render_viewport()  # Auto-frame scene with isometric view
         render_viewport(camera_rotation=[0, 0, 0])  # Front view
         render_viewport(camera_rotation=[-90, 0, 0])  # Top view
@@ -729,7 +728,7 @@ def list_render_nodes(
             - type: ROP type (opengl, karma, ifd, etc.)
             - camera: Camera path if set
             - output: Output image path if set
-            - enabled: Whether the node is bypassed
+            - bypassed: Whether the node is bypassed
 
     Examples:
         list_render_nodes()  # List all ROPs in /out

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +141,16 @@ def should_summarize(data: Any, force: bool = False) -> bool:
         return False
 
     return estimate_tokens(data) > AUTO_SUMMARIZE_THRESHOLD
+
+
+async def summarized(
+    result: dict[str, Any],
+    summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+    *,
+    asked: bool,
+) -> dict[str, Any]:
+    """The result with its AI summary when the caller asked for one or it is large."""
+    return await summarizer(result) if should_summarize(result, force=asked) else result
 
 
 async def summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
@@ -357,10 +368,18 @@ async def _request(prompt: str) -> Summary | NoSummary:
 
 
 def get_summarization_status() -> dict[str, Any]:
-    """Get current summarization configuration status.
+    """
+    Get AI summarization configuration and status.
+
+    Summaries come from an OpenAI-compatible chat-completions server.
 
     Returns:
-        Dict with the configuration summaries are made with
+        Dict with summarization configuration including:
+        - enabled: Whether AI summarization is active
+        - model: Model the summaries are requested from
+        - base_url: The chat-completions server (OpenAI API base, ending in /v1)
+        - auto_threshold_tokens: Token count that triggers auto-summarization
+        - target_summary_tokens: Target size for generated summaries
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,

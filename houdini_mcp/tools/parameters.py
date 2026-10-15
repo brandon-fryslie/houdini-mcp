@@ -23,18 +23,28 @@ logger = logging.getLogger("houdini_mcp.tools.parameters")
 
 @handle_connection_errors("set_parameter")
 def set_parameter(
-    node_path: str, param_name: str, value: Any, host: str = "localhost", port: int = 18811
+    node_path: str,
+    param_name: str,
+    value: float | int | str | bool | list[float] | list[int] | list[str],
+    host: str = "localhost",
+    port: int = 18811,
 ) -> dict[str, Any]:
     """
     Set a parameter value on a node.
 
     Args:
-        node_path: Path to the node (e.g., "/obj/geo1/sphere1")
-        param_name: Name of the parameter (e.g., "radx", "tx")
-        value: Value to set
+        node_path: Full path to the node (e.g., "/obj/geo1/sphere1")
+        param_name: Name of the parameter (e.g., "radx", "tx", "scale")
+        value: Value to set - can be:
+               - float/int for numeric parameters
+               - str for string/menu parameters
+               - bool for toggle parameters
+               - List[float]/List[int] for vector parameters (e.g., translate, rotate, scale)
 
-    Returns:
-        Dict with result.
+    Examples:
+        - set_parameter("/obj/geo1/sphere1", "radx", 2.5)
+        - set_parameter("/obj/cam1", "tx", 10.0)
+        - set_parameter("/obj/geo1", "t", [1.0, 2.0, 3.0])  # Vector param
     """
     hou = ensure_connected(host, port)
 
@@ -65,61 +75,38 @@ def get_parameter_schema(
     Get parameter metadata/schema for intelligent parameter setting.
 
     Returns detailed parameter information including types, defaults, ranges,
-    menu items, and current values. This helps agents understand what parameters
-    are available and how to set them correctly.
+    menu items, tuple sizes, and current values. Essential for understanding
+    what parameters are available on a node and how to set them correctly.
 
     Args:
-        node_path: Path to the node
-        parm_name: Optional specific parameter name. If provided, returns only that parameter.
-                  If None, returns all parameters (up to max_parms)
+        node_path: Full path to the node (e.g., "/obj/geo1/sphere1")
+        parm_name: Optional specific parameter name. If provided, returns only that parameter's schema.
+                  If None, returns schema for all parameters (up to max_parms)
         max_parms: Maximum number of parameters to return when parm_name is None (default: 100)
 
     Returns:
-        Dict with parameter schema information.
+        Dict containing parameter schemas with type information, defaults, ranges, and current values.
 
-    Example return for single parameter:
-        {
-          "status": "success",
-          "node_path": "/obj/geo1/sphere1",
-          "parameters": [
-            {
-              "name": "radx",
-              "label": "Radius X",
-              "type": "float",
-              "default": 1.0,
-              "min": 0.0,
-              "max": None,
-              "current_value": 2.5,
-              "is_animatable": True
-            }
-          ],
-          "count": 1
-        }
+    Schema includes:
+        - name: Parameter name
+        - label: UI label
+        - type: Parameter type (float, int, string, menu, toggle, vector, ramp, etc.)
+        - default: Default value(s)
+        - min/max: Numeric ranges (if applicable)
+        - menu_items: List of {label, value} for menu parameters
+        - tuple_size: Size for vector parameters
+        - is_animatable: Whether parameter can be keyframed
+        - current_value: Current parameter value
 
-    Example with menu parameter:
-        {
-          "name": "type",
-          "label": "Type",
-          "type": "menu",
-          "default": 0,
-          "menu_items": [
-            {"label": "Polygon", "value": 0},
-            {"label": "Mesh", "value": 1}
-          ],
-          "current_value": 0,
-          "is_animatable": False
-        }
+    Examples:
+        # Get all parameters on a sphere
+        get_parameter_schema("/obj/geo1/sphere1")
 
-    Example with vector parameter:
-        {
-          "name": "t",
-          "label": "Translate",
-          "type": "vector",
-          "tuple_size": 3,
-          "default": [0.0, 0.0, 0.0],
-          "current_value": [1.0, 2.0, 3.0],
-          "is_animatable": True
-        }
+        # Get specific parameter info
+        get_parameter_schema("/obj/geo1/sphere1", parm_name="radx")
+
+        # Get info for translate parameter (vector)
+        get_parameter_schema("/obj/geo1", parm_name="t")
     """
     # Import helper to flatten parameter templates
     from ._common import _flatten_parm_templates

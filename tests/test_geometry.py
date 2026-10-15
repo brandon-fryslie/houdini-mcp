@@ -74,7 +74,7 @@ class TestGetGeoSummary:
 
         return response
 
-    def test_get_geo_summary_basic_sphere(self, mock_execute_code):
+    async def test_get_geo_summary_basic_sphere(self, mock_execute_code):
         """Test getting geometry summary for a basic sphere."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -115,7 +115,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/sphere1", max_sample_points=2, host="localhost", port=18811
         )
 
@@ -154,7 +154,7 @@ class TestGetGeoSummary:
         assert result["sample_points"][0]["index"] == 0
         assert result["sample_points"][0]["P"] == [0.0, 1.0, 0.0]
 
-    def test_get_geo_summary_empty_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_empty_geometry(self, mock_execute_code):
         """Test geometry summary for empty geometry."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -176,7 +176,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["point_count"] == 0
@@ -185,7 +185,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["point"]) == 0
         assert len(result["groups"]["point"]) == 0
 
-    def test_get_geo_summary_massive_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_massive_geometry(self, mock_execute_code):
         """Test geometry summary with massive geometry (>1M points)."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -208,7 +208,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/large1", max_sample_points=100, host="localhost", port=18811
         )
 
@@ -224,7 +224,7 @@ class TestGetGeoSummary:
         # Sample points should be limited
         assert len(result["sample_points"]) == 100
 
-    def test_get_geo_summary_uncooked_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_uncooked_geometry(self, mock_execute_code):
         """Test geometry summary for uncooked/dirty node."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -239,13 +239,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/noise1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/noise1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["cook_state"] == "cooked"
         assert result["point_count"] == 1
 
-    def test_get_geo_summary_no_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_no_geometry(self, mock_execute_code):
         """Test error when node has no geometry."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -260,7 +260,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/cam1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/cam1", host="localhost", port=18811)
 
         # The program said the cook yielded nothing: Houdini's failure, not the path.
         assert result["status"] == "error"
@@ -268,7 +268,7 @@ class TestGetGeoSummary:
         assert "has no geometry" in result["message"]
         assert result["path"] == "/obj/cam1"
 
-    def test_get_geo_summary_node_not_found(self, mock_execute_code):
+    async def test_get_geo_summary_node_not_found(self, mock_execute_code):
         """Test error when node doesn't exist."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -283,13 +283,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert (result["kind"], result["retry"]) == ("invalid_input", "fix_input")
         assert "Node not found" in result["message"]
 
-    def test_get_geo_summary_no_attributes(self, mock_execute_code):
+    async def test_get_geo_summary_no_attributes(self, mock_execute_code):
         """Test geometry summary without attributes."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -304,7 +304,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/box1", include_attributes=True, host="localhost", port=18811
         )
 
@@ -314,7 +314,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["point"]) == 0
         assert len(result["attributes"]["primitive"]) == 0
 
-    def test_get_geo_summary_skip_attributes_and_groups(self, mock_execute_code):
+    async def test_get_geo_summary_skip_attributes_and_groups(self, mock_execute_code):
         """Test skipping attributes and groups."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -341,7 +341,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/sphere1",
             include_attributes=False,
             include_groups=False,
@@ -355,7 +355,7 @@ class TestGetGeoSummary:
         assert "groups" not in result
         assert "sample_points" not in result
 
-    def test_get_geo_summary_various_attribute_types(self, mock_execute_code):
+    async def test_get_geo_summary_various_attribute_types(self, mock_execute_code):
         """Test geometry with various attribute types."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -387,7 +387,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/xform1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/xform1", host="localhost", port=18811)
 
         assert result["status"] == "success"
 
@@ -406,7 +406,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["vertex"]) == 1
         assert len(result["attributes"]["detail"]) == 1
 
-    def test_get_geo_summary_sample_points_with_attributes(self, mock_execute_code):
+    async def test_get_geo_summary_sample_points_with_attributes(self, mock_execute_code):
         """Test sample points include attribute values."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -437,7 +437,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/mountain1", max_sample_points=3, host="localhost", port=18811
         )
 
@@ -457,7 +457,7 @@ class TestGetGeoSummary:
         assert pt1["P"] == [1.0, 0.0, 0.0]
         assert pt1["N"] == [1.0, 0.0, 0.0]
 
-    def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
+    async def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
         """Test max_sample_points validation (capped at 10000)."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -487,13 +487,13 @@ class TestGetGeoSummary:
         }
 
         # Test negative value -> 0 (no sample_points in result)
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/grid1", max_sample_points=-10, host="localhost", port=18811
         )
         assert result["status"] == "success"
         assert "sample_points" not in result
 
-    def test_get_geo_summary_multiple_groups(self, mock_execute_code):
+    async def test_get_geo_summary_multiple_groups(self, mock_execute_code):
         """Test geometry with multiple groups."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -513,7 +513,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/merge1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/merge1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert len(result["groups"]["point"]) == 3
@@ -524,7 +524,7 @@ class TestGetGeoSummary:
         assert "front" in result["groups"]["primitive"]
         assert "back" in result["groups"]["primitive"]
 
-    def test_get_geo_summary_vertex_count_calculation(self, mock_execute_code):
+    async def test_get_geo_summary_vertex_count_calculation(self, mock_execute_code):
         """Test vertex count calculation with varying primitive types."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -540,13 +540,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/poly1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/poly1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["primitive_count"] == 4
         assert result["vertex_count"] == 18
 
-    def test_get_geo_summary_execute_code_error(self, mock_execute_code):
+    async def test_get_geo_summary_execute_code_error(self, mock_execute_code):
         """The program runner's failure is the tool's failure, in the same shape."""
         from houdini_mcp.connection import HoudiniConnectionError
         from houdini_mcp.tools import get_geo_summary
@@ -555,14 +555,14 @@ class TestGetGeoSummary:
             "Houdini connection lost", target="localhost:18811"
         )
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_unavailable"
         assert result["target"] == "localhost:18811"
         assert "Houdini connection lost" in result["message"]
 
-    def test_get_geo_summary_empty_stdout(self, mock_execute_code):
+    async def test_get_geo_summary_empty_stdout(self, mock_execute_code):
         """Test handling when execute_code returns empty stdout."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -572,12 +572,12 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "No output" in result["message"]
 
-    def test_get_geo_summary_invalid_json(self, mock_execute_code):
+    async def test_get_geo_summary_invalid_json(self, mock_execute_code):
         """Test handling when execute_code returns invalid JSON."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -587,7 +587,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]
@@ -623,7 +623,7 @@ class TestTheProgramHoudiniRuns:
     """[LAW:behavior-not-structure] The program get_geo_summary sends into Houdini,
     run against a stand-in hou: what Houdini will not read is Unread in place."""
 
-    def _run(self, node: Any, **kwargs: Any) -> dict[str, Any]:
+    async def _run(self, node: Any, **kwargs: Any) -> dict[str, Any]:
         from houdini_mcp.tools import get_geo_summary
 
         hou = SimpleNamespace(
@@ -641,7 +641,7 @@ class TestTheProgramHoudiniRuns:
             return {"status": "success", "stdout": out.getvalue(), "stderr": ""}
 
         with patch("houdini_mcp.tools.code._execute_with_grant", side_effect=execute):
-            return get_geo_summary("/obj/geo1/box1", **kwargs)
+            return await get_geo_summary("/obj/geo1/box1", **kwargs)
 
     def _geo(self, **overrides: Any) -> SimpleNamespace:
         point = SimpleNamespace(attribValue=lambda _name: (0.0, 1.0, 2.0))
@@ -671,8 +671,8 @@ class TestTheProgramHoudiniRuns:
             setattr(node, key, value)
         return node
 
-    def test_a_readable_geometry_reads_whole(self):
-        result = self._run(self._node(self._geo()), max_sample_points=1)
+    async def test_a_readable_geometry_reads_whole(self):
+        result = await self._run(self._node(self._geo()), max_sample_points=1)
 
         assert result["cook_state"] == "cooked"
         assert result["bounding_box"]["center"] == [0.5, 0.5, 0.5]
@@ -680,26 +680,26 @@ class TestTheProgramHoudiniRuns:
         assert result["groups"]["point"] == ["top"]
         assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
 
-    def test_a_cook_that_raises_is_unread_not_a_state(self):
+    async def test_a_cook_that_raises_is_unread_not_a_state(self):
         node = self._node(self._geo(), needsToCook=lambda: True, cook=_Raises("cook failed"))
 
-        result = self._run(node)
+        result = await self._run(node)
 
         assert result["cook_state"] == {"unread": "RuntimeError: cook failed"}
         assert result["point_count"] == 1
 
-    def test_a_bounding_box_houdini_will_not_give_is_unread_not_null(self):
-        result = self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))))
+    async def test_a_bounding_box_houdini_will_not_give_is_unread_not_null(self):
+        result = await self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))))
 
         assert result["bounding_box"] == {"unread": "RuntimeError: no bounds"}
 
-    def test_an_attribute_or_group_houdini_will_not_read_stays_in_its_list(self):
+    async def test_an_attribute_or_group_houdini_will_not_read_stays_in_its_list(self):
         geo = self._geo(
             pointAttribs=lambda: [_Attrib("P"), _Attrib("Cd", data_type=_Raises("no type"))],
             pointGroups=lambda: [SimpleNamespace(name=_Raises("no name"))],
         )
 
-        result = self._run(self._node(geo), max_sample_points=0)
+        result = await self._run(self._node(geo), max_sample_points=0)
 
         assert result["attributes"]["point"] == [
             {"name": "P", "type": "float", "size": 3},
@@ -707,20 +707,22 @@ class TestTheProgramHoudiniRuns:
         ]
         assert result["groups"]["point"] == [{"unread": "RuntimeError: no name"}]
 
-    def test_a_sample_value_houdini_will_not_read_is_unread_not_missing(self):
+    async def test_a_sample_value_houdini_will_not_read_is_unread_not_missing(self):
         geo = self._geo(point=lambda _i: SimpleNamespace(attribValue=_Raises("no value")))
 
-        result = self._run(self._node(geo), max_sample_points=1)
+        result = await self._run(self._node(geo), max_sample_points=1)
 
         assert result["sample_points"] == [{"index": 0, "P": {"unread": "RuntimeError: no value"}}]
 
-    def test_each_field_the_program_could_not_read_is_logged(self, caplog):
+    async def test_each_field_the_program_could_not_read_is_logged(self, caplog):
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
-            self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))), max_sample_points=0)
+            await self._run(
+                self._node(self._geo(boundingBox=_Raises("no bounds"))), max_sample_points=0
+            )
 
         assert "unread bounding_box of /obj/geo1/box1 reason=RuntimeError: no bounds" in caplog.text
 
-    def test_the_program_spells_a_reason_as_the_server_does(self):
+    async def test_the_program_spells_a_reason_as_the_server_does(self):
         from houdini_mcp.tools.reads import format_reason
 
         class OperationFailed(Exception):
@@ -730,7 +732,7 @@ class TestTheProgramHoudiniRuns:
         def no_bounds() -> None:
             raise OperationFailed("no bounds")
 
-        result = self._run(self._node(self._geo(boundingBox=no_bounds)), max_sample_points=0)
+        result = await self._run(self._node(self._geo(boundingBox=no_bounds)), max_sample_points=0)
 
         assert result["bounding_box"] == {"unread": format_reason(OperationFailed("no bounds"))}
         assert result["bounding_box"] == {"unread": "hou.OperationFailed: no bounds"}

@@ -223,52 +223,26 @@ def capture_pane_screenshot(
     port: int = 18811,
 ) -> dict[str, Any]:
     """
-    Capture a screenshot of a Houdini pane tab using Qt screen grab.
+    Capture a screenshot of a Houdini pane tab.
 
-    This function captures the screen region occupied by a specific pane tab
-    in the Houdini interface. It uses PySide2/Qt's screen grab functionality
-    accessed remotely via RPyC.
+    Uses Qt screen grab to capture the specified pane type. Returns
+    base64-encoded PNG or saves to disk if save_path provided.
 
     Args:
-        pane_type_name: Name of the pane type to capture, as ``hou.paneTabType``
-            names it (default: "NetworkEditor"). ``list_visible_panes`` returns
-            every name this Houdini has under ``available_types``.
-        save_path: Optional path to save PNG file. If provided, saves to disk
-            instead of returning base64. Parent directories are created if needed.
+        pane_type_name: Pane type to capture, as ``hou.paneTabType`` names it
+            (default: "NetworkEditor"). list_visible_panes() returns every name
+            this Houdini has under ``available_types``.
+        save_path: Optional path to save PNG file (returns base64 if not provided)
         fit_contents: If True, fit/frame all contents before capture (default: False).
-            Supported for: NetworkEditor (frames all nodes), SceneViewer (frames geometry),
-            CompositorViewer, ChannelEditor. When False, captures the current view
-            (useful for showing what you're actively working on).
-        host: Houdini RPC server hostname (default: "localhost")
-        port: Houdini RPC server port (default: 18811)
+            When False, captures the current view (what the user is looking at).
+            Supported for: NetworkEditor, SceneViewer, CompositorViewer, ChannelEditor.
 
     Returns:
-        Dict containing:
-        - status: "success" or "error"
-        - pane_type: The pane type that was captured
-        - pane_name: The name of the specific pane instance
-        - geometry: Dict with x, y, width, height of the captured region
-        - image_format: Image format ("png")
-        - image_size_bytes: Size of the image data in bytes
-        - image_base64: Base64-encoded PNG image data (if save_path not provided)
-        - file_path: Absolute path to saved file (if save_path provided)
+        Dict with status, geometry, and either image_base64 or file_path
 
-        On error:
-        - status: "error"
-        - message: Error description
-        - available_types: List of available pane types (if pane type not found)
-
-    Example:
-        # Capture the network editor as-is (current view)
-        result = capture_pane_screenshot("NetworkEditor")
-
-        # Capture with all nodes framed
-        result = capture_pane_screenshot("NetworkEditor", fit_contents=True)
-
-        # Capture and save directly to disk
-        result = capture_pane_screenshot("SceneViewer", save_path="/tmp/scene.png")
-        if result["status"] == "success":
-            print(f"Saved to: {result['file_path']}")
+    Note:
+        Panes on inactive desktops cannot be captured (invalid geometry).
+        Use list_visible_panes() to find capturable panes.
     """
     hou = ensure_connected(host, port)
 
@@ -306,27 +280,15 @@ def list_visible_panes(
     """
     List all visible pane tabs in the current Houdini layout.
 
-    This is useful for discovering what panes are available for screenshots.
-    Panes on inactive desktops will have is_visible=False and cannot be captured.
-
-    Args:
-        host: Houdini RPC server hostname (default: "localhost")
-        port: Houdini RPC server port (default: 18811)
+    Returns information about all panes across all desktops, including
+    which ones are capturable (visible on current desktop with valid geometry).
 
     Returns:
-        Dict containing:
-        - status: "success" or "error"
-        - current_desktop: Name of the current active desktop
-        - panes: List of dicts with pane info:
-            - name: Pane tab name
-            - type: Pane type name
-            - desktop: Desktop name containing this pane
-            - is_current_desktop: Whether pane is on the active desktop
-            - is_visible: Whether pane has valid geometry (can be captured)
-            - geometry: Dict with width/height (None if not visible)
-            - capturable: True if pane can be captured (visible and on current desktop)
+        Dict with:
+        - current_desktop: Name of active desktop
+        - panes: List of pane info (name, type, desktop, is_visible, capturable)
         - capturable_count: Number of panes that can be captured
-        - total_count: Total number of panes found
+        - total_count: Total number of panes
         A field Houdini will not give is {"unread": "<why>"}, and so is a
         fact that depends on one (is_current_desktop, capturable,
         capturable_count); the pane stays listed.
@@ -422,9 +384,8 @@ def render_node_network(
     """
     Capture a screenshot of a node's network showing its children.
 
-    This is a convenience wrapper that navigates the NetworkEditor to the specified
-    node, optionally frames all children, and captures a screenshot. Useful for
-    visualizing the network structure of any node context.
+    Navigates the NetworkEditor to the specified node and captures a screenshot.
+    Useful for visualizing the network structure of any node context.
 
     Args:
         node_path: Path to the node whose network to capture (default: "/obj").
@@ -432,37 +393,19 @@ def render_node_network(
             Examples: "/obj", "/obj/geo1", "/stage", "/mat"
         fit_contents: If True, frame all children in view before capture (default: True).
             Set to False to capture the current zoom/pan state.
-        host: Houdini RPC server hostname (default: "localhost")
-        port: Houdini RPC server port (default: 18811)
 
     Returns:
-        Dict containing:
+        Dict with:
         - status: "success" or "error"
         - node_path: The node path that was navigated to
         - child_count: Number of children in the network
-        - pane_type: "NetworkEditor"
-        - pane_name: Name of the network editor pane used
-        - geometry: Dict with x, y, width, height of the captured region
-        - image_format: Image format ("png")
-        - image_size_bytes: Size of the image data in bytes
+        - geometry: x, y, width, height of the captured region
         - image_base64: Base64-encoded PNG image data
 
-        On error:
-        - status: "error"
-        - message: Error description
-
     Example:
-        # Capture /obj network with all nodes framed
-        result = render_node_network("/obj")
-
-        # Capture a specific geo node's network
-        result = render_node_network("/obj/geo1")
-
-        # Capture SOPs inside a geometry object
-        result = render_node_network("/obj/geo1")
-
-        # Capture the /stage context (LOPs/Solaris)
-        result = render_node_network("/stage")
+        render_node_network("/obj")  # Capture /obj network
+        render_node_network("/obj/geo1")  # Capture SOPs inside geo1
+        render_node_network("/stage")  # Capture LOPs/Solaris network
     """
     hou = ensure_connected(host, port)
 
@@ -531,39 +474,21 @@ def capture_multiple_panes(
     """
     Capture screenshots of multiple pane types in one call.
 
-    This is more efficient than calling capture_pane_screenshot multiple times
-    as it reuses the Qt module references and connection.
+    More efficient than calling capture_pane_screenshot multiple times
+    as it reuses Qt module references.
 
     Args:
-        pane_types: List of pane type names to capture (e.g., ["NetworkEditor", "SceneViewer"])
-        save_dir: Optional directory to save PNG files. If provided, saves files
-            as "{pane_type}.png" in this directory. Parent directories are created if needed.
-            If not provided, returns base64-encoded images.
-        host: Houdini RPC server hostname (default: "localhost")
-        port: Houdini RPC server port (default: 18811)
+        pane_types: List of pane type names to capture
+            e.g., ["NetworkEditor", "SceneViewer", "Parm"]
+        save_dir: Optional directory to save PNGs (returns base64 if not provided)
 
     Returns:
         Dict containing:
         - status: "success", "partial" (a pane was not captured) or "error"
           (none was; the report rides on the error)
         - success_count: Number of successful captures
-        - total_requested: Total number of pane types requested
-        - results: Dict mapping pane type names to their capture results
-            Each result is a dict with the same format as capture_pane_screenshot
-
-    Example:
-        # Capture multiple panes and get base64
-        result = capture_multiple_panes(["NetworkEditor", "SceneViewer", "Parm"])
-        for pane_type, data in result["results"].items():
-            if data["status"] == "success":
-                print(f"{pane_type}: {data['image_size_bytes']} bytes")
-
-        # Capture and save to directory
-        result = capture_multiple_panes(
-            ["NetworkEditor", "SceneViewer"],
-            save_dir="/tmp/houdini_captures"
-        )
-        # Creates /tmp/houdini_captures/NetworkEditor.png, etc.
+        - total_requested: Number of pane types requested
+        - results: Per-pane results with image_base64 or file_path
     """
     hou = ensure_connected(host, port)
 

@@ -950,49 +950,49 @@ class TestSceneOperations:
 class TestSerializeScene:
     """Tests for scene serialization."""
 
-    def test_serialize_scene_success(self, mock_connection):
+    async def test_serialize_scene_success(self, mock_connection):
         """Test serializing scene successfully."""
         from houdini_mcp.tools import serialize_scene
 
-        result = serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["root"] == "/obj"
         assert "structure" in result
 
-    def test_serialize_scene_with_children(self, mock_connection):
+    async def test_serialize_scene_with_children(self, mock_connection):
         """Test serializing scene with child nodes."""
         from houdini_mcp.tools import serialize_scene
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        result = serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert len(result["structure"]["children"]) == 1
 
-    def test_serialize_scene_not_found(self, mock_connection):
+    async def test_serialize_scene_not_found(self, mock_connection):
         """Test serializing from non-existent root."""
         from houdini_mcp.tools import serialize_scene
 
-        result = serialize_scene("/nonexistent", False, 10, host="localhost", port=18811)
+        result = await serialize_scene("/nonexistent", False, 10, host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "Root node not found" in result["message"]
 
-    def test_serialize_scene_with_params(self, mock_connection):
+    async def test_serialize_scene_with_params(self, mock_connection):
         """Test serializing scene includes params when requested."""
         from houdini_mcp.tools import serialize_scene
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.0})
         mock_connection.add_node(geo1)
 
-        result = serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
 
         assert result["status"] == "success"
 
-    def test_serialize_scene_respects_max_depth(self, mock_connection):
+    async def test_serialize_scene_respects_max_depth(self, mock_connection):
         """Test serialization respects max depth."""
         from houdini_mcp.tools import serialize_scene
 
@@ -1003,7 +1003,7 @@ class TestSerializeScene:
         level3 = MockHouNode(path="/obj/level1/level2/level3", name="level3", node_type="null")
         mock_connection.add_node(level3)
 
-        result = serialize_scene("/obj", False, 1, host="localhost", port=18811)
+        result = await serialize_scene("/obj", False, 1, host="localhost", port=18811)
 
         assert result["status"] == "success"
 
@@ -1775,7 +1775,7 @@ class TestFindNodes:
 class TestFindErrorNodes:
     """Tests for find_error_nodes function."""
 
-    def test_find_error_nodes_with_errors(self, mock_connection):
+    async def test_find_error_nodes_with_errors(self, mock_connection):
         """Test finding nodes with errors."""
         from houdini_mcp.tools import find_error_nodes
 
@@ -1786,7 +1786,9 @@ class TestFindErrorNodes:
         mock_connection.add_node(error_node)
         error_node._errors = ["Cook error: missing input"]
 
-        result = find_error_nodes("/obj", include_warnings=False, host="localhost", port=18811)
+        result = await find_error_nodes(
+            "/obj", include_warnings=False, host="localhost", port=18811
+        )
 
         assert result["status"] == "success"
         assert result["error_count"] == 1
@@ -1794,7 +1796,7 @@ class TestFindErrorNodes:
         assert result["error_nodes"][0]["path"] == "/obj/geo2"
         assert "Cook error" in result["error_nodes"][0]["errors"][0]
 
-    def test_find_error_nodes_with_warnings(self, mock_connection):
+    async def test_find_error_nodes_with_warnings(self, mock_connection):
         """Test finding nodes with warnings."""
         from houdini_mcp.tools import find_error_nodes
 
@@ -1803,31 +1805,31 @@ class TestFindErrorNodes:
         mock_connection.add_node(warn_node)
         warn_node._warnings = ["Parameter 'tx' has expression error"]
 
-        result = find_error_nodes("/obj", include_warnings=True, host="localhost", port=18811)
+        result = await find_error_nodes("/obj", include_warnings=True, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["warning_count"] == 1
         assert len(result["warning_nodes"]) == 1
         assert "expression error" in result["warning_nodes"][0]["warnings"][0]
 
-    def test_find_error_nodes_no_errors(self, mock_connection):
+    async def test_find_error_nodes_no_errors(self, mock_connection):
         """Test when no errors exist in scene."""
         from houdini_mcp.tools import find_error_nodes
 
         good_node = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(good_node)
 
-        result = find_error_nodes("/obj", host="localhost", port=18811)
+        result = await find_error_nodes("/obj", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["error_count"] == 0
         assert result["error_nodes"] == []
 
-    def test_find_error_nodes_root_not_found(self, mock_connection):
+    async def test_find_error_nodes_root_not_found(self, mock_connection):
         """Test error when root not found."""
         from houdini_mcp.tools import find_error_nodes
 
-        result = find_error_nodes("/nonexistent", host="localhost", port=18811)
+        result = await find_error_nodes("/nonexistent", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "Root node not found" in result["message"]

@@ -17,6 +17,7 @@ from functools import partial
 from typing import Any, Literal, get_args
 
 from ._common import (
+    Count,
     _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
@@ -60,12 +61,14 @@ def create_node(
     Create a new node in the Houdini scene.
 
     Args:
-        node_type: The type of node to create (e.g., "geo", "sphere", "box")
+        node_type: The type of node to create (e.g., "geo", "null", "cam")
         parent_path: The parent node path (default: "/obj")
         name: Optional name for the new node
 
-    Returns:
-        Dict with created node information.
+    Examples:
+        - create_node("geo") -> Creates a geometry container at /obj
+        - create_node("sphere", "/obj/geo1") -> Creates a sphere SOP inside geo1
+        - create_node("cam", name="render_cam") -> Creates a camera named render_cam
     """
     hou = ensure_connected(host, port)
 
@@ -86,7 +89,7 @@ def get_node_info(
     node_path: str,
     detail: Detail = "full",
     cook_info: CookInfo = "none",
-    max_params: int = 50,
+    max_params: Count = 50,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -94,21 +97,31 @@ def get_node_info(
     Get information about a node at a chosen level of detail.
 
     Args:
-        node_path: Path to the node
-        detail: How much of the node to return.
-            "compact": path, type and child/input/output counts.
-            "standard": identity, flags, children, inputs, outputs and input_connections.
+        node_path: Full path to the node
+        detail: How much of the node to return (default: "full").
+            "compact": path, type and child/input/output counts, for a minimal payload.
+            "standard": identity, flags, children, inputs, outputs and input_connections
+                (source node and output index per connection).
             "full": "standard" plus parameter values (at most max_params).
-        cook_info: Whether to report cook state, errors and warnings.
-            "none": no cook_info block.
+        cook_info: Whether to report cook state, errors and warnings (default: "none").
             "inspect": report the node's current cook state.
             "force_cook": cook the node first, then report.
-        max_params: Maximum number of parameters to return under detail="full"
+        max_params: Most parameter values returned under detail="full" (default: 50)
 
     Returns:
-        Dict with node information at the requested detail; a cook_info block
-        with cook_state, errors, warnings (and last_cook_time after a forced
-        cook) whenever cook_info is not "none".
+        Node information at the requested detail. When cook_info is not "none",
+        also includes cook_info with cook_state, errors, and warnings (and
+        last_cook_time after a forced cook).
+
+    Example:
+        # Check cook state and errors
+        get_node_info("/obj/geo1/sphere1", cook_info="inspect")
+
+        # Force cook and check for errors
+        get_node_info("/obj/geo1/sphere1", cook_info="force_cook")
+
+        # Minimal info for reduced payload
+        get_node_info("/obj/geo1/sphere1", detail="compact")
     """
     # [LAW:parse-dont-validate] MCP callers are checked by the schema; this is
     # the one check for Python callers, so an unknown level fails loudly instead
@@ -232,10 +245,9 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
     Delete a node from the scene.
 
     Args:
-        node_path: Path to the node to delete
+        node_path: Full path to the node to delete
 
-    Returns:
-        Dict with result.
+    Warning: This operation cannot be undone via this API.
     """
     hou = ensure_connected(host, port)
 
@@ -262,28 +274,30 @@ def list_node_types(
     cursor: int = 0,
 ) -> dict[str, Any]:
     """
-    List available node types, optionally filtered by category.
+    List available Houdini node types.
 
-    Uses in-memory caching for fast repeated queries. Node types are fetched
-    once per session and cached - subsequent calls filter from cache instantly.
+    The first call reads every node type from Houdini into a cache; later
+    calls filter that cache.
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
         name_filter: Optional substring filter for node type names (case-insensitive)
         limit: Maximum number of results per page (default: 100, max: 500)
-        cursor: Pagination cursor (default: 0)
+        cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
-        Dict with list of node types and pagination info.
+        List of node types with their categories and descriptions.
+        Includes pagination info (has_more, cursor) when applicable.
 
     Note:
         Large categories like "Sop" have thousands of node types.
         Use name_filter to narrow results (e.g., name_filter="noise" for noise-related SOPs).
-        Use cursor for pagination through large result sets.
 
-    Performance:
-        - First call walks every node type through the hou proxy to fill the cache
-        - Subsequent calls filter from the cache
+    Examples:
+        list_node_types(category="Object")  # List Object-level nodes
+        list_node_types(category="Sop", name_filter="noise")  # Find noise SOPs
+        list_node_types(category="Sop", name_filter="vdb", limit=50)  # VDB SOPs
+        list_node_types(category="Sop", cursor=100)  # Get next page of SOPs
     """
     hou = ensure_connected(host, port)
     request = parse_page_request(limit=limit, cursor=cursor)
@@ -335,28 +349,34 @@ def list_children(
     """
     List child nodes with paths, types, and current input connections.
 
-    This tool is essential for agents to understand node networks and insert
-    nodes without breaking existing connections.
-
-    Pagination (HDMCP-52 / houdini-mcp-2t6): Use limit/cursor for page-by-page
-    traversal. The default limit is 20 nodes per page.
+    This tool is essential for understanding node networks and helps agents
+    insert nodes without breaking existing connections. Each child includes
+    detailed input connection information showing which nodes are connected
+    and at which indices.
 
     Args:
-        node_path: Path to the parent node
-        recursive: If True, recursively traverse child nodes
-        max_depth: Maximum recursion depth (prevents infinite loops)
-        max_nodes: Maximum total nodes to collect (safety limit, default: 1000)
-        limit: Maximum nodes per page (default: 20, max: 500)
-        cursor: Pagination cursor (offset) for next page
-        compact: If True, return only path/name/type without connection details
+        node_path: Path to the parent node (e.g., "/obj/geo1")
+        recursive: If True, recursively traverse all descendants (default: False)
+        max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
+        max_nodes: Maximum number of nodes to return as safety limit (default: 1000)
+        compact: When True, return only path/name/type without connection details (default: False)
+        limit: Maximum number of children per page (default: 20, max: 500)
+        cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
-        Dict with child nodes including their connection information.
-        When compact=True, inputs/outputs are omitted for reduced payload size.
-        Includes pagination metadata: total, returned, has_more, cursor.
-        unwalked lists nodes whose children Houdini would not list, as
+        Dict with children array containing node info including:
+        - path: Full node path
+        - name: Node name
+        - type: Node type
+        - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
+        - outputs: Array of output node paths (omitted if compact=True)
+        Also unwalked: nodes whose children Houdini would not list, as
         {path, unread}; any makes status "partial". A walk stopped by max_depth
-        above nodes that have children says so in warning.
+        above nodes that have children, or that would not say, says so in warning.
+
+    Example:
+        list_children("/obj/geo1", recursive=True, max_depth=3)
+        list_children("/obj/geo1", compact=True)  # Minimal payload
     """
     hou = ensure_connected(host, port)
     request = parse_page_request(limit=limit, cursor=cursor)
@@ -519,21 +539,26 @@ def find_nodes(
     """
     Find nodes by name pattern or type using glob/substring matching.
 
+    Supports wildcard patterns (* and ?) for flexible searching. When pattern
+    contains no wildcards, also performs substring matching.
+
     Args:
-        root_path: Root path to start search from
-        pattern: Glob pattern or substring to match against node names (* for wildcard)
+        root_path: Root path to start search from (default: "/obj")
+        pattern: Glob pattern or substring to match node names (default: "*")
+                Examples: "noise*", "*grid*", "sphere"
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
         limit: Maximum number of results per page (default: 100, max: 500)
-        cursor: Pagination cursor (default: 0)
+        cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
-        Dict with matching nodes and their types.
+        Dict with matches array containing matching nodes with path, name, and type.
         Includes pagination info (has_more, cursor) when applicable.
 
-    Example:
-        find_nodes("/obj", "noise*", limit=50)
-        find_nodes("/obj/geo1", "*", node_type="sphere")
-        find_nodes("/obj", "*", cursor=100)  # Get next page
+    Examples:
+        find_nodes("/obj", "noise*") - Find all nodes starting with "noise"
+        find_nodes("/obj/geo1", "*", node_type="sphere") - Find all sphere nodes
+        find_nodes("/obj", "grid") - Substring match for "grid"
+        find_nodes("/obj", "*", cursor=100) - Get next page of results
     """
     hou = ensure_connected(host, port)
 
