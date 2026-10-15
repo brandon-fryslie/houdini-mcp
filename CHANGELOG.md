@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three finite numbers in the served schema, so any other length is refused on
   the wire; `create_network_box` no longer creates the box uncolored on a bad
   color, and reports the color it applied.
+- **BREAKING (Python API)**: each tool is declared once (houdini-laws-etg.5a0):
+  a tool's function in `houdini_mcp/tools` is its MCP contract - signature,
+  defaults and docs - and the server serves it with the Houdini address bound,
+  so the published schema cannot drift from the function that runs.
+  `get_node_info` publishes `max_params` (default 50) and `serialize_scene`
+  publishes `max_depth` (default 10), limits that were fixed before; a negative
+  one is refused on the wire.
+  `list_children` documents `limit` and `cursor`. `find_error_nodes`,
+  `get_geo_summary` and `serialize_scene` are coroutines whose `summarize`,
+  `host` and `port` are keyword-only, and which summarize a large result for a
+  Python caller as they do for an MCP one; `check_connection`, `ping_houdini`
+  and `manage_cache` are importable from `houdini_mcp.tools`.
 
 - **BREAKING (wire)**: a render's resolution has one default and no null spelling
   (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish

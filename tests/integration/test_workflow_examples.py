@@ -59,7 +59,7 @@ def teardown_module() -> None:
 class TestBuildFromScratch:
     """Test Example 1: Building a complete SOP network from scratch."""
 
-    def test_build_sphere_xform_color_out_chain(self):
+    async def test_build_sphere_xform_color_out_chain(self):
         """Build and verify: sphere → xform → color → OUT."""
 
         # Create geo container
@@ -114,7 +114,7 @@ class TestBuildFromScratch:
         assert flags["status"] == "success"
 
         # Verify with get_geo_summary
-        summary = get_geo_summary(out_path, max_sample_points=10)
+        summary = await get_geo_summary(out_path, max_sample_points=10)
         assert summary["status"] == "success"
         assert summary["cook_state"] == "cooked"
         assert summary["point_count"] > 0
@@ -128,7 +128,7 @@ class TestBuildFromScratch:
 class TestAugmentExistingScene:
     """Test Example 2: Augmenting an existing network by inserting a node."""
 
-    def test_insert_mountain_between_grid_and_noise(self):
+    async def test_insert_mountain_between_grid_and_noise(self):
         """Insert mountain between grid → noise."""
 
         # Create initial network: grid → noise
@@ -155,7 +155,7 @@ class TestAugmentExistingScene:
         assert noise_child["inputs"][0]["source_node"] == grid_path
 
         # Get geometry BEFORE mountain
-        geo_before = get_geo_summary(noise_path, max_sample_points=0)
+        geo_before = await get_geo_summary(noise_path, max_sample_points=0)
         assert geo_before["status"] == "success"
 
         # Create mountain node
@@ -184,7 +184,7 @@ class TestAugmentExistingScene:
         assert noise_info["input_connections"][0]["source_node"] == mountain_path
 
         # Get geometry AFTER mountain
-        geo_after = get_geo_summary(noise_path, max_sample_points=0)
+        geo_after = await get_geo_summary(noise_path, max_sample_points=0)
         assert geo_after["status"] == "success"
 
         # Verify geometry changed (mountain should affect bounding box)
@@ -199,7 +199,7 @@ class TestAugmentExistingScene:
 class TestParameterWorkflow:
     """Test Example 3: Parameter schema discovery and intelligent setting."""
 
-    def test_parameter_schema_discovery_and_setting(self):
+    async def test_parameter_schema_discovery_and_setting(self):
         """Discover parameter schema and set values intelligently."""
 
         # Create sphere
@@ -242,7 +242,7 @@ class TestParameterWorkflow:
         assert abs(node_info["parameters"]["radz"] - 3.0) < 0.001
 
         # Verify geometry reflects parameter change
-        geo_summary = get_geo_summary(sphere_path, max_sample_points=0)
+        geo_summary = await get_geo_summary(sphere_path, max_sample_points=0)
         assert geo_summary["status"] == "success"
 
         # Sphere diameter should be ~6.0 (radius 3.0)
@@ -281,7 +281,7 @@ class TestParameterWorkflow:
 class TestErrorHandling:
     """Test Example 4: Error detection, diagnosis, and fixing."""
 
-    def test_detect_missing_input_error(self):
+    async def test_detect_missing_input_error(self):
         """Detect when a node has no input (where one is expected)."""
 
         geo_result = create_node("geo", "/obj", "test_errors")
@@ -297,7 +297,7 @@ class TestErrorHandling:
         assert "cook_info" in noise_info
 
         # Noise without input won't error, but has no geometry
-        geo = get_geo_summary(noise_path, max_sample_points=0)
+        geo = await get_geo_summary(noise_path, max_sample_points=0)
         if geo.get("status") == "success":
             # Should have 0 points (no input)
             assert geo["point_count"] == 0
@@ -309,7 +309,7 @@ class TestErrorHandling:
         connect_nodes(grid_path, noise_path)
 
         # Verify fix
-        geo_after = get_geo_summary(noise_path, max_sample_points=0)
+        geo_after = await get_geo_summary(noise_path, max_sample_points=0)
         assert geo_after["status"] == "success"
         assert geo_after["point_count"] > 0, "Should have points after connecting input"
 
@@ -360,7 +360,7 @@ class TestErrorHandling:
             or "category" in bad_conn["message"].lower()
         )
 
-    def test_safe_geometry_access_pattern(self):
+    async def test_safe_geometry_access_pattern(self):
         """Test the safe pattern: check cook state before accessing geometry."""
 
         geo_result = create_node("geo", "/obj", "test_safe_access")
@@ -378,7 +378,7 @@ class TestErrorHandling:
 
         # Step 2: Only access geometry if cooked
         if cook_state == "cooked":
-            geo = get_geo_summary(box_path, max_sample_points=0)
+            geo = await get_geo_summary(box_path, max_sample_points=0)
             assert geo["status"] == "success"
             assert geo["point_count"] > 0
         else:

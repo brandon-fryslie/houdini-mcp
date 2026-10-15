@@ -729,7 +729,20 @@ class TestProductionPathResponseCap:
 
         assert result_bytes <= DEFAULT_RESPONSE_CAP_BYTES
 
-    def test_get_geo_summary_respects_cap(self):
+    async def test_serialize_scene_returns_its_whole_tree(self, mock_connection):
+        """The response cap cannot trim a tree, so a large scene is served whole, not emptied."""
+        from houdini_mcp.tools.scene import serialize_scene
+
+        obj = mock_connection.node("/obj")
+        for i in range(400):
+            obj.createNode("geo", f"geo_with_a_long_name_{i}")
+
+        result = await serialize_scene("/obj", host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        assert len(result["structure"]["children"]) == 400
+
+    async def test_get_geo_summary_respects_cap(self):
         """get_geo_summary final JSON response never exceeds cap.
 
         Exercises the real production path: get_geo_summary() -> execute_code()
@@ -804,7 +817,7 @@ class TestProductionPathResponseCap:
                 "stderr": "",
             }
 
-            result = get_geo_summary(
+            result = await get_geo_summary(
                 "/obj/geo1/dense_mesh1",
                 max_sample_points=16,
                 host="localhost",

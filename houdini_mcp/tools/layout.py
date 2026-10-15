@@ -41,14 +41,9 @@ def layout_children(
         node_path: Path to the parent node (e.g., "/obj/geo1")
         horizontal_spacing: Horizontal spacing between nodes (default: 2.0)
         vertical_spacing: Vertical spacing between nodes (default: 1.0)
-        host: Houdini RPC server host
-        port: Houdini RPC server port
 
     Returns:
-        Dict with:
-        - status: "success" or "error"
-        - node_path: Path to the parent node
-        - child_count: Number of children that were laid out
+        Dict with node_path and child_count
 
     Examples:
         layout_children("/obj/geo1")
@@ -97,25 +92,13 @@ def set_node_color(
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
         color: RGB color values as [r, g, b] where each value is 0.0-1.0
-               Common colors:
-               - Red: [1, 0, 0]
-               - Green: [0, 1, 0]
-               - Blue: [0, 0, 1]
-               - Yellow: [1, 1, 0]
-               - Orange: [1, 0.5, 0]
-               - Purple: [0.5, 0, 1]
-        host: Houdini RPC server host
-        port: Houdini RPC server port
 
     Returns:
-        Dict with:
-        - status: "success" or "error"
-        - node_path: Path to the node
-        - color: The color that was set
+        Dict with node_path and color
 
     Examples:
         set_node_color("/obj/geo1/sphere1", [1, 0, 0])  # Red
-        set_node_color("/obj/geo1/important_node", [1, 1, 0])  # Yellow
+        set_node_color("/obj/geo1/important", [1, 1, 0])  # Yellow
     """
     hou = ensure_connected(host, port)
 
@@ -146,14 +129,9 @@ def set_node_position(
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
         x: X position in network editor units
         y: Y position in network editor units
-        host: Houdini RPC server host
-        port: Houdini RPC server port
 
     Returns:
-        Dict with:
-        - status: "success" or "error"
-        - node_path: Path to the node
-        - position: [x, y] the position that was set
+        Dict with node_path and position
 
     Examples:
         set_node_position("/obj/geo1/sphere1", 0, 0)
@@ -186,28 +164,24 @@ def create_network_box(
     """
     Create a network box around a group of nodes.
 
-    Network boxes help organize and visually group related nodes
-    in the network editor.
+    Network boxes help organize and visually group related nodes.
 
     Args:
         parent_path: Path to the parent network (e.g., "/obj/geo1")
         node_paths: List of node paths to include in the box
         label: Optional label text for the network box
         color: Optional RGB color [r, g, b] for the box (0.0-1.0 each)
-        host: Houdini RPC server host
-        port: Houdini RPC server port
 
     Returns:
         Dict with:
         - status: "success" or "error"
-        - network_box_path: Path to the created network box
+        - network_box_name: Name of the created network box
         - nodes_contained: List of nodes in the box
         - label: The label set on the box
         - color: The color the box was given, clamped to 0-1, or None
 
     Examples:
-        create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform Setup")
-        create_network_box("/obj/geo1", ["/obj/geo1/box1"], "Input", color=[0.2, 0.6, 0.2])
+        create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform")
     """
     hou = ensure_connected(host, port)
 

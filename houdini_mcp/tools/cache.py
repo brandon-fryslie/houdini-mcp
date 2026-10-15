@@ -28,6 +28,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from ._common import ensure_connected, handle_connection_errors
+from .failure import InvalidInput
+
 logger = logging.getLogger("houdini_mcp.tools.cache")
 
 
@@ -305,3 +308,66 @@ def get_cache_stats() -> dict[str, Any]:
             "last_populate_ms": node_type_cache.stats.last_populate_time_ms,
         },
     }
+
+
+@handle_connection_errors("manage_cache")
+def manage_cache(
+    action: str = "stats", host: str = "localhost", port: int = 18811
+) -> dict[str, Any]:
+    """
+    Manage the Houdini MCP cache system.
+
+    The cache stores node types, read once per Houdini instance; subsequent
+    calls are instant.
+
+    Args:
+        action: Cache action to perform:
+            - "stats": Get cache statistics (hits, misses, entry counts)
+            - "invalidate": Clear all caches (forces refresh on next access)
+            - "warmup": Pre-populate caches (may take a few seconds)
+
+    Returns:
+        Dict with cache information including:
+        - action: The action that was performed
+        - For "stats": Cache statistics for node_types
+        - For "invalidate": Confirmation message
+        - For "warmup": Warmup timing and entry counts
+
+    Examples:
+        manage_cache()  # Get cache stats (default)
+        manage_cache("stats")  # Same as above
+        manage_cache("invalidate")  # Clear caches
+        manage_cache("warmup")  # Pre-populate caches
+    """
+    if action == "stats":
+        return {
+            "status": "success",
+            "action": "stats",
+            "caches": get_cache_stats(),
+        }
+
+    elif action == "invalidate":
+        invalidate_all_caches()
+        return {
+            "status": "success",
+            "action": "invalidate",
+            "message": "All caches invalidated. Data will be refreshed on next access.",
+        }
+
+    elif action == "warmup":
+        start = time.time()
+        hou = ensure_connected(host, port)
+        node_type_cache.get_all_types(hou)
+        elapsed_ms = (time.time() - start) * 1000
+        return {
+            "status": "success",
+            "action": "warmup",
+            "message": "Caches warmed up successfully",
+            "warmup_time_ms": round(elapsed_ms, 1),
+            "caches": get_cache_stats(),
+        }
+
+    else:
+        raise InvalidInput(
+            f"Unknown action: {action}. Valid actions: stats, invalidate, warmup", action=action
+        )

@@ -19,7 +19,9 @@ each call they show is sent to the server, and each program they hand to
 from __future__ import annotations
 
 import ast
+import inspect
 import json
+import logging
 import pathlib
 import re
 import textwrap
@@ -34,6 +36,7 @@ from fastmcp.client.client import CallToolResult
 from mcp.types import Tool
 from pydantic import ValidationError
 
+from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.server import mcp
 from houdini_mcp.tools._common import FAILURE
@@ -105,6 +108,34 @@ class TestServedSchemas:
             assert json.loads(json.dumps(schema)) == schema, tool.name
             jsonschema.Draft202012Validator.check_schema(schema)
 
+    def test_every_served_parameter_is_documented(self, served: dict[str, Tool]) -> None:
+        """A client learns what each argument means from the schema it reads."""
+        for tool in served.values():
+            for name, prop in tool.input_schema["properties"].items():
+                assert prop.get("description"), f"{tool.name}.{name}"
+
+    def test_no_served_tool_lets_the_caller_choose_the_houdini(
+        self, served: dict[str, Tool]
+    ) -> None:
+        """Which Houdini a tool reaches is the server's configuration, on every tool."""
+        for tool in served.values():
+            assert not {"host", "port"} & set(tool.input_schema["properties"]), tool.name
+            assert tool.input_schema["additionalProperties"] is False, tool.name
+
+    def test_serving_a_tool_logs_the_arguments_the_server_binds(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from houdini_mcp import tools
+        from houdini_mcp.server import served
+
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
+            served(tools.create_node)
+            served(tools.get_houdini_help)
+        assert [r.getMessage() for r in caplog.records] == [
+            "serving create_node with ['host', 'port'] bound by the server",
+            "serving get_houdini_help with [] bound by the server",
+        ]
+
     async def test_execute_code_requires_only_the_program(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
@@ -150,7 +181,7 @@ class TestServedSchemas:
             "orthographic",
             "karma_engine",
         }
-        assert "required" not in schema
+        assert not schema.get("required")
         assert await accepts(client, served, "render_viewport", {})
         # The intuitive-but-wrong spellings the doc warns about are refused on the wire.
         assert not await accepts(client, served, "render_viewport", {"width": 512, "height": 512})
@@ -223,6 +254,25 @@ class TestServedSchemas:
                 )
         assert await accepts(client, served, "create_network_box", calls["create_network_box"])
 
+    async def test_a_count_is_never_negative(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A negative limit would slice from the end and still report success."""
+        calls = {
+            ("get_node_info", "max_params"): {"node_path": "/obj"},
+            ("serialize_scene", "max_depth"): {},
+        }
+        for (name, limit), base in calls.items():
+            assert await accepts(client, served, name, {**base, limit: 0}), name
+            assert not await accepts(client, served, name, {**base, limit: -1}), name
+
+    @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
+    def test_summarize_and_the_target_are_keyword_only(self, name: str) -> None:
+        """summarize sits where host used to; a positional host must fail, not bind to it."""
+        params = inspect.signature(getattr(tools, name)).parameters
+        for keyword in ("summarize", "host", "port"):
+            assert params[keyword].kind is inspect.Parameter.KEYWORD_ONLY, (name, keyword)
+
     def test_a_color_channel_is_finite(self) -> None:
         """NaN would clamp to 1.0 and be reported as if it were asked for."""
         from pydantic import TypeAdapter, ValidationError
@@ -245,7 +295,7 @@ class TestServedSchemas:
             "include_perspective",
             "karma_engine",
         }
-        assert "required" not in schema
+        assert not schema.get("required")
         assert await accepts(client, served, "render_quad_view", {})
 
     def test_no_served_description_teaches_importing_hou(self, served: dict[str, Tool]) -> None:
@@ -404,13 +454,13 @@ class TestServedFailures:
     async def test_an_unreachable_houdini_is_connection_unavailable(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import houdini_mcp.server as server
+        from houdini_mcp.tools import link
 
         def refuse(*_a: Any, **_k: Any) -> None:
             raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
 
-        monkeypatch.setattr(server, "ensure_link", refuse)
-        monkeypatch.setattr(server, "ping", refuse)
+        monkeypatch.setattr(link, "ensure_link", refuse)
+        monkeypatch.setattr(link, "ping", refuse)
         for probe in ("check_connection", "ping_houdini"):
             failure = await self.failure_of(client, probe, {})
             assert failure.kind == "connection_unavailable", probe
@@ -422,17 +472,25 @@ class TestServedFailures:
     ) -> None:
         """The cap runs after ``get_geo_summary`` returns and is awaited under the
         same boundary: a tool bug there is one arm, never a protocol error."""
-        import houdini_mcp.server as server
+        from houdini_mcp.tools import geometry
 
         def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
             return {"status": "success", "points": {1, 2}}
 
-        monkeypatch.setattr(server.tools, "get_geo_summary", unserializable)
+        monkeypatch.setattr(geometry, "_read_geometry", unserializable)
         failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.operation == "get_geo_summary"
         assert failure.exception == "TypeError"
         assert "not JSON-serializable" in failure.message
+
+    async def test_a_large_failure_is_still_one_arm(self, client: Client[Any]) -> None:
+        """A program that fails after printing a lot still comes back as a failure arm."""
+        failure = await self.failure_of(
+            client, "execute_code", {"code": "print('x' * 90000)\nraise ValueError('after')"}
+        )
+        assert failure.kind == "operation_failed"
+        assert "after" in failure.message
 
     async def test_an_unknown_cache_action_is_invalid_input(self, client: Client[Any]) -> None:
         failure = await self.failure_of(client, "manage_cache", {"action": "defrag"})
@@ -443,12 +501,12 @@ class TestServedFailures:
     async def test_a_warmup_that_cannot_reach_houdini_is_connection_unavailable(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import houdini_mcp.server as server
+        from houdini_mcp.tools import cache
 
         def refuse(*_a: Any, **_k: Any) -> None:
             raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
 
-        monkeypatch.setattr(server, "ensure_connected", refuse)
+        monkeypatch.setattr(cache, "ensure_connected", refuse)
         failure = await self.failure_of(client, "manage_cache", {"action": "warmup"})
         assert (failure.kind, failure.target) == ("connection_unavailable", "farm:1")
 
@@ -531,7 +589,7 @@ class TestServedSummaries:
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Many errors in a small result are not, alone, a reason to summarize."""
-        import houdini_mcp.server as server
+        from houdini_mcp.tools import errors
 
         def six_errors(*_a: Any, **_k: Any) -> dict[str, Any]:
             nodes = [{"path": f"/obj/geo1/bad{i}", "errors": ["x"]} for i in range(6)]
@@ -543,8 +601,8 @@ class TestServedSummaries:
             asked.append(data)
             return data
 
-        monkeypatch.setattr(server.tools, "find_error_nodes", six_errors)
-        monkeypatch.setattr(server.tools, "summarize_errors", record)
+        monkeypatch.setattr(errors, "_scan_error_nodes", six_errors)
+        monkeypatch.setattr(errors, "summarize_errors", record)
 
         await client.call_tool("find_error_nodes", {})
         assert asked == []

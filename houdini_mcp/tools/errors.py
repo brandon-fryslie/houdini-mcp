@@ -11,24 +11,26 @@ from ..connection import transport_failure
 from ._common import (
     ResultLimit,
     _add_response_metadata,
+    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
     node_at,
 )
 from .failure import OperationFailed, Undone, batch_status
+from .summarization import summarize_errors, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
 
 @handle_connection_errors("find_error_nodes")
-def find_error_nodes(
+async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
     max_results: ResultLimit = 100,
+    *,
+    summarize: bool = False,
     host: str = "localhost",
     port: int = 18811,
-    *,
-    _defer_cap: bool = False,
 ) -> dict[str, Any]:
     """
     Find all nodes with cook errors or warnings in the scene.
@@ -42,25 +44,43 @@ def find_error_nodes(
         include_warnings: Whether to include nodes with warnings (default: True)
         max_results: Maximum number of nodes to list, error, warning and uninspected
             together (default: 100)
-        host: Houdini RPC server host
-        port: Houdini RPC server port
+        summarize: If True, use AI to triage and prioritize errors (default: False).
+                  Provides actionable fix order and identifies root causes.
 
     Returns:
         Dict with error/warning nodes including:
         - status: "success" when every node scanned was inspected, "partial" when
           some could not be (they are listed in uninspected), or "error" when none was
-        - error_nodes: List of nodes with errors
+        - error_nodes: List of nodes with errors (path, name, type, errors)
         - warning_nodes: List of nodes with warnings (if include_warnings=True)
+        - error_count: Number of error nodes found
+        - warning_count: Number of warning nodes found
         - uninspected: Nodes whose errors or warnings could not be read, as
           {path, kind, reason}; their errors are not in error_count. path is null
           when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
+        - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
-    Example:
+    Examples:
         find_error_nodes()  # Find all errors in scene
         find_error_nodes("/obj/geo1")  # Find errors within a specific network
         find_error_nodes(include_warnings=False)  # Only errors, no warnings
+        find_error_nodes(summarize=True)  # Get AI triage of errors
     """
+    # A scan that inspected nothing raises, so a failure is never summarized.
+    result = _scan_error_nodes(root_path, include_warnings, max_results, host, port)
+    return apply_response_cap(await summarized(result, summarize_errors, asked=summarize))
+
+
+def _scan_error_nodes(
+    root_path: str,
+    include_warnings: bool,
+    max_results: int,
+    host: str,
+    port: int,
+) -> dict[str, Any]:
+    """The nodes under root_path with errors or warnings, with response metadata, uncapped."""
     hou = ensure_connected(host, port)
 
     root = node_at(hou, root_path, "Root node")
@@ -127,7 +147,7 @@ def find_error_nodes(
     failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
     inspected = range(total_scanned - len(uninspected))
     status = batch_status("find_error_nodes", inspected, failed, **report)
-    return _add_response_metadata({"status": status, **report}, apply_cap=not _defer_cap)
+    return _add_response_metadata({"status": status, **report}, apply_cap=False)
 
 
 def _identity(node: Any) -> dict[str, Any]:

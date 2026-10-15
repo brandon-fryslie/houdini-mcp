@@ -519,16 +519,17 @@ uv run python -m houdini_mcp
 
 ```
 houdini_mcp/
-├── server.py              # FastMCP server with 43 tool wrappers
+├── server.py              # FastMCP server: serves the tool functions in tools/
 ├── connection.py          # One owner of the RPyC/in-process link, retry/backoff
-└── tools/                 # Modular tool implementations
+└── tools/                 # The tools: each function's signature and docstring is its MCP contract
     ├── _common.py         # Shared utilities, error handling
-    ├── cache.py           # Node type caching with TTL
+    ├── cache.py           # Node type caching with TTL, manage_cache
     ├── code.py            # Python execution
     ├── errors.py          # Error node detection
     ├── geometry.py        # Geometry introspection
     ├── help.py            # Houdini help access
     ├── layout.py          # Node layout tools
+    ├── link.py            # Connection probes
     ├── materials.py       # Material creation/assignment
     ├── nodes.py           # Node CRUD operations
     ├── pane_screenshot.py # Pane capture tools

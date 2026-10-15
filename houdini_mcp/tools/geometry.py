@@ -11,64 +11,85 @@ from typing import Any
 from ._common import (
     OperationFailed,
     _add_response_metadata,
+    apply_response_cap,
     handle_connection_errors,
     tool_error,
 )
+from .summarization import summarize_geometry, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
 
 @handle_connection_errors("get_geo_summary")
-def get_geo_summary(
+async def get_geo_summary(
     node_path: str,
     max_sample_points: int = 16,
     include_attributes: bool = True,
     include_groups: bool = True,
+    *,
+    summarize: bool = False,
     host: str = "localhost",
     port: int = 18811,
-    *,
-    _defer_cap: bool = False,
 ) -> dict[str, Any]:
     """
     Get geometry statistics and metadata for verification.
 
     Returns comprehensive geometry information including point/primitive counts,
-    bounding box, attributes, groups, and optionally sample points. Useful for
-    agents to verify results after operations.
-
-    This function executes geometry analysis on the Houdini side to avoid
-    slow RPC iteration over large point/primitive counts.
+    bounding box, attributes, groups, and optionally sample points. This tool is
+    essential for agents to verify results after geometry operations.
 
     Args:
-        node_path: Path to the SOP node (e.g., "/obj/geo1/sphere1")
-        max_sample_points: Maximum number of sample points to return (default: 16, max: 10000)
-            The default was reduced from 100 to 16 per HDMCP-52 (houdini-mcp-2t6)
-            to keep responses bounded. Use explicit sample_limit for more samples.
+        node_path: Full path to the SOP node (e.g., "/obj/geo1/sphere1")
+        max_sample_points: Maximum number of sample points to return (default: 16, max: 10000).
+                          Set to 0 to skip point sampling.
         include_attributes: Whether to include attribute metadata (default: True)
         include_groups: Whether to include group information (default: True)
+        summarize: If True, use AI to generate a concise summary of the geometry (default: False).
+                  Useful for large/complex geometry to reduce token usage.
 
     Returns:
-        Dict with geometry summary including:
-        - status: "success" or "error"
-        - node_path: Path to the node
-        - cook_state: "cooked", "dirty", "uncooked", or "error"
-        - point_count: Number of points
-        - primitive_count: Number of primitives
-        - vertex_count: Total number of vertices across all primitives
-        - bounding_box: {min, max, size, center} in world space
-        - attributes: {point, primitive, vertex, detail} attribute lists
-        - groups: {point, primitive} group lists
-        - sample_points: Optional list of first N points with attribute values
+        Dict with comprehensive geometry summary including:
+        - point_count, primitive_count, vertex_count: Geometry topology stats
+        - bounding_box: {min, max, size, center} vectors in world space
+        - cook_state: Current cook state ("cooked", "dirty", "uncooked", "error")
+        - attributes: Metadata for point/primitive/vertex/detail attributes
+        - groups: Names of point and primitive groups
+        - sample_points: Optional array of first N points with their attribute values
+        - ai_summary: (if summarize=True) AI-generated insights about the geometry
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
-    Example:
+    Edge Cases:
+        - Uncooked geometry: Tool will attempt to cook the node first
+        - Empty geometry: Returns zeros for counts, not an error
+        - Massive geometry (>1M points): Automatically caps sampling with warning
+        - No geometry/Not a SOP: Returns error status
+
+    Examples:
+        # Basic geometry summary with 50 sample points
         get_geo_summary("/obj/geo1/sphere1", max_sample_points=50)
 
-    Edge cases:
-        - Uncooked geometry: Will attempt to cook first
-        - Empty geometry: Returns zeros, not error
-        - Massive geometry (>1M points): Caps sampling with warning
-        - No bounding box: Returns None for bbox fields
+        # Just get counts and bbox, skip attributes/groups/samples
+        get_geo_summary("/obj/geo1/grid1", max_sample_points=0,
+                       include_attributes=False, include_groups=False)
+
+        # Full detail for verification with AI summary
+        get_geo_summary("/obj/geo1/noise1", max_sample_points=200, summarize=True)
     """
+    result = _read_geometry(
+        node_path, max_sample_points, include_attributes, include_groups, host, port
+    )
+    return apply_response_cap(await summarized(result, summarize_geometry, asked=summarize))
+
+
+def _read_geometry(
+    node_path: str,
+    max_sample_points: int,
+    include_attributes: bool,
+    include_groups: bool,
+    host: str,
+    port: int,
+) -> dict[str, Any]:
+    """The geometry statistics of the SOP at node_path, with response metadata, uncapped."""
     # Imported here to avoid circular imports
     from .code import ExecutionGrant, _bypass_config_enabled, _execute_with_grant
 
@@ -256,4 +277,4 @@ print(json.dumps(result))
     # crosses back into the one failure type here.
     if result["status"] == "error":
         raise tool_error(result["kind"], result["message"], path=node_path)
-    return _add_response_metadata(result, apply_cap=not _defer_cap)
+    return _add_response_metadata(result, apply_cap=False)

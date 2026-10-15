@@ -20,7 +20,7 @@ from ._common import (
     _truncate_output,
     ensure_connected,
 )
-from .cache import get_cache_stats, invalidate_all_caches, node_type_cache
+from .cache import get_cache_stats, invalidate_all_caches, manage_cache, node_type_cache
 from .code import execute_code, get_last_scene_diff
 from .code_policy import (
     _detect_dangerous_code,
@@ -32,6 +32,7 @@ from .errors import find_error_nodes
 from .geometry import get_geo_summary
 from .help import get_houdini_help
 from .layout import create_network_box, layout_children, set_node_color, set_node_position
+from .link import check_connection, ping_houdini
 from .materials import assign_material, create_material, get_material_info
 from .nodes import (
     create_node,
@@ -143,6 +144,10 @@ __all__ = [
     "node_type_cache",
     "invalidate_all_caches",
     "get_cache_stats",
+    "manage_cache",
+    # The link to Houdini
+    "check_connection",
+    "ping_houdini",
     # AI Summarization
     "summarize_geometry",
     "summarize_errors",

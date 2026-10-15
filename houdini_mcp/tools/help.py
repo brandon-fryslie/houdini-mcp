@@ -56,6 +56,8 @@ def get_houdini_help(
         - parameters: List of parameters with names, descriptions, and options
         - inputs: List of input connections (for nodes)
         - outputs: List of output connections (for nodes)
+        - vex_info: Signature and return type (for VEX functions)
+        - methods: Class methods (for Python hou module)
 
     Examples:
         get_houdini_help("sop", "box")  # Get box SOP documentation

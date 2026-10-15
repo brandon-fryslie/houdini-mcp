@@ -52,6 +52,7 @@ from ._common import (
     OperationFailed,
     ProgramStillRunning,
     _truncate_output,
+    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
 )
@@ -414,28 +415,71 @@ def execute_code(
     policy: Policy = DEFAULT_POLICY,
 ) -> dict[str, Any]:
     """
-    Execute Python code in Houdini with policy-gated safety rails.
+    Execute Python code in Houdini with scene change tracking and safety rails.
 
-    IMPORTANT: The 'hou' module is pre-injected as a global variable via RPyC.
-    Do NOT use 'import hou' or 'from hou import ...' - just use 'hou' directly.
+    IMPORTANT: The 'hou' module is pre-injected as a global variable. Do NOT use
+    'import hou' or 'from hou import ...' - just use 'hou' directly in your code.
+
+    Use this for complex operations that aren't covered by other tools.
+
+    SAFETY FEATURES:
+    - Policy profiles: "read-only" (inspection only: the code may name only
+      recognized inspection APIs, pure stdlib and dicts for its own records;
+      anything else, including hou APIs added after this release, is refused,
+      and bypass flags grant nothing) and "normal" (default; a guard rail
+      against accidents, not a sandbox).
+    - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
+      state changes (os and tempfile beyond their read side, shutil, pathlib,
+      archive and database modules, open() for writing), shell and process
+      access, dynamic import/execution, network egress (socket, urllib,
+      requests, httpx, http, ftplib, smtplib, ...) and the debugger. Judged on
+      the parsed program, so text in comments and strings is not code.
+    - Code that does not parse is refused before any rail runs.
+    - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
+    - Config+request bypass: allow_dangerous unlocks dangerous patterns and
+      allow_heavy_geometry unlocks heavy geometry, each only when the server
+      also sets HOUDINI_MCP_ALLOW_BYPASS=true.
+    - Output size caps: Prevents massive output from overwhelming the response
+    - Execution timeout with rollback: on timeout the run is rolled back via a
+      named Houdini undo group when available, else it fails closed.
+    - Scene diff limits: Caps the number of nodes returned in scene changes
+    - Structured audit block returned on every call.
 
     Args:
-        code: Python code to execute. The 'hou' module is pre-injected and available
-            as a global variable. Access it directly (e.g., hou.node('/obj')) without importing.
-        capture_diff: If True, captures before/after scene state for comparison.
-        max_stdout_size: Maximum stdout size in bytes (default: 100000 = 100KB).
-        max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB).
-        max_diff_nodes: Maximum number of nodes in each scene diff list (default: 1000).
-        timeout: Execution timeout in seconds (default: 30).
+        code: Python code to execute
+        capture_diff: If True, captures before/after scene state and returns changes (default: False)
+        max_stdout_size: Maximum stdout size in bytes (default: 100000 = 100KB)
+        max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB)
+        max_diff_nodes: Maximum nodes in each scene diff list (default: 1000)
+        timeout: Execution timeout in seconds (default: 30)
         allow_dangerous: Request-side opt-in to run dangerous patterns.
-            Only honored under policy "normal" when the server bypass config is enabled.
+            Only honored under policy "normal" when HOUDINI_MCP_ALLOW_BYPASS is enabled server-side.
         allow_heavy_geometry: Request-side opt-in to direct SOP geometry access.
-            Only honored under policy "normal" when the server bypass config is enabled.
-        policy: Safety profile - "read-only" or "normal".
+            Only honored under policy "normal" when HOUDINI_MCP_ALLOW_BYPASS is enabled.
+            Prefer get_geo_summary().
+        policy: Safety profile - "read-only" or "normal" (default).
+
+    Example:
+        execute_code('''
+            obj = hou.node("/obj")
+            geo = obj.createNode("geo", "my_geometry")
+            sphere = geo.createNode("sphere")
+            sphere.parm("radx").set(2.0)
+            sphere.setDisplayFlag(True)
+            sphere.setRenderFlag(True)
+        ''')
 
     Returns:
-        Dict with execution result including stdout/stderr, scene changes,
-        a structured ``audit`` block, and (on timeout) a ``rollback`` block.
+        Dict with status, stdout, stderr, and scene_changes (if capture_diff=True):
+        the nodes under /obj added, removed, or replaced by another type, at any
+        depth. When the scene could not be read after the code ran, the code's
+        result stands and scene_changes_error says why in place of scene_changes.
+        May include truncation flags (stdout_truncated, stderr_truncated, diff_truncated)
+        if output exceeded size limits.
+        If dangerous patterns detected and not allowed, returns error with detected patterns.
+        audit.granted reports the one permission decision the run was made under.
+        On timeout, a rollback block says whether an undo was attempted and
+        whether the scene is known to be consistent.
     """
     grant = ExecutionGrant.resolve(
         policy=policy,
@@ -454,17 +498,19 @@ def execute_code(
             message=f"Unknown policy {policy!r}. Valid policies: {', '.join(VALID_POLICIES)}.",
             hint=f"Pass policy as one of: {', '.join(VALID_POLICIES)}.",
         )
-    return _execute_with_grant(
-        code,
-        grant,
-        operation="execute_code",
-        capture_diff=capture_diff,
-        max_stdout_size=max_stdout_size,
-        max_stderr_size=max_stderr_size,
-        max_diff_nodes=max_diff_nodes,
-        timeout=timeout,
-        host=host,
-        port=port,
+    return apply_response_cap(
+        _execute_with_grant(
+            code,
+            grant,
+            operation="execute_code",
+            capture_diff=capture_diff,
+            max_stdout_size=max_stdout_size,
+            max_stderr_size=max_stderr_size,
+            max_diff_nodes=max_diff_nodes,
+            timeout=timeout,
+            host=host,
+            port=port,
+        )
     )
 
 
@@ -773,8 +819,8 @@ def get_last_scene_diff() -> dict[str, Any]:
     """
     Get the scene diff from the last execute_code call.
 
-    Returns:
-        Dict with scene changes from last code execution.
+    Shows the nodes under /obj that were added, removed, or replaced by a node
+    of another type ("modified") during the last code execution, at any depth.
     """
     if _last_scene_changes is None:
         return {
