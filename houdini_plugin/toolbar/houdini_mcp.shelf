@@ -70,9 +70,10 @@ import hou
 try:
     from houdini_mcp_plugin import is_server_running
     from houdini_mcp.connection import get_connection_info
+    from houdini_mcp.server import HOUDINI_HOST, HOUDINI_PORT
     
     if is_server_running():
-        info = get_connection_info()
+        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
         
         status_text = "MCP Server Status: RUNNING (ends when the client closes stdin)\n\n"
         status_text += f"Houdini: {info['target']}\n"

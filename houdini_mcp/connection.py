@@ -167,7 +167,7 @@ def _open_rpyc(host: str, port: int, sync_timeout: float) -> Any:
 
 
 def _open_in_process(host: str, port: int, sync_timeout: float) -> InProcessConnection:
-    logger.info("Connected to Houdini in-process")
+    logger.info("Connecting to Houdini in-process")
     return InProcessConnection()
 
 

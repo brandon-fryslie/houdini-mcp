@@ -38,7 +38,7 @@ class TestInProcessConnection:
             hou = ensure_connected("some-remote-host", 1)
         assert hou is in_process_houdini
         assert isinstance(conn_module.get_connection(), InProcessConnection)
-        assert "Connected to Houdini in-process" in caplog.text
+        assert "Connecting to Houdini in-process" in caplog.text
 
     def test_reconnect_after_dropped_connection_stays_in_process(
         self, in_process_houdini: Any
@@ -188,8 +188,10 @@ def _click_mcp_status(hou: Any) -> str:
     """Run the shelf's MCP Status script against ``hou``; return the text it shows."""
     script = ET.parse(SHELF).find("tool[@name='mcp_status']/script")
     assert script is not None and script.text is not None
-    hou.ui = MagicMock()
+    hou.ui.displayMessage = MagicMock()
     exec(script.text, {})
+    # the script's own failure branch also displays a message; only the status dialog counts
+    assert hou.ui.displayMessage.call_args.kwargs["title"] == "Houdini MCP Status"
     return str(hou.ui.displayMessage.call_args.args[0])
 
 
@@ -253,37 +255,24 @@ class TestPluginStartsTheSharedServer:
         assert runs == [{"target": "this interpreter", "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
 
-    def test_status_reports_this_houdini_before_any_tool_call(
+    def test_mcp_status_shows_the_houdini_served_from_start(
         self,
         plugin_server: Any,
         held_serve: dict[str, Any],
         in_process_houdini: Any,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """MCP Status, clicked right after Start MCP, shows the Houdini being served."""
+        """MCP Status, clicked right after Start MCP, before any tool call."""
         with caplog.at_level("INFO", logger="houdini_mcp.connection"):
             plugin_server.start_server(use_thread=True)
-        info = get_connection_info()
 
-        assert info["connected"] is True
-        assert info["target"] == "this interpreter"
-        assert info["houdini_version"] == in_process_houdini.applicationVersionString()
-        assert info["hip_file"] == in_process_houdini.hipFile.path()
+        shown = _click_mcp_status(in_process_houdini)
+
         assert (
             f"Connected to Houdini version: {in_process_houdini.applicationVersionString()}"
             in caplog.text
         )
-
-        held_serve["stdin"].set()
-        _wait_until_stopped(plugin_server)
-
-    def test_mcp_status_shows_the_houdini_served_from_start(
-        self, plugin_server: Any, held_serve: dict[str, Any], in_process_houdini: Any
-    ) -> None:
-        plugin_server.start_server(use_thread=True)
-
-        shown = _click_mcp_status(in_process_houdini)
-
+        assert "Houdini: this interpreter" in shown
         assert f"Houdini Version: {in_process_houdini.applicationVersionString()}" in shown
         assert f"Hip File: {in_process_houdini.hipFile.path()}" in shown
         held_serve["stdin"].set()
@@ -306,10 +295,9 @@ class TestPluginStartsTheSharedServer:
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
     ) -> None:
         """Start fails with the cause, not the client's first tool call."""
-        monkeypatch.delitem(sys.modules, "hou")
-        monkeypatch.setattr(sys, "path", [])  # nothing left to import hou from
+        monkeypatch.setitem(sys.modules, "hou", None)  # only hou is unimportable
 
-        with pytest.raises(conn_module.HoudiniConnectionError, match="No module named 'hou'"):
+        with pytest.raises(conn_module.HoudiniConnectionError, match="import of hou halted"):
             plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is False
         assert held_serve["runs"] == 0
