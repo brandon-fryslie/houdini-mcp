@@ -22,10 +22,15 @@ logger = logging.getLogger("houdini_mcp.tools.program_output")
 
 
 class _ThreadRoutedStream:
-    """A sys stream that sends one thread's operations to a capture and the rest past it."""
+    """A sys stream that sends one thread's operations to a capture and the rest past it.
+
+    The routing lasts as long as the run: a reference kept beyond it (a logging
+    handler built from ``sys.stderr`` mid-run) then sends everything past, even
+    from a later thread that is handed the program thread's reused ident.
+    """
 
     def __init__(self, thread: int, capture: TextIO, past: TextIO) -> None:
-        self._thread = thread
+        self._thread: int | None = thread
         self._capture = capture
         self._past = past
 
@@ -33,6 +38,9 @@ class _ThreadRoutedStream:
         # Every stream operation - write, flush, encoding, fileno - resolves
         # against the capture for the program's thread, the prior stream for any other.
         return getattr(self._capture if threading.get_ident() == self._thread else self._past, attr)
+
+    def end(self) -> None:
+        self._thread = None
 
 
 @contextmanager
@@ -48,6 +56,8 @@ def captured(stdout: TextIO, stderr: TextIO) -> Iterator[None]:
     try:
         yield
     finally:
+        for router in routers:
+            router.end()
         left = (sys.stdout, sys.stderr)
         # Restore before logging: a warning on a host with no log handler is
         # written to sys.stderr, which until now still routed into the capture.
