@@ -745,8 +745,8 @@ async def find_error_nodes(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if many errors found
-    if summarize or (result.get("error_count", 0) > 5):
+    # Apply AI summarization if requested or if response is very large
+    if summarize or tools.should_summarize(result):
         result = await tools.summarize_errors(result)
 
     return apply_response_cap(result)

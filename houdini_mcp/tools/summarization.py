@@ -27,9 +27,15 @@ logger = logging.getLogger("houdini_mcp.summarization")
 
 def parse_base_url(raw: str) -> httpx.URL:
     """Read an OpenAI API base such as ``http://host:8000/v1``, or raise ``ValueError``."""
-    url = httpx.URL(raw)
+    try:
+        url = httpx.URL(raw)
+    except httpx.InvalidURL as exc:
+        raise ValueError(f"SUMMARIZATION_BASE_URL is not a URL ({exc}): {raw!r}") from exc
     if url.scheme not in ("http", "https") or not url.host:
         raise ValueError(f"SUMMARIZATION_BASE_URL must be an http(s) URL with a host: {raw!r}")
+    # The URL is logged and reported by get_summarization_status, so it holds no secret.
+    if url.userinfo:
+        raise ValueError("SUMMARIZATION_BASE_URL carries credentials; set SUMMARIZATION_API_KEY")
     return url
 
 
@@ -291,7 +297,7 @@ def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, A
             data["ai_summary"] = text
             data["_summarized"] = True
         case NoSummary(reason):
-            # [LAW:no-silent-failure] The caller asked for a summary; it hears why not.
+            # [LAW:no-silent-failure] A summary was attempted; the result says why there is none.
             data["ai_summary_error"] = reason
     return data
 
@@ -306,15 +312,16 @@ async def _complete(prompt: str) -> Summary | NoSummary:
             logger.info(
                 "Summarized with %s in %.1fs: %d chars", SUMMARIZATION_MODEL, elapsed, len(text)
             )
+            return outcome
         case NoSummary(reason):
-            logger.warning(
-                "Summarization by %s at %s failed after %.1fs: %s",
-                SUMMARIZATION_MODEL,
-                SUMMARIZATION_BASE_URL,
-                elapsed,
-                reason,
+            # One sentence for the log and the caller: an empty ConnectTimeout message
+            # still arrives with the server it could not reach.
+            failure = NoSummary(
+                f"{SUMMARIZATION_MODEL} at {SUMMARIZATION_BASE_URL} failed after "
+                f"{elapsed:.1f}s: {reason}"
             )
-    return outcome
+            logger.warning("Summarization by %s", failure.reason)
+            return failure
 
 
 async def _request(prompt: str) -> Summary | NoSummary:

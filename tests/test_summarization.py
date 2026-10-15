@@ -157,21 +157,22 @@ class TestDefaults:
         assert client.headers["Authorization"] == "Bearer 1234"
 
     @pytest.mark.parametrize(
-        ("raw", "error"),
+        "raw",
         [
-            ("http://host:abc/v1", httpx.InvalidURL),
-            ("localhost:8000/v1", ValueError),
-            ("100.66.66.66:8000/v1", ValueError),
-            ("", ValueError),
-            ("ftp://host/v1", ValueError),
+            "http://host:abc/v1",
+            "localhost:8000/v1",
+            "100.66.66.66:8000/v1",
+            "",
+            "ftp://host/v1",
+            "http://user:secret@host/v1",
         ],
     )
-    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch, raw, error):
-        """A base URL that is not http(s) with a host stops the module loading."""
+    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch, raw):
+        """A base URL that is not a plain http(s) URL with a host stops the module loading."""
         import importlib
 
         monkeypatch.setenv("SUMMARIZATION_BASE_URL", raw)
-        with pytest.raises(error):
+        with pytest.raises(ValueError, match="SUMMARIZATION_BASE_URL"):
             importlib.reload(summarization)
 
 
@@ -197,9 +198,9 @@ class TestComplete:
     async def test_disabled_sends_nothing(self, wire, monkeypatch):
         """Disabled summarization sends nothing and says so."""
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        assert await summarization._complete("test prompt") == summarization.NoSummary(
-            "summarization is disabled (SUMMARIZATION_ENABLED)"
-        )
+        result = await summarization._complete("test prompt")
+        assert isinstance(result, summarization.NoSummary)
+        assert result.reason.endswith(": summarization is disabled (SUMMARIZATION_ENABLED)")
         assert wire.sent == []
 
     async def test_sends_a_chat_completions_request(self, wire):
@@ -240,7 +241,8 @@ class TestComplete:
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
             result = await summarization._complete("test prompt")
 
-        assert result == summarization.NoSummary(f"no finished summary: {reason} chars")
+        assert isinstance(result, summarization.NoSummary)
+        assert result.reason.endswith(f"s: no finished summary: {reason} chars")
         assert "failed after " in caplog.text
         assert f"s: no finished summary: {reason} chars" in caplog.text
 
@@ -255,7 +257,7 @@ class TestComplete:
             result = await summarization._complete("test prompt")
 
         assert isinstance(result, summarization.NoSummary)
-        assert result.reason.startswith("answered 507: ")
+        assert "s: answered 507: " in result.reason
         assert "s: answered 507" in caplog.text
         assert "Cannot load model: projected memory would exceed" in caplog.text
 
@@ -280,20 +282,23 @@ class TestComplete:
             result = await summarization._complete("test prompt")
 
         assert isinstance(result, summarization.NoSummary)
-        assert result.reason.startswith(logged)
+        assert f"s: {logged}" in result.reason
         assert f"s: {logged}" in caplog.text
 
     async def test_failure_names_the_model_server_and_duration(self, wire, caplog):
-        """A failure's event carries the same facts as a success: model, server, time taken."""
-        wire.response = httpx.ReadTimeout
+        """A failure tells the log and the caller the model, server and time taken."""
+        wire.response = httpx.ConnectTimeout
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            await summarization._complete("test prompt")
+            result = await summarization._complete("test prompt")
 
-        assert (
-            f"Summarization by {summarization.SUMMARIZATION_MODEL} at "
+        named = (
+            f"{summarization.SUMMARIZATION_MODEL} at "
             f"{summarization.SUMMARIZATION_BASE_URL} failed after "
-        ) in caplog.text
+        )
+        assert isinstance(result, summarization.NoSummary)
+        assert result.reason.startswith(named)
+        assert f"Summarization by {named}" in caplog.text
 
 
 class TestSummarizeGeometry:
@@ -321,7 +326,8 @@ class TestSummarizeGeometry:
 
         result = await summarization.summarize_geometry(geo_data)
 
-        assert result == {"point_count": 1000, "ai_summary_error": "answered 500: Internal error"}
+        assert result.keys() == {"point_count", "ai_summary_error"}
+        assert result["ai_summary_error"].endswith("s: answered 500: Internal error")
 
 
 class TestSummarizeErrors:

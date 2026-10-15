@@ -402,3 +402,31 @@ class TestServedFailures:
             assert result.structured_content["status"] == "success", probe
             with pytest.raises(ValidationError):
                 FAILURE.validate_python(result.structured_content)
+
+
+class TestServedSummaries:
+    """When a served tool asks the summarizer for a summary."""
+
+    async def test_find_error_nodes_summarizes_only_on_request_or_size(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Many errors in a small result are not, alone, a reason to summarize."""
+        import houdini_mcp.server as server
+
+        def six_errors(*_a: Any, **_k: Any) -> dict[str, Any]:
+            nodes = [{"path": f"/obj/geo1/bad{i}", "errors": ["x"]} for i in range(6)]
+            return {"status": "success", "error_nodes": nodes, "error_count": 6}
+
+        asked: list[dict[str, Any]] = []
+
+        async def record(data: dict[str, Any]) -> dict[str, Any]:
+            asked.append(data)
+            return data
+
+        monkeypatch.setattr(server.tools, "find_error_nodes", six_errors)
+        monkeypatch.setattr(server.tools, "summarize_errors", record)
+
+        await client.call_tool("find_error_nodes", {})
+        assert asked == []
+        await client.call_tool("find_error_nodes", {"summarize": True})
+        assert len(asked) == 1

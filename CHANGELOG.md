@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `ai_summary_error` instead of `ai_summary`, and each summary, finished or
   failed, logs the model, the server and how long it took. An unreachable
   server gives up after 3s rather than the 60s request budget, and a
-  `SUMMARIZATION_BASE_URL` that is not an http(s) URL with a host stops the
-  server at startup.
+  `SUMMARIZATION_BASE_URL` that is not an http(s) URL with a host, or that
+  carries credentials, stops the server at startup. `find_error_nodes`
+  summarizes on request or past the size threshold, as the other tools do,
+  rather than whenever more than 5 errors are found.
 
 - **Every tool failure is one arm of one result type** (houdini-laws-etg.2m5):
   an error result carries `kind` (`connection_unavailable`, `connection_mismatch`,
