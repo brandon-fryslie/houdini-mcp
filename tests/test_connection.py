@@ -390,6 +390,7 @@ class TestEnsureConnected:
         close of the one it replaced."""
         ensure_connected("localhost", 18811)
         get_connection().close()
+        caplog.clear()
 
         with (
             patch("houdini_mcp.connection.handshake") as mock_rpyc,
@@ -527,10 +528,11 @@ class TestPing:
         assert result["hip_file"] == mock_hou.hipFile.path()
         assert mock_conn.closed is True  # Connection should be closed
 
-    def test_ping_does_not_log_the_server_as_connected(
+    def test_ping_does_not_log_the_servers_link_changing(
         self, reset_connection_state, mock_hou, caplog
     ):
-        """The probe's link is never the server's, so it is not announced as one."""
+        """The probe's link is never the server's, so neither its open nor its close
+        is announced as the server's."""
         with (
             patch("houdini_mcp.connection.handshake") as mock_rpyc,
             caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
@@ -539,6 +541,7 @@ class TestPing:
             ping("localhost", 18811)
 
         assert "Connected to Houdini at localhost:18811" not in caplog.messages
+        assert "Disconnected from Houdini at localhost:18811" not in caplog.messages
 
     def test_ping_bounds_its_requests_by_its_timeout(self, mock_hou):
         """The timeout the probe advertises is the sync bound of the connection it
