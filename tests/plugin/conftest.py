@@ -22,6 +22,7 @@ import logging
 import socket
 import sys
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -171,8 +172,13 @@ class FakeHouModule:
 
 
 @pytest.fixture
-def fake_hrpyc() -> FakeHrpycModule:
-    return FakeHrpycModule()
+def fake_hrpyc() -> Iterator[FakeHrpycModule]:
+    hrpyc = FakeHrpycModule()
+    yield hrpyc
+    # A test that fails before its own stop() must not leave a socket bound
+    # and an accept loop running into the tests after it.
+    for server in hrpyc.servers:
+        server.close()
 
 
 @pytest.fixture

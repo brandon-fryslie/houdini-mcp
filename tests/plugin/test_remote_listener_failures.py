@@ -20,7 +20,7 @@ from houdini_mcp_plugin.listener import (
 )
 from rpyc.utils.authenticators import AuthenticationError
 
-from tests.plugin.conftest import started
+from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer, started
 
 # ---------------------------------------------------------------------------
 # Bind failures
@@ -62,8 +62,6 @@ class TestBindFailure:
         the second phase is reported like any bind error and leaves nothing
         behind, so the next start on the same port succeeds.
         """
-        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
-
         closed: list[FakeThreadedServer] = []
 
         class ListenFails(FakeThreadedServer):
@@ -94,8 +92,6 @@ class TestBindFailure:
         """rpyc's close() closes the listening socket and every client socket
         unguarded; the error is stop()'s result, and the listener no longer holds
         the server, so start() is not answered already_running."""
-        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
-
         class CloseFails(FakeThreadedServer):
             # stop()'s close, from the test's thread, fails as a client socket
             # reset would; the accept loop's own close() on exit is left to work,
@@ -432,7 +428,7 @@ class TestReconnect:
         fake_hrpyc.servers[0].close()
         assert listener.self_test()["stale"] is True
 
-        # A reload should recover cleanly on a fresh port.
+        # A reload recovers cleanly.
         started(listener.reload(ListenerConfig(host="127.0.0.1", port=0)))
         assert listener.self_test()["reachable"] is True
 

@@ -30,7 +30,7 @@ from houdini_mcp_plugin.listener import (
     resolve_security_policy,
 )
 
-from tests.plugin.conftest import started
+from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer, started
 
 # ---------------------------------------------------------------------------
 # Config + security policy
@@ -173,7 +173,6 @@ class TestStartStop:
         assert listener.is_running() is True
         with socket.create_connection(("127.0.0.1", port), timeout=1):
             pass
-        listener.stop()
 
     def test_start_is_idempotent(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
@@ -207,12 +206,13 @@ class TestStartStop:
         result = listener.stop()
         assert result["status"] == "not_running"
 
-    def test_reload_stops_then_starts_on_new_port(self, fake_hrpyc, fake_hou):
+    def test_reload_stops_then_starts_with_the_new_config(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        first = started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))["bound_port"]
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
 
-        result = started(listener.reload(ListenerConfig(host="127.0.0.1", port=0)))
-        assert result["bound_port"] == fake_hrpyc.servers[1].port != first
+        result = started(listener.reload(ListenerConfig(host="127.0.0.1", port=0, reuse_addr=False)))
+        assert fake_hrpyc.servers[1].reuse_addr is False
+        assert result["bound_port"] == fake_hrpyc.servers[1].port
         assert listener.is_running() is True
         # First server closed, second server open.
         assert fake_hrpyc.servers[0].active is False
@@ -240,8 +240,6 @@ class TestStartAwaitsReadiness:
         bet on timing.
         """
         import threading
-
-        from tests.plugin.conftest import FakeHrpycModule, FakeThreadedServer
 
         never = threading.Event()
 
@@ -272,8 +270,6 @@ class TestStartAwaitsReadiness:
         die with EBADF; the thread body serves only while active, so a server
         closed first is finished before the loop begins.
         """
-        from tests.plugin.conftest import FakeThreadedServer
-
         class CountingServer(FakeThreadedServer):
             accepts = 0
 
