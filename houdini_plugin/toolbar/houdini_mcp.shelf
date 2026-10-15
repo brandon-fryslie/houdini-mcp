@@ -70,14 +70,18 @@ import hou
 try:
     from houdini_mcp_plugin import is_server_running
     from houdini_mcp.connection import get_connection_info
+    from houdini_mcp.server import HOUDINI_HOST, HOUDINI_PORT
     
     if is_server_running():
-        info = get_connection_info()
+        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
         
         status_text = "MCP Server Status: RUNNING (ends when the client closes stdin)\n\n"
-        status_text += f"Houdini: {info.get('target', 'unknown')}\n"
-        status_text += f"Houdini Version: {info.get('houdini_version', 'unknown')}\n"
-        status_text += f"Hip File: {info.get('hip_file', 'unknown')}\n"
+        status_text += f"Houdini: {info['target']}\n"
+        if info["connected"]:
+            status_text += f"Houdini Version: {info['houdini_version']}\n"
+            status_text += f"Hip File: {info['hip_file']}\n"
+        else:
+            status_text += "Link: closed (the next tool call reopens it)\n"
     else:
         status_text = "MCP Server Status: STOPPED\n\n"
         status_text += "Click 'Start MCP' to start the server."

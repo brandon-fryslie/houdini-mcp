@@ -33,10 +33,15 @@ class AlreadyServing(RuntimeError):
 
 def _prepare_stdio_server() -> Callable[[], None]:
     """Bind the shared server to this interpreter's Houdini; return what runs it."""
-    from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
-    from houdini_mcp.server import serve
+    from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
+    from houdini_mcp.server import HOUDINI_HOST, HOUDINI_PORT, serve
 
     use_houdini(IN_PROCESS_HOUDINI)
+    # [LAW:no-ambient-temporal-coupling] binding opens the link, so the Houdini being
+    # served is known from Start - to MCP Status as to the first tool - and a missing
+    # ``hou`` fails Start instead of a client's first call.
+    # [LAW:one-source-of-truth] opened to the host:port the served tools name.
+    connect(HOUDINI_HOST, HOUDINI_PORT)
     return lambda: serve(transport="stdio")
 
 
@@ -61,6 +66,7 @@ class StdioServer:
 
         Raises:
             AlreadyServing: a server is serving; nothing is started.
+            HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
             Exception: binding to this Houdini failed, or (blocking only) the
                 transport failed; the caller is the one that reports it.
         """
@@ -120,6 +126,7 @@ def start_server(use_thread: bool = True) -> None:
 
     Raises:
         AlreadyServing: a server is already serving this process's stdin.
+        HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
         Exception: binding the shared server to this Houdini failed, or a
             blocking serve failed. Nothing is left running; the caller (shelf
             or ``hython -c``) shows the cause.

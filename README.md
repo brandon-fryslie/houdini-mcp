@@ -94,7 +94,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
 **Usage:**
 - Click "Start MCP" on the shelf to start the server
 - Configure your MCP client (Claude Desktop, Cursor, etc.) to use stdio transport
-- The server ends when the MCP client closes its stdin; "MCP Status" shows whether it is serving
+- The server ends when the MCP client closes its stdin; "MCP Status" shows whether it is serving, and the Houdini version and hip file it serves
 
 **MCP Client Configuration (stdio mode):**
 ```json
