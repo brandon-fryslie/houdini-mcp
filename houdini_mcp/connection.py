@@ -237,7 +237,6 @@ class Link:
     def close(self) -> None:
         try:
             self.conn.close()
-            logger.info(f"Disconnected from Houdini at {self.name}")
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
@@ -431,17 +430,21 @@ class HoudiniConnection:
             link = _open_link_with_retries(
                 self._target, host, port, max_retries, retry_delay, sync_timeout, jitter
             )
-            previous, self._link = self._link, link
-        if previous is not None:
-            previous.close()
+            # [LAW:no-ambient-temporal-coupling] The events are the server's link
+            # changing hands, so the owner logs both under its lock: no other replace
+            # or drop can log between them, and ``ping``'s link, never installed, logs neither.
+            self.close()
+            self._link = link
+            logger.info(f"Connected to Houdini at {link.name}")
         return link
 
     def close(self) -> None:
         """Drop the installed link, closing it."""
         with self._lock:
             link, self._link = self._link, None
-        if link is not None:
-            link.close()
+            if link is not None:
+                link.close()
+                logger.info(f"Disconnected from Houdini at {link.name}")
 
     def info(self, host: str, port: int) -> dict[str, Any]:
         """Connection state for diagnostics: the Houdini reached when connected, else
