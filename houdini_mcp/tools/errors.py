@@ -14,7 +14,7 @@ from ._common import (
     handle_connection_errors,
     node_at,
 )
-from .summarization import should_summarize, summarize_errors
+from .summarization import summarize_errors, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
@@ -60,9 +60,7 @@ async def find_error_nodes(
         find_error_nodes(summarize=True)  # Get AI triage of errors
     """
     result = _scan_error_nodes(root_path, include_warnings, max_results, host, port)
-    if summarize or should_summarize(result):
-        result = await summarize_errors(result)
-    return apply_response_cap(result)
+    return apply_response_cap(await summarized(result, summarize_errors, asked=summarize))
 
 
 def _scan_error_nodes(

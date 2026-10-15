@@ -135,7 +135,6 @@ def get_node_info(
     # appended to any record, so no level silently drops it.
     if cook_info != "none":
         info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
-    info = _add_response_metadata(info)
 
     logger.debug(
         "get_node_info path=%s detail=%s cook_info=%s keys=%s",

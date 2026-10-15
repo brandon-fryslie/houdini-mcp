@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +141,16 @@ def should_summarize(data: Any, force: bool = False) -> bool:
         return False
 
     return estimate_tokens(data) > AUTO_SUMMARIZE_THRESHOLD
+
+
+async def summarized(
+    result: dict[str, Any],
+    summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+    *,
+    asked: bool,
+) -> dict[str, Any]:
+    """The result with its AI summary when the caller asked for one or it is large."""
+    return await summarizer(result) if should_summarize(result, force=asked) else result
 
 
 async def summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:

@@ -692,45 +692,18 @@ class TestProductionPathResponseCap:
 
         assert result_bytes <= DEFAULT_RESPONSE_CAP_BYTES
 
-    def test_get_node_info_respects_cap(self, mock_connection):
-        """A caller-chosen max_params cannot lift the response past the cap."""
-        import json
-
-        from houdini_mcp.tools._common import DEFAULT_RESPONSE_CAP_BYTES
-        from houdini_mcp.tools.nodes import get_node_info
-        from tests.conftest import MockHouNode
-
-        params = {f"parm{i}": "x" * 200 for i in range(300)}
-        mock_connection.add_node(
-            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params=params)
-        )
-
-        result = get_node_info("/obj/geo1", max_params=300, host="localhost", port=18811)
-
-        assert (
-            len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
-            <= DEFAULT_RESPONSE_CAP_BYTES
-        )
-        assert result["_truncated"] is True
-
-    async def test_serialize_scene_respects_cap(self, mock_connection):
-        """A caller-chosen max_depth cannot lift the response past the cap."""
-        import json
-
-        from houdini_mcp.tools._common import DEFAULT_RESPONSE_CAP_BYTES
+    async def test_serialize_scene_returns_its_whole_tree(self, mock_connection):
+        """The response cap cannot trim a tree, so a large scene is served whole, not emptied."""
         from houdini_mcp.tools.scene import serialize_scene
 
         obj = mock_connection.node("/obj")
-        for i in range(500):
+        for i in range(400):
             obj.createNode("geo", f"geo_with_a_long_name_{i}")
 
-        result = await serialize_scene("/obj", max_depth=100, host="localhost", port=18811)
+        result = await serialize_scene("/obj", host="localhost", port=18811)
 
-        assert (
-            len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
-            <= DEFAULT_RESPONSE_CAP_BYTES
-        )
-        assert result["_truncated"] is True
+        assert result["status"] == "success"
+        assert len(result["structure"]["children"]) == 400
 
     async def test_get_geo_summary_respects_cap(self):
         """get_geo_summary final JSON response never exceeds cap.

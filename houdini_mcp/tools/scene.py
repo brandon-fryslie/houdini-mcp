@@ -14,7 +14,6 @@ from typing import Any
 from ._common import (
     Count,
     OperationFailed,
-    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
     node_at,
@@ -22,7 +21,7 @@ from ._common import (
 from .cache import invalidate_all_caches
 from .parms import evaluated
 from .snapshot import scene_snapshot
-from .summarization import should_summarize, summarize_scene
+from .summarization import summarize_scene, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -146,9 +145,7 @@ async def serialize_scene(
         or ai_summary_error saying why no summary could be made.
     """
     result = _scene_tree(root_path, include_params, max_depth, host, port)
-    if summarize or should_summarize(result):
-        result = await summarize_scene(result)
-    return apply_response_cap(result)
+    return await summarized(result, summarize_scene, asked=summarize)
 
 
 def _scene_tree(

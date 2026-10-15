@@ -477,6 +477,14 @@ class TestServedFailures:
         assert failure.exception == "TypeError"
         assert "not JSON-serializable" in failure.message
 
+    async def test_a_large_failure_is_still_one_arm(self, client: Client[Any]) -> None:
+        """A program that fails after printing a lot still comes back as a failure arm."""
+        failure = await self.failure_of(
+            client, "execute_code", {"code": "print('x' * 90000)\nraise ValueError('after')"}
+        )
+        assert failure.kind == "operation_failed"
+        assert "after" in failure.message
+
     async def test_an_unknown_cache_action_is_invalid_input(self, client: Client[Any]) -> None:
         failure = await self.failure_of(client, "manage_cache", {"action": "defrag"})
         assert (failure.kind, failure.retry) == ("invalid_input", "fix_input")

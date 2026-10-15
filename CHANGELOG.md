@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the published schema cannot drift from the function that runs.
   `get_node_info` publishes `max_params` (default 50) and `serialize_scene`
   publishes `max_depth` (default 10), limits that were fixed before; a negative
-  one is refused on the wire, and both results now pass the response cap.
+  one is refused on the wire.
   `list_children` documents `limit` and `cursor`. `find_error_nodes`,
   `get_geo_summary` and `serialize_scene` are coroutines that take `summarize`
   before `host` and `port`, which are keyword-only there; `check_connection`,

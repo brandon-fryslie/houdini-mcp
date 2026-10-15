@@ -15,7 +15,7 @@ from ._common import (
     handle_connection_errors,
     tool_error,
 )
-from .summarization import should_summarize, summarize_geometry
+from .summarization import summarize_geometry, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
@@ -78,9 +78,7 @@ async def get_geo_summary(
     result = _read_geometry(
         node_path, max_sample_points, include_attributes, include_groups, host, port
     )
-    if summarize or should_summarize(result):
-        result = await summarize_geometry(result)
-    return apply_response_cap(result)
+    return apply_response_cap(await summarized(result, summarize_geometry, asked=summarize))
 
 
 def _read_geometry(
