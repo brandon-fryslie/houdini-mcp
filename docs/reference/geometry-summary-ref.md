@@ -98,11 +98,8 @@ for pt in result["sample_points"]:
 
 | State | Meaning |
 |-------|---------|
-| `"cooked"` | Node successfully cooked, data is current |
-| `"dirty"` | Node needs recooking (tool auto-cooks) |
-| `"uncooked"` | Node never cooked (tool auto-cooks) |
-| `"error"` | Cook failed, check node errors |
-| `"unknown"` | Could not determine state |
+| `"cooked"` | Node is cooked (the tool cooks it first if it needs it) |
+| `{"unread": "<why>"}` | The cook failed; check the node's errors |
 
 ## Error Handling
 

@@ -223,6 +223,56 @@ class TestGetNodeInfoWithErrors:
         assert isinstance(result["cook_info"]["errors"], list)
         assert isinstance(result["cook_info"]["warnings"], list)
 
+    def test_errors_houdini_will_not_read_are_unread_not_empty(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1._warnings = ["Low memory"]
+        geo1.errors = MagicMock(side_effect=raised_inside_houdini(RuntimeError("no cook")))  # type: ignore[method-assign]
+        mock_connection.add_node(geo1)
+
+        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
+
+        assert cook_info["errors"]["unread"].startswith("RuntimeError: no cook")
+        assert [w["message"] for w in cook_info["warnings"]] == ["Low memory"]
+        assert cook_info["cook_state"] == "cooked"
+
+    def test_a_cook_state_houdini_will_not_read_is_unread_not_unknown(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1.cookState = MagicMock(side_effect=raised_inside_houdini(RuntimeError("locked")))  # type: ignore[method-assign]
+        mock_connection.add_node(geo1)
+
+        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
+
+        assert cook_info["cook_state"]["unread"].startswith("RuntimeError: locked")
+        assert cook_info["errors"] == []
+
+    def test_a_forced_cook_that_raises_still_reports_the_errors(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1._errors = ["Invalid input"]
+        geo1.cook = MagicMock(side_effect=raised_inside_houdini(RuntimeError("cook failed")))  # type: ignore[method-assign]
+        mock_connection.add_node(geo1)
+
+        cook_info = get_node_info("/obj/geo1", cook_info="force_cook")["cook_info"]
+
+        assert cook_info["last_cook_time"]["unread"].startswith("RuntimeError: cook failed")
+        assert [e["message"] for e in cook_info["errors"]] == ["Invalid input"]
+
+    def test_a_lost_link_while_reading_errors_fails_the_call(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1.errors = MagicMock(side_effect=EOFError("stream has been closed"))  # type: ignore[method-assign]
+        mock_connection.add_node(geo1)
+
+        result = get_node_info("/obj/geo1", cook_info="inspect")
+
+        assert (result["status"], result["kind"]) == ("error", "connection_lost")
+
 
 class TestFindErrorNodes:
     """Tests for find_error_nodes function."""

@@ -36,7 +36,7 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     radx_template.label.return_value = "Radius"
     radx_template.type.return_value = mock_hou.parmTemplateType.Float
     radx_template.numComponents.return_value = 1
-    radx_template.defaultValue.return_value = [1.0]
+    radx_template.defaultValue.return_value = (1.0,)
     radx_template.minValue.return_value = 0.0
     radx_template.maxValue.return_value = None
     sphere_templates.append(radx_template)
@@ -47,7 +47,7 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     type_template.label.return_value = "Primitive Type"
     type_template.type.return_value = mock_hou.parmTemplateType.Menu
     type_template.numComponents.return_value = 1
-    type_template.defaultValue.return_value = [0]
+    type_template.defaultValue.return_value = 0
     type_template.menuLabels.return_value = ["Polygon", "Mesh", "Polygon Mesh", "NURBS"]
     type_template.menuItems.return_value = ["poly", "mesh", "polymesh", "nurbs"]
     sphere_templates.append(type_template)
@@ -58,7 +58,7 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     freq_template.label.return_value = "Frequency"
     freq_template.type.return_value = mock_hou.parmTemplateType.Int
     freq_template.numComponents.return_value = 1
-    freq_template.defaultValue.return_value = [2]
+    freq_template.defaultValue.return_value = (2,)
     freq_template.minValue.return_value = 2
     freq_template.maxValue.return_value = 50
     sphere_templates.append(freq_template)
@@ -69,7 +69,7 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     t_template.label.return_value = "Translate"
     t_template.type.return_value = mock_hou.parmTemplateType.Float
     t_template.numComponents.return_value = 3
-    t_template.defaultValue.return_value = [0.0, 0.0, 0.0]
+    t_template.defaultValue.return_value = (0.0, 0.0, 0.0)
     t_template.minValue.return_value = None
     t_template.maxValue.return_value = None
     sphere_templates.append(t_template)
@@ -186,7 +186,7 @@ def test_get_parameter_schema_specific_parameter(connected_to):
     radx_template.label.return_value = "Radius X"
     radx_template.type.return_value = mock_hou.parmTemplateType.Float
     radx_template.numComponents.return_value = 1
-    radx_template.defaultValue.return_value = [1.0]
+    radx_template.defaultValue.return_value = (1.0,)
     radx_template.minValue.return_value = 0.0
     radx_template.maxValue.return_value = None
 

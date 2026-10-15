@@ -84,15 +84,12 @@ def get_geo_summary(
 - **Test**: `test_get_geo_summary_node_not_found`
 - **Result**: Clear "Node not found" error message
 
-### 6. No Bounding Box
-- **Behavior**: Returns None for bbox fields
-- **Test**: `test_get_geo_summary_no_bounding_box`
-- **Result**: `bounding_box: null`
-
-### 7. Cook Failed
-- **Behavior**: Returns cook_state "error" but still provides geometry data
-- **Test**: `test_get_geo_summary_cook_failed`
-- **Result**: Geometry info returned despite cook failure
+### 6. A Read Houdini Refuses
+- **Behavior**: The cook, the bounding box, an attribute, a group or a sample
+  value Houdini will not read is `{"unread": "<why>"}` in its place; the rest
+  of the summary is still returned
+- **Test**: `TestTheProgramHoudiniRuns` in `tests/test_geometry.py`
+- **Result**: e.g. `cook_state: {"unread": "RuntimeError: cook failed"}`
 
 ## Test Coverage
 

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import MockHouNode
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 class TestGetSceneInfo:
@@ -1254,7 +1254,7 @@ class TestListChildren:
         assert "/obj/geo1/subnet1" in paths
         assert "/obj/geo1/subnet1/sphere1" in paths
 
-    def test_list_children_max_depth(self, mock_connection):
+    def test_list_children_max_depth(self, mock_connection, caplog):
         """Test max_depth limit is respected."""
         from houdini_mcp.tools import list_children
 
@@ -1265,13 +1265,152 @@ class TestListChildren:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[level1])
         mock_connection.add_node(geo1)
 
-        result = list_children(
-            "/obj/geo1", recursive=True, max_depth=1, max_nodes=1000, host="localhost", port=18811
-        )
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
+            result = list_children("/obj/geo1", recursive=True, max_depth=1, max_nodes=1000)
 
         assert result["status"] == "success"
-        # Should only get level1 and level2 (depth 1)
-        assert result["returned"] <= 2
+        assert [c["path"] for c in result["children"]] == ["/obj/geo1/l1", "/obj/geo1/l1/l2"]
+        assert "collected=2 walked=2 unwalked=0 beyond_depth=1" in caplog.text
+        assert (
+            "Depth limited to 1: 1 nodes at that depth have children not listed"
+            in (result["warning"])
+        )
+
+    def test_a_walk_that_reaches_max_depth_with_nothing_below_has_no_warning(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        level1 = MockHouNode(path="/obj/geo1/l1", name="l1", node_type="null")
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[level1])
+        mock_connection.add_node(geo1)
+
+        result = list_children("/obj/geo1", recursive=True, max_depth=0)
+
+        assert result["status"] == "success"
+        assert "warning" not in result
+
+    def test_a_node_whose_children_will_not_list_makes_the_walk_partial(
+        self, mock_connection, caplog
+    ):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked])
+        mock_connection.add_node(geo1)
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
+            result = list_children("/obj/geo1", recursive=True)
+
+        assert result["status"] == "partial"
+        assert "root=/obj/geo1 collected=1 walked=1 unwalked=1 beyond_depth=0" in caplog.text
+        assert [c["path"] for c in result["children"]] == ["/obj/geo1/hda"]
+        [unwalked] = result["unwalked"]
+        assert unwalked["path"] == "/obj/geo1/hda"
+        assert unwalked["unread"].startswith("RuntimeError: locked asset")
+
+    def test_a_node_past_max_depth_that_will_not_list_is_in_the_depth_warning(
+        self, mock_connection
+    ):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, max_depth=0)
+
+        # every node asked for is listed; what is unknown is only whether there is more
+        assert result["status"] == "success"
+        assert result["unwalked"] == []
+        assert result["warning"] == (
+            "Depth limited to 0: 0 nodes at that depth have children not listed; "
+            "1 would not say whether they have any"
+        )
+
+    def test_a_capped_partial_walk_keeps_what_it_could_not_enter(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        many = [
+            MockHouNode(path=f"/obj/geo1/{'n' * 200}{i}", name=f"{'n' * 200}{i}", node_type="null")
+            for i in range(120)
+        ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked, *many])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, limit=500, compact=True)
+
+        assert result["_truncated"] is True
+        assert result["status"] == "partial"
+        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+
+    def test_a_capped_walk_bounds_what_it_could_not_enter_and_still_pages(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        def locked(i: int) -> MockHouNode:
+            name = f"{'h' * 200}{i}"
+            node = MockHouNode(path=f"/obj/geo1/{name}", name=name, node_type="hda")
+            node.children = MagicMock(  # type: ignore[method-assign]
+                side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+            )
+            return node
+
+        mock_connection.add_node(
+            MockHouNode(
+                path="/obj/geo1",
+                name="geo1",
+                node_type="geo",
+                children=[locked(i) for i in range(150)],
+            )
+        )
+
+        result = list_children("/obj/geo1", recursive=True, limit=500, compact=True)
+
+        assert result["status"] == "partial"
+        assert result["unwalked_truncated"] is True
+        assert result["unwalked_original_count"] == 150
+        assert 0 < result["unwalked_preserved_count"] < 150
+        # the page is still a page: what it delivered, and where the next one starts
+        assert result["returned"] == len(result["children"]) > 0
+        assert result["cursor"] == result["returned"]
+
+    def test_a_parent_whose_children_will_not_list_fails_the_call(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        mock_connection.add_node(geo1)
+
+        result = list_children("/obj/geo1")
+
+        assert (result["status"], result["kind"]) == ("error", "operation_failed")
+        assert result["unwalked"][0]["path"] == "/obj/geo1"
+
+    def test_a_compact_flag_houdini_will_not_read_is_unread(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        child = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
+        child.isBypassed = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("gone"))
+        )
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])
+        mock_connection.add_node(geo1)
+
+        [record] = list_children("/obj/geo1", compact=True)["children"]
+
+        assert record["flags"]["unread"].startswith("RuntimeError: gone")
 
     def test_list_children_max_nodes(self, mock_connection):
         """Test max_nodes limit is respected."""

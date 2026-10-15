@@ -16,6 +16,7 @@ from ._common import (
     tool_error,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
+from .reads import read
 
 logger = logging.getLogger("houdini_mcp.tools.parameters")
 
@@ -143,13 +144,9 @@ def get_parameter_schema(
             logger.info(f"Reached max_parms limit of {max_parms}")
             break
 
-        try:
-            param_info = _extract_parameter_info(hou, node, parm_template)
-            if param_info is not None:
-                parameters.append(param_info)
-        except Exception as e:
-            logger.warning(f"Failed to extract info for parameter {parm_template.name()}: {e}")
-            # Continue with next parameter
+        param_info = _extract_parameter_info(hou, node, parm_template)
+        if param_info is not None:
+            parameters.append(param_info)
 
     result = {
         "status": "success",
@@ -166,6 +163,9 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
     """
     Extract parameter information from a parameter template.
 
+    [LAW:no-silent-failure] A part of the template Houdini will not give reads
+    as ``Unread``; nothing is filled in with a guess.
+
     Args:
         hou: The hou module
         node: The node containing the parameter
@@ -174,123 +174,74 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
     Returns:
         Dict with parameter info, or None if parameter should be skipped
     """
-    # Get parameter template type enum
     parm_type = parm_template.type()
 
     # Skip folder/separator parameters - they're not settable
-    # Check against hou.parmTemplateType enum
-    try:
-        if parm_type in (
-            hou.parmTemplateType.Folder,
-            hou.parmTemplateType.FolderSet,
-            hou.parmTemplateType.Separator,
-            hou.parmTemplateType.Label,
-        ):
-            return None
-    except Exception:
-        # If we can't check the type, continue anyway
-        pass
+    if parm_type in (
+        hou.parmTemplateType.Folder,
+        hou.parmTemplateType.FolderSet,
+        hou.parmTemplateType.Separator,
+        hou.parmTemplateType.Label,
+    ):
+        return None
 
     param_name = parm_template.name()
-    param_label = parm_template.label()
-
-    # Initialize param info dict
-    param_info: dict[str, Any] = {"name": param_name, "label": param_label}
-
-    # Determine if this is a tuple/vector parameter
-    num_components = 1
-    try:
-        num_components = parm_template.numComponents()
-        # Ensure it's an integer, not a mock
-        num_components = int(num_components)
-    except Exception:
-        num_components = 1
-
+    num_components = parm_template.numComponents()
     is_tuple = num_components > 1
-
-    param_info["current_value"] = read_present(hou, node, [param_name]).get(param_name)
-
-    # Map Houdini parameter type to friendly string
     type_str = _map_parm_type_to_string(hou, parm_type, is_tuple)
-    param_info["type"] = type_str
 
+    param_info: dict[str, Any] = {
+        "name": param_name,
+        "label": parm_template.label(),
+        "current_value": read_present(hou, node, [param_name]).get(param_name),
+        "type": type_str,
+        # Most parameters are animatable except menus, toggles, buttons
+        "is_animatable": type_str not in ("menu", "toggle", "button", "string"),
+    }
     if is_tuple:
         param_info["tuple_size"] = num_components
 
-    # Get default value(s)
-    try:
-        if is_tuple:
-            defaults = []
-            for i in range(num_components):
-                try:
-                    default_val = parm_template.defaultValue()[i]
-                    defaults.append(default_val)
-                except Exception:
-                    try:
-                        default_expr = parm_template.defaultExpression()[i]
-                        defaults.append(default_expr if default_expr else 0.0)
-                    except Exception:
-                        defaults.append(0.0)
-            param_info["default"] = defaults
-        else:
-            try:
-                param_info["default"] = parm_template.defaultValue()[0]
-            except Exception:
-                try:
-                    default_expr = parm_template.defaultExpression()[0]
-                    param_info["default"] = default_expr if default_expr else None
-                except Exception:
-                    param_info["default"] = None
-    except Exception as e:
-        logger.debug(f"Could not get default value for {param_name}: {e}")
-        param_info["default"] = None
+    # A button has no default. A ramp's defaultValue() is its count of default
+    # points, not a value it holds, so it has none here either.
+    if hasattr(parm_template, "defaultValue") and type_str != "ramp":
+        param_info["default"] = read(
+            f"default of {param_name}", lambda: _default(parm_template.defaultValue(), is_tuple)
+        )
 
-    # Get min/max for numeric types
     if type_str in ("float", "int", "vector"):
-        try:
-            min_val = parm_template.minValue()
-            max_val = parm_template.maxValue()
-            param_info["min"] = min_val if min_val is not None else None
-            param_info["max"] = max_val if max_val is not None else None
-        except Exception:
-            param_info["min"] = None
-            param_info["max"] = None
+        param_info["min"] = read(f"min of {param_name}", parm_template.minValue)
+        param_info["max"] = read(f"max of {param_name}", parm_template.maxValue)
 
-    # Get menu items for menu parameters
     if type_str == "menu":
-        try:
-            menu_labels = parm_template.menuLabels()
-            menu_items_raw = parm_template.menuItems()
-
-            menu_items = []
-            for idx, label in enumerate(menu_labels):
-                # Menu items can be strings or integers
-                if idx < len(menu_items_raw):
-                    value = menu_items_raw[idx]
-                    # Try to convert to int if it's a numeric string
-                    try:
-                        value = int(value)
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    value = idx
-
-                menu_items.append({"label": label, "value": value})
-
-            param_info["menu_items"] = menu_items
-        except Exception as e:
-            logger.debug(f"Could not get menu items for {param_name}: {e}")
-            param_info["menu_items"] = []
-
-    # Determine if parameter is animatable
-    try:
-        # Most parameters are animatable except menus, toggles, buttons
-        is_animatable = type_str not in ("menu", "toggle", "button", "string")
-        param_info["is_animatable"] = is_animatable
-    except Exception:
-        param_info["is_animatable"] = True  # Default to true
+        param_info["menu_items"] = read(
+            f"menu items of {param_name}", lambda: _menu_items(parm_template)
+        )
 
     return param_info
+
+
+def _default(value: Any, is_tuple: bool) -> Any:
+    # Float, Int and String templates give a tuple of per-component defaults;
+    # Toggle, Menu and Ramp give one value.
+    if not isinstance(value, tuple):
+        return value
+    return list(value) if is_tuple else value[0]
+
+
+def _menu_items(parm_template: Any) -> list[dict[str, Any]]:
+    tokens = parm_template.menuItems()
+    return [
+        {"label": label, "value": _menu_value(tokens[idx]) if idx < len(tokens) else idx}
+        for idx, label in enumerate(parm_template.menuLabels())
+    ]
+
+
+def _menu_value(token: str) -> int | str:
+    # A numeric token is an index; any other is the token itself.
+    try:
+        return int(token)
+    except ValueError:
+        return token
 
 
 def _map_parm_type_to_string(hou: Any, parm_type: Any, is_tuple: bool = False) -> str:
@@ -305,26 +256,21 @@ def _map_parm_type_to_string(hou: Any, parm_type: Any, is_tuple: bool = False) -
     Returns:
         String representation of the parameter type
     """
-    try:
-        # Access the enum values
-        if parm_type == hou.parmTemplateType.Float:
-            return "vector" if is_tuple else "float"
-        elif parm_type == hou.parmTemplateType.Int:
-            return "vector" if is_tuple else "int"
-        elif parm_type == hou.parmTemplateType.String:
-            return "string"
-        elif parm_type == hou.parmTemplateType.Toggle:
-            return "toggle"
-        elif parm_type == hou.parmTemplateType.Menu:
-            return "menu"
-        elif parm_type == hou.parmTemplateType.Button:
-            return "button"
-        elif parm_type == hou.parmTemplateType.Ramp:
-            return "ramp"
-        elif parm_type == hou.parmTemplateType.Data:
-            return "data"
-        else:
-            return "unknown"
-    except Exception:
-        # Fallback if we can't access the enum
+    if parm_type == hou.parmTemplateType.Float:
+        return "vector" if is_tuple else "float"
+    elif parm_type == hou.parmTemplateType.Int:
+        return "vector" if is_tuple else "int"
+    elif parm_type == hou.parmTemplateType.String:
+        return "string"
+    elif parm_type == hou.parmTemplateType.Toggle:
+        return "toggle"
+    elif parm_type == hou.parmTemplateType.Menu:
+        return "menu"
+    elif parm_type == hou.parmTemplateType.Button:
+        return "button"
+    elif parm_type == hou.parmTemplateType.Ramp:
+        return "ramp"
+    elif parm_type == hou.parmTemplateType.Data:
+        return "data"
+    else:
         return "unknown"

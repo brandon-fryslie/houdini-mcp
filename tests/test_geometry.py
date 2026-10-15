@@ -4,7 +4,12 @@ The get_geo_summary function now executes geometry analysis code on the Houdini 
 via the trusted-grant execution door and parses JSON from stdout. These tests mock that door directly.
 """
 
+import io
 import json
+import logging
+from contextlib import redirect_stdout
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -519,50 +524,6 @@ class TestGetGeoSummary:
         assert "front" in result["groups"]["primitive"]
         assert "back" in result["groups"]["primitive"]
 
-    async def test_get_geo_summary_no_bounding_box(self, mock_execute_code):
-        """Test geometry with no bounding box."""
-        from houdini_mcp.tools import get_geo_summary
-
-        geo_data = self._make_geo_response(
-            node_path="/obj/geo1/grid1",
-            point_count=1,
-            include_bbox=False,
-        )
-        geo_data["bounding_box"] = None
-
-        mock_execute_code.return_value = {
-            "status": "success",
-            "stdout": json.dumps(geo_data),
-            "stderr": "",
-        }
-
-        result = await get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
-
-        assert result["status"] == "success"
-        assert result["bounding_box"] is None
-
-    async def test_get_geo_summary_cook_failed(self, mock_execute_code):
-        """Test geometry summary when cook fails."""
-        from houdini_mcp.tools import get_geo_summary
-
-        geo_data = self._make_geo_response(
-            node_path="/obj/geo1/bad1",
-            cook_state="error",
-            point_count=1,
-        )
-        mock_execute_code.return_value = {
-            "status": "success",
-            "stdout": json.dumps(geo_data),
-            "stderr": "",
-        }
-
-        result = await get_geo_summary("/obj/geo1/bad1", host="localhost", port=18811)
-
-        # Should still return geometry info despite cook error
-        assert result["status"] == "success"
-        assert result["cook_state"] == "error"
-        assert result["point_count"] == 1
-
     async def test_get_geo_summary_vertex_count_calculation(self, mock_execute_code):
         """Test vertex count calculation with varying primitive types."""
         from houdini_mcp.tools import get_geo_summary
@@ -630,3 +591,148 @@ class TestGetGeoSummary:
 
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]
+
+
+class _Raises:
+    """A hou call that raises inside Houdini."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(self.message)
+
+
+class _Attrib:
+    def __init__(self, name: str, data_type: Any = None) -> None:
+        self._name = name
+        self.dataType = data_type or (lambda: SimpleNamespace(name=lambda: "Float"))
+
+    def name(self) -> str:
+        return self._name
+
+    def size(self) -> int:
+        return 3
+
+
+class _SopNode(SimpleNamespace):
+    """A stand-in hou.SopNode."""
+
+
+class TestTheProgramHoudiniRuns:
+    """[LAW:behavior-not-structure] The program get_geo_summary sends into Houdini,
+    run against a stand-in hou: what Houdini will not read is Unread in place."""
+
+    async def _run(self, node: Any, **kwargs: Any) -> dict[str, Any]:
+        from houdini_mcp.tools import get_geo_summary
+
+        hou = SimpleNamespace(
+            node=lambda _path: node,
+            SopNode=_SopNode,
+            Vector2=tuple,
+            Vector3=tuple,
+            Vector4=tuple,
+        )
+
+        def execute(code: str, *args: Any, **kw: Any) -> dict[str, Any]:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                exec(code, {"hou": hou})
+            return {"status": "success", "stdout": out.getvalue(), "stderr": ""}
+
+        with patch("houdini_mcp.tools.code._execute_with_grant", side_effect=execute):
+            return await get_geo_summary("/obj/geo1/box1", **kwargs)
+
+    def _geo(self, **overrides: Any) -> SimpleNamespace:
+        point = SimpleNamespace(attribValue=lambda _name: (0.0, 1.0, 2.0))
+        geo = SimpleNamespace(
+            intrinsicValue=lambda _name: 1,
+            boundingBox=lambda: SimpleNamespace(
+                minvec=lambda: (0, 0, 0),
+                maxvec=lambda: (1, 1, 1),
+                sizevec=lambda: (1, 1, 1),
+                center=lambda: (0.5, 0.5, 0.5),
+            ),
+            pointAttribs=lambda: [_Attrib("P")],
+            primAttribs=lambda: [],
+            vertexAttribs=lambda: [],
+            globalAttribs=lambda: [],
+            pointGroups=lambda: [SimpleNamespace(name=lambda: "top")],
+            primGroups=lambda: [],
+            point=lambda _i: point,
+        )
+        for key, value in overrides.items():
+            setattr(geo, key, value)
+        return geo
+
+    def _node(self, geo: Any, **overrides: Any) -> "_SopNode":
+        node = _SopNode(needsToCook=lambda: False, cook=lambda **_kw: None, geometry=lambda: geo)
+        for key, value in overrides.items():
+            setattr(node, key, value)
+        return node
+
+    async def test_a_readable_geometry_reads_whole(self):
+        result = await self._run(self._node(self._geo()), max_sample_points=1)
+
+        assert result["cook_state"] == "cooked"
+        assert result["bounding_box"]["center"] == [0.5, 0.5, 0.5]
+        assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
+        assert result["groups"]["point"] == ["top"]
+        assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
+
+    async def test_a_cook_that_raises_is_unread_not_a_state(self):
+        node = self._node(self._geo(), needsToCook=lambda: True, cook=_Raises("cook failed"))
+
+        result = await self._run(node)
+
+        assert result["cook_state"] == {"unread": "RuntimeError: cook failed"}
+        assert result["point_count"] == 1
+
+    async def test_a_bounding_box_houdini_will_not_give_is_unread_not_null(self):
+        result = await self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))))
+
+        assert result["bounding_box"] == {"unread": "RuntimeError: no bounds"}
+
+    async def test_an_attribute_or_group_houdini_will_not_read_stays_in_its_list(self):
+        geo = self._geo(
+            pointAttribs=lambda: [_Attrib("P"), _Attrib("Cd", data_type=_Raises("no type"))],
+            pointGroups=lambda: [SimpleNamespace(name=_Raises("no name"))],
+        )
+
+        result = await self._run(self._node(geo), max_sample_points=0)
+
+        assert result["attributes"]["point"] == [
+            {"name": "P", "type": "float", "size": 3},
+            {"name": "Cd", "type": {"unread": "RuntimeError: no type"}, "size": 3},
+        ]
+        assert result["groups"]["point"] == [{"unread": "RuntimeError: no name"}]
+
+    async def test_a_sample_value_houdini_will_not_read_is_unread_not_missing(self):
+        geo = self._geo(point=lambda _i: SimpleNamespace(attribValue=_Raises("no value")))
+
+        result = await self._run(self._node(geo), max_sample_points=1)
+
+        assert result["sample_points"] == [{"index": 0, "P": {"unread": "RuntimeError: no value"}}]
+
+    async def test_each_field_the_program_could_not_read_is_logged(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            await self._run(
+                self._node(self._geo(boundingBox=_Raises("no bounds"))), max_sample_points=0
+            )
+
+        assert "unread bounding_box of /obj/geo1/box1 reason=RuntimeError: no bounds" in caplog.text
+
+    async def test_the_program_spells_a_reason_as_the_server_does(self):
+        from houdini_mcp.tools.reads import format_reason
+
+        class OperationFailed(Exception):
+            __module__ = "hou"
+            __qualname__ = "OperationFailed"
+
+        def no_bounds() -> None:
+            raise OperationFailed("no bounds")
+
+        result = await self._run(self._node(self._geo(boundingBox=no_bounds)), max_sample_points=0)
+
+        assert result["bounding_box"] == {"unread": format_reason(OperationFailed("no bounds"))}
+        assert result["bounding_box"] == {"unread": "hou.OperationFailed: no bounds"}

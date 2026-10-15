@@ -71,6 +71,44 @@ def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouMod
     assert [pane["type"] for pane in result["panes"]] == ["NetworkEditor"]
 
 
+def test_a_current_desktop_houdini_will_not_name_is_unread(
+    mock_connection: MockHouModule,
+) -> None:
+    mock_connection.ui.curDesktop().paneTabs().append(
+        MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
+    )
+    with patch.object(mock_connection.ui, "curDesktop", side_effect=RuntimeError("no ui")):
+        result = list_visible_panes()
+
+    assert result["current_desktop"] == {"unread": "RuntimeError: no ui"}
+    [pane] = result["panes"]
+    # whether the pane is on it, and so whether it is capturable, is unknown too
+    assert pane["is_current_desktop"] == pane["capturable"] == {"unread": "RuntimeError: no ui"}
+    assert result["capturable_count"] == {"unread": "RuntimeError: no ui"}
+
+
+def test_a_pane_houdini_will_not_measure_stays_listed_with_its_geometry_unread(
+    mock_connection: MockHouModule,
+) -> None:
+    unmeasured = MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
+    hidden = MockPaneTab("panetab2", MockPaneTabType.Parm, -1, -1)
+    mock_connection.ui.curDesktop().paneTabs().extend([unmeasured, hidden])
+
+    with patch.object(unmeasured, "qtScreenGeometry", side_effect=RuntimeError("no qt")):
+        result = list_visible_panes()
+
+    no_qt = {"unread": "RuntimeError: no qt"}
+    assert [
+        (p["name"], p["is_visible"], p["geometry"], p["capturable"]) for p in result["panes"]
+    ] == [
+        ("panetab1", no_qt, no_qt, no_qt),
+        # a pane known not to be visible is known not to be capturable
+        ("panetab2", False, None, False),
+    ]
+    assert result["total_count"] == 2
+    assert result["capturable_count"] == no_qt
+
+
 @pytest.mark.parametrize("name", ["ChannelEditor", "thisown"])
 def test_unknown_pane_type_is_refused_with_the_live_enum(
     mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture, name: str

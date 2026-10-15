@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from houdini_mcp.tools.parms import (
-    UNEVALUABLE,
     ParmNotFound,
     ParmValueError,
     evaluated,
@@ -77,21 +76,36 @@ class TestReadPresent:
             "t": [1.0, 2.0, 3.0],
         }
 
-    def test_a_present_parm_that_cannot_evaluate_is_marked(self, caplog):
+    def test_a_present_parm_that_cannot_evaluate_reads_as_unread(self, caplog):
         node = node_with(radx=2.5)
         node.parm("radx").eval = MagicMock(side_effect=RuntimeError("no cook"))
-        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.parms"):
-            assert read_present(MagicMock(), node, ["radx"]) == {"radx": UNEVALUABLE}
-        assert "parameter unevaluable name=radx reason=no cook" in caplog.text
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            assert read_present(MagicMock(), node, ["radx"]) == {
+                "radx": {"unread": "RuntimeError: no cook"}
+            }
+        assert "unread parameter radx reason=RuntimeError: no cook" in caplog.text
 
 
 class TestEvaluated:
-    def test_every_parm_with_its_json_value_or_the_marker(self):
+    def test_every_parm_with_its_json_value_or_unread(self):
         node = node_with(radx=2.5, file="/a.bgeo")
         node.parm("file").eval = MagicMock(side_effect=RuntimeError("no cook"))
-        assert dict(evaluated(MagicMock(), node.parms())) == {"radx": 2.5, "file": UNEVALUABLE}
+        assert dict(evaluated(MagicMock(), node.parms())) == {
+            "radx": 2.5,
+            "file": {"unread": "RuntimeError: no cook"},
+        }
 
-    def test_connection_loss_is_not_an_unevaluable_parm(self, mock_connection):
+    def test_a_value_with_no_json_form_reads_as_unread(self, mock_connection):
+        class Unprintable:
+            def __str__(self) -> str:
+                raise ValueError("no form")
+
+        node = node_with(radx=Unprintable())
+        assert dict(evaluated(mock_connection, node.parms())) == {
+            "radx": {"unread": "ValueError: no form"}
+        }
+
+    def test_connection_loss_is_not_an_unread_parm(self, mock_connection):
         node = node_with(radx=2.5)
         node.parm("radx").eval = MagicMock(side_effect=EOFError("stream has been closed"))
         with pytest.raises(EOFError):
@@ -285,9 +299,10 @@ class TestJsonSafeHouValue:
         shared = [1, 2]
         assert json_safe_hou_value(MagicMock(), [shared, shared]) == [[1, 2], [1, 2]]
 
-    def test_a_container_that_contains_itself_is(self):
+    def test_a_container_that_contains_itself_raises(self):
         from houdini_mcp.tools.parms import json_safe_hou_value
 
         loop: list = [1]
         loop.append(loop)
-        assert json_safe_hou_value(MagicMock(), loop) == [1, "<recursion>"]
+        with pytest.raises(RecursionError):
+            json_safe_hou_value(MagicMock(), loop)

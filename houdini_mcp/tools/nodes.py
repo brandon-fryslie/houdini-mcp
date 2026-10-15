@@ -11,7 +11,9 @@ This module provides tools for managing Houdini nodes:
 
 import fnmatch
 import logging
+import time
 from collections.abc import Iterator
+from functools import partial
 from typing import Any, Literal, get_args
 
 from ._common import (
@@ -27,7 +29,9 @@ from ._common import (
 )
 from .cache import node_type_cache
 from .connections import input_connections, input_paths
+from .failure import Undone, batch_status
 from .parms import evaluated
+from .reads import UNREAD, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -197,87 +201,42 @@ def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
 
 
 def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
-    """Cook state, errors and warnings; cooks the node first when ``force``."""
-    try:
-        if force:
-            node.cook(force=True)
+    """Cook state, errors and warnings; cooks the node first when ``force``.
 
-        # Determine cook state using available methods
-        # Houdini 20.5+ doesn't have cookState(), use needsToCook() instead
-        try:
-            if hasattr(node, "cookState"):
-                cook_state_obj = node.cookState()
-                cook_state_name = (
-                    cook_state_obj.name()
-                    if hasattr(cook_state_obj, "name")
-                    else str(cook_state_obj)
-                )
-                cook_state_map = {
-                    "Cooked": "cooked",
-                    "CookFailed": "error",
-                    "Dirty": "dirty",
-                    "Uncooked": "uncooked",
-                }
-                cook_state = cook_state_map.get(cook_state_name, cook_state_name.lower())
-            elif hasattr(node, "needsToCook"):
-                # Fallback for Houdini versions without cookState()
-                needs_cook = node.needsToCook()
-                cook_state = "dirty" if needs_cook else "cooked"
-            else:
-                cook_state = "unknown"
-        except Exception:
-            cook_state = "unknown"
+    [LAW:no-silent-failure] Each part Houdini will not give reads as ``Unread``,
+    so a node whose errors could not be read never looks like one with none.
+    """
+    cook_info: dict[str, Any] = {}
+    path = node.path()
+    # Houdini has no direct lastCookTime; after a forced cook, now is it.
+    if force:
+        cook_info["last_cook_time"] = read(f"forced cook of {path}", lambda: _cook(node))
+    cook_info["cook_state"] = read(f"cook state of {path}", lambda: _cook_state(node))
+    cook_info["errors"] = read(f"errors of {path}", lambda: _messages("error", path, node.errors()))
+    cook_info["warnings"] = read(
+        f"warnings of {path}", lambda: _messages("warning", path, node.warnings())
+    )
+    return cook_info
 
-        # Get errors and warnings
-        errors_list: list[dict[str, str]] = []
-        warnings_list: list[dict[str, str]] = []
 
-        # Get errors
-        try:
-            node_errors = node.errors()
-            for error_msg in node_errors:
-                errors_list.append(
-                    {"severity": "error", "message": error_msg, "node_path": node.path()}
-                )
-        except Exception:
-            pass
+_COOK_STATES = {"Cooked": "cooked", "CookFailed": "error", "Dirty": "dirty", "Uncooked": "uncooked"}
 
-        # Get warnings
-        try:
-            node_warnings = node.warnings()
-            for warning_msg in node_warnings:
-                warnings_list.append(
-                    {
-                        "severity": "warning",
-                        "message": warning_msg,
-                        "node_path": node.path(),
-                    }
-                )
-        except Exception:
-            pass
 
-        cook_info: dict[str, Any] = {
-            "cook_state": cook_state,
-            "errors": errors_list,
-            "warnings": warnings_list,
-        }
+def _cook(node: Any) -> float:
+    node.cook(force=True)
+    return time.time()
 
-        # Houdini has no direct lastCookTime; after a forced cook, now is it.
-        if force:
-            import time
 
-            cook_info["last_cook_time"] = time.time()
+def _cook_state(node: Any) -> str:
+    # Houdini 20.5+ doesn't have cookState(), use needsToCook() instead
+    if hasattr(node, "cookState"):
+        name = node.cookState().name()
+        return _COOK_STATES.get(name, name.lower())
+    return "dirty" if node.needsToCook() else "cooked"
 
-        return cook_info
 
-    except Exception as e:
-        # If we can't get cook info, add error but don't fail the whole request
-        logger.warning(f"Error getting cook info: {e}")
-        return {
-            "cook_state": "unknown",
-            "errors": [{"severity": "error", "message": f"Failed to get cook info: {str(e)}"}],
-            "warnings": [],
-        }
+def _messages(severity: str, path: str, messages: Any) -> list[dict[str, str]]:
+    return [{"severity": severity, "message": m, "node_path": path} for m in messages]
 
 
 @handle_connection_errors("delete_node")
@@ -411,6 +370,9 @@ def list_children(
         - type: Node type
         - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
         - outputs: Array of output node paths (omitted if compact=True)
+        Also unwalked: nodes whose children Houdini would not list, as
+        {path, unread}; any makes status "partial". A walk stopped by max_depth
+        above nodes that have children, or that would not say, says so in warning.
 
     Example:
         list_children("/obj/geo1", recursive=True, max_depth=3)
@@ -423,58 +385,62 @@ def list_children(
 
     children_list: list[dict[str, Any]] = []
     nodes_collected = 0
+    walked = 0
+    # [LAW:no-silent-failure] what the walk could not enter, and what it did
+    # not enter because of max_depth, are both in the response
+    unwalked: list[dict[str, Any]] = []
+    beyond_depth = 0
+    beyond_depth_unknown = 0
 
-    def compact_flag(node: Any, method: str) -> str:
-        getter = getattr(node, method, None)
-        if not callable(getter):
-            return "-"
-        try:
-            return "1" if bool(getter()) else "0"
-        except Exception:
-            return "-"
+    def compact_flags(node: Any) -> str:
+        # Three-character bitset: display/render/bypassed. `-` means the node
+        # class does not expose that flag API.
+        getters = (
+            getattr(node, m, None) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
+        )
+        return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
-    def collect_children(node: Any, depth: int = 0) -> None:
-        nonlocal nodes_collected
-
-        if depth > max_depth:
-            logger.warning(f"Max depth {max_depth} reached at {node.path()}")
-            return
+    def collect_children(node: Any, path: str, depth: int = 0) -> None:
+        nonlocal nodes_collected, walked, beyond_depth, beyond_depth_unknown
 
         if nodes_collected >= max_nodes:
-            logger.warning(f"Max nodes {max_nodes} limit reached")
             return
 
         # A locked HDA refuses to list its children; that is the one failure this
-        # walk tolerates. Anything a child's own record raises reaches the tool's
-        # error boundary, so a wire whose output cannot be read is reported, not
-        # dropped with its siblings. [LAW:no-silent-failure]
-        try:
-            children = node.children()
-        except Exception as e:
-            logger.warning(f"Could not access children of {node.path()}: {e}")
+        # walk tolerates, and the node is listed as unwalked. Anything a child's
+        # own record raises reaches the tool's error boundary, so a wire whose
+        # output cannot be read is reported, not dropped with its siblings.
+        # hou is untyped: a node's children are Any, so is_unread is the discriminator
+        children: Any = read(f"children of {path}", node.children)
+        if depth > max_depth:
+            # past the requested depth the walk only asks whether there is more;
+            # a node that will not say is outside the walk, so it is in the
+            # depth warning, not in unwalked
+            beyond_depth_unknown += is_unread(children)
+            beyond_depth += not is_unread(children) and len(children) > 0
             return
+        if is_unread(children):
+            unwalked.append({"path": path, **children})
+            return
+        walked += 1
 
         for child in children:
             if nodes_collected >= max_nodes:
                 break
 
+            child_path = child.path()
             # Compact mode: only path, name, type
             if compact:
                 child_info: dict[str, Any] = {
-                    "path": child.path(),
+                    "path": child_path,
                     "name": child.name(),
                     "type": child.type().name(),
-                    # Three-character bitset: display/render/bypassed. `-`
-                    # means the node class does not expose that flag API.
-                    "flags": "".join(
-                        compact_flag(child, method)
-                        for method in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
-                    ),
+                    "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
                 }
             else:
                 # Full mode: input wires with their source output, and output nodes
                 child_info = {
-                    "path": child.path(),
+                    "path": child_path,
                     "name": child.name(),
                     "type": child.type().name(),
                     "inputs": [conn.as_record() for conn in input_connections(child)],
@@ -486,18 +452,41 @@ def list_children(
 
             # Recurse if requested
             if recursive:
-                collect_children(child, depth + 1)
+                collect_children(child, child_path, depth + 1)
 
-    collect_children(parent)
+    collect_children(parent, parent.path())
+    logger.info(
+        "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
+        "beyond_depth_unknown=%d",
+        node_path,
+        nodes_collected,
+        walked,
+        len(unwalked),
+        beyond_depth,
+        beyond_depth_unknown,
+    )
 
     page = paginate(children_list, request)
-    result: dict[str, Any] = {
-        "status": "success",
+    report: dict[str, Any] = {
         "node_path": node_path,
         "children": page.items,
+        "unwalked": unwalked,
         **paging_fields(page),
     }
+    failed = [Undone(u["path"], "operation_failed", u[UNREAD]) for u in unwalked]
+    result = {"status": batch_status("list_children", range(walked), failed, **report), **report}
 
+    if beyond_depth or beyond_depth_unknown:
+        unknown = (
+            f"; {beyond_depth_unknown} would not say whether they have any"
+            if beyond_depth_unknown
+            else ""
+        )
+        result["warning"] = join_warnings(
+            result.get("warning"),
+            f"Depth limited to {max_depth}: {beyond_depth} nodes at that depth have "
+            f"children not listed{unknown}",
+        )
     if nodes_collected >= max_nodes:
         # [LAW:no-silent-failure] A capped walk and a further page are two facts;
         # neither may overwrite the other.

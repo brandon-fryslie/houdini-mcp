@@ -4,6 +4,7 @@ This module provides tools for inspecting geometry data in Houdini,
 including point/primitive counts, attributes, groups, and sampling.
 """
 
+import inspect
 import json
 import logging
 from typing import Any
@@ -15,9 +16,14 @@ from ._common import (
     handle_connection_errors,
     tool_error,
 )
+from .reads import UNREAD, format_reason, log_unread, unreads
 from .summarization import summarize_geometry, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
+
+# [LAW:one-source-of-truth] the program run inside Houdini spells a reason
+# with reads.format_reason itself, so one failure reads the same from any tool
+_FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
 
 
 @handle_connection_errors("get_geo_summary")
@@ -51,7 +57,7 @@ async def get_geo_summary(
         Dict with comprehensive geometry summary including:
         - point_count, primitive_count, vertex_count: Geometry topology stats
         - bounding_box: {min, max, size, center} vectors in world space
-        - cook_state: Current cook state ("cooked", "dirty", "uncooked", "error")
+        - cook_state: "cooked" (the node is cooked first if it needs it)
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
@@ -63,6 +69,9 @@ async def get_geo_summary(
         - Empty geometry: Returns zeros for counts, not an error
         - Massive geometry (>1M points): Automatically caps sampling with warning
         - No geometry/Not a SOP: Returns error status
+        - Anything Houdini will not read (the cook, the bounding box, an
+          attribute's name/type/size, a group, a sample value) is
+          {"unread": "<why>"} in its place
 
     Examples:
         # Basic geometry summary with 50 sample points
@@ -104,6 +113,7 @@ def _read_geometry(
     # This avoids slow RPC iteration over geometry elements
     geo_analysis_code = f"""
 import json
+import traceback
 
 node_path = {repr(node_path)}
 max_sample_points = {max_sample_points}
@@ -112,22 +122,58 @@ include_groups = {include_groups}
 
 result = {{"status": "success", "node_path": node_path}}
 
+
+{_FORMAT_REASON_SOURCE}
+
+def _read(fetch):
+    # [LAW:single-enforcer] the program's spelling of reads.read: what Houdini
+    # will not give stands as Unread, never as a value it might have been
+    try:
+        return fetch()
+    except Exception as e:
+        return {{{UNREAD!r}: format_reason(e)}}
+
+
+def _cook():
+    if node.needsToCook():
+        node.cook(force=True)
+    return "cooked"
+
+
+def _attrib(attrib):
+    # each part is its own read, so an attribute whose type will not read still
+    # says which attribute it is
+    return {{"name": _read(attrib.name), "type": _read(lambda: _type_name(attrib)), "size": _read(attrib.size)}}
+
+
+def _type_name(attrib):
+    dt = attrib.dataType()
+    return (dt.name() if hasattr(dt, "name") else str(dt)).lower()
+
+
+def _bounding_box(geo):
+    bbox = geo.boundingBox()
+    return {{
+        "min": list(bbox.minvec()),
+        "max": list(bbox.maxvec()),
+        "size": list(bbox.sizevec()),
+        "center": list(bbox.center()),
+    }}
+
+
+def _point_value(pt, aname):
+    val = pt.attribValue(aname)
+    if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
+        return list(val)
+    return val
+
+
 # Get node
 node = hou.node(node_path)
 if node is None:
     result = {{"status": "error", "kind": "invalid_input", "message": f"Node not found: {{node_path}}"}}
 else:
-    # Check cook state
-    cook_state = "unknown"
-    try:
-        if hasattr(node, "needsToCook"):
-            if node.needsToCook():
-                cook_state = "dirty"
-                node.cook(force=True)
-            cook_state = "cooked"
-    except:
-        pass
-    result["cook_state"] = cook_state
+    result["cook_state"] = _read(_cook)
 
     # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
     # that raises or yields nothing is Houdini's. The program says which.
@@ -138,7 +184,7 @@ else:
         try:
             geo = node.geometry()
         except Exception as e:
-            failure = ("operation_failed", f"{{type(e).__name__}}: {{e}}")
+            failure = ("operation_failed", format_reason(e))
         else:
             failure = None if geo is not None else ("operation_failed", "geometry() returned None")
     if failure is not None:
@@ -150,70 +196,24 @@ else:
         result["primitive_count"] = geo.intrinsicValue("primitivecount")
         result["vertex_count"] = geo.intrinsicValue("vertexcount")
 
-        # Bounding box
-        try:
-            bbox = geo.boundingBox()
-            result["bounding_box"] = {{
-                "min": list(bbox.minvec()),
-                "max": list(bbox.maxvec()),
-                "size": list(bbox.sizevec()),
-                "center": list(bbox.center()),
-            }}
-        except:
-            result["bounding_box"] = None
+        result["bounding_box"] = _read(lambda: _bounding_box(geo))
 
-        # Attributes
         if include_attributes:
-            attributes = {{"point": [], "primitive": [], "vertex": [], "detail": []}}
+            result["attributes"] = {{
+                kind: [_attrib(a) for a in attribs]
+                for kind, attribs in (
+                    ("point", geo.pointAttribs()),
+                    ("primitive", geo.primAttribs()),
+                    ("vertex", geo.vertexAttribs()),
+                    ("detail", geo.globalAttribs()),
+                )
+            }}
 
-            for attrib in geo.pointAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["point"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.primAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["primitive"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.vertexAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["vertex"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.globalAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["detail"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            result["attributes"] = attributes
-
-        # Groups
         if include_groups:
-            groups = {{"point": [], "primitive": []}}
-            for g in geo.pointGroups():
-                try:
-                    groups["point"].append(g.name())
-                except:
-                    pass
-            for g in geo.primGroups():
-                try:
-                    groups["primitive"].append(g.name())
-                except:
-                    pass
-            result["groups"] = groups
+            result["groups"] = {{
+                "point": [_read(g.name) for g in geo.pointGroups()],
+                "primitive": [_read(g.name) for g in geo.primGroups()],
+            }}
 
         # Sample points - use numpy-style array access if possible
         point_count = result["point_count"]
@@ -234,15 +234,7 @@ else:
                     continue
                 point_data = {{"index": i}}
                 for aname in point_attrib_names:
-                    try:
-                        val = pt.attribValue(aname)
-                        if val is not None:
-                            if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
-                                point_data[aname] = list(val)
-                            else:
-                                point_data[aname] = val
-                    except:
-                        pass
+                    point_data[aname] = _read(lambda: _point_value(pt, aname))
                 sample_points.append(point_data)
 
             result["sample_points"] = sample_points
@@ -277,4 +269,8 @@ print(json.dumps(result))
     # crosses back into the one failure type here.
     if result["status"] == "error":
         raise tool_error(result["kind"], result["message"], path=node_path)
+    # the program cannot reach this log; each field it could not read is an
+    # event here, as it would be had the server read it
+    for where, found in unreads(result):
+        log_unread(f"{where} of {node_path}", found)
     return _add_response_metadata(result, apply_cap=False)

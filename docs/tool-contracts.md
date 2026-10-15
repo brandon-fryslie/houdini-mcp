@@ -165,6 +165,15 @@ render_quad_view(resolution=[1024, 1024], renderer="karma")
 render_quad_view(renderer="karma", karma_engine="gpu")
 ```
 
+## Values Houdini Would Not Read
+
+Any response field Houdini refused to supply holds `{"unread": "<ExcType>: <message>"}`
+where its value would be: a parameter value, a cook state, a node's errors, a
+default, a bounding box, an attribute in its list. It is never `[]`, `0`, `null`,
+`"unknown"` or a placeholder string, so an empty error list means the node has
+no errors. A walk that could not enter part of the tree (`list_children`) lists
+those nodes in `unwalked` as `{path, unread}` and is `"partial"`.
+
 ## Schema Validation
 
 Every tool publishes a JSON schema for its arguments, and the server validates each call against it. An unexpected argument name or a wrong type is refused at the MCP boundary, before any RPC call to Houdini.

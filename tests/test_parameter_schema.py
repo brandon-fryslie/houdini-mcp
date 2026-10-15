@@ -45,10 +45,14 @@ class MockParmTemplate:
     def numComponents(self) -> int:
         return self._num_components
 
-    def defaultValue(self) -> list[Any]:
-        if isinstance(self._default_value, list):
+    def defaultValue(self) -> Any:
+        # As in Houdini: Float, Int and String templates give a tuple of
+        # per-component defaults; Toggle and Menu give one value.
+        if self._type not in ("Float", "Int", "String"):
             return self._default_value
-        return [self._default_value]
+        if isinstance(self._default_value, list):
+            return tuple(self._default_value)
+        return (self._default_value,)
 
     def defaultExpression(self) -> list[str]:
         return [""] * self._num_components
@@ -207,7 +211,7 @@ class TestGetParameterSchema:
             label="Primitive Type",
             parm_type=mock_hou.parmTemplateType.Menu,
             num_components=1,
-            default_value=[0],
+            default_value=0,
             menu_items=["poly", "mesh", "polymesh"],
             menu_labels=["Polygon", "Mesh", "Polygon Mesh"],
         )
@@ -519,3 +523,79 @@ class TestGetParameterSchema:
         assert param["type"] == "string"
         assert param["is_animatable"] is False
         assert param["current_value"] == "/path/to/geo.bgeo"
+
+
+class TestSchemaReadsOnlyWhatHoudiniGives:
+    """[LAW:no-silent-failure] A part Houdini will not give is Unread, never a guess."""
+
+    def _schema_of(self, connected_to, template: MockParmTemplate, value: Any) -> dict[str, Any]:
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = MockHouNode(path="/obj/n", name="n", node_type="null", params={"p": value})
+        mock_hou.add_node(node)
+        node.parm("p").parmTemplate = MagicMock(return_value=template)
+        connected_to(mock_hou)
+        [param] = get_parameter_schema("/obj/n", "p")["parameters"]
+        return param
+
+    def test_a_menu_reports_its_real_default(self, connected_to):
+        # Houdini gives a Menu's default as one int, not a tuple to index.
+        menu = MockParmTemplate("p", "P", "Menu", default_value=2, menu_labels=["a", "b", "c"])
+        assert self._schema_of(connected_to, menu, 2)["default"] == 2
+
+    def test_a_toggle_reports_its_real_default(self, connected_to):
+        toggle = MockParmTemplate("p", "P", "Toggle", default_value=True)
+        assert self._schema_of(connected_to, toggle, 1)["default"] is True
+
+    def test_a_ramp_has_no_default_value(self, connected_to):
+        # Houdini gives a ramp template's defaultValue() as its count of points
+        ramp = MockParmTemplate("p", "P", "Ramp", default_value=2)
+        assert "default" not in self._schema_of(connected_to, ramp, None)
+
+    def test_a_default_houdini_will_not_give_is_unread(self, connected_to):
+        template = MockParmTemplate("p", "P", "Float", num_components=3)
+        template.defaultValue = MagicMock(side_effect=RuntimeError("no default"))  # type: ignore[method-assign]
+        param = self._schema_of(connected_to, template, 1.0)
+        assert param["default"] == {"unread": "RuntimeError: no default"}
+
+    def test_a_range_houdini_will_not_give_is_unread(self, connected_to):
+        template = MockParmTemplate("p", "P", "Float", min_val=0.0, max_val=1.0)
+        template.minValue = MagicMock(side_effect=RuntimeError("no range"))  # type: ignore[method-assign]
+        param = self._schema_of(connected_to, template, 0.5)
+        assert (param["min"], param["max"]) == ({"unread": "RuntimeError: no range"}, 1.0)
+
+    def test_menu_items_houdini_will_not_give_are_unread_not_empty(self, connected_to):
+        menu = MockParmTemplate("p", "P", "Menu", default_value=0)
+        menu.menuLabels = MagicMock(side_effect=RuntimeError("no menu"))  # type: ignore[method-assign]
+        param = self._schema_of(connected_to, menu, 0)
+        assert param["menu_items"] == {"unread": "RuntimeError: no menu"}
+
+
+class TestFlattenParmTemplates:
+    def test_every_nested_template_is_reached_folder_first(self):
+        from houdini_mcp.tools._common import _flatten_parm_templates
+
+        mock_hou = create_mock_hou_with_parm_types()
+        leaf = MockParmTemplate("bind#", "Bind", "String")
+        multiparm = MockParmTemplate("bindings", "Bindings", "Folder")
+        multiparm.parmTemplates = MagicMock(return_value=[leaf])  # type: ignore[attr-defined]
+        tabs = MockParmTemplate("folder0", "Code", "Folder")
+        tabs.parmTemplates = MagicMock(return_value=[multiparm])  # type: ignore[attr-defined]
+        top = MockParmTemplate("top", "Top", "Float")
+
+        flat = _flatten_parm_templates(mock_hou, [tabs, top])
+
+        assert [t.name() for t in flat] == ["folder0", "bindings", "bind#", "top"]
+
+    def test_a_folder_set_is_listed_and_not_descended(self):
+        from houdini_mcp.tools._common import _flatten_parm_templates
+
+        mock_hou = create_mock_hou_with_parm_types()
+        # hou.FolderSetParmTemplate holds folder names only: it has no parmTemplates()
+        folder_set = MockParmTemplate("fs", "Tabs", "FolderSet")
+        top = MockParmTemplate("top", "Top", "Float")
+
+        flat = _flatten_parm_templates(mock_hou, [folder_set, top])
+
+        assert [t.name() for t in flat] == ["fs", "top"]
