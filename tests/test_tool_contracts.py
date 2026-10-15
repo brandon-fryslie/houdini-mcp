@@ -395,6 +395,24 @@ class TestServedFailures:
         assert failure.exception == "TypeError"
         assert "not JSON-serializable" in failure.message
 
+    async def test_an_unknown_cache_action_is_invalid_input(self, client: Client[Any]) -> None:
+        failure = await self.failure_of(client, "manage_cache", {"action": "defrag"})
+        assert (failure.kind, failure.retry) == ("invalid_input", "fix_input")
+        assert failure.operation == "manage_cache"
+        assert failure.action == "defrag"
+
+    async def test_a_warmup_that_cannot_reach_houdini_is_connection_unavailable(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import houdini_mcp.server as server
+
+        def refuse(*_a: Any, **_k: Any) -> None:
+            raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
+
+        monkeypatch.setattr(server, "ensure_connected", refuse)
+        failure = await self.failure_of(client, "manage_cache", {"action": "warmup"})
+        assert (failure.kind, failure.target) == ("connection_unavailable", "farm:1")
+
     async def test_the_probes_report_success_as_success(self, client: Client[Any]) -> None:
         for probe in ("check_connection", "ping_houdini"):
             result = await client.call_tool(probe, {})

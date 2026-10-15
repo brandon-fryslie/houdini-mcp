@@ -248,7 +248,16 @@ def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
 
 
 def failure_for(e: Exception, operation: str) -> _Failure:
-    """The one arm an exception raised during ``operation`` becomes.
+    """The one arm an exception raised during ``operation`` becomes, its message
+    ending with the notes added on the way out (a temporary node that would not
+    go), each on its own line, as Python prints them."""
+    arm = _classify(e, operation)
+    told = "\n".join([arm.message, *getattr(e, "__notes__", ())])
+    return arm.model_copy(update={"message": told})
+
+
+def _classify(e: Exception, operation: str) -> _Failure:
+    """The arm an exception raised during ``operation`` is.
 
     [LAW:single-enforcer] Connection loss is whatever ``transport_failure`` says
     it is, and it is the only failure that tears the connection down. A tool body

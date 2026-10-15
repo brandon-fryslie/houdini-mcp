@@ -12,6 +12,7 @@ from . import tools
 from .connection import describe_target, ensure_connected, ensure_link, ping
 from .tools._common import Resolution, Vec3, apply_response_cap, handle_connection_errors
 from .tools.code import Policy
+from .tools.failure import InvalidInput
 from .tools.nodes import CookInfo, Detail
 
 logger = logging.getLogger("houdini_mcp.server")
@@ -556,18 +557,22 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
-        - views: List of view results, each containing:
-            - name: View name (front, left, top, perspective)
-            - rotation: [rx, ry, rz] camera rotation used
+        - status: "success" when at least one view rendered
+        - views: List of view results, each with name (front, left, top,
+          perspective) and rotation ([rx, ry, rz] camera rotation used), and
+          either a picture:
+            - status: "success"
             - image_base64: Base64-encoded image data
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
+          or the failure arm for that view
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
-        - message: Why no view rendered, when the status is "error"
         - total_render_time_ms: Total time for all renders
+        When no view rendered, the call is an operation_failed failure whose
+        message names each view's cause, carrying the same views, renderer,
+        bounding_box and total_render_time_ms.
 
     Examples:
         render_quad_view()  # All 4 views with orthographic projection
@@ -1252,6 +1257,7 @@ def create_network_box(
 
 
 @mcp.tool()
+@handle_connection_errors("manage_cache")
 def manage_cache(action: str = "stats") -> dict[str, Any]:
     """
     Manage the Houdini MCP cache system.
@@ -1297,31 +1303,21 @@ def manage_cache(action: str = "stats") -> dict[str, Any]:
 
     elif action == "warmup":
         start = time.time()
-        try:
-            hou = ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
-            # Populate node type cache
-            tools.node_type_cache.get_all_types(hou)
-            elapsed_ms = (time.time() - start) * 1000
-            return {
-                "status": "success",
-                "action": "warmup",
-                "message": "Caches warmed up successfully",
-                "warmup_time_ms": round(elapsed_ms, 1),
-                "caches": tools.get_cache_stats(),
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "action": "warmup",
-                "message": f"Failed to warm up caches: {str(e)}",
-            }
+        hou = ensure_connected(HOUDINI_HOST, HOUDINI_PORT)
+        tools.node_type_cache.get_all_types(hou)
+        elapsed_ms = (time.time() - start) * 1000
+        return {
+            "status": "success",
+            "action": "warmup",
+            "message": "Caches warmed up successfully",
+            "warmup_time_ms": round(elapsed_ms, 1),
+            "caches": tools.get_cache_stats(),
+        }
 
     else:
-        return {
-            "status": "error",
-            "action": action,
-            "message": f"Unknown action: {action}. Valid actions: stats, invalidate, warmup",
-        }
+        raise InvalidInput(
+            f"Unknown action: {action}. Valid actions: stats, invalidate, warmup", action=action
+        )
 
 
 @mcp.tool()
@@ -1412,7 +1408,7 @@ def capture_multiple_panes(
 
     Returns:
         Dict with:
-        - status: "success" if any captures succeeded
+        - status: "success", whether none, some or all of the captures worked
         - success_count: Number of successful captures
         - total_requested: Number of pane types requested
         - results: Per-pane results with image_base64 or file_path

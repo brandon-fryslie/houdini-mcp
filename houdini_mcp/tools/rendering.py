@@ -420,11 +420,19 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
     remote_os.close(fd)
     try:
         rop.parm("picture").set(output_path)
-        rop.render()
-        with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
-            image = f.read()
+        try:
+            rop.render()
+            with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
+                image = f.read()
+        except Exception as e:
+            # [LAW:no-silent-failure] a dead link stays itself, so cleanup knows
+            # to send nothing more; anything else is Houdini's machine not
+            # producing the picture
+            if transport_failure(e):
+                raise
+            raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
         if not image:
-            raise RuntimeError("Render completed but produced no image")
+            raise OperationFailed("Render completed but produced no image")
         return base64.b64encode(image).decode("utf-8")
     finally:
         try:
@@ -564,18 +572,22 @@ def render_quad_view(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
-        - views: List of view results, each containing:
-            - name: View name (front, left, top, perspective)
-            - rotation: [rx, ry, rz] camera rotation used
+        - status: "success" when at least one view rendered
+        - views: List of view results, each with name (front, left, top,
+          perspective) and rotation ([rx, ry, rz] camera rotation used), and
+          either a picture:
+            - status: "success"
             - image_base64: Base64-encoded image data
             - format: Image format used
             - resolution: [width, height]
             - orthographic: Whether orthographic projection was used
+          or the failure arm for that view
         - bounding_box: The world-space box that was framed, when geometry was
         - renderer: Render engine used
-        - message: Why no view rendered, when the status is "error"
         - total_render_time_ms: Total time for all renders
+        When no view rendered, the call is an operation_failed failure whose
+        message names each view's cause, carrying the same views, renderer,
+        bounding_box and total_render_time_ms.
 
     Examples:
         render_quad_view()  # All 4 views with orthographic projection
@@ -604,15 +616,16 @@ def render_quad_view(
             try:
                 _aim(rig, rotation, offset, is_ortho, framing)
                 image = _render_picture(rop, prepared, output_format)
-            except Exception as e:
-                # [LAW:no-silent-failure] a dead link is not a view's failure
-                if transport_failure(e):
-                    raise
-                logger.error("Quad view %s failed: %r", name, e)
-                view["error"] = str(e)
+            except OperationFailed as e:
+                # A view owns only Houdini's failure to produce its picture, which
+                # _render_picture names; a dead link or a bug is the call's.
+                failure = e.failure("render_quad_view")
+                logger.warning("Quad view %s not rendered: %s", name, failure.message)
+                view = {**failure.model_dump(), **view}
             else:
                 logger.info("Rendered quad view %s", name)
                 view.update(
+                    status="success",
                     image_base64=image,
                     format=output_format,
                     resolution=[prepared.width, prepared.height],
@@ -620,20 +633,22 @@ def render_quad_view(
                 )
             view_results.append(view)
 
-    rendered = [view for view in view_results if "image_base64" in view]
-    result: dict[str, Any] = {
-        "status": "success" if rendered else "error",
+    report: dict[str, Any] = {
         "views": view_results,
         "renderer": renderer,
         "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
     }
-    if not rendered:
-        result["message"] = "No view rendered: " + "; ".join(
-            f"{view['name']}: {view['error']}" for view in view_results
-        )
     if (box := framing.report()) is not None:
-        result["bounding_box"] = box
-    return result
+        report["bounding_box"] = box
+    # A call that produced no picture did not do what was asked: it is raised to
+    # the one boundary that shapes failures, carrying the same report.
+    if all(view["status"] == "error" for view in view_results):
+        raise OperationFailed(
+            "No view rendered: "
+            + "; ".join(f"{view['name']}: {view['message']}" for view in view_results),
+            **report,
+        )
+    return {"status": "success", **report}
 
 
 # =============================================================================
