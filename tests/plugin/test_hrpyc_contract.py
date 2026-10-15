@@ -8,7 +8,6 @@ runs the listener against it with no Houdini.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import socket
 import threading
@@ -50,6 +49,20 @@ def real_hrpyc() -> SimpleNamespace:
     )
 
 
+def build(hrpyc, port: int) -> HrpycServer:
+    """A server built with exactly the keywords the listener passes."""
+    return hrpyc.ThreadedServer(
+        hrpyc.SlaveService,
+        hostname="127.0.0.1",
+        ipv6=False,
+        port=port,
+        reuse_addr=True,
+        auto_register=False,
+        authenticator=None,
+        logger=logging.getLogger("test_hrpyc_contract"),
+    )
+
+
 class TestContract:
     """``isinstance`` against a runtime Protocol proves the members exist; the
     constructor call below, with exactly the keywords the listener passes, proves
@@ -58,16 +71,7 @@ class TestContract:
     @pytest.mark.parametrize("hrpyc", [FakeHrpycModule(), real_hrpyc()], ids=["fake", "rpyc"])
     def test_module_and_server_satisfy_the_contract(self, hrpyc):
         assert isinstance(hrpyc, HrpycModule)
-        server = hrpyc.ThreadedServer(
-            hrpyc.SlaveService,
-            hostname="127.0.0.1",
-            ipv6=False,
-            port=0,
-            reuse_addr=True,
-            auto_register=False,
-            authenticator=None,
-            logger=logging.getLogger("test_hrpyc_contract"),
-        )
+        server = build(hrpyc, 0)
         try:
             assert isinstance(server, HrpycServer)
             server._listen()
@@ -85,34 +89,37 @@ class TestContract:
     def test_close_releases_the_port_while_accept_is_in_flight(self, hrpyc):
         """``close()`` releases the socket: once it returns, the port binds
         again, even with the serve thread still waiting in ``accept()``. That
-        is what lets ``start()`` take back the port of a server that died."""
-
-        def build(port: int) -> HrpycServer:
-            return hrpyc.ThreadedServer(
-                hrpyc.SlaveService,
-                hostname="127.0.0.1",
-                ipv6=False,
-                port=port,
-                reuse_addr=True,
-                auto_register=False,
-                authenticator=None,
-                logger=logging.getLogger("test_hrpyc_contract"),
-            )
-
-        def serve(server: HrpycServer) -> None:
-            with contextlib.suppress(EOFError):
-                while server.active:
-                    server.accept()
-
-        server = build(0)
+        is what lets ``start()`` rebind the port ``stop()`` just closed while
+        ``_serve`` was blocked in ``accept()``."""
+        server = build(hrpyc, 0)
         server._listen()
-        serving = threading.Thread(target=serve, args=(server,))
+        looping = threading.Event()
+        raised: list[BaseException] = []
+
+        def serve() -> None:
+            # [LAW:no-ambient-temporal-coupling] ``looping`` is set just before
+            # each accept(), so close() lands with accept() in flight, not before
+            # the loop starts. Only EOFError is the contract's; anything else is
+            # kept for the assertion below instead of reaching threading.excepthook.
+            try:
+                while server.active:
+                    looping.set()
+                    server.accept()
+            except EOFError:
+                pass
+            except BaseException as exc:  # noqa: BLE001 - asserted on below
+                raised.append(exc)
+
+        serving = threading.Thread(target=serve, daemon=True)
         serving.start()
         try:
+            assert looping.wait(timeout=5)
             server.close()
-            build(server.port).close()
+            build(hrpyc, server.port).close()
         finally:
-            serving.join()
+            serving.join(timeout=5)
+        assert not serving.is_alive(), "close() did not wake the accept() in flight"
+        assert raised == []
 
 
 class TestListenerAgainstRealRpyc:

@@ -127,8 +127,12 @@ class FakeThreadedServer:
         # be bound again yet; shutdown() releases it and wakes that accept().
         # The socket stays referenced: the woken accept() raises OSError on it,
         # which accept() reports as EOFError, with no attribute to race on.
+        if self._sock.fileno() == -1:
+            return  # as rpyc: closing a closed server is a no-op
         self.active = False
-        with contextlib.suppress(OSError):  # as rpyc: a never-listened socket refuses it
+        # As rpyc, a refusal is ignored: macOS refuses shutdown() on any socket
+        # with no peer, listening or not (ENOTCONN), and close() still frees it.
+        with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
 
