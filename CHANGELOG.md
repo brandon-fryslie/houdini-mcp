@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A render's resolution has one default and no null spelling**
+- **BREAKING (wire)**: a render's resolution has one default and no null spelling
   (houdini-laws-etg.o4l): `render_viewport` and `render_quad_view` publish
   `[512, 512]` as the `resolution` default in their schemas, and an omitted
   `resolution` renders at it. `"resolution": null` is now refused on the wire

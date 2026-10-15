@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, TypeVar, cast
 
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 from ..connection import (
     HoudiniConnectionError,
@@ -92,7 +92,7 @@ __all__ = [
     "ExecutionTimeoutError",
     # Logging
     "logger",
-    # Served vector types
+    # Served vector types, and the resolution default
     "Resolution",
     "DEFAULT_RESOLUTION",
     "Vec3",
@@ -219,7 +219,8 @@ Dimension = Annotated[int, Field(ge=64, le=4096)]
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
-DEFAULT_RESOLUTION: Resolution = (512, 512)
+# [LAW:parse-dont-validate] parsed, since a default is served unchecked: out of bounds fails import.
+DEFAULT_RESOLUTION: Resolution = TypeAdapter(Resolution).validate_python((512, 512))
 Vec3 = tuple[float, float, float]
 
 
