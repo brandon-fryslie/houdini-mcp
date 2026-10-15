@@ -185,11 +185,13 @@ def fake_hou() -> FakeHouModule:
     return FakeHouModule()
 
 
-@pytest.fixture
-def free_port() -> int:
-    """Return an OS-assigned free port (closed immediately, race-tolerant)."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+def started(result: dict[str, Any]) -> dict[str, Any]:
+    """A start's result, which must be a success; a failed start fails the test with its own report.
+
+    [LAW:no-silent-failure] a test that goes on to read the server a start was
+    meant to create would otherwise fail on the missing server, not the cause.
+    Tests start on port 0 and read the port back from ``bound_port``: the kernel
+    picks a free one at bind time, so no other process can take it in between.
+    """
+    assert result["status"] == "success", result
+    return result

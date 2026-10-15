@@ -21,6 +21,7 @@ from houdini_mcp_plugin.listener import ListenerConfig, RemoteListener
 from rpyc.utils.server import ThreadedServer
 
 from houdini_mcp import connection
+from tests.plugin.conftest import started
 
 TOKEN = "hunter2"
 
@@ -211,11 +212,9 @@ class TestTokenFromEnv:
 
 
 class TestListenerDerivesFromSharedHandshake:
-    def test_wired_authenticator_admits_the_shared_client_side(
-        self, fake_hrpyc, fake_hou, free_port, caplog
-    ):
+    def test_wired_authenticator_admits_the_shared_client_side(self, fake_hrpyc, fake_hou, caplog):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token=TOKEN))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token=TOKEN)))
         authenticate = fake_hrpyc.servers[0].authenticator
         sent, expected = handshake.exchange(TOKEN)
 
@@ -231,11 +230,11 @@ class TestListenerDerivesFromSharedHandshake:
             "accepted hrpyc token from",
         )
 
-    def test_wrong_token_is_logged_as_rejected(self, fake_hrpyc, fake_hou, free_port, caplog):
+    def test_wrong_token_is_logged_as_rejected(self, fake_hrpyc, fake_hou, caplog):
         from rpyc.utils.authenticators import AuthenticationError
 
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token=TOKEN))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token=TOKEN)))
         authenticate = fake_hrpyc.servers[0].authenticator
 
         client, server_side = socket.socketpair()
@@ -248,13 +247,11 @@ class TestListenerDerivesFromSharedHandshake:
         ]
         assert "invalid hrpyc token" in caplog.records[0].getMessage()
 
-    def test_client_leaving_before_the_ack_fails_authentication(
-        self, fake_hrpyc, fake_hou, free_port, caplog
-    ):
+    def test_client_leaving_before_the_ack_fails_authentication(self, fake_hrpyc, fake_hou, caplog):
         from rpyc.utils.authenticators import AuthenticationError
 
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="0.0.0.0", port=free_port, token=TOKEN))
+        started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token=TOKEN)))
         authenticate = fake_hrpyc.servers[0].authenticator
         sent, _ = handshake.exchange(TOKEN)
 
@@ -267,9 +264,9 @@ class TestListenerDerivesFromSharedHandshake:
         assert caplog.records[-1].levelno == logging.INFO
         assert "left before completing" in caplog.records[-1].getMessage()
 
-    def test_fake_server_runs_the_authenticator_on_accept(self, fake_hrpyc, fake_hou, free_port):
+    def test_fake_server_runs_the_authenticator_on_accept(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port, token=TOKEN))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0, token=TOKEN)))
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
@@ -278,11 +275,9 @@ class TestListenerDerivesFromSharedHandshake:
             assert sock.recv(1) == b""  # the fake closes the socket after rejecting
         assert server.rejected == before + 1
 
-    def test_stalled_client_is_rejected_not_held(
-        self, fake_hrpyc, fake_hou, free_port, short_handshake
-    ):
+    def test_stalled_client_is_rejected_not_held(self, fake_hrpyc, fake_hou, short_handshake):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        listener.start(ListenerConfig(host="127.0.0.1", port=free_port, token=TOKEN))
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0, token=TOKEN)))
         server = fake_hrpyc.servers[0]
         before = server.rejected
 
