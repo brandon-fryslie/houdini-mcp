@@ -2839,19 +2839,20 @@ class TestLayoutTools:
         assert result["child_count"] == 0
         assert geo.layout_calls == []
 
-    def test_set_node_color_success(self, mock_connection):
-        """Test successfully setting node color."""
+    def test_set_node_color_success(self, mock_connection, caplog):
+        """Test successfully setting node color, clamped, and the event naming it."""
         from houdini_mcp.tools import set_node_color
 
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo)
 
-        result = set_node_color(
-            node_path="/obj/geo1",
-            color=[1.0, 0.0, 0.0],  # Red
-            host="localhost",
-            port=18811,
-        )
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.layout"):
+            result = set_node_color(
+                node_path="/obj/geo1",
+                color=(1.5, 0.0, 0.0),  # Red, over-bright
+                host="localhost",
+                port=18811,
+            )
 
         assert result["status"] == "success"
         assert result["node_path"] == "/obj/geo1"
@@ -2859,6 +2860,7 @@ class TestLayoutTools:
         # Side effect: the node's stored color changed.
         assert geo.color() is not None
         assert geo.color().rgb() == (1.0, 0.0, 0.0)
+        assert "node color set path=/obj/geo1 color=[1.0, 0.0, 0.0]" in caplog.text
 
     def test_set_node_position_success(self, mock_connection):
         """Test successfully setting node position."""

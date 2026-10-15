@@ -704,7 +704,7 @@ def create_render_node(
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
         - updated: The settings that were applied, as {name, value}
-        - failed: The settings that were not, as {name, reason}
+        - failed: The settings that were not, as {name, kind, reason}
 
     Examples:
         create_render_node("karma", "hero_render", {"engine": "xpu", "samplesperpixel": 64})

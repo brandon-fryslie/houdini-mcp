@@ -501,7 +501,9 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw_bytes)
     except OSError as e:
-        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from e
+        # Not chained: _classify reads a ToolError's cause as the link's failure,
+        # and a disk timeout is not the link's; the message carries the error.
+        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from None
     return {**picture, "file_path": str(path.absolute())}
 
 
@@ -557,8 +559,6 @@ def capture_multiple_panes(
     # captured once, so the slots, the counts and the status all count the same panes.
     requested = list(dict.fromkeys(pane_types))
     results: dict[str, dict[str, Any]] = {}
-    captured: list[str] = []
-    failed: list[Undone] = []
 
     for pane_type_name in requested:
         # A pane's own failure (unknown type, not in the layout, could not be
@@ -574,12 +574,18 @@ def capture_multiple_panes(
                 "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
             )
             results[pane_type_name] = failure.model_dump()
-            failed.append(Undone(pane_type_name, failure.kind, failure.message))
             continue
 
         results[pane_type_name] = result
-        captured.append(pane_type_name)
 
+    # [LAW:one-source-of-truth] the slots are the record; the counts and the
+    # status are read off them.
+    captured = [name for name, slot in results.items() if slot["status"] == "success"]
+    failed = [
+        Undone(name, slot["kind"], slot["message"])
+        for name, slot in results.items()
+        if slot["status"] == "error"
+    ]
     report: dict[str, Any] = {
         "success_count": len(captured),
         "total_requested": len(requested),

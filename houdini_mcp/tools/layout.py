@@ -122,6 +122,7 @@ def set_node_color(
     node = node_at(hou, node_path)
     clamped_color = _clamped(color)
     node.setColor(hou.Color(clamped_color))
+    logger.info("node color set path=%s color=%s", node_path, clamped_color)
 
     return {
         "status": "success",

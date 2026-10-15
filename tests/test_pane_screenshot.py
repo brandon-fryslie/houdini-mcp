@@ -194,6 +194,43 @@ def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     assert slot.message.startswith("Could not save SceneViewer to ")
 
 
+def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
+    mock_connection: MockHouModule, tmp_path: Path
+) -> None:
+    """A save that times out on the disk is that pane's operation_failed: the
+    link to Houdini is not torn down, so the next pane is still captured."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import OperationFailure
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+
+    real_write = Path.write_bytes
+
+    def write_bytes(self: Path, data: bytes) -> int:
+        if self.name == "NetworkEditor.png":
+            raise TimeoutError(60, "Operation timed out")
+        return real_write(self, data)
+
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+        patch("houdini_mcp.tools.failure.disconnect") as disconnect,
+        patch.object(Path, "write_bytes", write_bytes),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
+
+    disconnect.assert_not_called()
+    assert result["status"] == "partial", result
+    slot = FAILURE.validate_python(result["results"]["NetworkEditor"])
+    assert isinstance(slot, OperationFailure), slot
+    assert (tmp_path / "SceneViewer.png").read_bytes() == b"png"
+
+
 def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
     mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
 ) -> None:

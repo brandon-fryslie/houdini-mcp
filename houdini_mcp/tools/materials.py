@@ -59,7 +59,7 @@ def create_material(
         - material_name: Name of the material
         - material_type: Type of material created
         - updated: The parameters that were set, as {name, value}
-        - failed: The parameters that were not, as {name, reason}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         create_material()  # Create default principled shader
