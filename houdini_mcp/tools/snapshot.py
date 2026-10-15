@@ -40,7 +40,7 @@ def scene_snapshot(hou: Any, root_path: str) -> SceneSnapshot:
     # silently skips one it does not; the names say which answer is whose.
     typed = _hscript(hou, "optype -N -t " + " ".join(paths)).splitlines()
     names = [p.rsplit("/", 1)[1] for p in paths]
-    if typed[0::2] != names:
+    if len(typed) != 2 * len(paths) or typed[0::2] != names:
         raise OperationFailed(
             f"Scene changed while it was read under {root_path}: "
             f"listed {len(paths)} nodes, found the type of {len(typed) // 2}"

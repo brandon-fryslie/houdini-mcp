@@ -745,6 +745,13 @@ def _execute_with_grant(
             scene_changes = scene_diff(before, after)
             lists = ("added", "removed", "modified", "added_nodes")
             over = [key for key in lists if len(scene_changes[key]) > max_diff_nodes]
+            logger.debug(
+                "%s scene diff of %s: added=%d removed=%d modified=%d truncated=%s",
+                operation,
+                _DIFF_ROOT,
+                *(len(scene_changes[key]) for key in ("added", "removed", "modified")),
+                over,
+            )
             scene_changes.update({key: scene_changes[key][:max_diff_nodes] for key in lists})
             if over:
                 result["diff_truncated"] = True

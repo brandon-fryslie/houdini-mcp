@@ -334,7 +334,7 @@ def get_last_scene_diff() -> dict[str, Any]:
     Shows the nodes under /obj that were added, removed, or replaced by a node
     of another type ("modified") during the last code execution, at any depth.
     """
-    return apply_response_cap(tools.get_last_scene_diff())
+    return tools.get_last_scene_diff()
 
 
 @mcp.tool()

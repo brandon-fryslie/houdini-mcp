@@ -784,6 +784,7 @@ def apply_response_cap(
         "url",
         "warning",
         "message",
+        "scene_changes_error",
     ]
     for field in essential_fields:
         if field in data:

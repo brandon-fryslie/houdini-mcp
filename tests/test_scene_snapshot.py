@@ -8,6 +8,7 @@ import pytest
 
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
+from houdini_mcp.tools._common import apply_response_cap
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
 from tests.conftest import MockHouModule, MockHouNode
@@ -146,8 +147,9 @@ class TestExecuteCodeDiff:
         assert get_last_scene_diff()["diff"] == result["scene_changes"]
 
     def test_every_list_in_the_diff_is_capped_at_max_diff_nodes(
-        self, mock_connection: MockHouModule
+        self, mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
     ) -> None:
+        caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.code")
         _scene(mock_connection)
         result = execute_code(
             "hou.node('/obj/geo1').destroy()\n"
@@ -166,6 +168,10 @@ class TestExecuteCodeDiff:
         assert result["diff_truncated"] is True
         assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
         assert get_last_scene_diff()["diff"] == changes
+        assert (
+            "execute_code scene diff of /obj: added=3 removed=4 modified=0"
+            " truncated=['added', 'removed', 'added_nodes']"
+        ) in caplog.messages
 
     def test_a_capture_of_an_empty_scene_is_still_the_last_diff(
         self, mock_connection: MockHouModule
@@ -220,6 +226,24 @@ class TestExecuteCodeDiff:
         )
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert mock_connection.node("/obj/never") is None
+
+
+class TestSnapshotFailuresSurviveTheResponseCap:
+    def test_a_diff_failure_outlives_a_large_stdout(self) -> None:
+        failure = {"status": "error", "kind": "operation_failed", "message": "busy"}
+        capped = apply_response_cap(
+            {"status": "success", "stdout": "x" * 30000, "scene_changes_error": failure}
+        )
+        assert capped["_truncated"] is True
+        assert capped["scene_changes_error"] == failure
+
+    def test_a_type_listing_one_line_short_is_a_changed_scene(self) -> None:
+        answers = {**RECORDED}
+        answers["optype -N -t /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid"] = (
+            "geo1\ngeo\nempty\ngeo\nbox1\nbox\nhid\n"
+        )
+        with pytest.raises(OperationFailed, match="Scene changed while it was read"):
+            scene_snapshot(_RecordedHou(answers), "/obj")
 
 
 class TestSerializeScene:

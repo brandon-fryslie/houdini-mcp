@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serialize_scene` builds its tree from the same snapshot. `max_diff_nodes`
   caps each list in the diff (`added`, `removed`, `modified`, `added_nodes`),
   and `get_last_scene_diff` returns that capped diff as the last capture returned
-  it, or no diff when that capture produced none, held to the response size cap.
+  it, or no diff when that capture produced none. `scene_changes_error` survives
+  the response size cap.
 
 - **A failed quad view and a failed cache call are arms of the one result type**
   (houdini-laws-etg.60v): a render whose picture Houdini's machine does not
