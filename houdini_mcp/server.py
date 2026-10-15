@@ -310,7 +310,8 @@ async def serialize_scene(
 
     Returns:
         Dict with scene structure, optionally with ai_summary field containing
-        insights about organization, complexity, and optimization opportunities.
+        insights about organization, complexity, and optimization opportunities,
+        or ai_summary_error saying why no summary could be made.
     """
     result = tools.serialize_scene(root_path, include_params, 10, HOUDINI_HOST, HOUDINI_PORT)
 
@@ -727,6 +728,7 @@ async def find_error_nodes(
         - warning_count: Number of warning nodes found
         - total_scanned: Number of nodes scanned
         - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Examples:
         find_error_nodes()  # Find all errors in scene
@@ -743,8 +745,8 @@ async def find_error_nodes(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if many errors found
-    if summarize or (result.get("error_count", 0) > 5):
+    # Apply AI summarization if requested or if response is very large
+    if summarize or tools.should_summarize(result):
         result = await tools.summarize_errors(result)
 
     return apply_response_cap(result)
@@ -971,6 +973,7 @@ async def get_geo_summary(
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
         - ai_summary: (if summarize=True) AI-generated insights about the geometry
+        - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
@@ -1326,20 +1329,13 @@ def get_summarization_status() -> dict[str, Any]:
     """
     Get AI summarization configuration and status.
 
-    Returns current summarization settings including:
-    - Whether summarization is enabled
-    - Which model is being used
-    - Proxy URL
-    - Token thresholds for automatic summarization
-
-    Use this to verify AI summarization is properly configured
-    before using summarize=True on other tools.
+    Summaries come from an OpenAI-compatible chat-completions server.
 
     Returns:
         Dict with summarization configuration including:
         - enabled: Whether AI summarization is active
-        - model: Claude model used for summarization
-        - proxy_url: URL of the Claude API proxy
+        - model: Model the summaries are requested from
+        - base_url: The chat-completions server (OpenAI API base, ending in /v1)
         - auto_threshold_tokens: Token count that triggers auto-summarization
         - target_summary_tokens: Target size for generated summaries
     """

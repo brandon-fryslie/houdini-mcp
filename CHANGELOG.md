@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **AI summarization runs by default against the local OpenAI-compatible server**
+  (houdini-tuneup-ef3.ktv): summaries are requested over OpenAI chat completions
+  from `http://100.66.66.66:8000/v1` with model
+  `mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit`, in place of the upstream
+  org's Claude proxy at `localhost:8082`, where nothing listened, so
+  summarization ran for the first time in this fork. `CLAUDE_PROXY_URL` is
+  replaced by `SUMMARIZATION_BASE_URL`, and `SUMMARIZATION_API_KEY` is new;
+  `get_summarization_status` returns `base_url` in place of `proxy_url`. A
+  summary that could not be made (a cut-off or empty completion, a server
+  error with the server's own message, an unreachable server) puts its reason
+  in `ai_summary_error` instead of `ai_summary`, and each summary, finished or
+  failed, logs the model, the server and how long it took. An unreachable
+  server gives up after 3s rather than the 60s request budget, and a
+  `SUMMARIZATION_BASE_URL` that is not an http(s) URL with a host, or that
+  carries credentials, stops the server at startup. `find_error_nodes`
+  summarizes on request or past the size threshold, as the other tools do,
+  rather than whenever more than 5 errors are found.
+
 - **Every tool failure is one arm of one result type** (houdini-laws-etg.2m5):
   an error result carries `kind` (`connection_unavailable`, `connection_mismatch`,
   `connection_lost`, `timeout`, `invalid_input`, `operation_failed` or

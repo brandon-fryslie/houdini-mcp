@@ -83,7 +83,7 @@ The Houdini plugin runs the MCP server directly inside Houdini, using stdio tran
    ```bash
    # From the repo root, with Houdini's Python
    hython -m pip install .
-   
+
    # Or from Houdini's Python Shell
    import subprocess, sys
    subprocess.run([sys.executable, "-m", "pip", "install", "/path/to/houdini-mcp"])
@@ -268,7 +268,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `get_houdini_help` | Get help for node types |
 | `summarize_response` | AI-summarize large responses |
 | `estimate_tokens` | Estimate token count |
-| `get_summarization_status` | Get summarization config |
+| `get_summarization_status` | Get summarization config (server, model, thresholds) |
 
 ### Infrastructure (`_common.py`, `cache.py`)
 - **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`
