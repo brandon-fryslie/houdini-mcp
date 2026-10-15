@@ -73,10 +73,12 @@ logger = logging.getLogger("houdini_mcp.tools.code")
 # builtin; patching a module-level name lets us prove blocked code never runs.
 exec = builtins.exec  # noqa: A001 - intentional shadow for testability
 
-# Module-level storage for scene diff tracking
 _DIFF_ROOT = "/obj"
-_before_scene: SceneSnapshot = {}
-_after_scene: SceneSnapshot = {}
+# [LAW:one-source-of-truth] The last capture is one value, written whole by the
+# run that made it, so get_last_scene_diff never pairs halves of two runs.
+_last_scene_changes: dict[str, Any] | None = None
+"""The diff the last ``capture_diff`` run returned, capped as it returned it;
+None when that run produced no diff, or no such run has happened."""
 
 # Policy profiles, from strictest to most permissive.
 Policy = Literal["read-only", "normal"]
@@ -483,7 +485,7 @@ def _execute_with_grant(
     program itself may enter here with :meth:`ExecutionGrant.trusted_heavy_geometry`.
     ``operation`` is the tool the caller invoked, so a refusal names it.
     """
-    global _before_scene, _after_scene
+    global _last_scene_changes
 
     logger.debug(
         "execute_code policy=%s source=%s granted=%s config=%s requested dangerous=%s heavy=%s",
@@ -598,7 +600,8 @@ def _execute_with_grant(
     undos = _resolve_undo_primitive(hou)
 
     if capture_diff:
-        _before_scene = scene_snapshot(hou, _DIFF_ROOT)
+        _last_scene_changes = None
+        before: SceneSnapshot = scene_snapshot(hou, _DIFF_ROOT)
 
     stdout_capture = StringIO()
     stderr_capture = StringIO()
@@ -731,7 +734,7 @@ def _execute_with_grant(
 
     if capture_diff:
         try:
-            _after_scene = scene_snapshot(hou, _DIFF_ROOT)
+            after = scene_snapshot(hou, _DIFF_ROOT)
         except Exception as error:  # noqa: BLE001
             # [LAW:no-silent-failure] The program ran; only its diff is missing,
             # and the result says why instead of reporting the run as failed.
@@ -739,14 +742,14 @@ def _execute_with_grant(
             logger.warning("%s ran but its scene diff failed: %s", operation, failure.message)
             result["scene_changes_error"] = failure.model_dump()
         else:
-            scene_changes = scene_diff(_before_scene, _after_scene)
+            scene_changes = scene_diff(before, after)
             lists = ("added", "removed", "modified", "added_nodes")
             over = [key for key in lists if len(scene_changes[key]) > max_diff_nodes]
             scene_changes.update({key: scene_changes[key][:max_diff_nodes] for key in lists})
             if over:
                 result["diff_truncated"] = True
                 result["diff_warning"] = f"{', '.join(over)} truncated to {max_diff_nodes} nodes"
-            result["scene_changes"] = scene_changes
+            result["scene_changes"] = _last_scene_changes = scene_changes
 
     if detected.dangerous:
         result["dangerous_patterns_executed"] = detected.dangerous
@@ -764,12 +767,13 @@ def get_last_scene_diff() -> dict[str, Any]:
     Returns:
         Dict with scene changes from last code execution.
     """
-    global _before_scene, _after_scene
-
-    if not _before_scene and not _after_scene:
+    if _last_scene_changes is None:
         return {
             "status": "warning",
-            "message": "No scene diff available. Run execute_code with capture_diff=True first.",
+            "message": (
+                "No scene diff available: the last execute_code run with capture_diff=True"
+                " produced none, or none has run."
+            ),
         }
 
-    return {"status": "success", "diff": scene_diff(_before_scene, _after_scene)}
+    return {"status": "success", "diff": _last_scene_changes}

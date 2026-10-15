@@ -165,6 +165,15 @@ class TestExecuteCodeDiff:
         )
         assert result["diff_truncated"] is True
         assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
+        assert get_last_scene_diff()["diff"] == changes
+
+    def test_a_capture_of_an_empty_scene_is_still_the_last_diff(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        assert mock_connection.node("/obj").children() == []
+        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        last = get_last_scene_diff()
+        assert (last["status"], last["diff"]["has_changes"]) == ("success", False)
 
     def test_a_diff_that_could_not_be_read_leaves_the_run_a_success_and_says_why(
         self,
@@ -185,6 +194,19 @@ class TestExecuteCodeDiff:
             r.levelno == logging.WARNING and "ran but its scene diff failed" in r.message
             for r in caplog.records
         )
+
+    def test_a_run_whose_diff_failed_leaves_no_last_diff_from_an_earlier_run(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scene(mock_connection)
+        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        assert get_last_scene_diff()["status"] == "success"
+        snapshot = mock_connection.hscript
+        reads = iter([snapshot, snapshot, lambda _c: ("", "Error:  hscript is busy\n")])
+        monkeypatch.setattr(mock_connection, "hscript", lambda command: next(reads)(command))
+        result = execute_code("print(2)", capture_diff=True, host="localhost", port=18811)
+        assert "scene_changes_error" in result
+        assert get_last_scene_diff()["status"] == "warning"
 
     def test_a_snapshot_that_fails_before_the_run_stops_the_run(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch

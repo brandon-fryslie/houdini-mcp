@@ -1002,34 +1002,17 @@ class TestSerializeScene:
 class TestSceneDiff:
     """Tests for scene diff functionality."""
 
-    def test_get_last_scene_diff_no_diff(self):
+    def test_get_last_scene_diff_no_diff(self, monkeypatch):
         """Test getting scene diff when none available."""
         import houdini_mcp.tools.code as code_module
         from houdini_mcp.tools import get_last_scene_diff
 
-        # Reset scene state (these globals live in code.py, not the re-export namespace)
-        code_module._before_scene = {}
-        code_module._after_scene = {}
+        monkeypatch.setattr(code_module, "_last_scene_changes", None)
 
         result = get_last_scene_diff()
 
         assert result["status"] == "warning"
         assert "No scene diff available" in result["message"]
-
-    def test_get_last_scene_diff_with_changes(self):
-        """Test getting scene diff with actual changes."""
-        import houdini_mcp.tools.code as code_module
-        from houdini_mcp.tools import get_last_scene_diff
-
-        # Simulate before/after state (these globals live in code.py)
-        code_module._before_scene = {"/obj": "obj"}
-        code_module._after_scene = {"/obj": "obj", "/obj/new_node": "geo"}
-
-        result = get_last_scene_diff()
-
-        assert result["status"] == "success"
-        assert result["diff"]["has_changes"] is True
-        assert "/obj/new_node" in result["diff"]["added"]
 
 
 class TestListNodeTypes:
