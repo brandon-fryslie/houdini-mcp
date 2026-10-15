@@ -8,7 +8,7 @@ Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
 """
 
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,13 +123,19 @@ class Writes:
     updated: list[dict[str, Any]]
     failed: list[dict[str, Any]]
 
-    def fields(self, *done_before: Any) -> dict[str, Any]:
-        """The writes' report under the call's status. ``done_before`` is what the
-        call did before writing (a node it created), so all writes failing over a
-        new node is ``partial``, and over nothing is raised."""
-        report = {"updated": self.updated, "failed": self.failed}
+    def fields(
+        self, operation: str, /, *, created: Sequence[Any] = (), **report: Any
+    ) -> dict[str, Any]:
+        """``operation``'s response: its status, these writes, and ``report``.
+
+        ``created`` is what the call created before writing, so every write
+        failing over a new node is ``partial``, and over nothing is raised with
+        the same report the response would have carried.
+        """
+        report = {"updated": self.updated, "failed": self.failed, **report}
         undone = [Undone(f["name"], f["kind"], f["reason"]) for f in self.failed]
-        return {"status": batch_status([*done_before, *self.updated], undone, **report), **report}
+        status = batch_status(operation, [*created, *self.updated], undone, **report)
+        return {"status": status, **report}
 
 
 def write_all(node: Any, values: Mapping[str, Any]) -> Writes:

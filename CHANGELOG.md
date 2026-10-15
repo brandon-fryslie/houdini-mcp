@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   else `operation_failed`. That now includes `set_render_settings` and
   `assign_material` when no write landed, which were `"partial"`; a node the call
   created still makes it `"partial"`. `capture_multiple_panes` captures a pane
-  named twice once. `set_node_color` and `create_network_box` take `color` as
+  named twice once, and a pane `save_dir` cannot take is that pane's failure
+  instead of aborting the call. `set_node_color` and `create_network_box` take `color` as
   three finite numbers in the served schema, so any other length is refused on
   the wire; `create_network_box` no longer creates the box uncolored on a bad
   color, and reports the color it applied.

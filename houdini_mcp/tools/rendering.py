@@ -648,7 +648,7 @@ def render_quad_view(
         for view in view_results
         if view["status"] == "error"
     ]
-    return {"status": batch_status(rendered, failed, **report), **report}
+    return {"status": batch_status("render_quad_view", rendered, failed, **report), **report}
 
 
 # =============================================================================
@@ -828,10 +828,11 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a parameter failed) or "error"
+        - status: "success", "partial" (a parameter failed) or "error" (none was
+          written; the fields ride on it)
         - rop_path: Path to the ROP
         - updated: The parameters that were written, as {name, value}
-        - failed: The parameters that were not, as {name, reason}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -841,7 +842,7 @@ def set_render_settings(
 
     node = node_at(hou, rop_path, "ROP")
 
-    return {**write_all(node, settings).fields(), "rop_path": rop_path}
+    return write_all(node, settings).fields("set_render_settings", rop_path=rop_path)
 
 
 @handle_connection_errors("create_render_node")
@@ -886,9 +887,10 @@ def create_render_node(
     if node is None:
         raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
-    return {
-        **write_all(node, settings or {}).fields(node),
-        "rop_path": node.path(),
-        "rop_name": node.name(),
-        "rop_type": rop_type,
-    }
+    return write_all(node, settings or {}).fields(
+        "create_render_node",
+        created=[node],
+        rop_path=node.path(),
+        rop_name=node.name(),
+        rop_type=rop_type,
+    )

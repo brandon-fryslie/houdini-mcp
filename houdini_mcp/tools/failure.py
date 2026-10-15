@@ -182,9 +182,11 @@ class Undone(NamedTuple):
     message: str
 
 
-def batch_status(done: Sized, failed: Sequence[Undone], /, **report: Any) -> BatchStatus:
-    """``"partial"`` while any item failed, else ``"success"``; raised when items
-    failed and nothing was done, carrying ``report``.
+def batch_status(
+    operation: str, done: Sized, failed: Sequence[Undone], /, **report: Any
+) -> BatchStatus:
+    """``"partial"`` while any item of ``operation`` failed, else ``"success"``;
+    raised when items failed and nothing was done, carrying ``report``.
 
     [LAW:single-enforcer] Every multi-item tool reads its status here, so
     ``"success"`` never stands over an item whose effect did not happen and
@@ -192,7 +194,12 @@ def batch_status(done: Sized, failed: Sequence[Undone], /, **report: Any) -> Bat
     item was refused as ``invalid_input`` is the caller's to fix; any other is
     ``operation_failed``.
     """
-    logger.info("batch outcome done=%d failed=%s", len(done), [(u.name, u.kind) for u in failed])
+    logger.info(
+        "batch outcome operation=%s done=%d failed=%s",
+        operation,
+        len(done),
+        [(u.name, u.kind) for u in failed],
+    )
     if failed and not len(done):
         refused = all(u.kind == "invalid_input" for u in failed)
         raise (InvalidInput if refused else OperationFailed)(

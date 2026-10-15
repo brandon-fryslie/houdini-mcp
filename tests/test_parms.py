@@ -106,7 +106,7 @@ class TestWriteAll:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
             writes = write_all(node, {"radx": 3.0, "t": 1.0, "nope": 1, "bad": 2})
 
-        assert writes.fields()["status"] == "partial"
+        assert writes.fields("op")["status"] == "partial"
         assert writes.updated == [{"name": "radx", "value": 3.0}]
         assert [f["name"] for f in writes.failed] == ["t", "nope", "bad"]
         assert writes.failed[0]["reason"] == "Parameter t is a tuple, provide a list/tuple value"
@@ -128,10 +128,11 @@ class TestWriteAll:
 
     def test_nothing_failed_is_success(self):
         writes = write_all(node_with(radx=2.5), {"radx": 1.0})
-        assert writes.fields() == {
+        assert writes.fields("op", rop_path="/out/k") == {
             "status": "success",
             "updated": [{"name": "radx", "value": 1.0}],
             "failed": [],
+            "rop_path": "/out/k",
         }
 
     def test_connection_loss_propagates_instead_of_being_a_failed_parm(self, mock_connection):
@@ -224,7 +225,12 @@ class TestToolsShareTheOwner:
         assert failure.message == "Nothing was done: nope: Parameter not found: nope on /out/k"
         assert result["updated"] == []
         assert [f["name"] for f in result["failed"]] == ["nope"]
-        assert "batch outcome done=0 failed=[('nope', 'invalid_input')]" in caplog.text
+        # the error carries the report a success would have, ROP included
+        assert result["rop_path"] == "/out/k"
+        assert (
+            "batch outcome operation=set_render_settings done=0 "
+            "failed=[('nope', 'invalid_input')]" in caplog.text
+        )
 
     def test_create_material_whose_every_parameter_fails_is_partial(self, mock_connection):
         """The material node was created, so the call did something: partial, not error."""

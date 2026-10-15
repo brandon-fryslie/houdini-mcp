@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -160,7 +161,37 @@ def test_capture_multiple_panes_captures_a_pane_named_twice_once(
     assert result["status"] == "success"
     assert (result["success_count"], result["total_requested"]) == (2, 2)
     assert list(result["results"]) == ["SceneViewer", "NetworkEditor"]
-    assert "batch outcome done=2 failed=[]" in caplog.text
+    assert "batch outcome operation=capture_multiple_panes done=2 failed=[]" in caplog.text
+
+
+def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
+    mock_connection: MockHouModule, tmp_path: Path
+) -> None:
+    """A save the disk refuses is that pane's failure, in its slot; the pane
+    already saved stays reported, instead of the whole call aborting."""
+    from houdini_mcp.tools._common import FAILURE
+    from houdini_mcp.tools.failure import OperationFailure
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
+
+    (tmp_path / "SceneViewer.png").mkdir()  # a directory where the file must go
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+    ):
+        result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
+
+    assert result["status"] == "partial", result
+    assert result["results"]["NetworkEditor"]["file_path"] == str(tmp_path / "NetworkEditor.png")
+    assert (tmp_path / "NetworkEditor.png").read_bytes() == b"png"
+    slot = FAILURE.validate_python(result["results"]["SceneViewer"])
+    assert isinstance(slot, OperationFailure)
+    assert slot.message.startswith("Could not save SceneViewer to ")
 
 
 def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(

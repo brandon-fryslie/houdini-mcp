@@ -668,10 +668,11 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success", "partial", or "error"
+        - status: "success", or "partial" when a parameter failed; when none
+          was written the call is an error carrying the same fields
         - rop_path: Path to the ROP
-        - updated: List of parameters that were updated
-        - failed: List of parameters that failed to update
+        - updated: The parameters that were written, as {name, value}
+        - failed: The parameters that were not, as {name, kind, reason}
 
     Examples:
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
@@ -1133,7 +1134,9 @@ def assign_material(
 
     Returns:
         Dict with geometry_path, material_path, material_sop_path, method, updated
-        and failed (status "partial" when a write failed)
+        and failed (status "partial" when a write failed beside a write or a newly
+        created Material SOP; when nothing changed the call is an error carrying
+        the same fields)
 
     Examples:
         assign_material("/obj/geo1", "/mat/red_metal")

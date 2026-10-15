@@ -489,6 +489,22 @@ def render_node_network(
     return result
 
 
+def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> dict[str, Any]:
+    """A captured PNG as the response carries it: saved to ``save_dir`` and
+    named by path, or inline as base64. A save the disk refuses is this pane's
+    failure, not the call's."""
+    picture: dict[str, Any] = {"image_format": "png", "image_size_bytes": len(raw_bytes)}
+    if not save_dir:
+        return {**picture, "image_base64": base64.b64encode(raw_bytes).decode("utf-8")}
+    path = Path(save_dir) / f"{pane_type_name}.png"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw_bytes)
+    except OSError as e:
+        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from e
+    return {**picture, "file_path": str(path.absolute())}
+
+
 @handle_connection_errors("capture_multiple_panes")
 def capture_multiple_panes(
     pane_types: list[str],
@@ -546,11 +562,12 @@ def capture_multiple_panes(
 
     for pane_type_name in requested:
         # A pane's own failure (unknown type, not in the layout, could not be
-        # captured) is recorded in its slot, in the same shape every tool failure
-        # takes, and the next pane is still tried. Anything else - a torn link, a
-        # bug - is the whole call's and reaches the boundary.
+        # captured or saved) is recorded in its slot, in the same shape every tool
+        # failure takes, and the next pane is still tried. Anything else - a torn
+        # link, a bug - is the whole call's and reaches the boundary.
         try:
             result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+            result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
         except ToolError as e:
             failure = failure_for(e, "capture_multiple_panes")
             logger.warning(
@@ -559,18 +576,6 @@ def capture_multiple_panes(
             results[pane_type_name] = failure.model_dump()
             failed.append(Undone(pane_type_name, failure.kind, failure.message))
             continue
-
-        raw_bytes: bytes = result.pop("raw_bytes")
-        result["image_format"] = "png"
-        result["image_size_bytes"] = len(raw_bytes)
-
-        if save_dir:
-            path = Path(save_dir) / f"{pane_type_name}.png"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(raw_bytes)
-            result["file_path"] = str(path.absolute())
-        else:
-            result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
 
         results[pane_type_name] = result
         captured.append(pane_type_name)
@@ -581,4 +586,7 @@ def capture_multiple_panes(
         "results": results,
     }
     # Each slot is a capture or the failure arm for that pane.
-    return {"status": batch_status(captured, failed, **report), **report}
+    return {
+        "status": batch_status("capture_multiple_panes", captured, failed, **report),
+        **report,
+    }

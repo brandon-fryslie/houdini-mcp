@@ -241,17 +241,18 @@ def create_network_box(
 
     # Fit box to contents
     netbox.fitAroundContents()
+    box_name = netbox.name()
     logger.info(
         "network box created parent=%s name=%s nodes=%d color=%s",
         parent_path,
-        netbox.name(),
+        box_name,
         len(nodes),
         applied_color,
     )
 
     return {
         "status": "success",
-        "network_box_name": netbox.name(),
+        "network_box_name": box_name,
         "parent_path": parent_path,
         "nodes_contained": node_paths,
         "label": label,
