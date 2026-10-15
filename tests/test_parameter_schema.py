@@ -548,6 +548,11 @@ class TestSchemaReadsOnlyWhatHoudiniGives:
         toggle = MockParmTemplate("p", "P", "Toggle", default_value=True)
         assert self._schema_of(connected_to, toggle, 1)["default"] is True
 
+    def test_a_ramp_has_no_default_value(self, connected_to):
+        # Houdini gives a ramp template's defaultValue() as its count of points
+        ramp = MockParmTemplate("p", "P", "Ramp", default_value=2)
+        assert "default" not in self._schema_of(connected_to, ramp, None)
+
     def test_a_default_houdini_will_not_give_is_unread(self, connected_to):
         template = MockParmTemplate("p", "P", "Float", num_components=3)
         template.defaultValue = MagicMock(side_effect=RuntimeError("no default"))  # type: ignore[method-assign]
@@ -582,3 +587,15 @@ class TestFlattenParmTemplates:
         flat = _flatten_parm_templates(mock_hou, [tabs, top])
 
         assert [t.name() for t in flat] == ["folder0", "bindings", "bind#", "top"]
+
+    def test_a_folder_set_is_listed_and_not_descended(self):
+        from houdini_mcp.tools._common import _flatten_parm_templates
+
+        mock_hou = create_mock_hou_with_parm_types()
+        # hou.FolderSetParmTemplate holds folder names only: it has no parmTemplates()
+        folder_set = MockParmTemplate("fs", "Tabs", "FolderSet")
+        top = MockParmTemplate("top", "Top", "Float")
+
+        flat = _flatten_parm_templates(mock_hou, [folder_set, top])
+
+        assert [t.name() for t in flat] == ["fs", "top"]

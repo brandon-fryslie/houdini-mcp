@@ -370,6 +370,7 @@ def list_children(
     # not enter because of max_depth, are both in the response
     unwalked: list[dict[str, Any]] = []
     beyond_depth = 0
+    beyond_depth_unknown = 0
 
     def compact_flags(node: Any) -> str:
         # Three-character bitset: display/render/bypassed. `-` means the node
@@ -380,7 +381,7 @@ def list_children(
         return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
     def collect_children(node: Any, path: str, depth: int = 0) -> None:
-        nonlocal nodes_collected, walked, beyond_depth
+        nonlocal nodes_collected, walked, beyond_depth, beyond_depth_unknown
 
         if nodes_collected >= max_nodes:
             return
@@ -391,13 +392,15 @@ def list_children(
         # output cannot be read is reported, not dropped with its siblings.
         # hou is untyped: a node's children are Any, so is_unread is the discriminator
         children: Any = read(f"children of {path}", node.children)
-        if is_unread(children):
-            # past max_depth too: there, it is whether there is more that is unknown
-            unwalked.append({"path": path, **children})
-            return
         if depth > max_depth:
-            # past the requested depth the walk only asks whether there is more
-            beyond_depth += len(children) > 0
+            # past the requested depth the walk only asks whether there is more;
+            # a node that will not say is outside the walk, so it is in the
+            # depth warning, not in unwalked
+            beyond_depth_unknown += is_unread(children)
+            beyond_depth += not is_unread(children) and len(children) > 0
+            return
+        if is_unread(children):
+            unwalked.append({"path": path, **children})
             return
         walked += 1
 
@@ -433,12 +436,14 @@ def list_children(
 
     collect_children(parent, parent.path())
     logger.info(
-        "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d",
+        "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
+        "beyond_depth_unknown=%d",
         node_path,
         nodes_collected,
         walked,
         len(unwalked),
         beyond_depth,
+        beyond_depth_unknown,
     )
 
     page = paginate(children_list, request)
@@ -451,11 +456,16 @@ def list_children(
     failed = [Undone(u["path"], "operation_failed", u[UNREAD]) for u in unwalked]
     result = {"status": batch_status("list_children", range(walked), failed, **report), **report}
 
-    if beyond_depth:
+    if beyond_depth or beyond_depth_unknown:
+        unknown = (
+            f"; {beyond_depth_unknown} would not say whether they have any"
+            if beyond_depth_unknown
+            else ""
+        )
         result["warning"] = join_warnings(
             result.get("warning"),
             f"Depth limited to {max_depth}: {beyond_depth} nodes at that depth have "
-            "children not listed",
+            f"children not listed{unknown}",
         )
     if nodes_collected >= max_nodes:
         # [LAW:no-silent-failure] A capped walk and a further page are two facts;

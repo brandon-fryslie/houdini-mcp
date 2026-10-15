@@ -1310,7 +1310,9 @@ class TestListChildren:
         assert unwalked["path"] == "/obj/geo1/hda"
         assert unwalked["unread"].startswith("RuntimeError: locked asset")
 
-    def test_a_node_past_max_depth_whose_children_will_not_list_is_unwalked(self, mock_connection):
+    def test_a_node_past_max_depth_that_will_not_list_is_in_the_depth_warning(
+        self, mock_connection
+    ):
         from houdini_mcp.tools import list_children
 
         locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
@@ -1323,10 +1325,13 @@ class TestListChildren:
 
         result = list_children("/obj/geo1", recursive=True, max_depth=0)
 
-        # whether it has more below is unknown, not "nothing below"
-        assert result["status"] == "partial"
-        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
-        assert "warning" not in result
+        # every node asked for is listed; what is unknown is only whether there is more
+        assert result["status"] == "success"
+        assert result["unwalked"] == []
+        assert result["warning"] == (
+            "Depth limited to 0: 0 nodes at that depth have children not listed; "
+            "1 would not say whether they have any"
+        )
 
     def test_a_capped_partial_walk_keeps_what_it_could_not_enter(self, mock_connection):
         from houdini_mcp.tools import list_children
@@ -1348,6 +1353,36 @@ class TestListChildren:
         assert result["_truncated"] is True
         assert result["status"] == "partial"
         assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+
+    def test_a_capped_walk_bounds_what_it_could_not_enter_and_still_pages(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        def locked(i: int) -> MockHouNode:
+            name = f"{'h' * 200}{i}"
+            node = MockHouNode(path=f"/obj/geo1/{name}", name=name, node_type="hda")
+            node.children = MagicMock(  # type: ignore[method-assign]
+                side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+            )
+            return node
+
+        mock_connection.add_node(
+            MockHouNode(
+                path="/obj/geo1",
+                name="geo1",
+                node_type="geo",
+                children=[locked(i) for i in range(150)],
+            )
+        )
+
+        result = list_children("/obj/geo1", recursive=True, limit=500, compact=True)
+
+        assert result["status"] == "partial"
+        assert result["unwalked_truncated"] is True
+        assert result["unwalked_original_count"] == 150
+        assert 0 < result["unwalked_preserved_count"] < 150
+        # the page is still a page: what it delivered, and where the next one starts
+        assert result["returned"] == len(result["children"]) > 0
+        assert result["cursor"] == result["returned"]
 
     def test_a_parent_whose_children_will_not_list_fails_the_call(self, mock_connection):
         from houdini_mcp.tools import list_children

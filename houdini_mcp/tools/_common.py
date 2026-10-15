@@ -391,15 +391,15 @@ def _flatten_parm_templates(hou: Any, parm_templates: list[Any]) -> list[Any]:
     """Every template in the tree, each folder before what it holds.
 
     A multiparm block is a Folder too (its ``folderType`` says which), so
-    descending Folder and FolderSet reaches every template.
+    descending Folders reaches every template. A FolderSet holds only folder
+    names; it has no templates to descend.
     """
     flattened: list[Any] = []
-    nested = (hou.parmTemplateType.Folder, hou.parmTemplateType.FolderSet)
 
     def walk(templates: list[Any]) -> None:
         for template in templates:
             flattened.append(template)
-            if template.type() in nested:
+            if template.type() == hou.parmTemplateType.Folder:
                 walk(list(template.parmTemplates()))
 
     walk(parm_templates)
@@ -664,7 +664,11 @@ def _page_key(data: dict[str, Any]) -> str:
     """The one list field a paged payload carries; any other shape is a producer bug."""
     # [LAW:no-silent-failure] The cap can only preserve lists named in
     # CAPPED_LIST_FIELDS, so a page under another key would be dropped: refuse.
-    keys = [key for key, _ in CAPPED_LIST_FIELDS if isinstance(data.get(key), list)]
+    keys = [
+        key
+        for key, _ in CAPPED_LIST_FIELDS
+        if key not in FAILURE_REPORT_FIELDS and isinstance(data.get(key), list)
+    ]
     if len(keys) != 1:
         raise ValueError(
             f"a paged response carries exactly one list field named in "
@@ -673,7 +677,14 @@ def _page_key(data: dict[str, Any]) -> str:
     return keys[0]
 
 
+FAILURE_REPORT_FIELDS = frozenset({"unwalked", "uninspected"})
+"""Lists of what a partial call could not do: never its page, and capped first
+within half the budget, so the "partial" a status says keeps what it stands on
+and the page beside it still delivers."""
+
 CAPPED_LIST_FIELDS: list[tuple[str, str]] = [
+    ("unwalked", "unwalked_node"),
+    ("uninspected", "uninspected_node"),
     ("items", "item"),
     ("children", "child"),
     ("matches", "match"),
@@ -684,7 +695,6 @@ CAPPED_LIST_FIELDS: list[tuple[str, str]] = [
     ("groups", "group"),
     ("error_nodes", "error_node"),
     ("warning_nodes", "warning_node"),
-    ("uninspected", "uninspected_node"),
     ("inputs", "input"),
     ("outputs", "output"),
     ("methods", "method"),
@@ -765,8 +775,6 @@ def apply_response_cap(
         "warning",
         "message",
         "scene_changes_error",
-        # what a partial walk could not enter: the status "partial" stands on it
-        "unwalked",
     ]
     # [LAW:one-source-of-truth] a capped failure still parses as the arm it was
     for field in [*essential_fields, *sorted(FAILURE_FIELDS)]:
@@ -816,14 +824,16 @@ def apply_response_cap(
                 _set_final_serialized_size(candidate)
                 return candidate
 
+            # Reserve room for pagination/truncation metadata added after the
+            # prefix is selected. A failure report takes at most half, so the
+            # page after it still has room to deliver.
+            budget = max_bytes - min(512, max_bytes // 4)
+            if field_name in FAILURE_REPORT_FIELDS:
+                budget = min(budget, max_bytes // 2)
             low, high, best = 1, len(field_value), 0
             while low <= high:
                 midpoint = (low + high) // 2
-                # Reserve room for pagination/truncation metadata added
-                # after the prefix is selected.
-                if _serialized_size(prefix_candidate(midpoint)) <= max_bytes - min(
-                    512, max_bytes // 4
-                ):
+                if _serialized_size(prefix_candidate(midpoint)) <= budget:
                     best = midpoint
                     low = midpoint + 1
                 else:

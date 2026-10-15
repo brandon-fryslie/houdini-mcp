@@ -214,8 +214,9 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
     if is_tuple:
         param_info["tuple_size"] = num_components
 
-    # A button has no default; every other kind does.
-    if hasattr(parm_template, "defaultValue"):
+    # A button has no default. A ramp's defaultValue() is its count of default
+    # points, not a value it holds, so it has none here either.
+    if hasattr(parm_template, "defaultValue") and type_str != "ramp":
         param_info["default"] = read(
             f"default of {param_name}", lambda: _default(parm_template.defaultValue(), is_tuple)
         )

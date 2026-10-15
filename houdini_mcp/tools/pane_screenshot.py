@@ -336,12 +336,14 @@ def list_visible_panes(
 
     current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
     try:
-        panes_info = [
-            _pane_info(
-                pane_tab, f"pane {index} of {desktop.name()}", desktop.name(), current_desktop_name
-            )
+        desktops = [
+            (read("desktop name", desktop.name), desktop.paneTabs())
             for desktop in hou.ui.desktops()
-            for index, pane_tab in enumerate(desktop.paneTabs())
+        ]
+        panes_info = [
+            _pane_info(pane_tab, f"pane {index} of {name}", name, current_desktop_name)
+            for name, pane_tabs in desktops
+            for index, pane_tab in enumerate(pane_tabs)
         ]
     except Exception as e:
         raise OperationFailed(f"Failed to enumerate panes: {e}") from e
@@ -367,14 +369,14 @@ Fact = bool | Unread
 
 
 def _pane_info(
-    pane_tab: Any, what: str, desktop_name: str, current: str | None | Unread
+    pane_tab: Any, what: str, desktop_name: str | Unread, current: str | None | Unread
 ) -> dict[str, Any]:
     """One pane's row. [LAW:no-silent-failure] A part Houdini will not give is
     ``Unread``, and so is every fact that depends on it; the pane stays listed."""
     size = read(f"geometry of {what}", lambda: _screen_size(pane_tab))
     # a size is a tuple and Unread a dict, so isinstance discriminates both ways
     is_visible: Fact = size[0] > 0 and size[1] > 0 if isinstance(size, tuple) else size
-    is_current: Fact = current if is_unread(current) else desktop_name == current
+    is_current: Fact = next(filter(is_unread, (desktop_name, current)), desktop_name == current)
     geometry = (
         size
         if not isinstance(size, tuple)

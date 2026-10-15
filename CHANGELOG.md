@@ -18,14 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `null`), attributes, groups and sample values (were dropped) take it in place.
   `get_parameter_schema` reports the defaults, ranges and menus Houdini gives:
   a menu's or toggle's default was `null`, a failed tuple default was `0.0`, and
-  a parameter whose details raised was dropped. Pane and desktop names and a
+  a parameter whose details raised was dropped; a ramp has no `default` (Houdini's
+  is its count of default points). Pane and desktop names and a
   network's child count were `"<unknown>"`, `null` and `0`; `list_visible_panes`
   keeps a pane it cannot measure (it was dropped), and whether a pane is on the
   current desktop or capturable, and `capturable_count`, are unread when what
   they depend on is (they were `false` and a count). `list_children`
   lists the nodes whose children would not list in `unwalked` as
   `{path, unread}` and is `"partial"` (an error when the parent itself will not
-  list), and says when `max_depth` stopped it above deeper nodes. A link lost
+  list), and says when `max_depth` stopped it above deeper nodes, or above nodes
+  that would not say. A capped response keeps a bounded `unwalked` and
+  `uninspected` beside its page. A link lost
   during any of these reads is `connection_lost`, not an unread value. The lint
   and security gates (ruff SIM105, bandit B110/B112) now flag a swallowed
   exception.
