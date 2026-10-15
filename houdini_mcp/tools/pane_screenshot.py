@@ -27,6 +27,7 @@ from ._common import (
     handle_connection_errors,
     node_at,
 )
+from .reads import read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -204,16 +205,10 @@ def _capture_pane_to_bytes(
     buffer.close()
     raw_bytes = bytes(buffer.data().data())
 
-    # Get pane name safely
-    try:
-        pane_name = str(pane.name())
-    except Exception:
-        pane_name = "<unknown>"
-
     return {
         "status": "success",
         "pane_type": pane_type_name,
-        "pane_name": pane_name,
+        "pane_name": read("pane name", lambda: str(pane.name())),
         "geometry": {"x": geom_x, "y": geom_y, "width": geom_width, "height": geom_height},
         "raw_bytes": raw_bytes,
     }
@@ -299,6 +294,10 @@ def capture_pane_screenshot(
     return result
 
 
+def _desktop_name(desktop: Any) -> str | None:
+    return str(desktop.name()) if desktop else None
+
+
 @handle_connection_errors("list_visible_panes")
 def list_visible_panes(
     host: str = "localhost",
@@ -333,14 +332,7 @@ def list_visible_panes(
     hou = ensure_connected(host, port)
 
     panes_info: list[dict[str, Any]] = []
-    current_desktop_name: str | None = None
-
-    # Get current desktop name
-    try:
-        current_desktop = hou.ui.curDesktop()
-        current_desktop_name = current_desktop.name() if current_desktop else None
-    except Exception:
-        pass
+    current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
 
     # Iterate through all desktops and panes
     try:
@@ -452,11 +444,7 @@ def render_node_network(
     node = node_at(hou, node_path)
 
     # Get child count for context
-    try:
-        children = node.children()
-        child_count = len(children)
-    except Exception:
-        child_count = 0
+    child_count = read(f"children of {node_path}", lambda: len(node.children()))
 
     QtWidgets, QtCore, _ = _get_qt_modules(host, port)
 

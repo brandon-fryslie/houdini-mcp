@@ -231,7 +231,8 @@ def get_node_info(
 
     Returns:
         Node information at the requested detail. When cook_info is not "none",
-        also includes cook_info with cook_state, errors, and warnings.
+        also includes cook_info with cook_state, errors, and warnings. A value
+        Houdini would not read, here or in parameters, is {"unread": "<why>"}.
 
     Example:
         # Check cook state and errors
@@ -417,6 +418,9 @@ def list_children(
         - type: Node type
         - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
         - outputs: Array of output node paths (omitted if compact=True)
+        Also unwalked: nodes whose children Houdini would not list, as
+        {path, unread}; any makes status "partial". A walk stopped by max_depth
+        above nodes that have children says so in warning.
 
     Example:
         list_children("/obj/geo1", recursive=True, max_depth=3)
@@ -989,7 +993,9 @@ async def get_geo_summary(
         Dict with comprehensive geometry summary including:
         - point_count, primitive_count, vertex_count: Geometry topology stats
         - bounding_box: {min, max, size, center} vectors in world space
-        - cook_state: Current cook state ("cooked", "dirty", "uncooked", "error")
+        - cook_state: "cooked" (the node is cooked first if it needs it)
+        Anything Houdini will not read (the cook, the bounding box, an attribute,
+        a group, a sample value) is {"unread": "<why>"} in its place.
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values

@@ -113,7 +113,6 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "ARG001", # unused function argument (common in interfaces)
     "ARG002", # unused method argument (common in interface methods and pytest fixtures)
-    "SIM105", # intentional try/except/pass defensive guards around optional Houdini APIs (see bandit B110)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -182,7 +181,5 @@ exclude_dirs = ["tests", "build", "dist"]
 #   B101 - assert statements are fine in tests
 #   B102 - exec: executing Houdini Python is the core purpose of the execute_code tool
 #   B104 - hardcoded_bind_all_interfaces: the 0.0.0.0 HTTP bind in server.py is intentional
-#   B110 - try_except_pass: defensive guards around optional Houdini (hou) APIs
-#   B112 - try_except_continue: defensive guards that skip failed items in render loops
 #   B311 - non-crypto random: used for jitter/ids, never for security
-skips = ["B101", "B102", "B104", "B110", "B112", "B311"]
+skips = ["B101", "B102", "B104", "B311"]

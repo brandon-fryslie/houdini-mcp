@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: a value Houdini would not read is
+  `{"unread": "<ExcType>: <message>"}` where the value would be, never a value
+  it might have been (houdini-laws-etg.82a). A parameter that will not evaluate
+  or convert was `"<unevaluable>"`; `get_node_info`'s errors and warnings were
+  `[]` and its cook state `"unknown"`; a forced cook that raised replaced all
+  three with a made-up error. `get_geo_summary`'s cook, bounding box (was
+  `null`), attributes, groups and sample values (were dropped) take it in place.
+  `get_parameter_schema` reports the defaults, ranges and menus Houdini gives:
+  a menu's or toggle's default was `null`, a failed tuple default was `0.0`, and
+  a parameter whose details raised was dropped. Pane and desktop names and a
+  network's child count were `"<unknown>"`, `null` and `0`. `list_children`
+  lists the nodes whose children would not list in `unwalked` as
+  `{path, unread}` and is `"partial"` (an error when the parent itself will not
+  list), and says when `max_depth` stopped it above deeper nodes. A link lost
+  during any of these reads is `connection_lost`, not an unread value. The lint
+  and security gates (ruff SIM105, bandit B110/B112) now flag a swallowed
+  exception.
+
 - **BREAKING (wire)**: `find_error_nodes` says when it could not inspect part of
   the scene (houdini-laws-etg.4ts). A node whose errors or warnings Houdini would
   not read is listed in `uninspected` as `{path, kind, reason}` and the call is

@@ -14,6 +14,7 @@ from ._common import (
     handle_connection_errors,
     tool_error,
 )
+from .reads import UNREAD
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
@@ -51,7 +52,7 @@ def get_geo_summary(
         Dict with geometry summary including:
         - status: "success" or "error"
         - node_path: Path to the node
-        - cook_state: "cooked", "dirty", "uncooked", or "error"
+        - cook_state: "cooked" (the node is cooked first if it needs it)
         - point_count: Number of points
         - primitive_count: Number of primitives
         - vertex_count: Total number of vertices across all primitives
@@ -67,7 +68,8 @@ def get_geo_summary(
         - Uncooked geometry: Will attempt to cook first
         - Empty geometry: Returns zeros, not error
         - Massive geometry (>1M points): Caps sampling with warning
-        - No bounding box: Returns None for bbox fields
+        - Anything Houdini will not read (the cook, the bounding box, an
+          attribute, a group, a sample value) is {"unread": "<why>"} in its place
     """
     # Imported here to avoid circular imports
     from .code import ExecutionGrant, _bypass_config_enabled, _execute_with_grant
@@ -91,22 +93,51 @@ include_groups = {include_groups}
 
 result = {{"status": "success", "node_path": node_path}}
 
+
+def _read(fetch):
+    # [LAW:single-enforcer] the program's spelling of reads.read: what Houdini
+    # will not give stands as Unread, never as a value it might have been
+    try:
+        return fetch()
+    except Exception as e:
+        return {{{UNREAD!r}: f"{{type(e).__name__}}: {{e}}"}}
+
+
+def _cook():
+    if node.needsToCook():
+        node.cook(force=True)
+    return "cooked"
+
+
+def _attrib(attrib):
+    dt = attrib.dataType()
+    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
+    return {{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}}
+
+
+def _bounding_box(geo):
+    bbox = geo.boundingBox()
+    return {{
+        "min": list(bbox.minvec()),
+        "max": list(bbox.maxvec()),
+        "size": list(bbox.sizevec()),
+        "center": list(bbox.center()),
+    }}
+
+
+def _point_value(pt, aname):
+    val = pt.attribValue(aname)
+    if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
+        return list(val)
+    return val
+
+
 # Get node
 node = hou.node(node_path)
 if node is None:
     result = {{"status": "error", "kind": "invalid_input", "message": f"Node not found: {{node_path}}"}}
 else:
-    # Check cook state
-    cook_state = "unknown"
-    try:
-        if hasattr(node, "needsToCook"):
-            if node.needsToCook():
-                cook_state = "dirty"
-                node.cook(force=True)
-            cook_state = "cooked"
-    except:
-        pass
-    result["cook_state"] = cook_state
+    result["cook_state"] = _read(_cook)
 
     # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
     # that raises or yields nothing is Houdini's. The program says which.
@@ -129,70 +160,24 @@ else:
         result["primitive_count"] = geo.intrinsicValue("primitivecount")
         result["vertex_count"] = geo.intrinsicValue("vertexcount")
 
-        # Bounding box
-        try:
-            bbox = geo.boundingBox()
-            result["bounding_box"] = {{
-                "min": list(bbox.minvec()),
-                "max": list(bbox.maxvec()),
-                "size": list(bbox.sizevec()),
-                "center": list(bbox.center()),
-            }}
-        except:
-            result["bounding_box"] = None
+        result["bounding_box"] = _read(lambda: _bounding_box(geo))
 
-        # Attributes
         if include_attributes:
-            attributes = {{"point": [], "primitive": [], "vertex": [], "detail": []}}
+            result["attributes"] = {{
+                kind: [_read(lambda a=a: _attrib(a)) for a in attribs]
+                for kind, attribs in (
+                    ("point", geo.pointAttribs()),
+                    ("primitive", geo.primAttribs()),
+                    ("vertex", geo.vertexAttribs()),
+                    ("detail", geo.globalAttribs()),
+                )
+            }}
 
-            for attrib in geo.pointAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["point"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.primAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["primitive"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.vertexAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["vertex"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            for attrib in geo.globalAttribs():
-                try:
-                    dt = attrib.dataType()
-                    dt_name = dt.name() if hasattr(dt, "name") else str(dt)
-                    attributes["detail"].append({{"name": attrib.name(), "type": dt_name.lower(), "size": attrib.size()}})
-                except:
-                    pass
-
-            result["attributes"] = attributes
-
-        # Groups
         if include_groups:
-            groups = {{"point": [], "primitive": []}}
-            for g in geo.pointGroups():
-                try:
-                    groups["point"].append(g.name())
-                except:
-                    pass
-            for g in geo.primGroups():
-                try:
-                    groups["primitive"].append(g.name())
-                except:
-                    pass
-            result["groups"] = groups
+            result["groups"] = {{
+                "point": [_read(g.name) for g in geo.pointGroups()],
+                "primitive": [_read(g.name) for g in geo.primGroups()],
+            }}
 
         # Sample points - use numpy-style array access if possible
         point_count = result["point_count"]
@@ -213,15 +198,7 @@ else:
                     continue
                 point_data = {{"index": i}}
                 for aname in point_attrib_names:
-                    try:
-                        val = pt.attribValue(aname)
-                        if val is not None:
-                            if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
-                                point_data[aname] = list(val)
-                            else:
-                                point_data[aname] = val
-                    except:
-                        pass
+                    point_data[aname] = _read(lambda: _point_value(pt, aname))
                 sample_points.append(point_data)
 
             result["sample_points"] = sample_points

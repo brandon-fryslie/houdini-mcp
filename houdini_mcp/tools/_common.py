@@ -387,58 +387,22 @@ class ExecutionTimeoutError(Exception):
     pass
 
 
-def _flatten_parm_templates(hou: Any, parm_templates: list[Any], max_depth: int = 20) -> list[Any]:
-    """
-    Flatten nested parameter templates into a single list.
+def _flatten_parm_templates(hou: Any, parm_templates: list[Any]) -> list[Any]:
+    """Every template in the tree, each folder before what it holds.
 
-    Args:
-        hou: The hou module
-        parm_templates: List of parameter templates to flatten
-        max_depth: Maximum recursion depth
-
-    Returns:
-        Flattened list of parameter templates
+    A multiparm block is a Folder too (its ``folderType`` says which), so
+    descending Folder and FolderSet reaches every template.
     """
     flattened: list[Any] = []
+    nested = (hou.parmTemplateType.Folder, hou.parmTemplateType.FolderSet)
 
-    def walk(templates: list[Any], depth: int) -> None:
-        if depth > max_depth:
-            return
-
+    def walk(templates: list[Any]) -> None:
         for template in templates:
-            try:
-                template_type = template.type()
-            except Exception:
-                template_type = None
-
-            is_folder_like = False
-            try:
-                is_folder_like = template_type in (
-                    hou.parmTemplateType.Folder,
-                    hou.parmTemplateType.FolderSet,
-                )
-            except Exception:
-                is_folder_like = False
-
-            is_multiparm = False
-            try:
-                is_multiparm = template_type in (
-                    hou.parmTemplateType.MultiParmBlock,
-                    hou.parmTemplateType.MultiParm,
-                )
-            except Exception:
-                is_multiparm = False
-
             flattened.append(template)
+            if template.type() in nested:
+                walk(list(template.parmTemplates()))
 
-            if (is_folder_like or is_multiparm) and hasattr(template, "parmTemplates"):
-                try:
-                    child_templates = list(template.parmTemplates())
-                except Exception:
-                    child_templates = []
-                walk(child_templates, depth + 1)
-
-    walk(parm_templates, 0)
+    walk(parm_templates)
 
     # De-dup while preserving order (folders can appear in multiple lists)
     seen_ids: set[int] = set()
@@ -853,17 +817,14 @@ def apply_response_cap(
             low, high, best = 1, len(field_value), 0
             while low <= high:
                 midpoint = (low + high) // 2
-                try:
-                    # Reserve room for pagination/truncation metadata added
-                    # after the prefix is selected.
-                    if _serialized_size(prefix_candidate(midpoint)) <= max_bytes - min(
-                        512, max_bytes // 4
-                    ):
-                        best = midpoint
-                        low = midpoint + 1
-                    else:
-                        high = midpoint - 1
-                except Exception:
+                # Reserve room for pagination/truncation metadata added
+                # after the prefix is selected.
+                if _serialized_size(prefix_candidate(midpoint)) <= max_bytes - min(
+                    512, max_bytes // 4
+                ):
+                    best = midpoint
+                    low = midpoint + 1
+                else:
                     high = midpoint - 1
 
             if best == 0 and field_value:
@@ -951,15 +912,9 @@ def apply_response_cap(
         if is_paged(data):
             result.update(capped_paging_fields(data, 0))
         for field in essential_fields:
-            if field in result:
-                try:
-                    test_minimal = dict(minimal)
-                    test_minimal[field] = result[field]
-                    test_json = json.dumps(test_minimal, ensure_ascii=False)
-                    if len(test_json.encode("utf-8")) <= max_bytes:
-                        minimal[field] = result[field]
-                except Exception:
-                    pass
+            # every value here came through the json.dumps that measured data
+            if field in result and _serialized_size({**minimal, field: result[field]}) <= max_bytes:
+                minimal[field] = result[field]
 
         # Add exact final size metadata for the minimal fallback too. If that
         # metadata crosses the cap, drop optional essentials from the end until

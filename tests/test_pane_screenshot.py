@@ -71,6 +71,19 @@ def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouMod
     assert [pane["type"] for pane in result["panes"]] == ["NetworkEditor"]
 
 
+def test_a_current_desktop_houdini_will_not_name_is_unread(
+    mock_connection: MockHouModule,
+) -> None:
+    mock_connection.ui.curDesktop().paneTabs().append(
+        MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
+    )
+    with patch.object(mock_connection.ui, "curDesktop", side_effect=RuntimeError("no ui")):
+        result = list_visible_panes()
+
+    assert result["current_desktop"] == {"unread": "RuntimeError: no ui"}
+    assert [pane["is_current_desktop"] for pane in result["panes"]] == [False]
+
+
 @pytest.mark.parametrize("name", ["ChannelEditor", "thisown"])
 def test_unknown_pane_type_is_refused_with_the_live_enum(
     mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture, name: str

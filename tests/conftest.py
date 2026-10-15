@@ -594,7 +594,9 @@ class MockHouModule:
         # Houdini types
         self.Color = MockColor
         self.Vector2 = MockVector2
+        self.Vector3 = MockVector3
         self.Vector4 = MockVector4
+        self.Ramp = MockRamp
         self.Node = MockHouNode
         self.SubnetIndirectInput = MockSubnetIndirectInput
 
@@ -1017,6 +1019,26 @@ class MockVector4:
 
     def __repr__(self) -> str:
         return f"MockVector4{self._v}"
+
+
+class MockVector3(tuple):
+    """Mock hou.Vector3: iterates its components."""
+
+
+class MockRamp:
+    """Mock hou.Ramp."""
+
+    def __init__(self, basis: list[Any], keys: list[float], values: list[Any]) -> None:
+        self._basis, self._keys, self._values = basis, keys, values
+
+    def basis(self) -> list[Any]:
+        return self._basis
+
+    def keys(self) -> list[float]:
+        return self._keys
+
+    def values(self) -> list[Any]:
+        return self._values
 
 
 class MockVector2:
