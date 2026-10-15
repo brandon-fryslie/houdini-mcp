@@ -17,6 +17,7 @@ so we add it to ``sys.path`` here.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
 import sys
@@ -121,9 +122,14 @@ class FakeThreadedServer:
             self.authenticated += 1
 
     def close(self) -> None:
-        # The socket stays referenced: an in-flight accept() raises OSError on
-        # it, which accept() reports as EOFError, with no attribute to race on.
+        # As rpyc: shut down before close. On Linux, close() alone leaves the
+        # socket bound until an in-flight accept() returns, so the port could not
+        # be bound again yet; shutdown() releases it and wakes that accept().
+        # The socket stays referenced: the woken accept() raises OSError on it,
+        # which accept() reports as EOFError, with no attribute to race on.
         self.active = False
+        with contextlib.suppress(OSError):  # as rpyc: a never-listened socket refuses it
+            self._sock.shutdown(socket.SHUT_RDWR)
         self._sock.close()
 
 
