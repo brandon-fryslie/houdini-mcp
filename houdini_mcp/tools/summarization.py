@@ -357,10 +357,18 @@ async def _request(prompt: str) -> Summary | NoSummary:
 
 
 def get_summarization_status() -> dict[str, Any]:
-    """Get current summarization configuration status.
+    """
+    Get AI summarization configuration and status.
+
+    Summaries come from an OpenAI-compatible chat-completions server.
 
     Returns:
-        Dict with the configuration summaries are made with
+        Dict with summarization configuration including:
+        - enabled: Whether AI summarization is active
+        - model: Model the summaries are requested from
+        - base_url: The chat-completions server (OpenAI API base, ending in /v1)
+        - auto_threshold_tokens: Token count that triggers auto-summarization
+        - target_summary_tokens: Target size for generated summaries
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,

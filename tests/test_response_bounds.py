@@ -692,7 +692,7 @@ class TestProductionPathResponseCap:
 
         assert result_bytes <= DEFAULT_RESPONSE_CAP_BYTES
 
-    def test_get_geo_summary_respects_cap(self):
+    async def test_get_geo_summary_respects_cap(self):
         """get_geo_summary final JSON response never exceeds cap.
 
         Exercises the real production path: get_geo_summary() -> execute_code()
@@ -767,7 +767,7 @@ class TestProductionPathResponseCap:
                 "stderr": "",
             }
 
-            result = get_geo_summary(
+            result = await get_geo_summary(
                 "/obj/geo1/dense_mesh1",
                 max_sample_points=16,
                 host="localhost",

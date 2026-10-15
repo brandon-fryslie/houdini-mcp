@@ -20,6 +20,7 @@ from ._common import (
 from .cache import invalidate_all_caches
 from .parms import evaluated
 from .snapshot import scene_snapshot
+from .summarization import should_summarize, summarize_scene
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -29,8 +30,10 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
     """
     Get current Houdini scene information.
 
-    Returns:
-        Dict with scene information including file path, nodes, and Houdini version.
+    Returns information about the currently open scene including:
+    - Hip file path
+    - Houdini version
+    - List of nodes in /obj
     """
     hou = ensure_connected(host, port)
 
@@ -59,10 +62,11 @@ def save_scene(
     Save the current Houdini scene.
 
     Args:
-        file_path: Optional path to save to. If None, saves to current file.
+        file_path: Optional path to save to. If not provided, saves to current file.
 
-    Returns:
-        Dict with result.
+    Example:
+        - save_scene() -> Saves to current file
+        - save_scene("/path/to/scene.hip") -> Saves to specified path
     """
     hou = ensure_connected(host, port)
 
@@ -83,9 +87,6 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
 
     Args:
         file_path: Path to the .hip file to load
-
-    Returns:
-        Dict with result.
     """
     hou = ensure_connected(host, port)
 
@@ -102,8 +103,7 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Create a new empty Houdini scene.
 
-    Returns:
-        Dict with result.
+    Warning: This will clear the current scene. Make sure to save first if needed.
     """
     hou = ensure_connected(host, port)
 
@@ -116,26 +116,46 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
 
 
 @handle_connection_errors("serialize_scene")
-def serialize_scene(
+async def serialize_scene(
     root_path: str = "/obj",
     include_params: bool = False,
     max_depth: int = 10,
+    summarize: bool = False,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
     """
-    Serialize the scene structure to a dictionary (useful for diffs/comparisons).
+    Serialize the scene structure to a dictionary.
 
-    This is an enhanced version ported from the OpenWebUI pipeline.
+    Useful for comparing scene states before and after operations,
+    or for understanding the scene hierarchy.
 
     Args:
-        root_path: Root node path to serialize from
-        include_params: Whether to include parameter values (can be verbose)
-        max_depth: Maximum recursion depth
+        root_path: Root node path to serialize from (default: "/obj")
+        include_params: Include parameter values (can be verbose, default: False)
+        max_depth: Levels below root_path to descend; deeper nodes are marked truncated (default: 10)
+        summarize: If True, use AI to analyze scene structure (default: False).
+                  Identifies complexity hotspots and optimization opportunities.
 
     Returns:
-        Dict with serialized scene structure.
+        Dict with scene structure, optionally with ai_summary field containing
+        insights about organization, complexity, and optimization opportunities,
+        or ai_summary_error saying why no summary could be made.
     """
+    result = _scene_tree(root_path, include_params, max_depth, host, port)
+    if summarize or should_summarize(result):
+        result = await summarize_scene(result)
+    return result
+
+
+def _scene_tree(
+    root_path: str,
+    include_params: bool,
+    max_depth: int,
+    host: str,
+    port: int,
+) -> dict[str, Any]:
+    """The node tree under root_path, max_depth levels deep."""
     hou = ensure_connected(host, port)
     root = node_at(hou, root_path, "Root node")
     snapshot = scene_snapshot(hou, root.path())

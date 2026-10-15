@@ -95,14 +95,14 @@ class TestWorkerBlocksMutation:
         assert result["kind"] == "worker_still_running"
         assert result["operation"] == render_tool
 
-    def test_program_running_read_is_refused_naming_itself(
+    async def test_program_running_read_is_refused_naming_itself(
         self, mock_connection, stalled_program, caplog
     ):
         """get_geo_summary runs a program in an undo group, so one worker refuses it."""
         _time_out(stalled_program)
 
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"):
-            result = get_geo_summary("/obj/geo1", host="localhost", port=18811)
+            result = await get_geo_summary("/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"

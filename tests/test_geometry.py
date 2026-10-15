@@ -69,7 +69,7 @@ class TestGetGeoSummary:
 
         return response
 
-    def test_get_geo_summary_basic_sphere(self, mock_execute_code):
+    async def test_get_geo_summary_basic_sphere(self, mock_execute_code):
         """Test getting geometry summary for a basic sphere."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -110,7 +110,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/sphere1", max_sample_points=2, host="localhost", port=18811
         )
 
@@ -149,7 +149,7 @@ class TestGetGeoSummary:
         assert result["sample_points"][0]["index"] == 0
         assert result["sample_points"][0]["P"] == [0.0, 1.0, 0.0]
 
-    def test_get_geo_summary_empty_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_empty_geometry(self, mock_execute_code):
         """Test geometry summary for empty geometry."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -171,7 +171,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["point_count"] == 0
@@ -180,7 +180,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["point"]) == 0
         assert len(result["groups"]["point"]) == 0
 
-    def test_get_geo_summary_massive_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_massive_geometry(self, mock_execute_code):
         """Test geometry summary with massive geometry (>1M points)."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -203,7 +203,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/large1", max_sample_points=100, host="localhost", port=18811
         )
 
@@ -219,7 +219,7 @@ class TestGetGeoSummary:
         # Sample points should be limited
         assert len(result["sample_points"]) == 100
 
-    def test_get_geo_summary_uncooked_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_uncooked_geometry(self, mock_execute_code):
         """Test geometry summary for uncooked/dirty node."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -234,13 +234,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/noise1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/noise1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["cook_state"] == "cooked"
         assert result["point_count"] == 1
 
-    def test_get_geo_summary_no_geometry(self, mock_execute_code):
+    async def test_get_geo_summary_no_geometry(self, mock_execute_code):
         """Test error when node has no geometry."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -255,7 +255,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/cam1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/cam1", host="localhost", port=18811)
 
         # The program said the cook yielded nothing: Houdini's failure, not the path.
         assert result["status"] == "error"
@@ -263,7 +263,7 @@ class TestGetGeoSummary:
         assert "has no geometry" in result["message"]
         assert result["path"] == "/obj/cam1"
 
-    def test_get_geo_summary_node_not_found(self, mock_execute_code):
+    async def test_get_geo_summary_node_not_found(self, mock_execute_code):
         """Test error when node doesn't exist."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -278,13 +278,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert (result["kind"], result["retry"]) == ("invalid_input", "fix_input")
         assert "Node not found" in result["message"]
 
-    def test_get_geo_summary_no_attributes(self, mock_execute_code):
+    async def test_get_geo_summary_no_attributes(self, mock_execute_code):
         """Test geometry summary without attributes."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -299,7 +299,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/box1", include_attributes=True, host="localhost", port=18811
         )
 
@@ -309,7 +309,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["point"]) == 0
         assert len(result["attributes"]["primitive"]) == 0
 
-    def test_get_geo_summary_skip_attributes_and_groups(self, mock_execute_code):
+    async def test_get_geo_summary_skip_attributes_and_groups(self, mock_execute_code):
         """Test skipping attributes and groups."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -336,7 +336,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/sphere1",
             include_attributes=False,
             include_groups=False,
@@ -350,7 +350,7 @@ class TestGetGeoSummary:
         assert "groups" not in result
         assert "sample_points" not in result
 
-    def test_get_geo_summary_various_attribute_types(self, mock_execute_code):
+    async def test_get_geo_summary_various_attribute_types(self, mock_execute_code):
         """Test geometry with various attribute types."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -382,7 +382,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/xform1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/xform1", host="localhost", port=18811)
 
         assert result["status"] == "success"
 
@@ -401,7 +401,7 @@ class TestGetGeoSummary:
         assert len(result["attributes"]["vertex"]) == 1
         assert len(result["attributes"]["detail"]) == 1
 
-    def test_get_geo_summary_sample_points_with_attributes(self, mock_execute_code):
+    async def test_get_geo_summary_sample_points_with_attributes(self, mock_execute_code):
         """Test sample points include attribute values."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -432,7 +432,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/mountain1", max_sample_points=3, host="localhost", port=18811
         )
 
@@ -452,7 +452,7 @@ class TestGetGeoSummary:
         assert pt1["P"] == [1.0, 0.0, 0.0]
         assert pt1["N"] == [1.0, 0.0, 0.0]
 
-    def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
+    async def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
         """Test max_sample_points validation (capped at 10000)."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -482,13 +482,13 @@ class TestGetGeoSummary:
         }
 
         # Test negative value -> 0 (no sample_points in result)
-        result = get_geo_summary(
+        result = await get_geo_summary(
             "/obj/geo1/grid1", max_sample_points=-10, host="localhost", port=18811
         )
         assert result["status"] == "success"
         assert "sample_points" not in result
 
-    def test_get_geo_summary_multiple_groups(self, mock_execute_code):
+    async def test_get_geo_summary_multiple_groups(self, mock_execute_code):
         """Test geometry with multiple groups."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -508,7 +508,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/merge1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/merge1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert len(result["groups"]["point"]) == 3
@@ -519,7 +519,7 @@ class TestGetGeoSummary:
         assert "front" in result["groups"]["primitive"]
         assert "back" in result["groups"]["primitive"]
 
-    def test_get_geo_summary_no_bounding_box(self, mock_execute_code):
+    async def test_get_geo_summary_no_bounding_box(self, mock_execute_code):
         """Test geometry with no bounding box."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -536,12 +536,12 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["bounding_box"] is None
 
-    def test_get_geo_summary_cook_failed(self, mock_execute_code):
+    async def test_get_geo_summary_cook_failed(self, mock_execute_code):
         """Test geometry summary when cook fails."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -556,14 +556,14 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/bad1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/bad1", host="localhost", port=18811)
 
         # Should still return geometry info despite cook error
         assert result["status"] == "success"
         assert result["cook_state"] == "error"
         assert result["point_count"] == 1
 
-    def test_get_geo_summary_vertex_count_calculation(self, mock_execute_code):
+    async def test_get_geo_summary_vertex_count_calculation(self, mock_execute_code):
         """Test vertex count calculation with varying primitive types."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -579,13 +579,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/poly1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/poly1", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["primitive_count"] == 4
         assert result["vertex_count"] == 18
 
-    def test_get_geo_summary_execute_code_error(self, mock_execute_code):
+    async def test_get_geo_summary_execute_code_error(self, mock_execute_code):
         """The program runner's failure is the tool's failure, in the same shape."""
         from houdini_mcp.connection import HoudiniConnectionError
         from houdini_mcp.tools import get_geo_summary
@@ -594,14 +594,14 @@ class TestGetGeoSummary:
             "Houdini connection lost", target="localhost:18811"
         )
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_unavailable"
         assert result["target"] == "localhost:18811"
         assert "Houdini connection lost" in result["message"]
 
-    def test_get_geo_summary_empty_stdout(self, mock_execute_code):
+    async def test_get_geo_summary_empty_stdout(self, mock_execute_code):
         """Test handling when execute_code returns empty stdout."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -611,12 +611,12 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "No output" in result["message"]
 
-    def test_get_geo_summary_invalid_json(self, mock_execute_code):
+    async def test_get_geo_summary_invalid_json(self, mock_execute_code):
         """Test handling when execute_code returns invalid JSON."""
         from houdini_mcp.tools import get_geo_summary
 
@@ -626,7 +626,7 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]

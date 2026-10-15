@@ -38,21 +38,22 @@ def connect_nodes(
     """
     Wire output of source node to input of destination node.
 
-    Validates that node types are compatible (e.g., SOP->SOP, OBJ->OBJ) before connecting.
+    Validates that node types are compatible (e.g., SOP→SOP, OBJ→OBJ) before connecting.
     Automatically disconnects existing connection if the destination input is already wired.
 
     Args:
-        src_path: Path to source node
-        dst_path: Path to destination node
+        src_path: Path to source node (e.g., "/obj/geo1/grid1")
+        dst_path: Path to destination node (e.g., "/obj/geo1/noise1")
         dst_input_index: Input index on destination node (default: 0)
         src_output_index: Output index on source node (default: 0)
 
     Returns:
-        status, node_path, and connection: the wire as Houdini holds it after the
-        write, {input_index, source_node, source_output_index}.
+        Dict with status, node_path, and connection: the wire as Houdini holds it after
+        the write, as {input_index, source_node, source_output_index}. The same record
+        shape every wiring and introspection tool reports.
 
-    Example:
-        connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1")  # Connect grid -> noise
+    Examples:
+        connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1")
         connect_nodes("/obj/geo1/grid1", "/obj/geo1/merge1", dst_input_index=1)
     """
     hou = ensure_connected(host, port)
@@ -117,15 +118,15 @@ def disconnect_node_input(
     Break/disconnect an input connection on a node.
 
     Args:
-        node_path: Path to the node
+        node_path: Path to the node (e.g., "/obj/geo1/noise1")
         input_index: Input index to disconnect (default: 0)
 
     Returns:
-        status, node_path, input_index, and disconnected: the wire that was cut,
-        {input_index, source_node, source_output_index}, or None when the input
-        was already unwired.
+        Dict with status, node_path, input_index, and disconnected: the wire that was
+        cut as {input_index, source_node, source_output_index}, or None when the input
+        was already unwired. source_node can be handed back to connect_nodes.
 
-    Example:
+    Examples:
         disconnect_node_input("/obj/geo1/noise1")  # Disconnect first input
         disconnect_node_input("/obj/geo1/merge1", input_index=1)  # Disconnect second input
     """
@@ -183,7 +184,7 @@ def set_node_flags(
     Checks for flag availability using hasattr() before setting.
 
     Args:
-        node_path: Path to the node
+        node_path: Path to the node (e.g., "/obj/geo1/sphere1")
         display: Display flag value (True/False) or None to skip
         render: Render flag value (True/False) or None to skip
         bypass: Bypass flag value (True/False) or None to skip
@@ -191,9 +192,10 @@ def set_node_flags(
     Returns:
         Dict with result and flags that were set.
 
-    Example:
+    Examples:
         set_node_flags("/obj/geo1/sphere1", display=True, render=True)
         set_node_flags("/obj/geo1/noise1", bypass=True)
+        set_node_flags("/obj/geo1/mountain1", display=True)  # Only set display
     """
     hou = ensure_connected(host, port)
 
@@ -256,27 +258,22 @@ def reorder_inputs(
     Reorder inputs on a node (useful for merge nodes).
 
     new_order is a permutation of the input indices 0..last wired input: position i
-    of new_order names the old input that moves to input i, so [1, 0, 2] swaps the
-    first two of three inputs. Every wire is read first (source item and its output),
-    then each input is set to its new wire in input order, so no wire is ever
-    unplugged without its replacement in hand. Wires from a subnet's indirect
-    inputs move like any other.
+    names the old input that moves to input i. Anything else (a repeated index, a
+    shorter or longer list) is rejected before any wire is touched. Each wire keeps
+    the source output it came from.
 
     Args:
-        node_path: Path to the node
-        new_order: List specifying new input order (e.g., [1, 0, 2] to swap first two)
+        node_path: Path to the node (e.g., "/obj/geo1/merge1")
+        new_order: Permutation of the input indices (e.g., [1, 0, 2] on a 3-input node)
 
     Returns:
-        status, node_path, new_order, and reconnections: one record per wire at its
-        new input, {input_index, source_node, source_output_index}, plus
+        Dict with status, node_path, new_order, and reconnections: one record per wire at
+        its new input, {input_index, source_node, source_output_index}, plus
         previous_input_index.
 
-    Example:
-        # Swap first two inputs on a merge node
-        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])
-
-        # Reverse three inputs
-        reorder_inputs("/obj/geo1/merge1", [2, 1, 0])
+    Examples:
+        reorder_inputs("/obj/geo1/merge1", [1, 0, 2, 3])  # Swap first two of four inputs
+        reorder_inputs("/obj/geo1/merge1", [2, 1, 0])  # Reverse three inputs
     """
     hou = ensure_connected(host, port)
 

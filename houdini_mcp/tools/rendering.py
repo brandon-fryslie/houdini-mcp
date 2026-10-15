@@ -473,8 +473,7 @@ def render_viewport(
 
     Creates a temporary camera, positions it to frame the scene geometry,
     renders the scene, and returns the rendered image encoded as base64.
-    The camera and render node are removed again before returning, whatever
-    the outcome: the scene is as it was before the call.
+    Useful for AI vision analysis of the current scene state.
 
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
@@ -492,13 +491,12 @@ def render_viewport(
 
     Returns:
         Dict with:
-        - status: "success" or "error"
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
         - bounding_box: The world-space box that was framed, when geometry was
 
-    Example:
+    Examples:
         render_viewport()  # Auto-frame scene with isometric view
         render_viewport(camera_rotation=[0, 0, 0])  # Front view
         render_viewport(camera_rotation=[-90, 0, 0])  # Top view
@@ -557,8 +555,6 @@ def render_quad_view(
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
 
     Creates a camera rig and renders standardized views for spatial understanding.
-    The rig and render node are removed again before returning, whatever the
-    outcome: the scene is as it was before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
     calling render_viewport 4 times as it reuses the camera rig and calculates
     the bounding box only once.
@@ -729,7 +725,7 @@ def list_render_nodes(
             - type: ROP type (opengl, karma, ifd, etc.)
             - camera: Camera path if set
             - output: Output image path if set
-            - enabled: Whether the node is bypassed
+            - bypassed: Whether the node is bypassed
 
     Examples:
         list_render_nodes()  # List all ROPs in /out

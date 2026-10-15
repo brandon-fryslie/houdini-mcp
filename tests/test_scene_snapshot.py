@@ -247,9 +247,11 @@ class TestSnapshotFailuresSurviveTheResponseCap:
 
 
 class TestSerializeScene:
-    def test_the_structure_is_the_snapshot_nested(self, mock_connection: MockHouModule) -> None:
+    async def test_the_structure_is_the_snapshot_nested(
+        self, mock_connection: MockHouModule
+    ) -> None:
         _scene(mock_connection)
-        result = serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
 
         def shape(node: dict[str, Any]) -> tuple[str, str, list[Any]]:
             return (node["path"], node["type"], [shape(c) for c in node["children"]])
@@ -270,27 +272,27 @@ class TestSerializeScene:
             ],
         )
 
-    def test_nodes_past_max_depth_are_marked_truncated(
+    async def test_nodes_past_max_depth_are_marked_truncated(
         self, mock_connection: MockHouModule
     ) -> None:
         _scene(mock_connection)
-        result = serialize_scene("/obj", False, 1, host="localhost", port=18811)
+        result = await serialize_scene("/obj", False, 1, host="localhost", port=18811)
         geo1 = result["structure"]["children"][0]
         assert geo1["children"][0] == {"path": "/obj/geo1/box1", "truncated": True}
 
-    def test_parameters_are_read_for_every_node_when_asked(
+    async def test_parameters_are_read_for_every_node_when_asked(
         self, mock_connection: MockHouModule
     ) -> None:
         mock_connection.add_node(
             MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.5})
         )
-        result = serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
         assert result["structure"]["children"][0]["parameters"] == {"tx": 1.5}
 
-    def test_the_scene_root_is_named_and_typed_by_its_node(
+    async def test_the_scene_root_is_named_and_typed_by_its_node(
         self, mock_connection: MockHouModule
     ) -> None:
-        result = serialize_scene("/", False, 0, host="localhost", port=18811)
+        result = await serialize_scene("/", False, 0, host="localhost", port=18811)
         root = mock_connection.node("/")
         assert (result["structure"]["name"], result["structure"]["type"]) == (
             root.name(),
@@ -298,7 +300,7 @@ class TestSerializeScene:
         )
         assert result["structure"]["children"][0]["path"] == "/obj"
 
-    def test_a_node_deleted_before_its_parameters_were_read_fails_the_read(
+    async def test_a_node_deleted_before_its_parameters_were_read_fails_the_read(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _scene(mock_connection)
@@ -309,7 +311,7 @@ class TestSerializeScene:
             return snapshot
 
         monkeypatch.setattr(scene_module, "scene_snapshot", snapshot_then_delete)
-        result = serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
         assert (result["kind"], result["message"]) == (
             "operation_failed",
             "Scene changed while it was read: /obj/cam1 was deleted",
