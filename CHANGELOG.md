@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP Status shows the Houdini being served from Start** (houdini-laws-etg.58u):
+  starting the stdio server opens its in-process link, so the shelf's status
+  dialog reports this Houdini's version and hip file before any tool call
+  instead of `None`, and a Houdini whose `hou` cannot be imported fails at
+  Start, where the shelf shows the cause.
+
 - **Pane types have one source** (houdini-laws-etg.8tg): `list_visible_panes`'s
   `available_types`, the names `capture_pane_screenshot` and
   `capture_multiple_panes` accept, and the list an unknown-type error offers are

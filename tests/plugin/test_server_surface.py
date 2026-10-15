@@ -238,6 +238,43 @@ class TestPluginStartsTheSharedServer:
         assert runs == [{"target": "this interpreter", "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
 
+    def test_status_reports_this_houdini_before_any_tool_call(
+        self,
+        plugin_server: Any,
+        held_serve: dict[str, Any],
+        in_process_houdini: Any,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """MCP Status, clicked right after Start MCP, shows the Houdini being served."""
+        with caplog.at_level("INFO", logger="houdini_mcp.connection"):
+            plugin_server.start_server(use_thread=True)
+        info = get_connection_info()
+
+        assert info["connected"] is True
+        assert info["target"] == "this interpreter"
+        assert info["houdini_version"] == in_process_houdini.applicationVersionString()
+        assert info["hip_file"] == in_process_houdini.hipFile.path()
+        assert (
+            f"Connected to Houdini version: {in_process_houdini.applicationVersionString()}"
+            in caplog.text
+        )
+
+        held_serve["stdin"].set()
+        _wait_until_stopped(plugin_server)
+
+    def test_binding_without_hou_fails_start_and_serves_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
+    ) -> None:
+        """The shelf shows the cause at Start, not on the client's first tool call."""
+        monkeypatch.delitem(sys.modules, "hou")
+        monkeypatch.setattr(sys, "path", [])  # nothing left to import hou from
+
+        with pytest.raises(conn_module.HoudiniConnectionError, match="No module named 'hou'"):
+            plugin_server.start_server(use_thread=True)
+        assert plugin_server.is_server_running() is False
+        assert held_serve["runs"] == 0
+        held_serve["stdin"].set()
+
     def test_failed_foreground_serve_raises_and_is_not_left_running(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
     ) -> None:

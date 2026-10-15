@@ -33,10 +33,14 @@ class AlreadyServing(RuntimeError):
 
 def _prepare_stdio_server() -> Callable[[], None]:
     """Bind the shared server to this interpreter's Houdini; return what runs it."""
-    from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
+    from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
     from houdini_mcp.server import serve
 
     use_houdini(IN_PROCESS_HOUDINI)
+    # [LAW:no-ambient-temporal-coupling] binding opens the link, so the Houdini being
+    # served is known from Start - to MCP Status as to the first tool - and a missing
+    # ``hou`` fails here, where the shelf shows it, not on a client's first call.
+    connect()
     return lambda: serve(transport="stdio")
 
 
