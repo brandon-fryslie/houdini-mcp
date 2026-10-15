@@ -732,7 +732,8 @@ async def find_error_nodes(
     Args:
         root_path: Root path to start search from (default: "/" for entire scene)
         include_warnings: Whether to include nodes with warnings (default: True)
-        max_results: Maximum number of results to return (default: 100)
+        max_results: Maximum number of nodes to list, error, warning and uninspected
+            together (default: 100)
         summarize: If True, use AI to triage and prioritize errors (default: False).
                   Provides actionable fix order and identifies root causes.
 
@@ -745,7 +746,8 @@ async def find_error_nodes(
         - error_count: Number of error nodes found
         - warning_count: Number of warning nodes found
         - uninspected: Nodes whose errors or warnings could not be read, as
-          {path, kind, reason}; their errors are not in error_count
+          {path, kind, reason}; their errors are not in error_count. path is null
+          when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
         - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
         - ai_summary_error: (in place of ai_summary) why no summary could be made
@@ -765,8 +767,9 @@ async def find_error_nodes(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if response is very large
-    if summarize or tools.should_summarize(result):
+    # Apply AI summarization if requested or if response is very large; a failure
+    # read no errors, so there is nothing to triage
+    if result["status"] != "error" and (summarize or tools.should_summarize(result)):
         result = await tools.summarize_errors(result)
 
     return apply_response_cap(result)
@@ -1019,8 +1022,9 @@ async def get_geo_summary(
         _defer_cap=True,
     )
 
-    # Apply AI summarization if requested or if response is very large
-    if summarize or tools.should_summarize(result):
+    # Apply AI summarization if requested or if response is very large; a failure
+    # read no errors, so there is nothing to triage
+    if result["status"] != "error" and (summarize or tools.should_summarize(result)):
         result = await tools.summarize_geometry(result)
 
     return apply_response_cap(result)

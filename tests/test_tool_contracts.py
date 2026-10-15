@@ -543,3 +543,25 @@ class TestServedSummaries:
         assert asked == []
         await client.call_tool("find_error_nodes", {"summarize": True})
         assert len(asked) == 1
+
+    async def test_find_error_nodes_never_summarizes_a_failure(
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A call that read no node has no errors to triage, asked or not."""
+        import houdini_mcp.server as server
+
+        def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
+            return {"status": "error", "kind": "operation_failed", "uninspected": [{}]}
+
+        asked: list[dict[str, Any]] = []
+
+        async def record(data: dict[str, Any]) -> dict[str, Any]:
+            asked.append(data)
+            return data
+
+        monkeypatch.setattr(server.tools, "find_error_nodes", nothing_read)
+        monkeypatch.setattr(server.tools, "summarize_errors", record)
+        monkeypatch.setattr(server.tools, "should_summarize", lambda _data: True)
+
+        await client.call_tool("find_error_nodes", {"summarize": True})
+        assert asked == []

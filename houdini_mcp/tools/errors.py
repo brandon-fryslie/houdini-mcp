@@ -36,7 +36,8 @@ def find_error_nodes(
     Args:
         root_path: Root path to start search from (default: "/" for entire scene)
         include_warnings: Whether to include nodes with warnings (default: True)
-        max_results: Maximum number of results to return (default: 100)
+        max_results: Maximum number of nodes to list, error, warning and uninspected
+            together (default: 100)
         host: Houdini RPC server host
         port: Houdini RPC server port
 
@@ -47,7 +48,8 @@ def find_error_nodes(
         - error_nodes: List of nodes with errors
         - warning_nodes: List of nodes with warnings (if include_warnings=True)
         - uninspected: Nodes whose errors or warnings could not be read, as
-          {path, kind, reason}; their errors are not in error_count
+          {path, kind, reason}; their errors are not in error_count. path is null
+          when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
 
     Example:
@@ -71,19 +73,21 @@ def find_error_nodes(
     total_scanned = 0
 
     for node in [root, *descendants]:
-        if len(error_nodes) + len(warning_nodes) >= max_results:
+        if len(error_nodes) + len(warning_nodes) + len(uninspected) >= max_results:
             break
         total_scanned += 1
-        path = node.path()
         try:
             errors = list(node.errors())
             warnings = list(node.warnings()) if include_warnings else []
-            identity = {"path": path, "name": node.name(), "type": node.type().name()}
+            # every read is a round trip to Houdini: a clean node is not asked who it is
+            identity = _identity(node) if errors or warnings else {}
         except Exception as e:
             # [LAW:single-enforcer] a lost link is the call's failure, not this node's
             if transport_failure(e):
                 raise
-            uninspected.append({"path": path, "kind": "operation_failed", "reason": str(e)})
+            uninspected.append(
+                {"path": _path_or_none(node), "kind": "operation_failed", "reason": str(e)}
+            )
             continue
         if errors:
             error_nodes.append({**identity, "errors": errors})
@@ -103,11 +107,26 @@ def find_error_nodes(
         report["warning_count"] = len(warning_nodes)
 
     # Add warning if results were limited
-    if len(error_nodes) + len(warning_nodes) >= max_results:
+    if len(error_nodes) + len(warning_nodes) + len(uninspected) >= max_results:
         report["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
 
     # [LAW:single-enforcer] success means every node scanned was inspected
-    failed = [Undone(u["path"], u["kind"], u["reason"]) for u in uninspected]
+    failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
     inspected = range(total_scanned - len(uninspected))
     status = batch_status("find_error_nodes", inspected, failed, **report)
     return _add_response_metadata({"status": status, **report}, apply_cap=not _defer_cap)
+
+
+def _identity(node: Any) -> dict[str, Any]:
+    return {"path": node.path(), "name": node.name(), "type": node.type().name()}
+
+
+def _path_or_none(node: Any) -> str | None:
+    """``node``'s path, or None when Houdini will not give it: a node deleted
+    since the scan listed it refuses every read, its path included."""
+    try:
+        return str(node.path())
+    except Exception as e:
+        if transport_failure(e):
+            raise
+        return None

@@ -422,6 +422,38 @@ class TestFindErrorNodesUninspected:
 
         assert (result["status"], result["uninspected"]) == ("success", [])
 
+    def test_a_node_deleted_mid_scan_is_uninspected_without_a_path(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        gone = raised_inside_houdini(
+            RuntimeError("Attempt to access an object that no longer exists")
+        )
+        deleted = self._unreadable("/obj/deleted", gone)
+        mock_connection.add_node(deleted)
+        deleted.path = MagicMock(side_effect=gone)  # type: ignore[method-assign]
+
+        result = find_error_nodes(root_path="/obj", host="localhost", port=18811)
+
+        assert result["status"] == "partial"
+        [unread] = result["uninspected"]
+        assert (unread["path"], unread["kind"]) == (None, "operation_failed")
+        assert unread["reason"].startswith("Attempt to access an object that no longer exists")
+
+    def test_uninspected_nodes_count_toward_max_results(self, mock_connection):
+        from houdini_mcp.tools import find_error_nodes
+
+        for i in range(5):
+            mock_connection.add_node(
+                self._unreadable(f"/obj/broken{i}", raised_inside_houdini(RuntimeError("no cook")))
+            )
+
+        result = find_error_nodes(root_path="/obj", max_results=3, host="localhost", port=18811)
+
+        assert result["status"] == "partial"
+        assert len(result["uninspected"]) == 3
+        assert result["total_scanned"] == 4
+        assert result["warning"].startswith("Results limited to 3")
+
     def test_a_scan_that_read_no_node_is_an_error(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
 
