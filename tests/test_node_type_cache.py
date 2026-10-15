@@ -1,10 +1,15 @@
 """The node type cache serves data from the Houdini instance it was read from."""
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from houdini_mcp.connection import get_connection
+from houdini_mcp.tools import list_node_types
 from houdini_mcp.tools.cache import NodeTypeCache
+from houdini_mcp.tools.failure import OperationFailed
 from tests.conftest import MockHouModule
 
 
@@ -127,3 +132,82 @@ class TestNodeTypeCacheReadsThroughTheProxy:
         assert cache.filter_types(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]
+
+
+class TestAFailedReadIsNeverCached:
+    """[LAW:no-silent-failure] "has no types" and "could not read the types" are
+    different states: only the first is ever served from the cache."""
+
+    def test_a_refused_read_raises_with_houdinis_reason(self) -> None:
+        cache = NodeTypeCache()
+        hou = _hou_with_types("box")
+        hou.nodeTypeCategories.side_effect = RuntimeError("categories unavailable")
+
+        with pytest.raises(OperationFailed, match="RuntimeError: categories unavailable"):
+            cache.get_all_types(hou)
+
+        assert not cache.is_valid()
+        assert cache.stats.entry_count == 0
+
+    def test_the_next_read_after_a_failure_reads_houdini_again(self) -> None:
+        cache = NodeTypeCache()
+        hou = _hou_with_types("box", "scatter")
+        categories = hou.nodeTypeCategories.return_value
+        hou.nodeTypeCategories.side_effect = [RuntimeError("transient"), categories]
+
+        with pytest.raises(OperationFailed):
+            cache.get_all_types(hou)
+        types = cache.get_all_types(hou)
+
+        assert _names(types) == ["box", "scatter"]
+        assert hou.nodeTypeCategories.call_count == 2
+
+    def test_a_houdini_with_no_types_is_a_cached_answer(self) -> None:
+        cache = NodeTypeCache()
+        hou = _hou_with_types()
+
+        assert cache.get_all_types(hou) == []
+        assert cache.get_all_types(hou) == []
+        assert hou.nodeTypeCategories.call_count == 1
+        assert (cache.stats.misses, cache.stats.hits) == (1, 1)
+
+    def test_a_description_that_will_not_read_is_unread(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cache = NodeTypeCache()
+        hou = _hou_with_types("box", "broken_hda")
+        broken = hou.nodeTypeCategories.return_value["Sop"].nodeTypes.return_value["broken_hda"]
+        broken.description.side_effect = RuntimeError("definition missing")
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            types = cache.get_all_types(hou)
+
+        assert [t["description"] for t in types] == [
+            "Box",
+            {"unread": "RuntimeError: definition missing"},
+        ]
+        assert "types=2 categories=1 unread_descriptions=1" in caplog.text
+
+
+class TestListNodeTypesReportsAFailedRead:
+    def test_a_refused_read_is_operation_failed(self, mock_connection: MockHouModule) -> None:
+        mock_connection.nodeTypeCategories = MagicMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("categories unavailable")
+        )
+
+        result = list_node_types()
+
+        assert result["kind"] == "operation_failed"
+        assert "categories unavailable" in result["message"]
+        assert "node_types" not in result
+
+    def test_a_lost_link_during_the_read_is_connection_lost(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        mock_connection.nodeTypeCategories = MagicMock(  # type: ignore[method-assign]
+            side_effect=EOFError("stream has been closed")
+        )
+
+        result = list_node_types()
+
+        assert result["kind"] == "connection_lost"

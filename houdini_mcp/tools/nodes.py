@@ -277,7 +277,8 @@ def list_node_types(
     List available Houdini node types.
 
     The first call reads every node type from Houdini into a cache; later
-    calls filter that cache.
+    calls filter that cache. A read Houdini refuses fails the call with
+    operation_failed and caches nothing, so the next call reads again.
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
@@ -286,7 +287,8 @@ def list_node_types(
         cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
-        List of node types with their categories and descriptions.
+        List of node types with their categories and descriptions; a
+        description Houdini would not give is {unread}.
         Includes pagination info (has_more, cursor) when applicable.
 
     Note:
