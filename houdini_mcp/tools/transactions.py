@@ -110,10 +110,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
 }
 
 # The tools a transaction can be begun for: everything with an effect to recover.
-MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
-    tool: policy.recovery
-    for tool, policy in TOOL_POLICIES.items()
-    if policy.recovery is not None
+RECOVERABLE_TOOL_POLICIES: dict[str, TransactionPolicy] = {
+    tool: policy.recovery for tool, policy in TOOL_POLICIES.items() if policy.recovery is not None
 }
 
 
@@ -262,7 +260,7 @@ class TransactionManager:
     ) -> SceneTransaction:
         if not tools:
             raise ValueError("A transaction requires at least one tool")
-        policies = [MUTATING_TOOL_POLICIES[tool] for tool in tools]
+        policies = [RECOVERABLE_TOOL_POLICIES[tool] for tool in tools]
         precedence = {
             TransactionPolicy.UNDOABLE: 0,
             TransactionPolicy.CHECKPOINT_REQUIRED: 1,

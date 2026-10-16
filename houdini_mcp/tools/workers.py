@@ -151,7 +151,7 @@ class WorkerLedger:
         return worker
 
     def admit(self, operation: str) -> None:
-        """Give ``operation`` the scene to itself, or refuse by raising :class:`WorkerStillRunning`."""
+        """Give ``operation`` the scene to itself, or refuse with :class:`WorkerStillRunning`."""
         worker = self.running()
         if worker is not None:
             _refuse(operation, worker)

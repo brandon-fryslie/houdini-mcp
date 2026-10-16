@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from houdini_mcp.tools.transactions import (
-    MUTATING_TOOL_POLICIES,
+    RECOVERABLE_TOOL_POLICIES,
     SceneAccess,
     ToolPolicy,
     TransactionConflict,
@@ -31,7 +31,7 @@ def manager(mock_connection, tmp_path: Path, revision):
 def test_render_tools_need_no_transaction(render_tool):
     """A render leaves the scene as it found it, so there is no checkpoint to pay for;
     that it still waits for a running program is test_execute_code_worker's."""
-    assert render_tool not in MUTATING_TOOL_POLICIES
+    assert render_tool not in RECOVERABLE_TOOL_POLICIES
 
 
 @pytest.mark.parametrize(
