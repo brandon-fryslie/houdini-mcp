@@ -12,11 +12,11 @@ Key features:
 Usage:
     from houdini_mcp.tools.cache import node_type_cache, invalidate_all_caches
 
-    # Cache is populated automatically on first call
-    types = node_type_cache.get_all_types(hou)
+    # Houdini is read on the first lookup; later lookups are served from the cache
+    types = node_type_cache.lookup(hou).types
 
-    # Filter from cache (instant)
-    sop_types = node_type_cache.filter_types(category="Sop", name_filter="noise")
+    # Filter the snapshot (instant)
+    sop_types = types.filter(category="Sop", name_filter="noise")
 
     # Invalidate on scene load
     invalidate_all_caches()
@@ -25,12 +25,13 @@ Usage:
 import logging
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any, TypedDict
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, TypedDict
 
 from ._common import ensure_connected, handle_connection_errors
 from .failure import InvalidInput, OperationFailed
-from .reads import Unread, is_unread, read, unread
+from .reads import Unread, is_unread, read, reraise_transport_failure, unread
 
 logger = logging.getLogger("houdini_mcp.tools.cache")
 
@@ -41,6 +42,36 @@ class NodeType(TypedDict):
     category: str
     name: str
     description: str | Unread
+
+
+@dataclass(frozen=True)
+class NodeTypes:
+    """Every node type one Houdini reported, in one walk.
+
+    [LAW:no-ambient-temporal-coupling] A call works from the one snapshot its
+    lookup returned, so a fill or invalidate racing it cannot change what the
+    call answers with.
+    """
+
+    types: tuple[NodeType, ...] = ()
+    categories: tuple[str, ...] = ()
+    by_category: Mapping[str, tuple[NodeType, ...]] = field(default_factory=dict)
+
+    def filter(self, category: str | None = None, name_filter: str | None = None) -> list[NodeType]:
+        """The types in ``category`` (case-insensitive) whose names contain
+        ``name_filter`` (case-insensitive); either filter left out matches all."""
+        source = self.by_category.get(category.lower(), ()) if category else self.types
+        if name_filter:
+            needle = name_filter.lower()
+            source = tuple(t for t in source if needle in t["name"].lower())
+        return list(source)
+
+
+class NodeTypeLookup(NamedTuple):
+    """The types a lookup answered with, and whether the cache already held them."""
+
+    types: NodeTypes
+    hit: bool
 
 
 @dataclass
@@ -137,115 +168,63 @@ class NodeTypeCache(BaseCache):
                  Node types are truly static during a session.
         """
         super().__init__("node_types", ttl)
-        self._all_types: list[NodeType] = []
-        self._by_category: dict[str, list[NodeType]] = {}
-        self._categories: list[str] = []
+        self._types = NodeTypes()
         # [LAW:one-source-of-truth] the Houdini the cached types were read from. A
         # ``hou`` is one connection's view of one Houdini instance, so cached data is
         # tied to the instance by identity: a reconnect hands out a new ``hou``, and the
         # types it reports are read again rather than served from the old instance.
         self._hou: Any = None
 
-    def get_all_types(self, hou: Any) -> list[NodeType]:
+    def lookup(self, hou: Any) -> NodeTypeLookup:
         """
-        Get all node types, populating cache if needed.
-
-        This is the primary method to populate the cache. On first call,
-        it fetches all node types from Houdini. Subsequent calls return
-        cached data instantly.
+        The node types ``hou`` reports, read from Houdini on the first lookup for
+        that ``hou`` and served from the cache after.
 
         Args:
             hou: The hou module (from ensure_connected)
-
-        Returns:
-            List of all node types with category, name, description
         """
         with self._lock:
             # [LAW:no-silent-failure] a cache holds only a read that succeeded, so an
             # empty one is Houdini's answer, served like any other.
             if self._valid and self._hou is hou:
                 self._record_hit()
-                return self._all_types
+                return NodeTypeLookup(self._types, hit=True)
 
             # [LAW:dataflow-not-control-flow] a miss means what the cache holds was
             # not read from this ``hou``: it is forgotten before every fill, so a fill
             # that fails leaves nothing behind that describes another Houdini.
             self._record_miss()
             self._forget()
-            self._populate(hou)
+            self._types = self._read(hou)
             self._hou = hou
-            return self._all_types
-
-    def filter_types(
-        self,
-        category: str | None = None,
-        name_filter: str | None = None,
-    ) -> list[NodeType]:
-        """
-        Filter cached node types.
-
-        This is a fast operation that works on cached data.
-        Must call get_all_types() first to populate cache.
-
-        Args:
-            category: Optional category filter (case-insensitive)
-            name_filter: Optional substring filter for type names
-
-        Returns:
-            Every cached type matching both filters; the caller pages it.
-        """
-        with self._lock:
-            # Start with category filter
-            if category:
-                cat_lower = category.lower()
-                source = self._by_category.get(cat_lower, [])
-            else:
-                source = self._all_types
-
-            # Apply name filter
-            if name_filter:
-                filter_lower = name_filter.lower()
-                source = [t for t in source if filter_lower in t["name"].lower()]
-
-            return list(source)
-
-    def get_categories(self) -> list[str]:
-        """
-        The categories of the types ``get_all_types`` last read.
-
-        [LAW:dataflow-not-control-flow] A read of cached data, like ``filter_types``:
-        ``get_all_types`` is the one place the cache is filled and the one lookup
-        the stats count, so a tool's categories are not a second lookup.
-        """
-        with self._lock:
-            return self._categories.copy()
+            self._valid = True
+            self._stats.entry_count = len(self._types.types)
+            return NodeTypeLookup(self._types, hit=False)
 
     def invalidate(self) -> None:
-        """Forget the types and the ``hou`` they came from; every read is empty until
-        ``get_all_types`` fills the cache again."""
+        """Forget the types and the ``hou`` they came from; the next lookup reads
+        Houdini again."""
         with self._lock:
             self._forget()
             super().invalidate()
 
     def _forget(self) -> None:
-        self._all_types, self._by_category, self._categories = [], {}, []
+        self._types = NodeTypes()
         self._hou = None
         self._valid = False
         self._stats.entry_count = 0
 
-    def _populate(self, hou: Any) -> None:
+    def _read(self, hou: Any) -> NodeTypes:
         """
-        Populate the cache with all node types.
+        Every node type ``hou`` reports.
 
-        This is called internally when cache is invalid. The types are read
-        through the hou proxy; no program is sent to Houdini for it.
-        [LAW:single-enforcer] the only program execution in this server is the
-        gate in ``code.py``, and a cache fill is not a program.
+        The types are read through the hou proxy; no program is sent to Houdini
+        for it. [LAW:single-enforcer] the only program execution in this server
+        is the gate in ``code.py``, and a cache fill is not a program.
 
         [LAW:no-silent-failure] A walk Houdini refuses raises, and the cache holds
         nothing: "has no types" and "could not read the types" are never the same
-        cached value. The cause rides on the error, so a lost link is still
-        reported as one.
+        cached value.
         """
         start_time = time.time()
         logger.info("Populating node type cache...")
@@ -258,15 +237,13 @@ class NodeTypeCache(BaseCache):
                 for cat_name, cat in hou.nodeTypeCategories().items()
             ]
         except Exception as e:
+            reraise_transport_failure(e)
             raise OperationFailed(
                 f"Could not read node types from Houdini: {unread(e)['unread']}"
             ) from e
 
-        all_types: list[NodeType] = []
-        by_category: dict[str, list[NodeType]] = {}
-        categories: list[str] = []
-        for cat_name, types in walked:
-            cat_types = [
+        by_category = {
+            cat_name: tuple(
                 NodeType(
                     category=cat_name,
                     name=type_name,
@@ -275,27 +252,28 @@ class NodeTypeCache(BaseCache):
                     ),
                 )
                 for type_name, type_obj in types
-            ]
-            categories.append(cat_name)
-            all_types.extend(cat_types)
-            by_category[cat_name.lower()] = cat_types
-
-        self._all_types = all_types
-        self._by_category = by_category
-        self._categories = categories
-        self._valid = True
-        self._stats.entry_count = len(all_types)
+            )
+            for cat_name, types in walked
+        }
+        node_types = NodeTypes(
+            types=tuple(t for cat_types in by_category.values() for t in cat_types),
+            categories=tuple(by_category),
+            by_category={
+                cat_name.lower(): cat_types for cat_name, cat_types in by_category.items()
+            },
+        )
 
         elapsed_ms = (time.time() - start_time) * 1000
         self._stats.last_populate_time_ms = elapsed_ms
         logger.info(
             "Node type cache populated: types=%d categories=%d unread_descriptions=%d "
             "elapsed_ms=%.1f",
-            len(all_types),
-            len(categories),
-            sum(is_unread(t["description"]) for t in all_types),
+            len(node_types.types),
+            len(node_types.categories),
+            sum(is_unread(t["description"]) for t in node_types.types),
             elapsed_ms,
         )
+        return node_types
 
 
 # =============================================================================
@@ -392,7 +370,7 @@ def manage_cache(
     elif action == "warmup":
         start = time.time()
         hou = ensure_connected(host, port)
-        node_type_cache.get_all_types(hou)
+        node_type_cache.lookup(hou)
         elapsed_ms = (time.time() - start) * 1000
         return {
             "status": "success",

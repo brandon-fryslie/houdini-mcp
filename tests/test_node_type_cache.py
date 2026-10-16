@@ -9,7 +9,7 @@ import pytest
 
 from houdini_mcp.connection import get_connection
 from houdini_mcp.tools import list_node_types
-from houdini_mcp.tools.cache import NodeType, NodeTypeCache
+from houdini_mcp.tools.cache import NodeType, NodeTypeCache, invalidate_all_caches
 from houdini_mcp.tools.failure import OperationFailed
 from tests.conftest import MockHouModule
 
@@ -37,11 +37,12 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         cache = NodeTypeCache()
         hou = _hou_with_types("box", "sphere")
 
-        first = cache.get_all_types(hou)
-        second = cache.get_all_types(hou)
+        first = cache.lookup(hou)
+        second = cache.lookup(hou)
 
-        assert _names(second) == ["box", "sphere"]
-        assert second is first
+        assert _names(second.types.types) == ["box", "sphere"]
+        assert second.types is first.types
+        assert (first.hit, second.hit) == (False, True)
         assert hou.nodeTypeCategories.call_count == 1
         assert (cache.stats.misses, cache.stats.hits) == (1, 1)
 
@@ -52,11 +53,12 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         before_restart = _hou_with_types("box", "sphere")
         after_restart = _hou_with_types("box", "sphere", "my_hda")
 
-        cache.get_all_types(before_restart)
-        types = cache.get_all_types(after_restart)
+        cache.lookup(before_restart)
+        lookup = cache.lookup(after_restart)
 
-        assert _names(types) == ["box", "sphere", "my_hda"]
-        assert _names(cache.filter_types(name_filter="hda")) == ["my_hda"]
+        assert not lookup.hit
+        assert _names(lookup.types.types) == ["box", "sphere", "my_hda"]
+        assert _names(lookup.types.filter(name_filter="hda")) == ["my_hda"]
         assert after_restart.nodeTypeCategories.call_count == 1
         assert (cache.stats.misses, cache.stats.hits) == (2, 0)
 
@@ -67,48 +69,44 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         old = _hou_with_types("box")
         new = _hou_with_types("box", "my_hda")
 
-        cache.get_all_types(old)
-        cache.get_all_types(new)
-        types = cache.get_all_types(old)
+        cache.lookup(old)
+        cache.lookup(new)
+        types = cache.lookup(old).types
 
-        assert _names(types) == ["box"]
+        assert _names(types.types) == ["box"]
         assert old.nodeTypeCategories.call_count == 2
 
     def test_invalidate_rereads_the_same_instance(self) -> None:
         cache = NodeTypeCache()
         hou = _hou_with_types("box")
 
-        cache.get_all_types(hou)
+        cache.lookup(hou)
         cache.invalidate()
-        cache.get_all_types(hou)
+        cache.lookup(hou)
 
         assert hou.nodeTypeCategories.call_count == 2
 
     def test_categories_follow_the_instance(self) -> None:
         cache = NodeTypeCache()
-        cache.get_all_types(_hou_with_types("box"))
+        cache.lookup(_hou_with_types("box"))
         other = _hou_with_types("box")
         other.nodeTypeCategories.return_value = {
             "Object": other.nodeTypeCategories.return_value["Sop"]
         }
 
-        cache.get_all_types(other)
+        assert cache.lookup(other).types.categories == ("Object",)
 
-        assert cache.get_categories() == ["Object"]
-
-    def test_invalidate_empties_every_read(self) -> None:
+    def test_a_snapshot_outlives_an_invalidate(self) -> None:
+        """A call answers from the walk its lookup returned, whatever the cache
+        does after."""
         cache = NodeTypeCache()
-        cache.get_all_types(_hou_with_types("box"))
+        types = cache.lookup(_hou_with_types("box", "sphere")).types
         cache.invalidate()
 
-        assert (cache.filter_types(), cache.get_categories()) == ([], [])
-
-    def test_categories_are_not_a_second_lookup(self) -> None:
-        cache = NodeTypeCache()
-        cache.get_all_types(_hou_with_types("box"))
-        cache.get_categories()
-
-        assert (cache.stats.hits, cache.stats.misses) == (0, 1)
+        assert _names(types.filter()) == ["box", "sphere"]
+        assert types.categories == ("Sop",)
+        assert not cache.is_valid()
+        assert cache.stats.entry_count == 0
 
 
 class TestNodeTypeCacheReadsThroughTheProxy:
@@ -125,12 +123,12 @@ class TestNodeTypeCacheReadsThroughTheProxy:
         hou.____conn__ = connection
 
         cache = NodeTypeCache()
-        types = cache.get_all_types(hou)
+        types = cache.lookup(hou).types
 
         connection.execute.assert_not_called()
         assert cache.is_valid()
-        assert {t["category"] for t in types} == set(hou.nodeTypeCategories())
-        assert cache.filter_types(category="Object", name_filter="geo") == [
+        assert {t["category"] for t in types.types} == set(hou.nodeTypeCategories())
+        assert types.filter(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]
 
@@ -145,7 +143,7 @@ class TestAFailedReadIsNeverCached:
         hou.nodeTypeCategories.side_effect = RuntimeError("categories unavailable")
 
         with pytest.raises(OperationFailed, match="RuntimeError: categories unavailable"):
-            cache.get_all_types(hou)
+            cache.lookup(hou)
 
         assert not cache.is_valid()
         assert cache.stats.entry_count == 0
@@ -157,23 +155,22 @@ class TestAFailedReadIsNeverCached:
         hou.nodeTypeCategories.side_effect = [RuntimeError("transient"), categories]
 
         with pytest.raises(OperationFailed):
-            cache.get_all_types(hou)
-        types = cache.get_all_types(hou)
+            cache.lookup(hou)
+        types = cache.lookup(hou).types
 
-        assert _names(types) == ["box", "scatter"]
+        assert _names(types.types) == ["box", "scatter"]
         assert hou.nodeTypeCategories.call_count == 2
 
     def test_a_refused_read_from_another_houdini_forgets_the_old_one(self) -> None:
         cache = NodeTypeCache()
-        cache.get_all_types(_hou_with_types("box"))
+        cache.lookup(_hou_with_types("box"))
         restarted = _hou_with_types("box")
         restarted.nodeTypeCategories.side_effect = RuntimeError("still starting")
 
         with pytest.raises(OperationFailed):
-            cache.get_all_types(restarted)
+            cache.lookup(restarted)
 
         assert not cache.is_valid()
-        assert (cache.filter_types(), cache.get_categories()) == ([], [])
         assert cache.stats.entry_count == 0
 
     def test_a_fault_in_building_the_entries_is_not_labelled_a_refused_read(self) -> None:
@@ -190,7 +187,7 @@ class TestAFailedReadIsNeverCached:
         hou.nodeTypeCategories.return_value = {UnlowerableName("Sop"): category}
 
         with pytest.raises(TypeError, match="server fault"):
-            cache.get_all_types(hou)
+            cache.lookup(hou)
 
         assert not cache.is_valid()
 
@@ -198,8 +195,8 @@ class TestAFailedReadIsNeverCached:
         cache = NodeTypeCache()
         hou = _hou_with_types()
 
-        assert cache.get_all_types(hou) == []
-        assert cache.get_all_types(hou) == []
+        assert cache.lookup(hou).types.types == ()
+        assert cache.lookup(hou).types.types == ()
         assert hou.nodeTypeCategories.call_count == 1
         assert (cache.stats.misses, cache.stats.hits) == (1, 1)
 
@@ -212,9 +209,9 @@ class TestAFailedReadIsNeverCached:
         broken.description.side_effect = RuntimeError("definition missing")
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
-            types = cache.get_all_types(hou)
+            types = cache.lookup(hou).types
 
-        assert [t["description"] for t in types] == [
+        assert [t["description"] for t in types.types] == [
             "Box",
             {"unread": "RuntimeError: definition missing"},
         ]
@@ -243,3 +240,16 @@ class TestListNodeTypesReportsAFailedRead:
         result = list_node_types()
 
         assert result["kind"] == "connection_lost"
+
+    def test_cache_info_says_whether_this_call_read_houdini(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        """A read after earlier hits is not a hit: the flag is this call's, not the
+        cache's lifetime count."""
+        first = list_node_types()
+        second = list_node_types()
+        invalidate_all_caches()
+        third = list_node_types()
+
+        hits = [r["_cache_info"]["hit"] for r in (first, second, third)]
+        assert hits == [False, True, False]
