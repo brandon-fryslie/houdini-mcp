@@ -67,8 +67,10 @@ for that worker is the remedy, with `timeout`, a `warning`,
 }
 ```
 
-Until that program ends, every scene-writing tool, another `execute_code`, and
-`get_geo_summary` (which reads through a program in the same worker slot) return
+Until that program ends, every scene-writing tool, another `execute_code`,
+`get_geo_summary` (which reads through a program in the same worker slot), and
+`render_viewport` and `render_quad_view` (which add a camera rig and a ROP for
+the call) return
 `kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
 worker; plain reads,
 `save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.

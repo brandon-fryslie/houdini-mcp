@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from houdini_mcp.tools.transactions import (
+    RECOVERABLE_TOOL_POLICIES,
+    SceneAccess,
+    ToolPolicy,
     TransactionConflict,
     TransactionManager,
     TransactionPolicy,
@@ -24,12 +27,19 @@ def manager(mock_connection, tmp_path: Path, revision):
     )
 
 
-def test_begin_refuses_a_reading_policy(mock_connection, tmp_path):
-    """A transaction under a reading policy would checkpoint nothing and undo nothing."""
-    with pytest.raises(ValueError, match="reading policy"):
-        manager(mock_connection, tmp_path, ["before"]).begin(
-            ["create_node"], policy=TransactionPolicy.READS_ONLY
-        )
+@pytest.mark.parametrize("render_tool", ["render_viewport", "render_quad_view"])
+def test_render_tools_need_no_transaction(render_tool):
+    """A render leaves the scene as it found it, so there is no checkpoint to pay for;
+    that it still waits for a running program is test_execute_code_worker's."""
+    assert render_tool not in RECOVERABLE_TOOL_POLICIES
+
+
+@pytest.mark.parametrize(
+    "recovery", [TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED]
+)
+def test_a_scene_writer_cannot_share_the_scene(recovery):
+    with pytest.raises(ValueError, match="cannot share it"):
+        ToolPolicy(recovery, SceneAccess.SHARED)
 
 
 def test_failed_multistep_transaction_closes_group_then_undoes(mock_connection, tmp_path):

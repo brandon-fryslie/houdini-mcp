@@ -7,8 +7,8 @@ interleave with it, and the undo stack would attribute the mix to nobody.
 
 [LAW:no-ambient-temporal-coupling] "A worker is still running" is therefore
 explicit state with one owner, :class:`WorkerLedger`: it launches the thread,
-the thread clears the slot as its last act, and every tool that writes the
-scene asks the ledger before it runs. Nothing else starts a worker thread and
+the thread clears the slot as its last act, and every tool that needs the
+scene to itself asks the ledger before it runs. Nothing else starts a worker thread and
 nothing else decides whether a mutation may proceed.
 """
 
@@ -151,7 +151,7 @@ class WorkerLedger:
         return worker
 
     def admit(self, operation: str) -> None:
-        """Let ``operation`` write the scene, or refuse by raising :class:`WorkerStillRunning`."""
+        """Give ``operation`` the scene to itself, or refuse with :class:`WorkerStillRunning`."""
         worker = self.running()
         if worker is not None:
             _refuse(operation, worker)

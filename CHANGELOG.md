@@ -373,8 +373,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its undo group have ended. `TOOL_POLICIES` (`tools/transactions.py`) now
   classifies every tool, readers included, and the tool boundary looks a
   tool's name up at import, so an unclassified tool cannot exist. Every tool
-  whose policy waits for a worker (the scene writers, `execute_code`, and
-  `get_geo_summary`, which reads through a program in the same slot) is
+  whose policy waits for a worker (the scene writers, `execute_code`,
+  `get_geo_summary`, which reads through a program in the same slot, and the
+  render tools, which add a camera rig and a ROP for the call) is
   refused while the slot is held, with `error_type: "worker_still_running"`,
   the `operation`, and a `worker` block (`operation`, `code_sha256`, `timeout`,
   `running_for_seconds`); plain reads, `save_scene` and the screenshot tools
