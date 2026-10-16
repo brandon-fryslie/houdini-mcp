@@ -287,6 +287,36 @@ class TestPolicyProfiles:
         assert result["hint"].startswith("Use get_geo_summary()")
         assert ". Enable HOUDINI_MCP_ALLOW_BYPASS" in result["hint"]
 
+    # Dangerous code under read-only is refused by the allowlist, before any bypass gate.
+    @pytest.mark.parametrize(
+        ("code", "flag", "policy"),
+        [
+            ("import socket; socket.socket()", "allow_dangerous", "normal"),
+            ("hou.node('/obj/geo1').geometry()", "allow_heavy_geometry", "normal"),
+            ("hou.node('/obj/geo1').geometry()", "allow_heavy_geometry", "read-only"),
+        ],
+    )
+    @pytest.mark.parametrize("requested", [False, True])
+    @pytest.mark.parametrize("config", [False, True])
+    def test_hint_names_exactly_the_unmet_inputs(
+        self, mock_connection, monkeypatch, code, flag, policy, requested, config
+    ):
+        """Every refusal's hint asks for each input still short of the grant, and no other."""
+        import houdini_mcp.tools.code as code_mod
+        from houdini_mcp.tools import execute_code
+
+        if policy == "normal" and requested and config:
+            pytest.skip("granted: there is no refusal to hint")
+        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: config)
+        result = execute_code(
+            code, policy=policy, host="localhost", port=18811, **{flag: requested}
+        )
+        assert result["status"] == "error"
+        hint = result["hint"]
+        assert ("policy='normal'" in hint) == (policy != "normal")
+        assert (f"{flag}=True" in hint) == (not requested)
+        assert ("HOUDINI_MCP_ALLOW_BYPASS" in hint) == (not config)
+
 
 # ---------------------------------------------------------------------------
 # AC4: bypass flags require configuration + request opt-in and are audited

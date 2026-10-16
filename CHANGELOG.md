@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A bypass refusal's hint names only what is still missing**
+  (houdini-execute-code-d6q): when `execute_code` refuses dangerous or
+  heavy-geometry code, the `hint` lists each of `policy='normal'`, the request
+  flag, and `HOUDINI_MCP_ALLOW_BYPASS` that is not yet met, and none that is.
+  It named the server setting when it was already enabled, and the flag when
+  it was already set.
+
 - **A scene diff is its own run's alone** (houdini-laws-etg.c91): `execute_code`
   reads the scene before and after the program, and computes the diff, inside
   the program's worker, so no other program can run between the two reads; a

@@ -301,29 +301,36 @@ def _bypass_refusal(gate: _BypassGate, grant: ExecutionGrant) -> tuple[str, str,
     """``(blocked_reason, message, hint)`` for code that needs ``gate`` under ``grant``.
 
     The refusal is one of the grant's own states - the policy forbids it, the
-    config forbids it, or nobody asked - and the hint names the input that
-    would change the answer, never one that cannot.
+    config forbids it, or nobody asked - and the hint names every input still
+    short of the grant, never one already met.
     """
+    # [LAW:one-source-of-truth] The three inputs ExecutionGrant.resolve ANDs
+    # together, each with what the caller does to meet it; the hint is the unmet ones.
+    unmet = [
+        step
+        for step, met in (
+            ("re-run with policy='normal'", grant.mutation),
+            (f"set {gate.flag}=True", gate.requested(grant)),
+            ("enable HOUDINI_MCP_ALLOW_BYPASS on the server", grant.bypass_config_enabled),
+        )
+        if not met
+    ]
+    steps = " and ".join(unmet)
+    hint = f"{gate.alternative}{steps[0].upper()}{steps[1:]}."
     if not grant.mutation:
         return (
             gate.pattern_reason,
             f"{gate.found} under policy {grant.policy!r}, which permits inspection only.",
-            f"{gate.alternative}Re-run with policy='normal' and {gate.flag}=True on a server "
-            "with HOUDINI_MCP_ALLOW_BYPASS enabled.",
+            hint,
         )
     if gate.requested(grant) and not grant.bypass_config_enabled:
         return (
             "bypass_config_disabled",
             f"Bypass requested ({gate.flag}=True) but server config "
             "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
-            f"{gate.alternative}Enable HOUDINI_MCP_ALLOW_BYPASS on the server; "
-            "the request flag alone grants nothing.",
+            hint,
         )
-    return (
-        gate.pattern_reason,
-        gate.found,
-        f"{gate.alternative}Set {gate.flag}=True AND enable HOUDINI_MCP_ALLOW_BYPASS to proceed.",
-    )
+    return (gate.pattern_reason, gate.found, hint)
 
 
 def _resolve_undo_primitive(hou: Any) -> Any | None:
