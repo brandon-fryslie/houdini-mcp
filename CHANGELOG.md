@@ -263,27 +263,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **ws_client actions carry exactly their own payload; limits aren't magic numbers**
-  (houdini-laws-etg.tnz): `Action` is now the union `Open | Send | Close | ScheduleTimer
-  | CancelTimer | DeliverEvent | DeliverOutcome | Telemetry`, one frozen dataclass per
-  side effect with only the fields that effect needs: `Open` carries `gateway_url` and
-  `tls_verify` as fields (they were a dict under `telemetry`), `Send` a `frame`,
-  `ScheduleTimer` a `timer` and `delay`, `CancelTimer` a `timer`, `DeliverEvent` an
-  `event`, `DeliverOutcome` an `outcome` and `Telemetry` a `record`. A driver matches
-  on the class; `ActionType` and the optional fields are gone. Timer names are the
-  `Timer` enum (`HEARTBEAT`, `HEARTBEAT_TIMEOUT`, `HANDSHAKE_TIMEOUT`, `BACKOFF`, with
-  the old strings as values) instead of four string constants. `WSConfig.max_command_queue`
-  and `max_reconnect_attempts` are a `Limit`: a positive int or `UNBOUNDED`, read by one
-  `limit_reached`; zero and negative no longer mean unlimited and are rejected, and
-  `max_reconnect_attempts` defaults to `UNBOUNDED` (it was `0`). A budget of N now
-  allows N reconnects (it allowed N-1: the attempt was counted before the budget was
-  read, so `1` meant never reconnect). `WSConfig` is frozen, and it rejects a
-  non-positive `heartbeat_timeout` or `handshake_timeout` (the timer fired at once)
-  and a `backoff_multiplier` below 1 (the delay shrank on every retry; at 0 every
-  retry after the first was immediate). A drop the driver reports while the core is
-  not holding a socket (before `start`, in backoff, or after closing) is ignored
-  with `ignored_socket_error` / `ignored_socket_closed` telemetry instead of being
-  charged as another failure.
 - **Render tools share one implementation of framing, rig and ROP configuration**
   (houdini-laws-etg.arl): `render_viewport` and `render_quad_view` derive the
   camera pivot, distance, orthographic width and reported `bounding_box` from
@@ -308,50 +287,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the render instead of being silently left out of the frame; a ROP missing a
   parm the renderer table names fails the render naming the parm. Each render
   logs what it framed and what it set on the ROP.
-- **Inbound ws_client frames are parsed into typed frames gated by state and session**
-  (houdini-laws-etg.qhj): `parse_frame` is the one boundary between the wire and
-  `WSClientCore`. It turns a decoded frame into `WelcomeFrame`, `PongFrame`,
-  `EventFrame`, `AckFrame` or `ErrorFrame`, each with its required fields typed
-  (`session_id` on every frame once a session exists, `capabilities` on `welcome`,
-  `id` and `payload` on `event`, `request_id` and `result` on `ack`, `code` and `fatal`
-  on `error`), and raises `FrameParseError` naming the frame and field for anything
-  else, including an unknown type; the driver reports that where it reports
-  undecodable JSON. `on_frame` takes the parsed frame and admits it from one table:
-  HANDSHAKING takes `welcome` and `error` whatever session they name, CONNECTED takes
-  `pong`, `event`, `ack` and `error` carrying the active session id, and every other
-  frame is ignored with an `ignored_frame` record. An event can no longer be delivered
-  during BACKOFF or HANDSHAKING, and omitting `session_id` no longer bypasses
-  stale-session rejection. `Action.event` carries the `EventFrame`, `Acked.ack` the
-  `AckFrame` (it was `Acked.frame`, a dict), and `Acked.request_id` reads from it. The
-  parser deep-copies an event's `payload` and an ack's `result`, so the frame the app
-  holds does not change when the driver reuses its decoded dict, takes whatever the
-  JSON decoded to and rejects a non-object as a `FrameParseError`, and reads a null
-  `session_id` on an `error` as absent. The `ignored_welcome`,
-  `ignored_pong` and `unknown_frame` telemetry records are gone, and so is
-  `StaleSessionError`, which nothing ever raised. `WSConfig.max_event_queue`,
-  `WSClientCore.event_backlog` and the `event_dropped_backpressure` record are gone:
-  every event is delivered inside the `on_frame` that received it, so the queue they
-  described never held one.
-- **Every ws_client request id reaches exactly one terminal outcome**
-  (houdini-laws-etg.jyr): `WSClientCore.send_command` returns an id that is live until
-  the core emits one `DELIVER_OUTCOME` action for it, carrying `Acked` (with the ack
-  frame), `Cancelled` or `Failed` (with a `CloseReason`). `stop()`, reconnect
-  exhaustion and a fatal gateway error all close through one path that fails every
-  queued and pending request and emits a `command_failed` telemetry record per id. A
-  full command queue now raises `QueueFullError` before allocating an id instead of
-  silently evicting the oldest queued command; `reject_on_full` is gone with the
-  eviction. CLOSED is terminal: `send_command` and `start` raise `ClientClosedError`
-  after it, a second `stop()` is a no-op, and any frame arriving after close is
-  ignored. A fatal error frame from a stale session is rejected like any other stale
-  frame instead of closing the client; before `welcome` no session exists to be stale
-  against, so a fatal rejection of the `hello` closes the client whatever session id it
-  carries. `cancel_command` withdraws the command and
-  settles the id at once with `Cancelled(sent=...)`: a queued command (`sent=False`) is
-  never sent, an in-flight one (`sent=True`) still gets a `cancel` frame and may still
-  run on the gateway, and a later ack for it is ignored. It no longer records unknown
-  ids, which used to drop a command that was later allocated that id. `DELIVER_ACK` is
-  replaced by `DELIVER_OUTCOME`, and the outcome types and both exceptions are exported
-  from `houdini_mcp_plugin`.
 
 - **Connection failure has one definition each of classification, retry and error**
   (houdini-laws-etg.c3b): the in-use failure set is the one union `TransportException`,
