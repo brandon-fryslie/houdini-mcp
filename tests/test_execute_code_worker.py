@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from houdini_mcp.tools import create_node, execute_code, get_scene_info
+from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, get_scene_info
 from houdini_mcp.tools._common import handle_connection_errors
 from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
@@ -144,6 +144,19 @@ class TestWorkerBlocksMutation:
         assert sha in refusals[0].getMessage()
 
 
+class TestATimedOutRunsDiff:
+    def test_appears_once_the_program_ends(self, mock_connection, stalled_program):
+        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
+        _time_out(program, capture_diff=True)
+        assert get_last_scene_diff()["status"] == "warning"
+        worker = WORKERS.running()
+        mock_connection.stall_gate.set()
+        worker.thread.join(5)
+        assert get_last_scene_diff()["diff"]["added_nodes"] == [
+            {"path": "/obj/late", "type": "geo"}
+        ]
+
+
 class TestWorkerLifetime:
     def test_completed_program_releases_the_slot(self, mock_connection, caplog):
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.workers"):
@@ -152,11 +165,8 @@ class TestWorkerLifetime:
         assert result["status"] == "success"
         assert WORKERS.running() is None
         messages = [r.getMessage() for r in caplog.records]
-        [started] = [m for m in messages if m.startswith("execute_code worker started")]
-        [finished] = [m for m in messages if m.startswith("execute_code worker finished")]
-        # One launch number names the run in both of its events.
-        launch = started.split()[3]
-        assert launch.startswith("launch=") and finished.split()[3] == launch
+        assert any(m.startswith("execute_code worker started") for m in messages)
+        assert any(m.startswith("execute_code worker finished") for m in messages)
 
     def test_failing_program_releases_the_slot(self, mock_connection):
         result = execute_code("raise ValueError('boom')", host="localhost", port=18811)
@@ -170,19 +180,14 @@ class TestWorkerLedger:
     def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self, caplog):
         ledger = WorkerLedger()
         gate = threading.Event()
-        first = ledger.launch(
-            lambda _me: gate.wait(), operation="execute_code", code_sha256="a" * 64, timeout=5
-        )
+        first = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=5)
         try:
             with (
                 caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"),
                 pytest.raises(WorkerStillRunning) as refused,
             ):
                 ledger.launch(
-                    lambda _me: gate.wait(),
-                    operation="get_geo_summary",
-                    code_sha256="b" * 64,
-                    timeout=5,
+                    gate.wait, operation="get_geo_summary", code_sha256="b" * 64, timeout=5
                 )
             assert refused.value.worker is first
             assert refused.value.operation == "get_geo_summary"
@@ -206,9 +211,7 @@ class TestWorkerLedger:
 
         monkeypatch.setattr(threading.Thread, "start", cannot_start)
         with pytest.raises(RuntimeError, match="can't start new thread"):
-            ledger.launch(
-                lambda _me: None, operation="execute_code", code_sha256="a" * 64, timeout=5
-            )
+            ledger.launch(lambda: None, operation="execute_code", code_sha256="a" * 64, timeout=5)
 
         assert ledger.running() is None
         monkeypatch.undo()

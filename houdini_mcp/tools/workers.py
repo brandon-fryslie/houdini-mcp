@@ -14,7 +14,6 @@ nothing else decides whether a mutation may proceed.
 
 from __future__ import annotations
 
-import itertools
 import logging
 import threading
 import time
@@ -30,11 +29,9 @@ class RunningWorker:
     """One program running in its own thread, undo group open until it ends.
 
     ``operation`` is the tool that launched it: ``execute_code`` for a caller's
-    program, ``get_geo_summary`` for the server's own. ``launch`` is its place in
-    the order the ledger admitted programs, so a later launch has a larger number.
+    program, ``get_geo_summary`` for the server's own.
     """
 
-    launch: int
     operation: str
     code_sha256: str
     timeout: int
@@ -78,8 +75,8 @@ class WorkerStillRunning(RuntimeError):
             f"{operation} refused: a program launched by {worker.operation} "
             f"(sha256 {worker.code_sha256[:12]}, "
             f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
-            "still running against Houdini with its undo group open, and this call would "
-            f"interleave with it. {HOW_A_WORKER_ENDS}"
+            "still holding Houdini - running with its undo group open, or reading the scene "
+            f"around itself - and this call would interleave with it. {HOW_A_WORKER_ENDS}"
         )
 
 
@@ -96,7 +93,6 @@ class WorkerLedger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running: RunningWorker | None = None
-        self._launches = itertools.count(1)
 
     def running(self) -> RunningWorker | None:
         with self._lock:
@@ -104,16 +100,13 @@ class WorkerLedger:
 
     def launch(
         self,
-        target: Callable[[RunningWorker], None],
+        target: Callable[[], None],
         *,
         operation: str,
         code_sha256: str,
         timeout: int,
     ) -> RunningWorker:
         """Start ``target`` on a daemon thread and record it as the running worker.
-
-        ``target`` is handed its own record, so whatever it must do as this
-        launch it does first, before anything it runs.
 
         Daemon, because a timed-out program must not keep the process alive.
         Raises :class:`WorkerStillRunning` naming ``operation`` rather than ever
@@ -126,20 +119,18 @@ class WorkerLedger:
 
             def run() -> None:
                 try:
-                    target(worker)
+                    target()
                 finally:
                     with self._lock:
                         self._running = None
                     logger.info(
-                        "%s worker finished launch=%d code_sha256=%s after %.3fs",
+                        "%s worker finished code_sha256=%s after %.3fs",
                         worker.operation,
-                        worker.launch,
                         worker.code_sha256,
                         worker.running_for_seconds(),
                     )
 
             worker = RunningWorker(
-                launch=next(self._launches),
                 operation=operation,
                 code_sha256=code_sha256,
                 timeout=timeout,
@@ -154,13 +145,7 @@ class WorkerLedger:
                 # leaving it in the slot would refuse every write until restart.
                 self._running = None
                 raise
-        logger.info(
-            "%s worker started launch=%d code_sha256=%s timeout=%ss",
-            operation,
-            worker.launch,
-            code_sha256,
-            timeout,
-        )
+        logger.info("%s worker started code_sha256=%s timeout=%ss", operation, code_sha256, timeout)
         return worker
 
     def admit(self, operation: str) -> None:

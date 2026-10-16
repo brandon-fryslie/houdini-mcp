@@ -4,7 +4,6 @@ it, and a snapshot that cannot be read is an error the caller sees."""
 import logging
 import threading
 import time
-from collections import Counter
 from typing import Any
 
 import pytest
@@ -225,23 +224,22 @@ class TestADiffIsItsOwnRunsAlone:
 
     @staticmethod
     def _launch_a(
-        paused: str, monkeypatch: pytest.MonkeyPatch
+        monkeypatch: pytest.MonkeyPatch,
     ) -> tuple[threading.Thread, dict[str, Any], threading.Event]:
-        """Start run A on its own thread and hold it inside ``paused`` (a name in
-        code.py) until the returned event is set; return once A is held there."""
-        real = getattr(code_module, paused)
+        """Start run A on its own thread and hold it in its after-read until the
+        returned event is set; return once A is held there."""
+        real = code_module.scene_snapshot
         held, release = threading.Event(), threading.Event()
-        calls: Counter[str] = Counter()
+        reads: list[str] = []
 
-        def hold_then_call(*args: Any) -> Any:
-            calls[paused] += 1
-            # A's second snapshot is its after-read; its one scene_diff is its diff.
-            if (paused, calls[paused]) in {("scene_snapshot", 2), ("scene_diff", 1)}:
+        def hold_the_after_read(*args: Any) -> Any:
+            reads.append("read")
+            if len(reads) == 2:
                 held.set()
                 assert release.wait(5), "run A was never released"
             return real(*args)
 
-        monkeypatch.setattr(code_module, paused, hold_then_call)
+        monkeypatch.setattr(code_module, "scene_snapshot", hold_the_after_read)
         result: dict[str, Any] = {}
 
         def run_a() -> None:
@@ -256,7 +254,7 @@ class TestADiffIsItsOwnRunsAlone:
 
         a = threading.Thread(target=run_a)
         a.start()
-        assert held.wait(5), f"run A never reached {paused}"
+        assert held.wait(5), "run A never reached its after-read"
         return a, result, release
 
     @staticmethod
@@ -271,56 +269,26 @@ class TestADiffIsItsOwnRunsAlone:
     def test_no_program_runs_between_a_captures_two_reads(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        a, a_result, release = self._launch_a("scene_snapshot", monkeypatch)
+        a, a_result, release = self._launch_a(monkeypatch)
         b = self._run_b()
         release.set()
         a.join(5)
-        assert (b["status"], "still running" in b["message"]) == ("error", True)
+        assert (b["status"], "still holding Houdini" in b["message"]) == ("error", True)
         assert mock_connection.node("/obj/from_b") is None
         assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
         # B was refused, never run: the last capture is still A's.
         assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
 
-    def test_a_later_run_with_no_diff_does_not_borrow_an_earlier_runs(
-        self,
-        mock_connection: MockHouModule,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
+    def test_a_run_in_progress_has_no_diff_not_an_earlier_runs(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        caplog.set_level(logging.INFO, logger="houdini_mcp.tools.code")
-        a, a_result, release = self._launch_a("scene_diff", monkeypatch)
-        read = mock_connection.hscript
-        # Houdini is busy once B's program has run: B's after-read fails, nothing else.
-        monkeypatch.setattr(
-            mock_connection,
-            "hscript",
-            lambda command: (
-                ("", "Error:  busy\n") if mock_connection.node("/obj/from_b") else read(command)
-            ),
-        )
-        b = self._run_b()
-        release.set()
-        a.join(5)
-        assert "scene_changes_error" in b
-        assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
+        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        assert get_last_scene_diff()["status"] == "success"
+        a, a_result, release = self._launch_a(monkeypatch)
         assert get_last_scene_diff()["status"] == "warning"
-        assert any("dropped" in m and "is the last capture" in m for m in caplog.messages)
-
-    def test_an_earlier_run_finishing_late_does_not_replace_a_later_runs_diff(
-        self,
-        mock_connection: MockHouModule,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        caplog.set_level(logging.INFO, logger="houdini_mcp.tools.code")
-        a, a_result, release = self._launch_a("scene_diff", monkeypatch)
-        b = self._run_b()
         release.set()
         a.join(5)
-        assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
-        assert b["scene_changes"]["added_nodes"] == [{"path": "/obj/from_b", "type": "geo"}]
-        assert get_last_scene_diff()["diff"] == b["scene_changes"]
-        assert any("dropped" in m and "is the last capture" in m for m in caplog.messages)
+        assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
 
     def test_a_run_whose_first_read_failed_has_no_diff_and_writes_nothing(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
@@ -333,35 +301,43 @@ class TestADiffIsItsOwnRunsAlone:
         assert mock_connection.node("/obj/from_b") is None
         assert get_last_scene_diff()["status"] == "warning"
 
-    def test_a_program_that_exits_still_reports_its_diff(
-        self, mock_connection: MockHouModule
+    @pytest.mark.parametrize("raised", ["SystemExit(0)", "KeyboardInterrupt"])
+    def test_a_program_that_exits_failed_and_has_no_diff(
+        self, mock_connection: MockHouModule, raised: str
     ) -> None:
         result = execute_code(
-            "hou.node('/obj').createNode('geo', 'then_exit')\nraise SystemExit(0)",
+            f"hou.node('/obj').createNode('geo', 'then_exit')\nraise {raised}",
             capture_diff=True,
             host="localhost",
             port=18811,
         )
-        added = [{"path": "/obj/then_exit", "type": "geo"}]
-        assert result["scene_changes"]["added_nodes"] == added
-        assert get_last_scene_diff()["diff"] == result["scene_changes"]
+        assert (result["status"], result["kind"]) == ("error", "operation_failed")
+        assert raised.split("(")[0] in result["traceback"]
+        assert get_last_scene_diff()["status"] == "warning"
 
     def test_the_timeout_is_the_programs_not_the_scene_reads(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         read = code_module.scene_snapshot
+        reads: list[str] = []
 
-        def slow_read(*args: Any) -> Any:
-            time.sleep(0.6)
+        def after_read_outlasts_the_timeout(*args: Any) -> Any:
+            reads.append("read")
+            if len(reads) == 2:
+                time.sleep(1.5)
             return read(*args)
 
-        monkeypatch.setattr(code_module, "scene_snapshot", slow_read)
-        # Two reads take longer than the timeout; the program itself is instant.
+        monkeypatch.setattr(code_module, "scene_snapshot", after_read_outlasts_the_timeout)
+        # The program is instant; the wait expires while the worker reads after it.
         result = execute_code(
-            "print(1)", capture_diff=True, timeout=1, host="localhost", port=18811
+            "hou.node('/obj').createNode('geo', 'quick')",
+            capture_diff=True,
+            timeout=1,
+            host="localhost",
+            port=18811,
         )
         assert result["status"] == "success"
-        assert "scene_changes" in result
+        assert result["scene_changes"]["added_nodes"] == [{"path": "/obj/quick", "type": "geo"}]
 
     def test_a_program_that_raised_has_its_scene_read_once(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
