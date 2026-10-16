@@ -320,7 +320,7 @@ def list_node_types(
         # Get available categories from cache
         result["categories_available"] = list(lookup.types.categories)
 
-    result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.types)}
+    result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
 
     # Add response size metadata for large responses
     return _add_response_metadata(result)

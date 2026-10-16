@@ -53,18 +53,25 @@ class NodeTypes:
     call answers with.
     """
 
-    types: tuple[NodeType, ...] = ()
+    all: tuple[NodeType, ...] = ()
     categories: tuple[str, ...] = ()
     by_category: Mapping[str, tuple[NodeType, ...]] = field(default_factory=dict)
 
     def filter(self, category: str | None = None, name_filter: str | None = None) -> list[NodeType]:
         """The types in ``category`` (case-insensitive) whose names contain
         ``name_filter`` (case-insensitive); either filter left out matches all."""
-        source = self.by_category.get(category.lower(), ()) if category else self.types
+        source = self.by_category.get(category.lower(), ()) if category else self.all
         if name_filter:
             needle = name_filter.lower()
             source = tuple(t for t in source if needle in t["name"].lower())
         return list(source)
+
+
+class _Held(NamedTuple):
+    """What the cache holds: the types one ``hou`` reported, and that ``hou``."""
+
+    hou: Any
+    types: NodeTypes
 
 
 class NodeTypeLookup(NamedTuple):
@@ -97,7 +104,6 @@ class CacheStats:
     misses: int = 0
     invalidations: int = 0
     last_populate_time_ms: float = 0
-    entry_count: int = 0
 
     def hit_rate(self) -> float:
         """Calculate cache hit rate."""
@@ -122,21 +128,15 @@ class BaseCache:
         self.default_ttl = default_ttl
         self._lock = threading.RLock()
         self._stats = CacheStats()
-        self._valid = False
 
     @property
     def stats(self) -> CacheStats:
         """Get cache statistics."""
         return self._stats
 
-    def is_valid(self) -> bool:
-        """Check if cache is populated and valid."""
-        return self._valid
-
     def invalidate(self) -> None:
         """Invalidate the cache, forcing repopulation on next access."""
         with self._lock:
-            self._valid = False
             self._stats.invalidations += 1
             logger.debug(f"Cache '{self.name}' invalidated")
 
@@ -168,12 +168,12 @@ class NodeTypeCache(BaseCache):
                  Node types are truly static during a session.
         """
         super().__init__("node_types", ttl)
-        self._types = NodeTypes()
-        # [LAW:one-source-of-truth] the Houdini the cached types were read from. A
-        # ``hou`` is one connection's view of one Houdini instance, so cached data is
-        # tied to the instance by identity: a reconnect hands out a new ``hou``, and the
-        # types it reports are read again rather than served from the old instance.
-        self._hou: Any = None
+        # [LAW:one-source-of-truth] the types and the Houdini they were read from, as
+        # one value: a ``hou`` is one connection's view of one Houdini instance, so
+        # cached data is tied to the instance by identity. A reconnect hands out a
+        # new ``hou``, and the types it reports are read again rather than served from
+        # the old instance. Nothing held is the one state of an unfilled cache.
+        self._held: _Held | None = None
 
     def lookup(self, hou: Any) -> NodeTypeLookup:
         """
@@ -184,35 +184,39 @@ class NodeTypeCache(BaseCache):
             hou: The hou module (from ensure_connected)
         """
         with self._lock:
+            held = self._held
             # [LAW:no-silent-failure] a cache holds only a read that succeeded, so an
             # empty one is Houdini's answer, served like any other.
-            if self._valid and self._hou is hou:
+            if held is not None and held.hou is hou:
                 self._record_hit()
-                return NodeTypeLookup(self._types, hit=True)
+                hit = True
+            else:
+                # A miss means what the cache holds was not read from this ``hou``:
+                # it is dropped before the read, so a read that fails leaves nothing
+                # behind that describes another Houdini.
+                self._record_miss()
+                self._held = None
+                held = self._held = _Held(hou, self._read(hou))
+                hit = False
+            logger.info("node type lookup hit=%s types=%d", hit, len(held.types.all))
+            return NodeTypeLookup(held.types, hit=hit)
 
-            # [LAW:dataflow-not-control-flow] a miss means what the cache holds was
-            # not read from this ``hou``: it is forgotten before every fill, so a fill
-            # that fails leaves nothing behind that describes another Houdini.
-            self._record_miss()
-            self._forget()
-            self._types = self._read(hou)
-            self._hou = hou
-            self._valid = True
-            self._stats.entry_count = len(self._types.types)
-            return NodeTypeLookup(self._types, hit=False)
+    def is_valid(self) -> bool:
+        """Whether the cache holds the types some Houdini reported."""
+        return self._held is not None
+
+    @property
+    def entry_count(self) -> int:
+        """How many node types the cache holds."""
+        held = self._held
+        return 0 if held is None else len(held.types.all)
 
     def invalidate(self) -> None:
         """Forget the types and the ``hou`` they came from; the next lookup reads
         Houdini again."""
         with self._lock:
-            self._forget()
+            self._held = None
             super().invalidate()
-
-    def _forget(self) -> None:
-        self._types = NodeTypes()
-        self._hou = None
-        self._valid = False
-        self._stats.entry_count = 0
 
     def _read(self, hou: Any) -> NodeTypes:
         """
@@ -256,7 +260,7 @@ class NodeTypeCache(BaseCache):
             for cat_name, types in walked
         }
         node_types = NodeTypes(
-            types=tuple(t for cat_types in by_category.values() for t in cat_types),
+            all=tuple(t for cat_types in by_category.values() for t in cat_types),
             categories=tuple(by_category),
             by_category={
                 cat_name.lower(): cat_types for cat_name, cat_types in by_category.items()
@@ -268,9 +272,9 @@ class NodeTypeCache(BaseCache):
         logger.info(
             "Node type cache populated: types=%d categories=%d unread_descriptions=%d "
             "elapsed_ms=%.1f",
-            len(node_types.types),
+            len(node_types.all),
             len(node_types.categories),
-            sum(is_unread(t["description"]) for t in node_types.types),
+            sum(is_unread(t["description"]) for t in node_types.all),
             elapsed_ms,
         )
         return node_types
@@ -316,7 +320,7 @@ def get_cache_stats() -> dict[str, Any]:
             "misses": node_type_cache.stats.misses,
             "hit_rate": f"{node_type_cache.stats.hit_rate():.1%}",
             "invalidations": node_type_cache.stats.invalidations,
-            "entry_count": node_type_cache.stats.entry_count,
+            "entry_count": node_type_cache.entry_count,
             "last_populate_ms": node_type_cache.stats.last_populate_time_ms,
         },
     }

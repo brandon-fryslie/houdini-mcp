@@ -33,14 +33,23 @@ def _names(types: Sequence[NodeType]) -> list[str]:
 
 
 class TestNodeTypeCacheIsTiedToItsInstance:
-    def test_a_second_read_from_the_same_houdini_is_a_hit(self) -> None:
+    def test_a_second_read_from_the_same_houdini_is_a_hit(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         cache = NodeTypeCache()
         hou = _hou_with_types("box", "sphere")
 
-        first = cache.lookup(hou)
-        second = cache.lookup(hou)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.cache"):
+            first = cache.lookup(hou)
+            second = cache.lookup(hou)
 
-        assert _names(second.types.types) == ["box", "sphere"]
+        lookups = [r.getMessage() for r in caplog.records if "node type lookup" in r.getMessage()]
+        assert lookups == [
+            "node type lookup hit=False types=2",
+            "node type lookup hit=True types=2",
+        ]
+
+        assert _names(second.types.all) == ["box", "sphere"]
         assert second.types is first.types
         assert (first.hit, second.hit) == (False, True)
         assert hou.nodeTypeCategories.call_count == 1
@@ -57,7 +66,7 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         lookup = cache.lookup(after_restart)
 
         assert not lookup.hit
-        assert _names(lookup.types.types) == ["box", "sphere", "my_hda"]
+        assert _names(lookup.types.all) == ["box", "sphere", "my_hda"]
         assert _names(lookup.types.filter(name_filter="hda")) == ["my_hda"]
         assert after_restart.nodeTypeCategories.call_count == 1
         assert (cache.stats.misses, cache.stats.hits) == (2, 0)
@@ -73,7 +82,7 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         cache.lookup(new)
         types = cache.lookup(old).types
 
-        assert _names(types.types) == ["box"]
+        assert _names(types.all) == ["box"]
         assert old.nodeTypeCategories.call_count == 2
 
     def test_invalidate_rereads_the_same_instance(self) -> None:
@@ -106,7 +115,7 @@ class TestNodeTypeCacheIsTiedToItsInstance:
         assert _names(types.filter()) == ["box", "sphere"]
         assert types.categories == ("Sop",)
         assert not cache.is_valid()
-        assert cache.stats.entry_count == 0
+        assert cache.entry_count == 0
 
 
 class TestNodeTypeCacheReadsThroughTheProxy:
@@ -127,7 +136,7 @@ class TestNodeTypeCacheReadsThroughTheProxy:
 
         connection.execute.assert_not_called()
         assert cache.is_valid()
-        assert {t["category"] for t in types.types} == set(hou.nodeTypeCategories())
+        assert {t["category"] for t in types.all} == set(hou.nodeTypeCategories())
         assert types.filter(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]
@@ -146,7 +155,7 @@ class TestAFailedReadIsNeverCached:
             cache.lookup(hou)
 
         assert not cache.is_valid()
-        assert cache.stats.entry_count == 0
+        assert cache.entry_count == 0
 
     def test_the_next_read_after_a_failure_reads_houdini_again(self) -> None:
         cache = NodeTypeCache()
@@ -158,7 +167,7 @@ class TestAFailedReadIsNeverCached:
             cache.lookup(hou)
         types = cache.lookup(hou).types
 
-        assert _names(types.types) == ["box", "scatter"]
+        assert _names(types.all) == ["box", "scatter"]
         assert hou.nodeTypeCategories.call_count == 2
 
     def test_a_refused_read_from_another_houdini_forgets_the_old_one(self) -> None:
@@ -171,7 +180,7 @@ class TestAFailedReadIsNeverCached:
             cache.lookup(restarted)
 
         assert not cache.is_valid()
-        assert cache.stats.entry_count == 0
+        assert cache.entry_count == 0
 
     def test_a_fault_in_building_the_entries_is_not_labelled_a_refused_read(self) -> None:
         """Only Houdini's walk is a refused read; this server's own fault surfaces
@@ -195,8 +204,8 @@ class TestAFailedReadIsNeverCached:
         cache = NodeTypeCache()
         hou = _hou_with_types()
 
-        assert cache.lookup(hou).types.types == ()
-        assert cache.lookup(hou).types.types == ()
+        assert cache.lookup(hou).types.all == ()
+        assert cache.lookup(hou).types.all == ()
         assert hou.nodeTypeCategories.call_count == 1
         assert (cache.stats.misses, cache.stats.hits) == (1, 1)
 
@@ -211,7 +220,7 @@ class TestAFailedReadIsNeverCached:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
             types = cache.lookup(hou).types
 
-        assert [t["description"] for t in types.types] == [
+        assert [t["description"] for t in types.all] == [
             "Box",
             {"unread": "RuntimeError: definition missing"},
         ]
