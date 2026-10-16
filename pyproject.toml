@@ -76,10 +76,11 @@ houdini-mcp = "houdini_mcp.server:run_server"
 
 [tool.setuptools.packages.find]
 # houdini_mcp_handshake is defined once, in the plugin tree (Houdini's path), and
-# ships in this distribution from that same source. The plugin itself does not.
+# ships in this distribution from that same source. The plugin itself does not, nor
+# does houdini_mcp_search: the server reaches it only inside Houdini.
 where = [".", "houdini_plugin/python"]
 include = ["houdini_mcp*"]
-exclude = ["houdini_mcp_plugin*"]
+exclude = ["houdini_mcp_plugin*", "houdini_mcp_search*"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]
@@ -130,6 +131,8 @@ indent-style = "space"
 # Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The plugin tree, as the package JSON puts it on Houdini's path.
+pythonpath = ["houdini_plugin/python"]
 asyncio_mode = "auto"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

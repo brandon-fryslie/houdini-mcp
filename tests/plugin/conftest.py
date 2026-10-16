@@ -10,9 +10,6 @@ depends on:
   server does. ``tests/plugin/test_hrpyc_contract.py`` holds the fake and the
   real rpyc to the same contract.
 - ``hou`` module -> ``applicationVersionString()`` / ``applicationVersion()``.
-
-The plugin package lives under ``houdini_plugin/python`` and is not installed,
-so we add it to ``sys.path`` here.
 """
 
 from __future__ import annotations
@@ -20,18 +17,11 @@ from __future__ import annotations
 import contextlib
 import logging
 import socket
-import sys
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
 from rpyc.utils.authenticators import AuthenticationError
-
-# Make the plugin package importable without installing it.
-_PLUGIN_PATH = Path(__file__).resolve().parents[2] / "houdini_plugin" / "python"
-if str(_PLUGIN_PATH) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_PATH))
 
 
 class FakeThreadedServer:

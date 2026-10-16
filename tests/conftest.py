@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rpyc.core import vinegar
 
+from houdini_mcp.connection import _InterpreterModules
+
 
 def split_path(path: str) -> tuple[str, str]:
     """A node path into its parent's path and its name.
@@ -546,13 +548,26 @@ class MockHouNode:
         self.setInput(0, node)
 
 
+class MockModuleNamespace(_InterpreterModules):
+    """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
+
+    Any other name imports here - the plugin tree is on this interpreter's path as
+    it is on Houdini's - so Houdini-side modules run against the double.
+    """
+
+    def __init__(self, hou_module: "MockHouModule"):
+        self._hou = hou_module
+
+    def __getitem__(self, name: str) -> Any:
+        return self._hou if name == "hou" else super().__getitem__(name)
+
+
 class MockRpycConnection:
     """Mock rpyc connection object: ``modules``, ``closed``, ``close``, and the
     ``_config`` rpyc reads its sync timeout from."""
 
     def __init__(self, hou_module: "MockHouModule"):
-        self.modules = MagicMock()
-        self.modules.hou = hou_module
+        self.modules = MockModuleNamespace(hou_module)
         self._config: dict[str, Any] = {}
         self.closed = False
 

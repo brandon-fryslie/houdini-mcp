@@ -124,7 +124,10 @@ If you have the Houdini MCP plugin installed:
   or `HOUDINI_RPC_TOKEN` (set the same token in the MCP server's environment).
   See [docs/remote-listener.md](docs/remote-listener.md).
 
-Or manually in Houdini's Python Shell (unchanged, still supported):
+Or manually in Houdini's Python Shell. Every tool but `find_nodes` works this
+way; `find_nodes` runs its search inside Houdini, so it also needs the plugin
+installed as in [Option 1](#option-1-houdini-plugin-stdio-mode), whose package
+JSON puts its modules on Houdini's path when Houdini starts:
 ```python
 import hrpyc
 

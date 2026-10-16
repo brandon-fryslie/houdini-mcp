@@ -28,6 +28,7 @@ __all__ = [
     "is_unread",
     "log_unread",
     "read",
+    "reason",
     "reraise_transport_failure",
     "unread",
     "unreads",
@@ -52,7 +53,7 @@ def is_unread(value: Any) -> TypeGuard[Unread]:
 
 
 def unread(e: Exception) -> Unread:
-    return Unread(unread=_reason(e))
+    return Unread(unread=reason(e))
 
 
 def format_reason(e: BaseException) -> str:
@@ -65,7 +66,7 @@ def format_reason(e: BaseException) -> str:
     return "".join(traceback.format_exception_only(type(e), e)).rstrip()
 
 
-def _reason(e: Exception) -> str:
+def reason(e: Exception) -> str:
     """The reason Houdini gave for ``e``.
 
     rpyc rebuilds a remote exception without its arguments (a ``hou`` error

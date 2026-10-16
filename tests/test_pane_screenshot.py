@@ -116,7 +116,13 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     """A name the enum lacks and a class attribute that is no member (``thisown``
     resolves to a property) are refused alike, and the refusal is logged with
     how many pane types this Houdini has."""
-    with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"):
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
+    ):
         result = capture_pane_screenshot(name)
 
     assert result["status"] == "error"
