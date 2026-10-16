@@ -277,7 +277,8 @@ def list_node_types(
     List available Houdini node types.
 
     The first call reads every node type from Houdini into a cache; later
-    calls filter that cache.
+    calls filter that cache. A read Houdini refuses fails the call with
+    operation_failed and caches nothing, so the next call reads again.
 
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
@@ -286,7 +287,8 @@ def list_node_types(
         cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
-        List of node types with their categories and descriptions.
+        List of node types with their categories and descriptions; a
+        description Houdini would not give is {unread}.
         Includes pagination info (has_more, cursor) when applicable.
 
     Note:
@@ -302,13 +304,9 @@ def list_node_types(
     hou = ensure_connected(host, port)
     request = parse_page_request(limit=limit, cursor=cursor)
 
-    # Populate cache if needed (first call fetches all types)
-    # This is done automatically by get_all_types()
-    node_type_cache.get_all_types(hou)
+    lookup = node_type_cache.lookup(hou)
 
-    page = paginate(
-        node_type_cache.filter_types(category=category, name_filter=name_filter), request
-    )
+    page = paginate(lookup.types.filter(category=category, name_filter=name_filter), request)
     result: dict[str, Any] = {
         "status": "success",
         "node_types": page.items,
@@ -320,14 +318,9 @@ def list_node_types(
         result["category"] = category
     else:
         # Get available categories from cache
-        result["categories_available"] = node_type_cache.get_categories()
+        result["categories_available"] = list(lookup.types.categories)
 
-    # Add cache stats for visibility
-    cache_stats = node_type_cache.stats
-    result["_cache_info"] = {
-        "hit": cache_stats.hits > 0 and node_type_cache.is_valid(),
-        "total_cached": cache_stats.entry_count,
-    }
+    result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
 
     # Add response size metadata for large responses
     return _add_response_metadata(result)
