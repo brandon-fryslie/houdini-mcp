@@ -1,4 +1,4 @@
-"""Node search that runs inside Houdini, shipped to both sides.
+"""Node search that runs inside Houdini.
 
 [LAW:effects-at-boundaries] The MCP server's ``find_nodes`` calls this through the
 connection's module namespace, so the walk happens where the nodes live: one
@@ -36,7 +36,7 @@ def matching_descendants(
     substring = "*" not in pattern and "?" not in pattern
     type_lower = None if node_type is None else node_type.lower()
 
-    matches: list[Match] = []
+    matches: list[tuple[Any, str, str]] = []
     for node in root.allSubChildren():
         name = node.name()
         name_lower = name.lower()
@@ -47,5 +47,6 @@ def matching_descendants(
             continue
         type_name = node.type().name()
         if type_lower is None or type_name.lower() == type_lower:
-            matches.append((node.path(), name, type_name))
-    return len(matches), tuple(matches[window])
+            matches.append((node, name, type_name))
+    # only the page pays for path()
+    return len(matches), tuple((node.path(), name, t) for node, name, t in matches[window])

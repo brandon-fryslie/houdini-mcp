@@ -500,7 +500,8 @@ def _search_module(link: Link) -> Any:
     except ImportError as e:
         raise OperationFailed(
             f"Houdini cannot import houdini_mcp_search ({reason(e)}): Houdini's path lacks "
-            "this release's houdini_mcp plugin. Install the plugin from the same release."
+            "this release's houdini_mcp plugin. Install the plugin from the same release, "
+            "then restart Houdini."
         ) from e
 
 

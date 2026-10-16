@@ -126,7 +126,8 @@ If you have the Houdini MCP plugin installed:
 
 Or manually in Houdini's Python Shell. Every tool but `find_nodes` works this
 way; `find_nodes` runs its search inside Houdini, so it also needs the plugin
-installed, which puts its modules on Houdini's path:
+installed as in [Option 1](#option-1-houdini-plugin-stdio-mode), whose package
+JSON puts its modules on Houdini's path when Houdini starts:
 ```python
 import hrpyc
 
