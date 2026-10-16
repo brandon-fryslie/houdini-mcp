@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Scene-writing calls take turns** (houdini-laws-etg.qxp): a tool that
+  writes the scene, `execute_code`, `get_geo_summary`, `render_viewport` and
+  `render_quad_view` hold the scene for their whole call. Before, two
+  concurrent calls could interleave, and a writer could run inside a program's
+  open undo group. A call that arrives while another is running waits for it,
+  and its response's `scene_wait` names what it waited for and for how long.
+  A call that arrives while a timed-out program still runs is refused with
+  `worker_still_running` as before. An `execute_code` that arrives while
+  another is still running inside its own call now waits for it instead of
+  being refused.
+
 - **`find_nodes` searches inside Houdini** (houdini-search-jtw): the match runs
   in `houdini_mcp_search`, a module in the plugin tree, so a search is one
   request to Houdini whatever the scene size, where it was several per node,

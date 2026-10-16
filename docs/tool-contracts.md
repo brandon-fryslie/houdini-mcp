@@ -75,6 +75,22 @@ the call) return
 worker; plain reads,
 `save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 
+### Concurrent Calls Wait Their Turn
+
+Those same tools hold the scene for the whole call, so two of them never run
+at once. A call that arrives while another one is running waits for it to
+finish, then runs. Its response, success or error, carries `scene_wait`,
+which names the calls it waited behind (in arrival order, the one holding the
+scene first) and how long it waited:
+
+```python
+{"status": "success", ..., "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
+```
+
+A call that finds the scene free has no `scene_wait`. A call still waiting
+when a timed-out program takes over the scene is refused with
+`worker_still_running`, as above.
+
 ## render_viewport
 
 ### Parameter Schema

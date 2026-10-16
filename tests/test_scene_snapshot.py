@@ -4,6 +4,7 @@ it, and a snapshot that cannot be read is an error the caller sees."""
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -270,18 +271,26 @@ class TestADiffIsItsOwnRunsAlone:
             port=18811,
         )
 
-    def test_no_program_runs_between_a_captures_two_reads(
-        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    def test_a_program_arriving_mid_capture_waits_for_the_capture_to_end(
+        self,
+        mock_connection: MockHouModule,
+        monkeypatch: pytest.MonkeyPatch,
+        heard: Callable[[str], threading.Event],
     ) -> None:
         a, a_result, release = self._launch_a(monkeypatch)
-        b = self._run_b()
+        queued = heard("execute_code waits for the scene behind execute_code")
+        b_result: dict[str, Any] = {}
+        b = threading.Thread(target=lambda: b_result.update(self._run_b()))
+        b.start()
+        assert queued.wait(5)
+        assert mock_connection.node("/obj/from_b") is None
         release.set()
         a.join(5)
-        assert (b["status"], "still holding Houdini" in b["message"]) == ("error", True)
-        assert mock_connection.node("/obj/from_b") is None
+        b.join(5)
         assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
-        # B was refused, never run: the last capture is still A's.
-        assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
+        assert b_result["scene_wait"]["waited_for"] == ["execute_code"]
+        assert b_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_b", "type": "geo"}]
+        assert get_last_scene_diff()["diff"] == b_result["scene_changes"]
 
     def test_a_run_in_progress_has_no_diff_not_an_earlier_runs(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch

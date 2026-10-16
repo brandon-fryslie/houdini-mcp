@@ -230,8 +230,9 @@ class TestWorkerLedger:
             first.thread.join(5)
         assert ledger.running() is None
 
-    def test_admit_passes_when_idle(self):
-        WorkerLedger().admit("create_node")
+    def test_hold_is_granted_when_idle(self):
+        with WorkerLedger().hold("create_node") as wait:
+            assert wait.waited_for == ()
 
     def test_a_thread_that_fails_to_start_holds_no_slot(self, monkeypatch):
         ledger = WorkerLedger()
@@ -245,4 +246,5 @@ class TestWorkerLedger:
 
         assert ledger.running() is None
         monkeypatch.undo()
-        ledger.admit("create_node")
+        with ledger.hold("create_node") as wait:
+            assert wait.waited_for == ()
