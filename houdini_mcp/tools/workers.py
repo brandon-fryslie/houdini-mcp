@@ -14,6 +14,7 @@ nothing else decides whether a mutation may proceed.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import threading
 import time
@@ -29,9 +30,11 @@ class RunningWorker:
     """One program running in its own thread, undo group open until it ends.
 
     ``operation`` is the tool that launched it: ``execute_code`` for a caller's
-    program, ``get_geo_summary`` for the server's own.
+    program, ``get_geo_summary`` for the server's own. ``launch`` is its place in
+    the order the ledger admitted programs, so a later launch has a larger number.
     """
 
+    launch: int
     operation: str
     code_sha256: str
     timeout: int
@@ -93,6 +96,7 @@ class WorkerLedger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running: RunningWorker | None = None
+        self._launches = itertools.count(1)
 
     def running(self) -> RunningWorker | None:
         with self._lock:
@@ -131,6 +135,7 @@ class WorkerLedger:
                     )
 
             worker = RunningWorker(
+                launch=next(self._launches),
                 operation=operation,
                 code_sha256=code_sha256,
                 timeout=timeout,

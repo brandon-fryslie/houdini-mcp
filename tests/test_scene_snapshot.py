@@ -2,10 +2,13 @@
 it, and a snapshot that cannot be read is an error the caller sees."""
 
 import logging
+import threading
+from collections import Counter
 from typing import Any
 
 import pytest
 
+from houdini_mcp.tools import code as code_module
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
 from houdini_mcp.tools._common import apply_response_cap
@@ -214,18 +217,113 @@ class TestExecuteCodeDiff:
         assert "scene_changes_error" in result
         assert get_last_scene_diff()["status"] == "warning"
 
-    def test_a_snapshot_that_fails_before_the_run_stops_the_run(
-        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(mock_connection, "hscript", lambda _command: ("", "Error:  busy\n"))
-        result = execute_code(
-            "hou.node('/obj').createNode('geo', 'never')",
+
+class TestADiffIsItsOwnRunsAlone:
+    """A diff holds only its own program's changes, and get_last_scene_diff
+    answers for the run launched last, not the one that finished last."""
+
+    @staticmethod
+    def _launch_a(
+        paused: str, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[threading.Thread, dict[str, Any], threading.Event]:
+        """Start run A on its own thread and hold it inside ``paused`` (a name in
+        code.py) until the returned event is set; return once A is held there."""
+        real = getattr(code_module, paused)
+        held, release = threading.Event(), threading.Event()
+        calls: Counter[str] = Counter()
+
+        def hold_then_call(*args: Any) -> Any:
+            calls[paused] += 1
+            # A's second snapshot is its after-read; its one scene_diff is its diff.
+            if (paused, calls[paused]) in {("scene_snapshot", 2), ("scene_diff", 1)}:
+                held.set()
+                assert release.wait(5), "run A was never released"
+            return real(*args)
+
+        monkeypatch.setattr(code_module, paused, hold_then_call)
+        result: dict[str, Any] = {}
+
+        def run_a() -> None:
+            result.update(
+                execute_code(
+                    "hou.node('/obj').createNode('geo', 'from_a')",
+                    capture_diff=True,
+                    host="localhost",
+                    port=18811,
+                )
+            )
+
+        a = threading.Thread(target=run_a)
+        a.start()
+        assert held.wait(5), f"run A never reached {paused}"
+        return a, result, release
+
+    @staticmethod
+    def _run_b() -> dict[str, Any]:
+        return execute_code(
+            "hou.node('/obj').createNode('geo', 'from_b')",
             capture_diff=True,
             host="localhost",
             port=18811,
         )
+
+    def test_no_program_runs_between_a_captures_two_reads(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        a, a_result, release = self._launch_a("scene_snapshot", monkeypatch)
+        b = self._run_b()
+        release.set()
+        a.join(5)
+        assert (b["status"], "still running" in b["message"]) == ("error", True)
+        assert mock_connection.node("/obj/from_b") is None
+        assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
+        # B was refused, never run: the last capture is still A's.
+        assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
+
+    def test_a_later_run_with_no_diff_does_not_borrow_an_earlier_runs(
+        self,
+        mock_connection: MockHouModule,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="houdini_mcp.tools.code")
+        a, a_result, release = self._launch_a("scene_diff", monkeypatch)
+        reads = iter([mock_connection.hscript] * 2 + [lambda _c: ("", "Error:  busy\n")])
+        monkeypatch.setattr(mock_connection, "hscript", lambda command: next(reads)(command))
+        b = self._run_b()
+        release.set()
+        a.join(5)
+        assert "scene_changes_error" in b
+        assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
+        assert get_last_scene_diff()["status"] == "warning"
+        assert any("dropped" in m and "is the last capture" in m for m in caplog.messages)
+
+    def test_an_earlier_run_finishing_late_does_not_replace_a_later_runs_diff(
+        self,
+        mock_connection: MockHouModule,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="houdini_mcp.tools.code")
+        a, a_result, release = self._launch_a("scene_diff", monkeypatch)
+        b = self._run_b()
+        release.set()
+        a.join(5)
+        assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
+        assert b["scene_changes"]["added_nodes"] == [{"path": "/obj/from_b", "type": "geo"}]
+        assert get_last_scene_diff()["diff"] == b["scene_changes"]
+        assert any("dropped" in m and "is the last capture" in m for m in caplog.messages)
+
+    def test_a_run_whose_first_read_failed_has_no_diff_and_writes_nothing(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        assert get_last_scene_diff()["status"] == "success"
+        monkeypatch.setattr(mock_connection, "hscript", lambda _command: ("", "Error:  busy\n"))
+        result = self._run_b()
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
-        assert mock_connection.node("/obj/never") is None
+        assert mock_connection.node("/obj/from_b") is None
+        assert get_last_scene_diff()["status"] == "warning"
 
 
 class TestSnapshotFailuresSurviveTheResponseCap:

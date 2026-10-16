@@ -1016,7 +1016,7 @@ class TestSceneDiff:
         import houdini_mcp.tools.code as code_module
         from houdini_mcp.tools import get_last_scene_diff
 
-        monkeypatch.setattr(code_module, "_last_scene_changes", None)
+        monkeypatch.setattr(code_module, "LAST_SCENE_DIFF", code_module.LastSceneDiff())
 
         result = get_last_scene_diff()
 

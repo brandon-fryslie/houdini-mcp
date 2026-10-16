@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A scene diff is its own run's alone** (houdini-laws-etg.c91): `execute_code`
+  reads the scene before and after the program inside the program's worker, so
+  no other program can run between the two reads; a diff could include another
+  run's changes. `get_last_scene_diff` answers for the capture run launched
+  last: a run that launched earlier and finished later no longer replaces it,
+  and while that run has no diff (still running, timed out, raised, or its scene
+  could not be read) there is none. A call refused because another program is
+  still running is not a run and leaves the last diff as it was; it cleared it.
+
 - **BREAKING (wire)**: `list_node_types` and `manage_cache("warmup")` fail with
   `operation_failed` when Houdini refuses the node-type walk
   (houdini-laws-etg.29y); they returned success with no types. Nothing is
