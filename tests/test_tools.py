@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1757,19 +1759,46 @@ class TestFindNodes:
             "total=3 returned=2 has_more=True"
         ) in caplog.text
 
-    def test_find_nodes_type_filter_skips_type_lookup_for_name_misses(self, mock_connection):
-        """A node whose name does not match never has its type fetched."""
+    def test_find_nodes_asks_houdini_once_and_pages_the_answer(self, mock_connection, monkeypatch):
+        """One call into Houdini's search carries the inputs as data; the server pages
+        the strings it answers and never walks the scene itself."""
         from houdini_mcp.tools import find_nodes
 
-        miss = MockHouNode(path="/obj/cam1", name="cam1", node_type="cam")
-        mock_connection.add_node(miss)
-        miss.type = lambda: (_ for _ in ()).throw(AssertionError("type() fetched for a name miss"))
-        hit = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
-        mock_connection.add_node(hit)
+        obj = mock_connection.node("/obj")
+        obj.allSubChildren = MagicMock(side_effect=AssertionError("walked from the server"))
+        search = SimpleNamespace(
+            matching_descendants=MagicMock(
+                return_value=(
+                    ("/obj/a", "a", "null"),
+                    ("/obj/b", "b", "null"),
+                    ("/obj/c", "c", "null"),
+                )
+            )
+        )
+        monkeypatch.setitem(sys.modules, "houdini_mcp_search", search)
 
-        result = find_nodes("/obj", "grid*", "grid", host="localhost", port=18811)
+        result = find_nodes("/obj", "*", "null", limit=2, host="localhost", port=18811)
 
-        assert [m["name"] for m in result["matches"]] == ["grid1"]
+        search.matching_descendants.assert_called_once_with(obj, "*", "null")
+        assert result["matches"] == [
+            {"path": "/obj/a", "name": "a", "type": "null"},
+            {"path": "/obj/b", "name": "b", "type": "null"},
+        ]
+        assert (result["total"], result["has_more"]) == (3, True)
+
+    def test_find_nodes_names_the_plugin_when_houdini_lacks_the_search(
+        self, mock_connection, monkeypatch
+    ):
+        """A Houdini plugin older than this server fails the search with the fix."""
+        from houdini_mcp.tools import find_nodes
+
+        monkeypatch.setitem(sys.modules, "houdini_mcp_search", None)
+
+        result = find_nodes("/obj", "*", host="localhost", port=18811)
+
+        assert (result["status"], result["kind"]) == ("error", "operation_failed")
+        assert "Houdini cannot import houdini_mcp_search" in result["message"]
+        assert "Install the plugin from the same release" in result["message"]
 
 
 class TestFindErrorNodes:

@@ -26,24 +26,11 @@ sockets, sleeps, or threads.
 from __future__ import annotations
 
 import dataclasses
-import os
 import random
-import sys
 from typing import assert_never
 
 import pytest
-
-# The plugin package lives outside the importable server package; make it
-# importable for this test module without altering global test configuration.
-_PLUGIN_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "houdini_plugin",
-    "python",
-)
-if _PLUGIN_PATH not in sys.path:
-    sys.path.insert(0, _PLUGIN_PATH)
-
-from houdini_mcp_plugin.ws_client import (  # noqa: E402
+from houdini_mcp_plugin.ws_client import (
     ACK,
     BYE,
     CANCEL,

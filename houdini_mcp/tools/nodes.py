@@ -9,17 +9,18 @@ This module provides tools for managing Houdini nodes:
 - find_nodes: Find nodes by pattern or type
 """
 
-import fnmatch
 import logging
 import time
-from collections.abc import Iterator
 from functools import partial
 from typing import Any, Literal, get_args
 
+from ..connection import Link
 from ._common import (
     Count,
+    OperationFailed,
     _add_response_metadata,
     ensure_connected,
+    ensure_link,
     handle_connection_errors,
     join_warnings,
     node_at,
@@ -491,31 +492,15 @@ def list_children(
     return _add_response_metadata(result)
 
 
-def _matching_descendants(
-    root: Any, pattern: str, node_type: str | None
-) -> Iterator[tuple[Any, str, str]]:
-    """Yield ``(node, name, type)`` for every descendant of ``root`` that matches.
-
-    A pattern without ``*``/``?`` also matches as a substring. Paging is the
-    caller's job; this only decides membership.
-    """
-    pattern_lower = pattern.lower()
-    has_wildcards = "*" in pattern or "?" in pattern
-    type_lower = node_type.lower() if node_type is not None else None
-
-    for child in root.allSubChildren():
-        name = child.name()
-        name_lower = name.lower()
-        name_match = fnmatch.fnmatch(name_lower, pattern_lower) or (
-            not has_wildcards and pattern_lower in name_lower
-        )
-        if not name_match:
-            continue
-        # The type lookup is a second round trip per node; only name hits pay it.
-        child_type = child.type().name()
-        if type_lower is not None and child_type.lower() != type_lower:
-            continue
-        yield child, name, child_type
+def _search_module(link: Link) -> Any:
+    """Houdini's ``houdini_mcp_search``, or the failure that names the plugin to update."""
+    try:
+        return link.conn.modules["houdini_mcp_search"]
+    except ImportError as e:
+        raise OperationFailed(
+            f"Houdini cannot import houdini_mcp_search ({e}); its houdini_mcp plugin "
+            "predates this server. Install the plugin from the same release."
+        ) from e
 
 
 @handle_connection_errors("find_nodes")
@@ -553,21 +538,22 @@ def find_nodes(
         find_nodes("/obj", "grid") - Substring match for "grid"
         find_nodes("/obj", "*", cursor=100) - Get next page of results
     """
-    hou = ensure_connected(host, port)
+    link = ensure_link(host, port)
 
-    root = node_at(hou, root_path, "Root node")
+    root = node_at(link.hou, root_path, "Root node")
 
     request = parse_page_request(limit=limit, cursor=cursor)
 
-    # [LAW:single-enforcer] Caller strings are compared as data here, never formatted
-    # into a program; find_nodes has no code-execution path of its own.
+    # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
+    # the scene size, answered with plain strings this side pages.
+    # [LAW:single-enforcer] Caller strings cross as arguments, never formatted into a
+    # program; find_nodes has no code-execution path of its own.
     # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
     # as an error instead of switching to a different result set.
-    page = paginate(_matching_descendants(root, pattern, node_type), request)
-    # path() is one more round trip; only the returned page pays it.
+    found = _search_module(link).matching_descendants(root, pattern, node_type)
+    page = paginate(found, request)
     matches = [
-        {"path": child.path(), "name": name, "type": child_type}
-        for child, name, child_type in page.items
+        {"path": path, "name": name, "type": type_name} for path, name, type_name in page.items
     ]
     logger.debug(
         "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",

@@ -101,6 +101,7 @@ class TestConnect:
         retried, the half-open link is closed, and nothing is left behind for
         is_connected() - or logged as connected."""
         busy = MockRpycConnection(mock_hou)
+        busy.modules = MagicMock()  # a per-instance type, so the property stays here
         type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
 
         with (
@@ -135,6 +136,7 @@ class TestConnect:
         self, reset_connection_state, mock_hou
     ):
         busy = MockRpycConnection(mock_hou)
+        busy.modules = MagicMock()  # a per-instance type, so the property stays here
         type(busy.modules).hou = PropertyMock(side_effect=TimeoutError("sync request"))
         busy.close = MagicMock(side_effect=ValueError("half-torn channel"))
 
@@ -579,6 +581,7 @@ class TestPing:
         """A listener that accepts the link but exposes no ``hou`` is not a reachable
         Houdini, and the socket the probe opened does not outlive the failed proof."""
         mock_conn = MockRpycConnection(mock_hou)
+        mock_conn.modules = MagicMock()  # a per-instance type, so the property stays here
         type(mock_conn.modules).hou = PropertyMock(side_effect=EOFError("listener went away"))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
