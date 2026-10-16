@@ -228,6 +228,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `houdini_mcp_plugin.ws_client` and the plugin's re-exports of it
+  (`WSClientCore`, `WSConfig`, its frames, actions and outcomes)
+  (houdini-laws-etg.2m0). It was the client half of a hosted WebSocket gateway
+  that this fork does not have, and nothing ran it.
+
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
   (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
   `available_types`.

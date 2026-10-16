@@ -9,9 +9,6 @@
    example the Docker gateway) connects to over RPyC.
    - ``start_hrpyc_server()`` / ``stop_hrpyc_server()``, with status,
      self-test and reload beside them (see :mod:`houdini_mcp_plugin.remote`).
-
-:mod:`houdini_mcp_plugin.ws_client` is a sans-I/O outbound WebSocket
-state-machine core; nothing in this package drives it yet.
 """
 
 __version__ = "0.2.0"
@@ -38,75 +35,8 @@ from .remote import (
     stop_hrpyc_server,
 )
 from .server import AlreadyServing, is_server_running, start_server
-from .ws_client import (
-    UNBOUNDED,
-    Acked,
-    AckFrame,
-    Action,
-    Cancelled,
-    CancelTimer,
-    ClientClosedError,
-    Close,
-    CloseReason,
-    ConnectionState,
-    DeliverEvent,
-    DeliverOutcome,
-    ErrorFrame,
-    EventFrame,
-    Failed,
-    FrameParseError,
-    InboundFrame,
-    Limit,
-    Open,
-    PongFrame,
-    QueueFullError,
-    RequestOutcome,
-    ScheduleTimer,
-    Send,
-    Telemetry,
-    Timer,
-    WelcomeFrame,
-    WSClientCore,
-    WSConfig,
-    limit_reached,
-    parse_frame,
-    redact,
-)
 
 __all__ = [
-    # Outbound WSS state-machine core
-    "WSClientCore",
-    "WSConfig",
-    "ConnectionState",
-    "Limit",
-    "UNBOUNDED",
-    "limit_reached",
-    "Action",
-    "Open",
-    "Send",
-    "Close",
-    "ScheduleTimer",
-    "CancelTimer",
-    "DeliverEvent",
-    "DeliverOutcome",
-    "Telemetry",
-    "Timer",
-    "RequestOutcome",
-    "Acked",
-    "Cancelled",
-    "Failed",
-    "CloseReason",
-    "QueueFullError",
-    "ClientClosedError",
-    "InboundFrame",
-    "WelcomeFrame",
-    "PongFrame",
-    "EventFrame",
-    "AckFrame",
-    "ErrorFrame",
-    "FrameParseError",
-    "parse_frame",
-    "redact",
     # stdio mode (MCP server in Houdini)
     "start_server",
     "is_server_running",
