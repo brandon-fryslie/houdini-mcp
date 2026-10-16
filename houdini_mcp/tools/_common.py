@@ -413,6 +413,8 @@ import asyncio
 import os
 from collections.abc import Coroutine
 
+import anyio
+
 # Default semaphore limit for bounded parallel execution
 # Can be overridden via environment variable
 SEMAPHORE_LIMIT = int(os.getenv("HOUDINI_MCP_SEMAPHORE_LIMIT", "10"))
@@ -482,9 +484,11 @@ def batch_items(items: list[Any], batch_size: int) -> list[list[Any]]:
 
 async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
     """
-    Run a synchronous function in a thread pool executor.
+    Run a synchronous function on anyio's worker threads.
 
-    Useful for wrapping blocking Houdini RPC calls in async context.
+    [LAW:one-source-of-truth] The one way a coroutine runs blocking Houdini work:
+    a call the event loop is running (``server.held``, an async tool's read) must
+    never block that loop, or no other call - nor any cancellation - can run.
 
     Args:
         func: Synchronous function to execute
@@ -497,11 +501,7 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
     Example:
         result = await run_in_executor(sync_houdini_operation, param1, param2)
     """
-    import functools
-
-    loop = asyncio.get_event_loop()
-    partial_func = functools.partial(func, *args, **kwargs)
-    return await loop.run_in_executor(None, partial_func)
+    return await anyio.to_thread.run_sync(functools.partial(func, *args, **kwargs))
 
 
 # =============================================================================

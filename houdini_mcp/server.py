@@ -8,7 +8,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any, Literal
 
-import anyio
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from fastmcp.tools.tool_transform import ArgTransform
@@ -17,6 +16,7 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target
+from .tools._common import run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES, SceneAccess
 from .tools.workers import NO_WAIT, WORKERS, SceneWait, WorkerStillRunning
@@ -116,15 +116,11 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
         try:
             async with hold(name) as wait:
                 result: dict[str, Any] = await (
-                    tool(*args, **kwargs)
-                    if is_async
-                    else anyio.to_thread.run_sync(functools.partial(tool, *args, **kwargs))
+                    tool(*args, **kwargs) if is_async else run_in_executor(tool, *args, **kwargs)
                 )
         except WorkerStillRunning as refused:
             result, wait = failure_response(refused, name), refused.wait
-        if wait.waited_for:
-            result["scene_wait"] = wait.describe()
-        return result
+        return {**result, "scene_wait": wait.describe()} if wait.waited_for else result
 
     return call
 

@@ -90,8 +90,8 @@ held it) and how long it waited:
 A call that finds the scene free has no `scene_wait`. A call still waiting
 when a timed-out program takes over the scene is refused with
 `worker_still_running`, as above. A call cancelled while it waits (its client
-timed out or gave up) leaves the queue and never runs, so retrying it cannot
-apply the same write twice.
+timed out or gave up) leaves the queue and never runs. A call cancelled after
+it started still finishes its write.
 
 ## render_viewport
 

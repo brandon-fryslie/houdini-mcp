@@ -85,6 +85,28 @@ class TestCallsHoldTheScene:
             writer.gate.set()
             await call
 
+    async def test_an_async_tool_reads_off_the_event_loop(self, monkeypatch):
+        """get_geo_summary's read joins a worker; on the loop it would stall every call."""
+        from houdini_mcp.tools import geometry
+
+        reading, release, read_over = threading.Event(), threading.Event(), threading.Event()
+
+        def stalled_read(*args) -> dict:
+            reading.set()
+            release.wait(2)
+            read_over.set()
+            return {"status": "success"}
+
+        monkeypatch.setattr(geometry, "_read_geometry", stalled_read)
+        summary = asyncio.create_task(held(geometry.get_geo_summary)("/obj/geo1"))
+        await _until(reading)
+        read = _named("get_scene_info", lambda: {"status": "success"})
+        assert await held(read)() == {"status": "success"}
+        # The read ran while get_geo_summary's read was still stalled.
+        assert not read_over.is_set()
+        release.set()
+        assert (await summary)["status"] == "success"
+
     async def test_queued_writers_cost_no_thread_so_reads_still_run(self):
         """A waiting call holds no thread from the pool that runs tool bodies."""
         anyio.to_thread.current_default_thread_limiter().total_tokens = 2
@@ -148,8 +170,8 @@ class TestCallsHoldTheScene:
 
 class TestAClientThatGivesUp:
     async def test_a_call_whose_client_times_out_while_queued_never_runs(self, heard):
-        """The client's timeout cancels the call on the server, so a retry cannot
-        land beside a write the client never saw finish."""
+        """The client's timeout cancels the queued call on the server, so its
+        write never starts."""
         log: list[str] = []
         holder, late = _Gated("set_parameter", log), _Gated("create_node", log)
         late.gate.set()
