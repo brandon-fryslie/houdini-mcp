@@ -152,8 +152,11 @@ class TestWorkerLifetime:
         assert result["status"] == "success"
         assert WORKERS.running() is None
         messages = [r.getMessage() for r in caplog.records]
-        assert any(m.startswith("execute_code worker started") for m in messages)
-        assert any(m.startswith("execute_code worker finished") for m in messages)
+        [started] = [m for m in messages if m.startswith("execute_code worker started")]
+        [finished] = [m for m in messages if m.startswith("execute_code worker finished")]
+        # One launch number names the run in both of its events.
+        launch = started.split()[3]
+        assert launch.startswith("launch=") and finished.split()[3] == launch
 
     def test_failing_program_releases_the_slot(self, mock_connection):
         result = execute_code("raise ValueError('boom')", host="localhost", port=18811)
@@ -167,14 +170,19 @@ class TestWorkerLedger:
     def test_launch_refuses_a_second_worker_rather_than_losing_the_first(self, caplog):
         ledger = WorkerLedger()
         gate = threading.Event()
-        first = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=5)
+        first = ledger.launch(
+            lambda _me: gate.wait(), operation="execute_code", code_sha256="a" * 64, timeout=5
+        )
         try:
             with (
                 caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"),
                 pytest.raises(WorkerStillRunning) as refused,
             ):
                 ledger.launch(
-                    gate.wait, operation="get_geo_summary", code_sha256="b" * 64, timeout=5
+                    lambda _me: gate.wait(),
+                    operation="get_geo_summary",
+                    code_sha256="b" * 64,
+                    timeout=5,
                 )
             assert refused.value.worker is first
             assert refused.value.operation == "get_geo_summary"
@@ -198,7 +206,9 @@ class TestWorkerLedger:
 
         monkeypatch.setattr(threading.Thread, "start", cannot_start)
         with pytest.raises(RuntimeError, match="can't start new thread"):
-            ledger.launch(lambda: None, operation="execute_code", code_sha256="a" * 64, timeout=5)
+            ledger.launch(
+                lambda _me: None, operation="execute_code", code_sha256="a" * 64, timeout=5
+            )
 
         assert ledger.running() is None
         monkeypatch.undo()

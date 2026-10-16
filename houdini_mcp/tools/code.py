@@ -67,7 +67,7 @@ from .code_policy import (
 from .failure import failure_for
 from .program_output import captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
-from .workers import HOW_A_WORKER_ENDS, WORKERS
+from .workers import HOW_A_WORKER_ENDS, WORKERS, RunningWorker
 
 logger = logging.getLogger("houdini_mcp.tools.code")
 
@@ -372,19 +372,16 @@ def _run_code_thread(
         exec_traceback[0] = traceback.format_exc()
 
 
-def _scene_around(
-    scene: list[SceneSnapshot | Exception],
-) -> tuple[SceneSnapshot, SceneSnapshot | Exception]:
-    """The scene before a finished program and after it, as its worker read them.
+@dataclass(frozen=True)
+class _SceneAround:
+    """The scene before a program and after it, as the program's own worker read them.
 
-    [LAW:no-silent-failure] A scene that could not be read before is raised: the
-    program did not run on it. One that could not be read after is returned, for
-    the run stands and only its diff is missing.
+    ``after`` may be the reason it could not be read: the run stands, and only
+    its diff is missing.
     """
-    before, after = scene[0], scene[1:]
-    if isinstance(before, Exception):
-        raise before
-    return before, after[0]
+
+    before: SceneSnapshot
+    after: SceneSnapshot | Exception
 
 
 def _build_audit(
@@ -695,28 +692,50 @@ def _execute_with_grant(
     stderr_capture = StringIO()
     exec_exception: list[Exception | None] = [None]
     exec_traceback: list[str] = [""]
-    # With capture_diff: the scene before the program, then after it, each as
-    # read or the reason it could not be read.
-    scene: list[SceneSnapshot | Exception] = []
+    # With capture_diff: the scene around the program, or why the program never
+    # ran on it - which, until the worker writes the slot, is that the worker
+    # ended without reading the scene. Without capture_diff: None.
+    scene: _SceneAround | Exception | None = (
+        RuntimeError(f"{operation}'s worker ended without reading {_DIFF_ROOT}")
+        if capture_diff
+        else None
+    )
+    # The program's clock: timeout is the program's, not the scene reads around it.
+    program_starts, program_ends = threading.Event(), threading.Event()
 
-    def read_scene() -> None:
+    def read_scene() -> SceneSnapshot | Exception:
         try:
-            scene.append(scene_snapshot(hou, _DIFF_ROOT))
+            return scene_snapshot(hou, _DIFF_ROOT)
         except Exception as error:  # noqa: BLE001
-            scene.append(error)
+            return error
 
-    def run_code() -> None:
+    def run_code(me: RunningWorker) -> None:
         # [LAW:no-ambient-temporal-coupling] Both reads of the scene happen in the
         # worker, under its ledger slot, so no other program runs between them
         # and the diff is this program's alone. A scene that could not be read
-        # first is not written.
-        if capture_diff:
-            read_scene()
-            if isinstance(scene[0], Exception):
-                return
-        run_program()
-        if capture_diff:
-            read_scene()
+        # first is not written. Every way out, SystemExit included, leaves
+        # through the finally, so the caller's clock never waits on a program
+        # that is not running.
+        nonlocal scene
+        before: SceneSnapshot | None = None
+        try:
+            if capture_diff:
+                # [LAW:one-source-of-truth] From its first act until its diff
+                # exists, the last capture is this run's, with no diff.
+                LAST_SCENE_DIFF.record(me.launch, None)
+                read = read_scene()
+                if isinstance(read, Exception):
+                    scene = read
+                    return
+                before = read
+            program_starts.set()
+            run_program()
+        finally:
+            program_starts.set()
+            program_ends.set()
+            # A program that raised has no diff to report; its scene is not read.
+            if before is not None and exec_exception[0] is None:
+                scene = _SceneAround(before, read_scene())
 
     def run_program() -> None:
         # Never retry user code if the undo context fails: __exit__ may raise
@@ -754,15 +773,14 @@ def _execute_with_grant(
     worker = WORKERS.launch(
         run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
     )
-    if capture_diff:
-        # [LAW:one-source-of-truth] From its launch until its diff exists, the
-        # last capture is this run's, with no diff: never an earlier run's.
-        LAST_SCENE_DIFF.record(worker.launch, None)
-    worker.thread.join(timeout=timeout)
+    program_starts.wait()
+    if program_ends.wait(timeout):
+        worker.thread.join()
 
     # [LAW:one-source-of-truth] The ledger, not thread liveness, says whether the
-    # program is still running: the slot clears after the undo group closes, so
-    # a program that ended as the join expired is reported as complete.
+    # program is still running: the slot clears after the undo group closes and
+    # the scene is read, so a program that ended as the wait expired is reported
+    # as complete.
     if WORKERS.running() is worker:
         # The worker is still inside the undo-group context. Calling performUndo
         # now can undo the PREVIOUS human action because this run's group has not
@@ -808,9 +826,6 @@ def _execute_with_grant(
             ),
         )
 
-    if capture_diff:
-        before, after = _scene_around(scene)
-
     audit = _build_audit(code=code, grant=grant, detected=detected)
 
     # --- Exception during execution -----------------------------------------
@@ -829,6 +844,11 @@ def _execute_with_grant(
         if stderr_truncated:
             error_fields["stderr_truncated"] = True
         raise OperationFailed(str(exec_exception[0]), **error_fields)
+
+    # [LAW:no-silent-failure] A scene that could not be read before the program
+    # is raised: the program never ran on it.
+    if isinstance(scene, Exception):
+        raise scene
 
     # --- Success -------------------------------------------------------------
     stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
@@ -849,15 +869,15 @@ def _execute_with_grant(
         result["stderr_truncated"] = True
         result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
-    if capture_diff:
-        if isinstance(after, Exception):
+    if isinstance(scene, _SceneAround):
+        if isinstance(scene.after, Exception):
             # [LAW:no-silent-failure] The program ran; only its diff is missing,
             # and the result says why instead of reporting the run as failed.
-            failure = failure_for(after, operation)
+            failure = failure_for(scene.after, operation)
             logger.warning("%s ran but its scene diff failed: %s", operation, failure.message)
             result["scene_changes_error"] = failure.model_dump()
         else:
-            scene_changes = scene_diff(before, after)
+            scene_changes = scene_diff(scene.before, scene.after)
             lists = ("added", "removed", "modified", "added_nodes")
             over = [key for key in lists if len(scene_changes[key]) > max_diff_nodes]
             logger.debug(
@@ -885,10 +905,11 @@ def _execute_with_grant(
 
 def get_last_scene_diff() -> dict[str, Any]:
     """
-    Get the scene diff from the last execute_code call.
+    Get the scene diff of the execute_code run with capture_diff=True launched last.
 
-    Shows the nodes under /obj that were added, removed, or replaced by a node
-    of another type ("modified") during the last code execution, at any depth.
+    Shows the nodes under /obj that run added, removed, or replaced by a node of
+    another type ("modified"), at any depth. While that run has no diff - still
+    running, timed out, raised, or its scene could not be read - there is none.
     """
     diff = LAST_SCENE_DIFF.diff()
     if diff is None:

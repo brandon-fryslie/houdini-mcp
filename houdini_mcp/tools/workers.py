@@ -104,13 +104,16 @@ class WorkerLedger:
 
     def launch(
         self,
-        target: Callable[[], None],
+        target: Callable[[RunningWorker], None],
         *,
         operation: str,
         code_sha256: str,
         timeout: int,
     ) -> RunningWorker:
         """Start ``target`` on a daemon thread and record it as the running worker.
+
+        ``target`` is handed its own record, so whatever it must do as this
+        launch it does first, before anything it runs.
 
         Daemon, because a timed-out program must not keep the process alive.
         Raises :class:`WorkerStillRunning` naming ``operation`` rather than ever
@@ -123,13 +126,14 @@ class WorkerLedger:
 
             def run() -> None:
                 try:
-                    target()
+                    target(worker)
                 finally:
                     with self._lock:
                         self._running = None
                     logger.info(
-                        "%s worker finished code_sha256=%s after %.3fs",
+                        "%s worker finished launch=%d code_sha256=%s after %.3fs",
                         worker.operation,
+                        worker.launch,
                         worker.code_sha256,
                         worker.running_for_seconds(),
                     )
@@ -150,7 +154,13 @@ class WorkerLedger:
                 # leaving it in the slot would refuse every write until restart.
                 self._running = None
                 raise
-        logger.info("%s worker started code_sha256=%s timeout=%ss", operation, code_sha256, timeout)
+        logger.info(
+            "%s worker started launch=%d code_sha256=%s timeout=%ss",
+            operation,
+            worker.launch,
+            code_sha256,
+            timeout,
+        )
         return worker
 
     def admit(self, operation: str) -> None:

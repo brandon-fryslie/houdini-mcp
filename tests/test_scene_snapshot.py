@@ -3,6 +3,7 @@ it, and a snapshot that cannot be read is an error the caller sees."""
 
 import logging
 import threading
+import time
 from collections import Counter
 from typing import Any
 
@@ -288,8 +289,15 @@ class TestADiffIsItsOwnRunsAlone:
     ) -> None:
         caplog.set_level(logging.INFO, logger="houdini_mcp.tools.code")
         a, a_result, release = self._launch_a("scene_diff", monkeypatch)
-        reads = iter([mock_connection.hscript] * 2 + [lambda _c: ("", "Error:  busy\n")])
-        monkeypatch.setattr(mock_connection, "hscript", lambda command: next(reads)(command))
+        read = mock_connection.hscript
+        # Houdini is busy once B's program has run: B's after-read fails, nothing else.
+        monkeypatch.setattr(
+            mock_connection,
+            "hscript",
+            lambda command: (
+                ("", "Error:  busy\n") if mock_connection.node("/obj/from_b") else read(command)
+            ),
+        )
         b = self._run_b()
         release.set()
         a.join(5)
@@ -323,6 +331,50 @@ class TestADiffIsItsOwnRunsAlone:
         result = self._run_b()
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert mock_connection.node("/obj/from_b") is None
+        assert get_last_scene_diff()["status"] == "warning"
+
+    def test_a_program_that_exits_still_reports_its_diff(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        result = execute_code(
+            "hou.node('/obj').createNode('geo', 'then_exit')\nraise SystemExit(0)",
+            capture_diff=True,
+            host="localhost",
+            port=18811,
+        )
+        added = [{"path": "/obj/then_exit", "type": "geo"}]
+        assert result["scene_changes"]["added_nodes"] == added
+        assert get_last_scene_diff()["diff"] == result["scene_changes"]
+
+    def test_the_timeout_is_the_programs_not_the_scene_reads(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        read = code_module.scene_snapshot
+
+        def slow_read(*args: Any) -> Any:
+            time.sleep(0.6)
+            return read(*args)
+
+        monkeypatch.setattr(code_module, "scene_snapshot", slow_read)
+        # Two reads take longer than the timeout; the program itself is instant.
+        result = execute_code(
+            "print(1)", capture_diff=True, timeout=1, host="localhost", port=18811
+        )
+        assert result["status"] == "success"
+        assert "scene_changes" in result
+
+    def test_a_program_that_raised_has_its_scene_read_once(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        read = code_module.scene_snapshot
+        reads: list[str] = []
+        monkeypatch.setattr(
+            code_module, "scene_snapshot", lambda *args: reads.append("read") or read(*args)
+        )
+        result = execute_code(
+            "raise ValueError('no')", capture_diff=True, host="localhost", port=18811
+        )
+        assert (result["status"], len(reads)) == ("error", 1)
         assert get_last_scene_diff()["status"] == "warning"
 
 
