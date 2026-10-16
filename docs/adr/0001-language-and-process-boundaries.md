@@ -7,6 +7,10 @@
 - **Deciders:** Houdini MCP maintainers (reviewed before companion-protocol implementation)
 - **Supersedes:** none
 - **Blocks:** `houdini-mcp-vzp.9`, `houdini-mcp-vzp.11`, `houdini-mcp-xu4`
+- **Note (2026-10-16):** This fork has no hosted gateway, and none is planned. The
+  WebSocket client `houdini-mcp-xu4` asked for was built, then deleted with nothing
+  running it (`houdini-laws-etg.2m0`). The gateway, protocol-seam and `xu4` passages
+  below are the upstream plan this ADR was written against, not work to do here.
 
 <!-- ADR-BOUNDARY-ANCHOR: do not remove. The docs-link lint (tests/test_docs_links.py)
      asserts this file, its README/AGENTS links, and the "Module Boundaries" section
