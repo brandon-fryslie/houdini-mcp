@@ -3548,12 +3548,12 @@ class TestHandleConnectionErrorsDecorator:
 
         assert result["operation"] == "list_children"
 
-    def test_decorator_refuses_a_tool_with_no_policy(self):
-        """Every tool is classified in TOOL_POLICIES; an unclassified one cannot be defined."""
-        from houdini_mcp.tools._common import handle_connection_errors
+    def test_a_tool_with_no_policy_cannot_be_served(self):
+        """Every tool is classified in TOOL_POLICIES; an unclassified one cannot be served."""
+        from houdini_mcp.server import held
+
+        def custom_operation_name():
+            return {"status": "success"}
 
         with pytest.raises(KeyError, match="custom_operation_name"):
-
-            @handle_connection_errors("custom_operation_name")
-            def unclassified():
-                return {"status": "success"}
+            held(custom_operation_name)

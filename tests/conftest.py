@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
 import copy
+import logging
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -1347,3 +1348,36 @@ def stalled_program(mock_connection: MockHouModule) -> Generator[str, None, None
     if worker is not None:
         worker.thread.join(5)
     assert WORKERS.running() is None, "stalled program did not release its worker"
+
+
+class _Heard(logging.Handler):
+    """Sets an event the moment the ledger logs a message containing ``text``."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+        self.event = threading.Event()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self.text in record.getMessage():
+            self.event.set()
+
+
+@pytest.fixture
+def heard() -> Generator[Callable[[str], threading.Event], None, None]:
+    """``heard(text)`` is set once the ledger has logged ``text``."""
+    logger = logging.getLogger("houdini_mcp.tools.workers")
+    handlers: list[_Heard] = []
+    level = logger.level
+    logger.setLevel(logging.INFO)
+
+    def listen(text: str) -> threading.Event:
+        handler = _Heard(text)
+        handlers.append(handler)
+        logger.addHandler(handler)
+        return handler.event
+
+    yield listen
+    for handler in handlers:
+        logger.removeHandler(handler)
+    logger.setLevel(level)

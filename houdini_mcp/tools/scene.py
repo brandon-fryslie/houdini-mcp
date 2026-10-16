@@ -17,6 +17,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
     node_at,
+    on_the_scene,
 )
 from .cache import invalidate_all_caches
 from .parms import evaluated
@@ -144,7 +145,9 @@ async def serialize_scene(
         insights about organization, complexity, and optimization opportunities,
         or ai_summary_error saying why no summary could be made.
     """
-    result = _scene_tree(root_path, include_params, max_depth, host, port)
+    result = await on_the_scene(
+        "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
+    )
     return await summarized(result, summarize_scene, asked=summarize)
 
 

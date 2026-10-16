@@ -1,5 +1,7 @@
 """Houdini MCP Server - Main server entry point."""
 
+import functools
+import inspect
 import logging
 import os
 from collections.abc import Callable
@@ -13,6 +15,10 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target
+from .tools._common import on_the_scene
+from .tools.failure import failure_response
+from .tools.transactions import TOOL_POLICIES
+from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
 
@@ -87,9 +93,32 @@ SERVED_TOOLS: tuple[Callable[..., Any], ...] = (
 TARGET: dict[str, Any] = {"host": HOUDINI_HOST, "port": HOUDINI_PORT}
 
 
+def held(tool: Callable[..., Any]) -> Callable[..., Any]:
+    """The tool as a client's call runs it, never blocking the server's event loop.
+
+    A sync tool's body is all Houdini work, so it runs whole through
+    ``on_the_scene``, holding the scene when its policy needs it. An async tool
+    sends its own Houdini read there and finishes the rest on the loop with the
+    scene released.
+    """
+    name = tool.__name__
+    TOOL_POLICIES[name]  # an unclassified tool fails here, at import
+    if inspect.iscoroutinefunction(tool):
+        return tool
+
+    @functools.wraps(tool)
+    async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return await on_the_scene(name, tool, *args, **kwargs)
+        except WorkerStillRunning as refused:
+            return failure_response(refused, name)
+
+    return call
+
+
 def served(tool: Callable[..., Any]) -> Tool:
     """The tool as clients see it: its own signature and docs, with the target bound."""
-    declared = Tool.from_function(tool)
+    declared = Tool.from_function(held(tool))
     bound = {
         name: ArgTransform(hide=True, default=value)
         for name, value in TARGET.items()

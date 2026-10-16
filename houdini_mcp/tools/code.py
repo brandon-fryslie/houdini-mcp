@@ -861,9 +861,9 @@ def _execute_with_grant(
         )
 
     # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
-    # starts the thread, the thread clears the slot once the program, its undo
-    # group, and the scene reads around it have ended, and every scene-writing
-    # tool asks it first. A timeout leaves the slot occupied.
+    # starts the thread inside this call's hold on the scene, the thread clears
+    # the slot once the program, its undo group, and the scene reads around it
+    # have ended, and a timeout leaves the slot occupied after this call returns.
     worker = WORKERS.launch(
         run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
     )

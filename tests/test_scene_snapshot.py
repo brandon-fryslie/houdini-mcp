@@ -1,13 +1,16 @@
 """A scene has one snapshot, every reader of the scene's structure derives from
 it, and a snapshot that cannot be read is an error the caller sees."""
 
+import asyncio
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
+from houdini_mcp.server import held
 from houdini_mcp.tools import code as code_module
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
@@ -233,13 +236,13 @@ class TestADiffIsItsOwnRunsAlone:
         """Start run A on its own thread and hold it in its after-read until the
         returned event is set; return once A is held there."""
         real = code_module.scene_snapshot
-        held, release = threading.Event(), threading.Event()
+        paused, release = threading.Event(), threading.Event()
         reads: list[str] = []
 
         def hold_the_after_read(*args: Any) -> Any:
             reads.append("read")
             if len(reads) == 2:
-                held.set()
+                paused.set()
                 assert release.wait(5), "run A was never released"
             return real(*args)
 
@@ -248,40 +251,52 @@ class TestADiffIsItsOwnRunsAlone:
 
         def run_a() -> None:
             result.update(
-                execute_code(
-                    "hou.node('/obj').createNode('geo', 'from_a')",
-                    capture_diff=True,
-                    host="localhost",
-                    port=18811,
+                asyncio.run(
+                    held(execute_code)(
+                        "hou.node('/obj').createNode('geo', 'from_a')",
+                        capture_diff=True,
+                        host="localhost",
+                        port=18811,
+                    )
                 )
             )
 
         a = threading.Thread(target=run_a)
         a.start()
-        assert held.wait(5), "run A never reached its after-read"
+        assert paused.wait(5), "run A never reached its after-read"
         return a, result, release
 
     @staticmethod
     def _run_b() -> dict[str, Any]:
-        return execute_code(
-            "hou.node('/obj').createNode('geo', 'from_b')",
-            capture_diff=True,
-            host="localhost",
-            port=18811,
+        return asyncio.run(
+            held(execute_code)(
+                "hou.node('/obj').createNode('geo', 'from_b')",
+                capture_diff=True,
+                host="localhost",
+                port=18811,
+            )
         )
 
-    def test_no_program_runs_between_a_captures_two_reads(
-        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    def test_a_program_arriving_mid_capture_waits_for_the_capture_to_end(
+        self,
+        mock_connection: MockHouModule,
+        monkeypatch: pytest.MonkeyPatch,
+        heard: Callable[[str], threading.Event],
     ) -> None:
         a, a_result, release = self._launch_a(monkeypatch)
-        b = self._run_b()
+        queued = heard("execute_code waits for the scene behind execute_code")
+        b_result: dict[str, Any] = {}
+        b = threading.Thread(target=lambda: b_result.update(self._run_b()))
+        b.start()
+        assert queued.wait(5)
+        assert mock_connection.node("/obj/from_b") is None
         release.set()
         a.join(5)
-        assert (b["status"], "still holding Houdini" in b["message"]) == ("error", True)
-        assert mock_connection.node("/obj/from_b") is None
+        b.join(5)
         assert a_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_a", "type": "geo"}]
-        # B was refused, never run: the last capture is still A's.
-        assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
+        assert b_result["scene_wait"]["waited_for"] == ["execute_code"]
+        assert b_result["scene_changes"]["added_nodes"] == [{"path": "/obj/from_b", "type": "geo"}]
+        assert get_last_scene_diff()["diff"] == b_result["scene_changes"]
 
     def test_a_run_in_progress_has_no_diff_not_an_earlier_runs(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch

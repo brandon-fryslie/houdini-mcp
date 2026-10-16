@@ -1,9 +1,9 @@
 """A timed-out execute_code worker is owned state that blocks further mutation.
 
 (houdini-laws-etg.7kc) While the caller's program is still running against
-Houdini, every tool that writes the scene is refused and told which worker
+Houdini, every call that writes the scene is refused and told which worker
 holds it; reads and file writers proceed; the moment the worker ends, writes
-resume.
+resume. A call meets the ledger where the server runs it (``held``).
 """
 
 import logging
@@ -11,8 +11,8 @@ import threading
 
 import pytest
 
+from houdini_mcp.server import held
 from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, get_scene_info
-from houdini_mcp.tools._common import handle_connection_errors
 from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.rendering import render_quad_view, render_viewport
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
@@ -44,10 +44,12 @@ class TestWorkerBlocksMutation:
         assert "refused until this worker finishes" in result["warning"]
         assert "ends only with the MCP server" in result["warning"]
 
-    def test_writing_tool_is_refused_and_writes_nothing(self, mock_connection, stalled_program):
+    async def test_writing_tool_is_refused_and_writes_nothing(
+        self, mock_connection, stalled_program
+    ):
         _time_out(stalled_program)
 
-        result = create_node("geo", "/obj", name="late", host="localhost", port=18811)
+        result = await held(create_node)("geo", "/obj", name="late", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"
@@ -57,37 +59,37 @@ class TestWorkerBlocksMutation:
         assert "create_node refused" in result["message"]
         assert "late" not in _child_names(mock_connection)
 
-    def test_second_program_is_refused_the_same_way(self, mock_connection, stalled_program):
+    async def test_second_program_is_refused_the_same_way(self, mock_connection, stalled_program):
         _time_out(stalled_program)
 
-        result = execute_code("print('me too')", host="localhost", port=18811)
+        result = await held(execute_code)("print('me too')", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"
         assert result["operation"] == "execute_code"
 
-    def test_reads_still_work(self, mock_connection, stalled_program):
+    async def test_reads_still_work(self, mock_connection, stalled_program):
         _time_out(stalled_program)
 
-        assert get_scene_info(host="localhost", port=18811)["status"] == "success"
+        result = await held(get_scene_info)(host="localhost", port=18811)
+        assert result["status"] == "success"
 
-    def test_file_writers_are_not_scene_writers(self, mock_connection, stalled_program):
+    async def test_file_writers_are_not_scene_writers(self, mock_connection, stalled_program):
         """A screenshot is how a caller verifies the scene the warning tells it to verify."""
         _time_out(stalled_program)
 
-        @handle_connection_errors("capture_pane_screenshot")
-        def screenshot():
+        def capture_pane_screenshot() -> dict:
             return {"status": "success"}
 
-        assert screenshot()["status"] == "success"
+        assert (await held(capture_pane_screenshot)())["status"] == "success"
 
     @pytest.mark.parametrize("render", [render_viewport, render_quad_view])
-    def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render):
+    async def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render):
         """A render tool adds a camera rig and a ROP to the scene for the call, so it
         must not run beside a program still mutating it (TOOL_POLICIES says why)."""
         _time_out(stalled_program)
 
-        result = render(host="localhost", port=18811)
+        result = await held(render)(host="localhost", port=18811)
 
         assert result["kind"] == "worker_still_running"
         assert result["operation"] == render.__name__
@@ -99,7 +101,7 @@ class TestWorkerBlocksMutation:
         _time_out(stalled_program)
 
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"):
-            result = await get_geo_summary("/obj/geo1", host="localhost", port=18811)
+            result = await held(get_geo_summary)("/obj/geo1", host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"
@@ -122,14 +124,14 @@ class TestWorkerBlocksMutation:
         assert result["status"] == "success"
         assert "after" in _child_names(mock_connection)
 
-    def test_refusal_is_logged_with_the_tool_and_the_worker(
+    async def test_refusal_is_logged_with_the_tool_and_the_worker(
         self, mock_connection, stalled_program, caplog
     ):
         _time_out(stalled_program)
         sha = WORKERS.running().code_sha256
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.workers"):
-            create_node("geo", "/obj", name="late", host="localhost", port=18811)
+            await held(create_node)("geo", "/obj", name="late", host="localhost", port=18811)
 
         refusals = [
             r
@@ -230,10 +232,11 @@ class TestWorkerLedger:
             first.thread.join(5)
         assert ledger.running() is None
 
-    def test_admit_passes_when_idle(self):
-        WorkerLedger().admit("create_node")
+    async def test_hold_is_granted_when_idle(self):
+        async with WorkerLedger().hold("create_node") as wait:
+            assert wait.waited_for == ()
 
-    def test_a_thread_that_fails_to_start_holds_no_slot(self, monkeypatch):
+    async def test_a_thread_that_fails_to_start_holds_no_slot(self, monkeypatch):
         ledger = WorkerLedger()
 
         def cannot_start(self):
@@ -245,4 +248,5 @@ class TestWorkerLedger:
 
         assert ledger.running() is None
         monkeypatch.undo()
-        ledger.admit("create_node")
+        async with ledger.hold("create_node") as wait:
+            assert wait.waited_for == ()

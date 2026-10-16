@@ -35,6 +35,8 @@ dependencies = [
     "starlette>=1.7",
     # Field() constrains the served render schema (tools/_common.py)
     "pydantic>=2.14",
+    # Blocking Houdini work leaves the event loop on anyio's threads (tools/_common.py)
+    "anyio>=4.15",
 ]
 
 [dependency-groups]

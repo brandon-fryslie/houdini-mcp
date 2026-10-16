@@ -75,6 +75,24 @@ the call) return
 worker; plain reads,
 `save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
 
+### Concurrent Calls Wait Their Turn
+
+Those same tools hold the scene while they work in Houdini, so two of them
+never run at once; `get_geo_summary` releases it before its AI summary. A call that arrives while another one is running waits for it to
+finish, then runs. Its response, success or error, carries `scene_wait`,
+which names the calls that held the scene while it waited (in the order they
+held it) and how long it waited:
+
+```python
+{"status": "success", "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
+```
+
+A call that finds the scene free has no `scene_wait`. A call still waiting
+when a timed-out program takes over the scene is refused with
+`worker_still_running`, as above. A call cancelled while it waits (its client
+timed out or gave up) leaves the queue and never runs. A call cancelled after
+it started still finishes its write.
+
 ## render_viewport
 
 ### Parameter Schema

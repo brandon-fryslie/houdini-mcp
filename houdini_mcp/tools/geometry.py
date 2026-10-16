@@ -14,6 +14,7 @@ from ._common import (
     _add_response_metadata,
     apply_response_cap,
     handle_connection_errors,
+    on_the_scene,
     tool_error,
 )
 from .reads import UNREAD, format_reason, log_unread, unreads
@@ -84,8 +85,15 @@ async def get_geo_summary(
         # Full detail for verification with AI summary
         get_geo_summary("/obj/geo1/noise1", max_sample_points=200, summarize=True)
     """
-    result = _read_geometry(
-        node_path, max_sample_points, include_attributes, include_groups, host, port
+    result = await on_the_scene(
+        "get_geo_summary",
+        _read_geometry,
+        node_path,
+        max_sample_points,
+        include_attributes,
+        include_groups,
+        host,
+        port,
     )
     return apply_response_cap(await summarized(result, summarize_geometry, asked=summarize))
 

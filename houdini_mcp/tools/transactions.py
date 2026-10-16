@@ -22,7 +22,8 @@ class TransactionPolicy(StrEnum):
 
 
 class SceneAccess(StrEnum):
-    """Whether a tool may run beside an execute_code program still mutating the scene."""
+    """Whether a tool's Houdini work may run beside another call's, or beside an
+    execute_code program still mutating the scene."""
 
     SHARED = "shared"
     EXCLUSIVE = "exclusive"
@@ -60,9 +61,9 @@ _CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, SceneAccess.EX
 _FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHARED)
 
 # [LAW:types-are-the-program] Every tool the server exposes is classified here:
-# the tool boundary looks a decorated tool's name up at decoration time, so one
-# with no policy cannot be imported, and tests/plugin/test_server_surface.py
-# holds the served tool names equal to these keys.
+# the server looks every served tool's name up when it registers it, so one with
+# no policy cannot be served, and tests/plugin/test_server_surface.py holds the
+# served tool names equal to these keys.
 TOOL_POLICIES: dict[str, ToolPolicy] = {
     "assign_material": _UNDOABLE,
     "capture_multiple_panes": _FILE_WRITE,

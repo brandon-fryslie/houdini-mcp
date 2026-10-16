@@ -38,8 +38,6 @@ from .failure import (
     failure_response,
     tool_error,
 )
-from .transactions import TOOL_POLICIES, SceneAccess
-from .workers import WORKERS
 
 T = TypeVar("T")
 
@@ -128,15 +126,12 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. A tool whose policy needs the scene to itself
-    (``SceneAccess.EXCLUSIVE``) first asks the worker ledger whether a program is
-    still running against Houdini, and is refused with that worker named when it
-    is.
+    tears the connection down. Who holds the scene while the tool's Houdini
+    work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
-        operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
-            unclassified tool fails here, at import) and names the operation
-            in error responses.
+        operation_name: The tool's name: it names the operation in error
+            responses.
 
     Returns:
         Decorated function with error handling
@@ -150,19 +145,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
 
     def decorator(func: ToolFn) -> ToolFn:
-        signature = inspect.signature(func)
-        # [LAW:single-enforcer] Whether a tool must wait for a worker is its
-        # policy's fact; whether one is running is the ledger's. This is the one
-        # place both are consulted, so no tool can mutate alongside a timed-out
-        # worker unseen.
-        waits_for_worker = TOOL_POLICIES[operation_name].access is SceneAccess.EXCLUSIVE
-
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
         # the caller's bug and raises as one, before the boundary opens; only what
         # the tool itself raises becomes an error response.
-        def admit() -> None:
-            if waits_for_worker:
-                WORKERS.admit(operation_name)
+        signature = inspect.signature(func)
 
         # A served tool that finishes its result asynchronously (summarizing it,
         # then capping it) is the same boundary awaited: whatever that finishing
@@ -173,7 +159,6 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
                 signature.bind(*args, **kwargs)
                 try:
-                    admit()
                     result: dict[str, Any] = await func(*args, **kwargs)
                     return result
                 except Exception as e:
@@ -185,7 +170,6 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         def wrapper(*args, **kwargs) -> dict[str, Any]:
             signature.bind(*args, **kwargs)
             try:
-                admit()
                 result: dict[str, Any] = func(*args, **kwargs)
                 return result
             except Exception as e:
@@ -428,6 +412,12 @@ def _flatten_parm_templates(hou: Any, parm_templates: list[Any]) -> list[Any]:
 import asyncio
 import os
 from collections.abc import Coroutine
+from contextlib import nullcontext
+
+import anyio
+
+from .transactions import TOOL_POLICIES, SceneAccess
+from .workers import NO_WAIT, WORKERS, SceneWait
 
 # Default semaphore limit for bounded parallel execution
 # Can be overridden via environment variable
@@ -496,11 +486,40 @@ def batch_items(items: list[Any], batch_size: int) -> list[list[Any]]:
     return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
 
+async def on_the_scene(
+    operation: str, work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
+) -> dict[str, Any]:
+    """Run ``operation``'s blocking Houdini work off the event loop, holding the
+    scene for it when its policy needs the scene to itself.
+
+    [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
+    tool's whole body comes through here (``server.held``), an async tool's
+    Houdini read does, and whatever it finishes afterwards (a summary) runs
+    with the scene released. An ``SceneAccess.EXCLUSIVE`` operation waits on
+    the event loop for a call already holding the scene, so a waiting call
+    costs no thread and one its client cancels never runs, and it is refused
+    with :class:`WorkerStillRunning` while a program still runs against
+    Houdini. The result tells the wait in ``scene_wait``.
+    """
+    exclusive = TOOL_POLICIES[operation].access is SceneAccess.EXCLUSIVE
+    hold = WORKERS.hold if exclusive else _holds_nothing
+    async with hold(operation) as wait:
+        result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
+    return {**result, **wait.response_fields()}
+
+
+def _holds_nothing(operation: str) -> nullcontext[SceneWait]:
+    """The hold of an operation that shares the scene: it never waits."""
+    return nullcontext(NO_WAIT)
+
+
 async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
     """
-    Run a synchronous function in a thread pool executor.
+    Run a synchronous function on anyio's worker threads.
 
-    Useful for wrapping blocking Houdini RPC calls in async context.
+    [LAW:one-source-of-truth] The one way a coroutine runs blocking work: a call
+    the event loop is running must never block that loop, or no other call - nor
+    any cancellation - can run. Houdini work goes through :func:`on_the_scene`.
 
     Args:
         func: Synchronous function to execute
@@ -513,11 +532,7 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
     Example:
         result = await run_in_executor(sync_houdini_operation, param1, param2)
     """
-    import functools
-
-    loop = asyncio.get_event_loop()
-    partial_func = functools.partial(func, *args, **kwargs)
-    return await loop.run_in_executor(None, partial_func)
+    return await anyio.to_thread.run_sync(functools.partial(func, *args, **kwargs))
 
 
 # =============================================================================
