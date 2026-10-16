@@ -16,23 +16,9 @@ from typing import Any
 class TransactionPolicy(StrEnum):
     """What recovering from a tool's lasting effect takes."""
 
-    NOTHING_TO_RECOVER = "nothing_to_recover"
     UNDOABLE = "undoable"
     CHECKPOINT_REQUIRED = "checkpoint_required"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
-
-    @property
-    def writes_scene(self) -> bool:
-        """Whether a tool under this policy leaves the Houdini scene changed.
-
-        File writers (screenshots, save) are not scene writers.
-        """
-        return self in (TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED)
-
-    @property
-    def needs_transaction(self) -> bool:
-        """Whether a tool under this policy has an effect a transaction can recover."""
-        return self is not TransactionPolicy.NOTHING_TO_RECOVER
 
 
 class SceneAccess(StrEnum):
@@ -42,35 +28,33 @@ class SceneAccess(StrEnum):
     EXCLUSIVE = "exclusive"
 
 
+# File writers (screenshots, save) leave the Houdini scene as it was.
+_SCENE_WRITERS = (TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED)
+
+
 @dataclass(frozen=True)
 class ToolPolicy:
     """What a tool leaves behind, and whether it needs the scene to itself meanwhile.
 
     [LAW:types-are-the-program] Two facts, two discriminators: a render leaves
-    nothing to recover yet must not run beside a mutating program. The one pair
-    no tool may have, a scene writer that shares the scene, is refused here.
+    nothing to recover (``recovery`` is None) yet must not run beside a mutating
+    program. The one pair no tool may have, a scene writer that shares the
+    scene, is refused here.
     """
 
-    recovery: TransactionPolicy
+    recovery: TransactionPolicy | None
     access: SceneAccess
 
     def __post_init__(self) -> None:
-        if self.recovery.writes_scene and self.access is SceneAccess.SHARED:
-            raise ValueError(
-                f"A {self.recovery.value} tool writes the scene, so it cannot share it"
-            )
-
-    @property
-    def waits_for_worker(self) -> bool:
-        """Whether a running execute_code program refuses a tool under this policy."""
-        return self.access is SceneAccess.EXCLUSIVE
+        if self.recovery in _SCENE_WRITERS and self.access is SceneAccess.SHARED:
+            raise ValueError(f"A {self.recovery} tool writes the scene, so it cannot share it")
 
 
-_READ = ToolPolicy(TransactionPolicy.NOTHING_TO_RECOVER, SceneAccess.SHARED)
+_READ = ToolPolicy(None, SceneAccess.SHARED)
 # Needs the scene to itself for the call and leaves it as found: a read through a
 # program in the one worker slot, or a render that adds a camera rig and a ROP
 # for the call and removes them before returning.
-_HOLDS_SCENE = ToolPolicy(TransactionPolicy.NOTHING_TO_RECOVER, SceneAccess.EXCLUSIVE)
+_HOLDS_SCENE = ToolPolicy(None, SceneAccess.EXCLUSIVE)
 _UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, SceneAccess.EXCLUSIVE)
 _CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, SceneAccess.EXCLUSIVE)
 _FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHARED)
@@ -129,7 +113,7 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
 MUTATING_TOOL_POLICIES: dict[str, TransactionPolicy] = {
     tool: policy.recovery
     for tool, policy in TOOL_POLICIES.items()
-    if policy.recovery.needs_transaction
+    if policy.recovery is not None
 }
 
 
@@ -285,8 +269,6 @@ class TransactionManager:
             TransactionPolicy.EXTERNAL_SIDE_EFFECT: 2,
         }
         resolved = policy or max(policies, key=precedence.__getitem__)
-        if not resolved.needs_transaction:
-            raise ValueError(f"Under {resolved.value} a transaction recovers nothing")
         return SceneTransaction(
             self,
             tools=list(tools),

@@ -38,7 +38,7 @@ from .failure import (
     failure_response,
     tool_error,
 )
-from .transactions import TOOL_POLICIES
+from .transactions import TOOL_POLICIES, SceneAccess
 from .workers import WORKERS
 
 T = TypeVar("T")
@@ -128,10 +128,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. A tool whose policy waits for a worker (it writes
-    the scene, or reads it through a program) first asks the worker ledger whether
-    a program is still running against Houdini, and is refused with that worker
-    named when it is.
+    tears the connection down. A tool whose policy needs the scene to itself
+    (``SceneAccess.EXCLUSIVE``) first asks the worker ledger whether a program is
+    still running against Houdini, and is refused with that worker named when it
+    is.
 
     Args:
         operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
@@ -155,7 +155,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         # policy's fact; whether one is running is the ledger's. This is the one
         # place both are consulted, so no tool can mutate alongside a timed-out
         # worker unseen.
-        waits_for_worker = TOOL_POLICIES[operation_name].waits_for_worker
+        waits_for_worker = TOOL_POLICIES[operation_name].access is SceneAccess.EXCLUSIVE
 
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
         # the caller's bug and raises as one, before the boundary opens; only what

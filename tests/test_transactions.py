@@ -27,14 +27,6 @@ def manager(mock_connection, tmp_path: Path, revision):
     )
 
 
-def test_begin_refuses_a_policy_with_nothing_to_recover(mock_connection, tmp_path):
-    """A transaction with nothing to recover would checkpoint nothing and undo nothing."""
-    with pytest.raises(ValueError, match="recovers nothing"):
-        manager(mock_connection, tmp_path, ["before"]).begin(
-            ["create_node"], policy=TransactionPolicy.NOTHING_TO_RECOVER
-        )
-
-
 @pytest.mark.parametrize("render_tool", ["render_viewport", "render_quad_view"])
 def test_render_tools_need_no_transaction(render_tool):
     """A render leaves the scene as it found it, so there is no checkpoint to pay for;
