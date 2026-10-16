@@ -1,7 +1,6 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
 import copy
-import importlib
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -10,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from rpyc.core import vinegar
+
+from houdini_mcp.connection import _InterpreterModules
 
 
 def split_path(path: str) -> tuple[str, str]:
@@ -547,22 +548,18 @@ class MockHouNode:
         self.setInput(0, node)
 
 
-class MockModuleNamespace:
-    """rpyc's ``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
+class MockModuleNamespace(_InterpreterModules):
+    """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
-    Like the real namespace it answers ``modules.hou`` and ``modules["name"]``, and
-    imports any other name - the plugin tree is on this interpreter's path as it is
-    on Houdini's - so Houdini-side modules run against the double.
+    Any other name imports here - the plugin tree is on this interpreter's path as
+    it is on Houdini's - so Houdini-side modules run against the double.
     """
 
     def __init__(self, hou_module: "MockHouModule"):
         self._hou = hou_module
 
     def __getitem__(self, name: str) -> Any:
-        return self._hou if name == "hou" else importlib.import_module(name)
-
-    def __getattr__(self, name: str) -> Any:
-        return self[name]
+        return self._hou if name == "hou" else super().__getitem__(name)
 
 
 class MockRpycConnection:

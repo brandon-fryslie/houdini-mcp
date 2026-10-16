@@ -9,7 +9,7 @@ This module contains common utilities used across all tool modules:
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, TypeVar, cast
 
@@ -79,6 +79,7 @@ __all__ = [
     "PageRequest",
     "parse_page_request",
     "Page",
+    "page_from",
     "paginate",
     "paging_fields",
     "is_paged",
@@ -539,6 +540,11 @@ class PageRequest:
     offset: int
     limit: int
 
+    @property
+    def window(self) -> slice:
+        """The page's place in a result set, as a slice: it crosses to Houdini by value."""
+        return slice(self.offset, self.offset + self.limit)
+
     def __post_init__(self) -> None:
         # [LAW:types-are-the-program] The type, not its callers, refuses the
         # empty or negative window that would repeat a cursor forever.
@@ -580,20 +586,15 @@ class Page(Generic[T]):
         return self.offset + len(self.items) < self.total
 
 
-def paginate(items: Iterable[T], request: PageRequest) -> Page[T]:
-    """Cut ``request``'s page from ``items``, counting the whole set for ``total``.
+def paginate(items: Sequence[T], request: PageRequest) -> Page[T]:
+    """Cut ``request``'s page from ``items``, counting the whole set for ``total``."""
+    return page_from(len(items), items[request.window], request)
 
-    Works on any iterable, so a tool that streams matches pays per-item cost
-    (a Houdini round trip, say) only for the items it returns.
-    """
-    window = range(request.offset, request.offset + request.limit)
-    page: list[T] = []
-    total = 0
-    for item in items:
-        if total in window:
-            page.append(item)
-        total += 1
-    result = Page(items=page, offset=request.offset, total=total)
+
+def page_from(total: int, items: Iterable[T], request: PageRequest) -> Page[T]:
+    """The page of ``request`` whose ``items`` were already cut at ``request.window``
+    from a set of ``total`` - by Houdini, say, so only the page crosses the link."""
+    result = Page(items=list(items), offset=request.offset, total=total)
     logger.debug(
         "paged offset=%d limit=%d total=%d returned=%d has_more=%s",
         request.offset,

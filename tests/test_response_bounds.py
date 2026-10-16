@@ -108,22 +108,6 @@ class TestResponsePagination:
         assert result["returned"] == 0
         assert result["has_more"] is False
 
-    def test_paginate_streams_and_only_materializes_the_page(self):
-        """An iterator is consumed once; only the page's items are kept."""
-        from houdini_mcp.tools._common import paginate, parse_page_request
-
-        seen = []
-
-        def source():
-            for i in range(30):
-                seen.append(i)
-                yield i
-
-        page = paginate(source(), parse_page_request(limit=5, cursor=10))
-        assert page.items == [10, 11, 12, 13, 14]
-        assert page.total == 30
-        assert seen == list(range(30))
-
 
 class TestOnePagingContract:
     """Every list tool pages the same arguments the same way and emits the same keys."""

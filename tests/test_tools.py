@@ -1768,28 +1768,24 @@ class TestFindNodes:
         obj.allSubChildren = MagicMock(side_effect=AssertionError("walked from the server"))
         search = SimpleNamespace(
             matching_descendants=MagicMock(
-                return_value=(
-                    ("/obj/a", "a", "null"),
-                    ("/obj/b", "b", "null"),
-                    ("/obj/c", "c", "null"),
-                )
+                return_value=(3, (("/obj/b", "b", "null"), ("/obj/c", "c", "null")))
             )
         )
         monkeypatch.setitem(sys.modules, "houdini_mcp_search", search)
 
-        result = find_nodes("/obj", "*", "null", limit=2, host="localhost", port=18811)
+        result = find_nodes("/obj", "*", "null", limit=2, cursor=1, host="localhost", port=18811)
 
-        search.matching_descendants.assert_called_once_with(obj, "*", "null")
+        search.matching_descendants.assert_called_once_with(obj, "*", "null", slice(1, 3))
         assert result["matches"] == [
-            {"path": "/obj/a", "name": "a", "type": "null"},
             {"path": "/obj/b", "name": "b", "type": "null"},
+            {"path": "/obj/c", "name": "c", "type": "null"},
         ]
-        assert (result["total"], result["has_more"]) == (3, True)
+        assert (result["total"], result["has_more"]) == (3, False)
 
     def test_find_nodes_names_the_plugin_when_houdini_lacks_the_search(
         self, mock_connection, monkeypatch
     ):
-        """A Houdini plugin older than this server fails the search with the fix."""
+        """A Houdini without this release's plugin fails the search with the fix."""
         from houdini_mcp.tools import find_nodes
 
         monkeypatch.setitem(sys.modules, "houdini_mcp_search", None)
@@ -1797,8 +1793,9 @@ class TestFindNodes:
         result = find_nodes("/obj", "*", host="localhost", port=18811)
 
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
-        assert "Houdini cannot import houdini_mcp_search" in result["message"]
-        assert "Install the plugin from the same release" in result["message"]
+        message = result["message"]
+        assert "Houdini cannot import houdini_mcp_search (ModuleNotFoundError: " in message
+        assert "Install the plugin from the same release" in message
 
 
 class TestFindErrorNodes:

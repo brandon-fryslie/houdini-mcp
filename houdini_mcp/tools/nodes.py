@@ -24,6 +24,7 @@ from ._common import (
     handle_connection_errors,
     join_warnings,
     node_at,
+    page_from,
     paginate,
     paging_fields,
     parse_page_request,
@@ -32,7 +33,7 @@ from .cache import node_type_cache
 from .connections import input_connections, input_paths
 from .failure import Undone, batch_status
 from .parms import evaluated
-from .reads import UNREAD, is_unread, read
+from .reads import UNREAD, is_unread, read, reason
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -493,13 +494,13 @@ def list_children(
 
 
 def _search_module(link: Link) -> Any:
-    """Houdini's ``houdini_mcp_search``, or the failure that names the plugin to update."""
+    """Houdini's ``houdini_mcp_search``, or the failure that names the plugin to install."""
     try:
         return link.conn.modules["houdini_mcp_search"]
     except ImportError as e:
         raise OperationFailed(
-            f"Houdini cannot import houdini_mcp_search ({e}); its houdini_mcp plugin "
-            "predates this server. Install the plugin from the same release."
+            f"Houdini cannot import houdini_mcp_search ({reason(e)}): Houdini's path lacks "
+            "this release's houdini_mcp plugin. Install the plugin from the same release."
         ) from e
 
 
@@ -545,13 +546,15 @@ def find_nodes(
     request = parse_page_request(limit=limit, cursor=cursor)
 
     # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
-    # the scene size, answered with plain strings this side pages.
+    # the scene size, answered with the match count and the page's strings.
     # [LAW:single-enforcer] Caller strings cross as arguments, never formatted into a
     # program; find_nodes has no code-execution path of its own.
     # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
     # as an error instead of switching to a different result set.
-    found = _search_module(link).matching_descendants(root, pattern, node_type)
-    page = paginate(found, request)
+    total, found = _search_module(link).matching_descendants(
+        root, pattern, node_type, request.window
+    )
+    page = page_from(total, found, request)
     matches = [
         {"path": path, "name": name, "type": type_name} for path, name, type_name in page.items
     ]

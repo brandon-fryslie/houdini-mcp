@@ -19,15 +19,18 @@ from typing import Any
 Match = tuple[str, str, str]
 
 
-def matching_descendants(root: Any, pattern: str, node_type: str | None) -> tuple[Match, ...]:
-    """``(path, name, type)`` of every descendant of ``root`` that matches, in walk order.
+def matching_descendants(
+    root: Any, pattern: str, node_type: str | None, window: slice
+) -> tuple[int, tuple[Match, ...]]:
+    """How many descendants of ``root`` match, and ``(path, name, type)`` of those
+    inside ``window``, in walk order.
 
     Names compare case-insensitively against the glob ``pattern``; a pattern with
     no ``*`` or ``?`` also matches as a substring. ``node_type``, when given, must
     equal the type name, ignoring case.
 
-    A tuple of string tuples because rpyc sends that by value: the caller pages
-    the answer itself, not references back into Houdini.
+    Ints and string tuples because rpyc sends those by value, and only the
+    window's matches, so a page costs the link its own size whatever the scene's.
     """
     pattern_lower = pattern.lower()
     substring = "*" not in pattern and "?" not in pattern
@@ -45,4 +48,4 @@ def matching_descendants(root: Any, pattern: str, node_type: str | None) -> tupl
         type_name = node.type().name()
         if type_lower is None or type_name.lower() == type_lower:
             matches.append((node.path(), name, type_name))
-    return tuple(matches)
+    return len(matches), tuple(matches[window])

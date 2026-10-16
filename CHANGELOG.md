@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`find_nodes` searches inside Houdini** (houdini-search-jtw): the match runs
   in `houdini_mcp_search`, a module in the plugin tree, so a search is one
-  request to Houdini whatever the scene size, where it was several per node.
-  The pattern and type cross as arguments, never as source. A Houdini whose
-  plugin predates this release fails `find_nodes` with `operation_failed`
-  naming the plugin to install.
+  request to Houdini whatever the scene size, where it was several per node,
+  and only the requested page crosses back. The pattern, type and page cross
+  as arguments, never as source. A Houdini without this release's plugin -
+  including a hand-started `hrpyc` with no plugin installed - fails
+  `find_nodes` with `operation_failed` naming the plugin to install.
 
 - **A bypass refusal's hint names only what is still missing**
   (houdini-execute-code-d6q): when `execute_code` refuses dangerous or
