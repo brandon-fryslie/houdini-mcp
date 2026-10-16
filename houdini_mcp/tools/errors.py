@@ -15,7 +15,7 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
     node_at,
-    run_in_executor,
+    on_the_scene,
 )
 from .failure import OperationFailed, Undone, batch_status
 from .summarization import summarize_errors, summarized
@@ -70,8 +70,8 @@ async def find_error_nodes(
         find_error_nodes(summarize=True)  # Get AI triage of errors
     """
     # A scan that inspected nothing raises, so a failure is never summarized.
-    result = await run_in_executor(
-        _scan_error_nodes, root_path, include_warnings, max_results, host, port
+    result = await on_the_scene(
+        "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
     return apply_response_cap(await summarized(result, summarize_errors, asked=summarize))
 

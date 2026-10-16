@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Scene-writing calls take turns** (houdini-laws-etg.qxp): a tool that
   writes the scene, `execute_code`, `get_geo_summary`, `render_viewport` and
-  `render_quad_view` hold the scene for their whole call. Before, two
+  `render_quad_view` hold the scene while they work in Houdini
+  (`get_geo_summary` releases it before its AI summary). Before, two
   concurrent calls could interleave, and a writer could run inside a program's
   open undo group. A call that arrives while another is running waits for it,
   and its response's `scene_wait` names what it waited for and for how long.

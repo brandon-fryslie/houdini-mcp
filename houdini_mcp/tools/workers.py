@@ -87,8 +87,16 @@ class SceneWait:
     waited_for: tuple[str, ...]
     seconds: float
 
-    def describe(self) -> dict[str, Any]:
-        return {"waited_for": list(self.waited_for), "seconds": round(self.seconds, 3)}
+    def response_fields(self) -> dict[str, Any]:
+        """What this wait adds to the call's response: ``scene_wait``, only if it waited.
+
+        [LAW:one-source-of-truth] A result and a refusal both tell their wait here.
+        """
+        if not self.waited_for:
+            return {}
+        return {
+            "scene_wait": {"waited_for": list(self.waited_for), "seconds": round(self.seconds, 3)}
+        }
 
 
 NO_WAIT = SceneWait((), 0.0)
@@ -260,10 +268,16 @@ class WorkerLedger:
                 outcome.seconds,
                 ", ".join(outcome.waited_for),
             )
+        taken_at = time.monotonic()
         try:
             yield outcome
         finally:
             self._release()
+            logger.info(
+                "%s released the scene after holding it %.3fs",
+                waiter.operation,
+                time.monotonic() - taken_at,
+            )
 
     def _release(self) -> None:
         with self._lock:
@@ -290,14 +304,20 @@ class WorkerLedger:
         worker holds it, else the first one takes it. Runs under the lock."""
         while self._call is None and self._queue:
             waiter = self._queue.popleft()
-            if self._worker is not None:
-                waiter.outcome = _Refused(self._worker, waiter.wait())
-            else:
+            granted = self._worker is None
+            waiter.outcome = waiter.wait() if granted else _Refused(self._worker, waiter.wait())
+            try:
+                waiter.wake()
+            except RuntimeError as gone:
+                # [LAW:no-silent-failure] A waiter whose event loop has closed can
+                # never run or release, so it is dropped, loudly, rather than
+                # handed a slot no one would ever free.
+                logger.error("%s dropped from the queue for the scene: %s", waiter.operation, gone)
+                continue
+            if granted:
                 self._call = waiter.operation
-                waiter.outcome = waiter.wait()
                 for queued in self._queue:
                     queued.held_by.append(waiter.operation)
-            waiter.wake()
 
 
 def _resolve(woken: asyncio.Future[None]) -> None:

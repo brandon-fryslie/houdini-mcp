@@ -77,8 +77,8 @@ worker; plain reads,
 
 ### Concurrent Calls Wait Their Turn
 
-Those same tools hold the scene for the whole call, so two of them never run
-at once. A call that arrives while another one is running waits for it to
+Those same tools hold the scene while they work in Houdini, so two of them
+never run at once; `get_geo_summary` releases it before its AI summary. A call that arrives while another one is running waits for it to
 finish, then runs. Its response, success or error, carries `scene_wait`,
 which names the calls that held the scene while it waited (in the order they
 held it) and how long it waited:

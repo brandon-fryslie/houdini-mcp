@@ -331,7 +331,10 @@ def _classify(e: Exception, operation: str) -> _Failure:
         )
     if isinstance(cause, WorkerStillRunning):
         return WorkerBusyFailure(
-            operation=operation, message=str(cause), worker=cause.worker.describe()
+            operation=operation,
+            message=str(cause),
+            worker=cause.worker.describe(),
+            **cause.wait.response_fields(),
         )
     lost = transport_failure(cause)
     if lost is not None:

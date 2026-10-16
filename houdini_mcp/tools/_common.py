@@ -126,8 +126,8 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. Who holds the scene while the tool runs is the
-    server's to arbitrate, around this boundary (``houdini_mcp.server.held``).
+    tears the connection down. Who holds the scene while the tool's Houdini
+    work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
         operation_name: The tool's name: it names the operation in error
@@ -412,8 +412,12 @@ def _flatten_parm_templates(hou: Any, parm_templates: list[Any]) -> list[Any]:
 import asyncio
 import os
 from collections.abc import Coroutine
+from contextlib import nullcontext
 
 import anyio
+
+from .transactions import TOOL_POLICIES, SceneAccess
+from .workers import NO_WAIT, WORKERS, SceneWait
 
 # Default semaphore limit for bounded parallel execution
 # Can be overridden via environment variable
@@ -482,13 +486,40 @@ def batch_items(items: list[Any], batch_size: int) -> list[list[Any]]:
     return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
 
+async def on_the_scene(
+    operation: str, work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
+) -> dict[str, Any]:
+    """Run ``operation``'s blocking Houdini work off the event loop, holding the
+    scene for it when its policy needs the scene to itself.
+
+    [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
+    tool's whole body comes through here (``server.held``), an async tool's
+    Houdini read does, and whatever it finishes afterwards (a summary) runs
+    with the scene released. An ``SceneAccess.EXCLUSIVE`` operation waits on
+    the event loop for a call already holding the scene, so a waiting call
+    costs no thread and one its client cancels never runs, and it is refused
+    with :class:`WorkerStillRunning` while a program still runs against
+    Houdini. The result tells the wait in ``scene_wait``.
+    """
+    exclusive = TOOL_POLICIES[operation].access is SceneAccess.EXCLUSIVE
+    hold = WORKERS.hold if exclusive else _holds_nothing
+    async with hold(operation) as wait:
+        result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
+    return {**result, **wait.response_fields()}
+
+
+def _holds_nothing(operation: str) -> nullcontext[SceneWait]:
+    """The hold of an operation that shares the scene: it never waits."""
+    return nullcontext(NO_WAIT)
+
+
 async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
     """
     Run a synchronous function on anyio's worker threads.
 
-    [LAW:one-source-of-truth] The one way a coroutine runs blocking Houdini work:
-    a call the event loop is running (``server.held``, an async tool's read) must
-    never block that loop, or no other call - nor any cancellation - can run.
+    [LAW:one-source-of-truth] The one way a coroutine runs blocking work: a call
+    the event loop is running must never block that loop, or no other call - nor
+    any cancellation - can run. Houdini work goes through :func:`on_the_scene`.
 
     Args:
         func: Synchronous function to execute

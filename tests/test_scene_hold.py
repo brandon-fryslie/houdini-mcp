@@ -52,6 +52,7 @@ class TestCallsHoldTheScene:
         first, second = _Gated("set_parameter", log), _Gated("create_node", log)
         queued = heard("create_node waits for the scene behind set_parameter")
         granted = heard("create_node waited ")
+        released = heard("set_parameter released the scene after holding it ")
         second.gate.set()
 
         first_call = asyncio.create_task(held(first.tool)())
@@ -73,6 +74,30 @@ class TestCallsHoldTheScene:
         assert second_result["scene_wait"]["waited_for"] == ["set_parameter"]
         assert second_result["scene_wait"]["seconds"] >= 0
         assert granted.is_set()
+        assert released.is_set()
+
+    async def test_a_summary_is_made_with_the_scene_released(self, monkeypatch):
+        """get_geo_summary holds the scene for its read only: a writer runs while
+        the summarizer is still answering."""
+        from houdini_mcp.tools import geometry
+
+        summarizing, answer = asyncio.Event(), asyncio.Event()
+
+        async def slow_summary(result: dict, summarizer, *, asked: bool) -> dict:
+            summarizing.set()
+            await answer.wait()
+            return result
+
+        monkeypatch.setattr(geometry, "_read_geometry", lambda *_: {"status": "success"})
+        monkeypatch.setattr(geometry, "summarized", slow_summary)
+        summary = asyncio.create_task(held(geometry.get_geo_summary)("/obj/geo1", summarize=True))
+        await asyncio.wait_for(summarizing.wait(), 5)
+        try:
+            write = _named("create_node", lambda: {"status": "success"})
+            assert await asyncio.wait_for(held(write)(), 5) == {"status": "success"}
+        finally:
+            answer.set()
+            assert (await summary)["status"] == "success"
 
     async def test_a_reader_runs_beside_a_writer_without_waiting(self):
         writer = _Gated("create_node", [])
@@ -234,6 +259,29 @@ class TestLedgerQueue:
                 await b
 
         assert (await c).waited_for == ("a",)
+
+    async def test_a_waiter_whose_event_loop_closed_is_dropped_not_handed_the_scene(self, heard):
+        ledger = WorkerLedger()
+        queued = heard("b waits for the scene behind a")
+        dropped = heard("b dropped from the queue for the scene")
+        dead_loop = asyncio.new_event_loop()
+
+        async def take(operation: str) -> None:
+            async with ledger.hold(operation):
+                pytest.fail("a waiter on a closed loop never runs")
+
+        def queue_on_a_loop_that_then_closes() -> None:
+            dead_loop.create_task(take("b"))
+            dead_loop.run_until_complete(asyncio.sleep(0))
+            dead_loop.close()
+
+        async with ledger.hold("a"):
+            await asyncio.to_thread(queue_on_a_loop_that_then_closes)
+            assert queued.is_set()
+        assert dropped.is_set()
+
+        async with asyncio.timeout(5), ledger.hold("c") as wait:
+            assert wait.waited_for == ()
 
     async def test_a_worker_alone_refuses_an_arriving_call(self):
         ledger = WorkerLedger()

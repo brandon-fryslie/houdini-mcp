@@ -5,7 +5,6 @@ import inspect
 import logging
 import os
 from collections.abc import Callable
-from contextlib import nullcontext
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -16,10 +15,10 @@ from starlette.responses import JSONResponse
 
 from . import tools
 from .connection import describe_target
-from .tools._common import run_in_executor
+from .tools._common import on_the_scene
 from .tools.failure import failure_response
-from .tools.transactions import TOOL_POLICIES, SceneAccess
-from .tools.workers import NO_WAIT, WORKERS, SceneWait, WorkerStillRunning
+from .tools.transactions import TOOL_POLICIES
+from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
 
@@ -95,39 +94,26 @@ TARGET: dict[str, Any] = {"host": HOUDINI_HOST, "port": HOUDINI_PORT}
 
 
 def held(tool: Callable[..., Any]) -> Callable[..., Any]:
-    """The tool as a client's call runs it: holding the scene when it needs it.
+    """The tool as a client's call runs it, never blocking the server's event loop.
 
-    [LAW:single-enforcer] Calls run concurrently only because the server runs
-    them so; this is the one place a call meets the worker ledger. A tool whose
-    policy needs the scene to itself (``SceneAccess.EXCLUSIVE``) holds it for
-    its whole body: it waits on the event loop for a call already holding it,
-    and is refused, with the worker named, while a program is still running
-    against Houdini. Its response's ``scene_wait`` says what it waited for and
-    how long. A sync body runs on a thread only once the call holds the scene,
-    so a waiting call costs no thread, and one its client cancels never runs.
-    An unclassified tool fails here, at import.
+    A sync tool's body is all Houdini work, so it runs whole through
+    ``on_the_scene``, holding the scene when its policy needs it. An async tool
+    sends its own Houdini read there and finishes the rest on the loop with the
+    scene released.
     """
     name = tool.__name__
-    hold = WORKERS.hold if TOOL_POLICIES[name].access is SceneAccess.EXCLUSIVE else _holds_nothing
-    is_async = inspect.iscoroutinefunction(tool)
+    TOOL_POLICIES[name]  # an unclassified tool fails here, at import
+    if inspect.iscoroutinefunction(tool):
+        return tool
 
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
-            async with hold(name) as wait:
-                result: dict[str, Any] = await (
-                    tool(*args, **kwargs) if is_async else run_in_executor(tool, *args, **kwargs)
-                )
+            return await on_the_scene(name, tool, *args, **kwargs)
         except WorkerStillRunning as refused:
-            result, wait = failure_response(refused, name), refused.wait
-        return {**result, "scene_wait": wait.describe()} if wait.waited_for else result
+            return failure_response(refused, name)
 
     return call
-
-
-def _holds_nothing(operation: str) -> nullcontext[SceneWait]:
-    """The hold of a tool that shares the scene: it never waits."""
-    return nullcontext(NO_WAIT)
 
 
 def served(tool: Callable[..., Any]) -> Tool:
