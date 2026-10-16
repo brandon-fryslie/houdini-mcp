@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A scene diff is its own run's alone** (houdini-laws-etg.c91): `execute_code`
+  reads the scene before and after the program, and computes the diff, inside
+  the program's worker, so no other program can run between the two reads; a
+  diff could include another run's changes. Other writing tools are refused
+  while those reads run. `get_last_scene_diff` answers for the capture run
+  launched last, and has nothing while that run has no diff (still running,
+  raised, or its scene could not be read). A run that timed out leaves its
+  diff there once its program ends. A call refused because another program is
+  still running is not a run and leaves the last diff as it was; it cleared it.
+  `timeout` still bounds the program alone, not the reads around it.
+
+- **A program that raises `SystemExit` or `KeyboardInterrupt` fails**
+  (houdini-laws-etg.c91): `execute_code` reports it as `operation_failed` with
+  its traceback, like any other exception; it returned success. The message of
+  any exception a program raises now leads with its type (`ValueError: boom`);
+  it was the bare text, which for these is empty or `0`.
+
 - **BREAKING (wire)**: `list_node_types` and `manage_cache("warmup")` fail with
   `operation_failed` when Houdini refuses the node-type walk
   (houdini-laws-etg.29y); they returned success with no types. Nothing is
