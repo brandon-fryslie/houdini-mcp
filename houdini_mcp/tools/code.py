@@ -155,11 +155,14 @@ class ExecutionGrant:
     bypass_config_enabled: bool
     dangerous_requested: bool
     heavy_geometry_requested: bool
-    mutation: bool
     # [LAW:one-source-of-truth] A capability is granted exactly when nothing is
     # unmet; the refusal's reason, hint and payload all read these same tuples.
     dangerous_unmet: tuple[Requirement, ...]
     heavy_geometry_unmet: tuple[Requirement, ...]
+
+    @property
+    def mutation(self) -> bool:
+        return self.policy == "normal"
 
     @property
     def dangerous(self) -> bool:
@@ -184,6 +187,7 @@ class ExecutionGrant:
         """
         bypassable = policy == "normal"
 
+        # In precedence order: a refusal's reason is its first unmet requirement.
         def unmet(requested: bool) -> tuple[Requirement, ...]:
             met: tuple[tuple[Requirement, bool], ...] = (
                 ("policy", bypassable),
@@ -198,7 +202,6 @@ class ExecutionGrant:
             bypass_config_enabled=bypass_config_enabled,
             dangerous_requested=allow_dangerous,
             heavy_geometry_requested=allow_heavy_geometry,
-            mutation=bypassable,
             dangerous_unmet=unmet(allow_dangerous),
             heavy_geometry_unmet=unmet(allow_heavy_geometry),
         )
@@ -216,10 +219,15 @@ class ExecutionGrant:
             bypass_config_enabled=bypass_config_enabled,
             dangerous_requested=False,
             heavy_geometry_requested=True,
-            mutation=True,
             dangerous_unmet=("source",),
             heavy_geometry_unmet=(),
         )
+
+    def unmet_audit(self) -> dict[str, list[Requirement]]:
+        return {
+            "dangerous": list(self.dangerous_unmet),
+            "heavy_geometry": list(self.heavy_geometry_unmet),
+        }
 
     def as_audit(self) -> dict[str, bool]:
         return {
@@ -326,15 +334,17 @@ _REQUIREMENT_STEP: dict[Requirement, str] = {
     "request": "Set {flag}=True.",
     "config": "Enable HOUDINI_MCP_ALLOW_BYPASS on the server.",
     "source": (
-        "A server-authored program is never granted {capability} access; "
-        "the tool that generated it is at fault."
+        "A program {operation} wrote is never granted {capability} access; "
+        "no request input admits it, so the program is {operation}'s defect."
     ),
 }
 
 
-def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...]) -> str:
+def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...], operation: str) -> str:
     steps = (
-        _REQUIREMENT_STEP[requirement].format(flag=gate.flag, capability=gate.capability)
+        _REQUIREMENT_STEP[requirement].format(
+            flag=gate.flag, capability=gate.capability, operation=operation
+        )
         for requirement in unmet
     )
     return gate.alternative + " ".join(steps)
@@ -343,19 +353,24 @@ def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...]) -> str:
 def _bypass_refusal(
     gate: _BypassGate, unmet: tuple[Requirement, ...], grant: ExecutionGrant
 ) -> tuple[str, str]:
-    """``(blocked_reason, message)`` for code that needs ``gate`` while ``unmet`` is still short of it."""
-    if "policy" in unmet:
-        return (
-            gate.pattern_reason,
-            f"{gate.found} under policy {grant.policy!r}, which permits inspection only.",
-        )
-    if unmet == ("config",):
-        return (
-            "bypass_config_disabled",
-            f"Bypass requested ({gate.flag}=True) but server config "
-            "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
-        )
-    return (gate.pattern_reason, gate.found)
+    """``(blocked_reason, message)`` for code that needs ``gate`` while ``unmet`` is still short of it.
+
+    The first unmet requirement decides: ``unmet`` is in precedence order.
+    """
+    match unmet[0]:
+        case "policy":
+            return (
+                gate.pattern_reason,
+                f"{gate.found} under policy {grant.policy!r}, which permits inspection only.",
+            )
+        case "config":
+            return (
+                "bypass_config_disabled",
+                f"Bypass requested ({gate.flag}=True) but server config "
+                "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
+            )
+        case "request" | "source":
+            return (gate.pattern_reason, gate.found)
 
 
 def _resolve_undo_primitive(hou: Any) -> Any | None:
@@ -438,6 +453,7 @@ def _build_audit(
         "allow_heavy_geometry_requested": grant.heavy_geometry_requested,
         "bypass_config_enabled": grant.bypass_config_enabled,
         "granted": grant.as_audit(),
+        "unmet": grant.unmet_audit(),
         "dangerous_patterns": detected.dangerous,
         "heavy_geometry_patterns": detected.heavy_geometry,
         "mutation_patterns": detected.mutation,
@@ -463,9 +479,10 @@ def _blocked(
     """The one shape of a pre-execution refusal: the program is the caller's to fix."""
     # Patterns only, never the source: this line is the durable server-side trail.
     logger.warning(
-        "execute_code blocked: %s policy=%s mutation=%s dangerous=%s heavy=%s",
+        "execute_code blocked: %s policy=%s unmet=%s mutation=%s dangerous=%s heavy=%s",
         reason,
         grant.policy,
+        grant.unmet_audit(),
         detected.mutation,
         detected.dangerous,
         detected.heavy_geometry,
@@ -555,8 +572,13 @@ def execute_code(
         result stands and scene_changes_error says why in place of scene_changes.
         May include truncation flags (stdout_truncated, stderr_truncated, diff_truncated)
         if output exceeded size limits.
-        If dangerous patterns detected and not allowed, returns error with detected patterns.
-        audit.granted reports the one permission decision the run was made under.
+        If dangerous or heavy-geometry patterns are detected and not granted, returns
+        error with the detected patterns and unmet_requirements: each of "policy"
+        (re-run with policy='normal'), "request" (set the flag), "config" (enable
+        HOUDINI_MCP_ALLOW_BYPASS) or "source" (a server-authored program no input
+        admits) still short of the grant; the hint asks for exactly these.
+        audit.granted reports the one permission decision the run was made under,
+        and audit.unmet what each bypass capability still lacked.
         On timeout, a rollback block says whether an undo was attempted and
         whether the scene is known to be consistent.
     """
@@ -702,7 +724,7 @@ def _execute_with_grant(
                 detected=detected,
                 reason=reason,
                 message=message,
-                hint=_bypass_hint(gate, unmet),
+                hint=_bypass_hint(gate, unmet, operation),
                 unmet_requirements=list(unmet),
                 bypass_requested=gate.requested(grant),
                 bypass_config_enabled=grant.bypass_config_enabled,

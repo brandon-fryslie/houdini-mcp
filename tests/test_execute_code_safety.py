@@ -323,8 +323,14 @@ class TestPolicyProfiles:
         if not unmet:
             assert result["status"] == "success"
             return
+        capability = flag.removeprefix("allow_")
+        pattern_reason = {"dangerous": "dangerous_pattern", "heavy_geometry": "heavy_geometry"}
         assert result["status"] == "error"
         assert result["unmet_requirements"] == unmet
+        assert result["audit"]["unmet"][capability] == unmet
+        assert result["audit"]["blocked_reason"] == (
+            "bypass_config_disabled" if unmet == ["config"] else pattern_reason[capability]
+        )
         hint = result["hint"]
         assert ("policy='normal'" in hint) == (policy != "normal")
         assert (f"{flag}=True" in hint) == (not requested)
@@ -440,6 +446,8 @@ class TestTrustedInternalGeometryCapability:
         refusal = raised.value.fields
         assert refusal["audit"]["blocked_reason"] == "dangerous_pattern"
         assert refusal["unmet_requirements"] == ["source"]
+        assert refusal["audit"]["unmet"]["dangerous"] == ["source"]
+        assert "get_geo_summary" in refusal["hint"]
         assert "allow_dangerous" not in refusal["hint"]
         assert "HOUDINI_MCP_ALLOW_BYPASS" not in refusal["hint"]
 

@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It named the server setting when it was already enabled, and the flag when
   it was already set.
   The refusal also carries `unmet_requirements` (`policy`, `request`,
-  `config`, or `source`). A server-authored program refused dangerous access is
+  `config`, or `source`), and every audit reports `audit.unmet` per capability. A server-authored program refused dangerous access is
   told that no request input admits it, rather than told to set a flag its tool
   does not have.
 
