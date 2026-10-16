@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flag, and `HOUDINI_MCP_ALLOW_BYPASS` that is not yet met, and none that is.
   It named the server setting when it was already enabled, and the flag when
   it was already set.
+  The refusal also carries `unmet_requirements` (`policy`, `request`,
+  `config`, or `source`). A server-authored program refused dangerous access is
+  told that no request input admits it, rather than told to set a flag its tool
+  does not have.
 
 - **A scene diff is its own run's alone** (houdini-laws-etg.c91): `execute_code`
   reads the scene before and after the program, and computes the diff, inside

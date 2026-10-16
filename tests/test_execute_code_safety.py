@@ -250,7 +250,7 @@ class TestPolicyProfiles:
             port=18811,
         )
         assert result["status"] == "error"
-        assert result["audit"]["blocked_reason"] != "bypass_config_disabled"
+        assert result["audit"]["blocked_reason"] == "read_only_mutation"
         assert result["audit"]["granted"] == {
             "mutation": False,
             "dangerous": False,
@@ -287,13 +287,14 @@ class TestPolicyProfiles:
         assert result["hint"].startswith("Use get_geo_summary()")
         assert ". Enable HOUDINI_MCP_ALLOW_BYPASS" in result["hint"]
 
-    # Dangerous code under read-only is refused by the allowlist, before any bypass gate.
+    # Dangerous code under read-only is refused by the allowlist, before any bypass gate
+    # (test_read_only_ignores_bypass_flags).
     @pytest.mark.parametrize(
         ("code", "flag", "policy"),
         [
             ("import socket; socket.socket()", "allow_dangerous", "normal"),
-            ("hou.node('/obj/geo1').geometry()", "allow_heavy_geometry", "normal"),
-            ("hou.node('/obj/geo1').geometry()", "allow_heavy_geometry", "read-only"),
+            ("hou.node('/obj').geometry()", "allow_heavy_geometry", "normal"),
+            ("hou.node('/obj').geometry()", "allow_heavy_geometry", "read-only"),
         ],
     )
     @pytest.mark.parametrize("requested", [False, True])
@@ -301,17 +302,29 @@ class TestPolicyProfiles:
     def test_hint_names_exactly_the_unmet_inputs(
         self, mock_connection, monkeypatch, code, flag, policy, requested, config
     ):
-        """Every refusal's hint asks for each input still short of the grant, and no other."""
+        """Every refusal's hint asks for each input still short of the grant, and no other;
+        with none short, the program runs."""
         import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
 
-        if policy == "normal" and requested and config:
-            pytest.skip("granted: there is no refusal to hint")
         monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: config)
         result = execute_code(
             code, policy=policy, host="localhost", port=18811, **{flag: requested}
         )
+        unmet = [
+            requirement
+            for requirement, met in (
+                ("policy", policy == "normal"),
+                ("request", requested),
+                ("config", config),
+            )
+            if not met
+        ]
+        if not unmet:
+            assert result["status"] == "success"
+            return
         assert result["status"] == "error"
+        assert result["unmet_requirements"] == unmet
         hint = result["hint"]
         assert ("policy='normal'" in hint) == (policy != "normal")
         assert (f"{flag}=True" in hint) == (not requested)
@@ -404,6 +417,31 @@ class TestTrustedInternalGeometryCapability:
             "dangerous": True,
             "heavy_geometry": False,
         }
+
+    def test_trusted_grant_dangerous_hint_names_no_request_input(
+        self, mock_connection, deny_bypass_config
+    ):
+        """No flag or config admits dangerous code to a server-authored program, so the hint names none."""
+        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant
+        from houdini_mcp.tools.failure import InvalidInput
+
+        with pytest.raises(InvalidInput) as raised:
+            _execute_with_grant(
+                "import socket; socket.socket()",
+                ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False),
+                operation="get_geo_summary",
+                capture_diff=False,
+                max_stdout_size=1000,
+                max_stderr_size=1000,
+                max_diff_nodes=10,
+                host="localhost",
+                port=18811,
+            )
+        refusal = raised.value.fields
+        assert refusal["audit"]["blocked_reason"] == "dangerous_pattern"
+        assert refusal["unmet_requirements"] == ["source"]
+        assert "allow_dangerous" not in refusal["hint"]
+        assert "HOUDINI_MCP_ALLOW_BYPASS" not in refusal["hint"]
 
     def test_trusted_grant_runs_the_internal_bounded_program(
         self, mock_connection, deny_bypass_config

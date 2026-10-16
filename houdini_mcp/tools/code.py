@@ -112,6 +112,10 @@ DEFAULT_POLICY: Policy = "normal"
 # Where a grant came from: the MCP request, or a server tool that wrote the code itself.
 GrantSource = Literal["request", "trusted"]
 
+# What a bypass capability can still lack: the "normal" policy, the request flag,
+# the server config - or, for a server-authored program, nothing any input can supply.
+Requirement = Literal["policy", "request", "config", "source"]
+
 # [LAW:one-source-of-truth] The execution limits, stated once for the public
 # tool and for every server-side entry.
 DEFAULT_MAX_STDOUT_SIZE = 100000
@@ -152,8 +156,18 @@ class ExecutionGrant:
     dangerous_requested: bool
     heavy_geometry_requested: bool
     mutation: bool
-    dangerous: bool
-    heavy_geometry: bool
+    # [LAW:one-source-of-truth] A capability is granted exactly when nothing is
+    # unmet; the refusal's reason, hint and payload all read these same tuples.
+    dangerous_unmet: tuple[Requirement, ...]
+    heavy_geometry_unmet: tuple[Requirement, ...]
+
+    @property
+    def dangerous(self) -> bool:
+        return not self.dangerous_unmet
+
+    @property
+    def heavy_geometry(self) -> bool:
+        return not self.heavy_geometry_unmet
 
     @classmethod
     def resolve(
@@ -169,6 +183,15 @@ class ExecutionGrant:
         Any other policy - read-only, or a value that does not exist - grants nothing.
         """
         bypassable = policy == "normal"
+
+        def unmet(requested: bool) -> tuple[Requirement, ...]:
+            met: tuple[tuple[Requirement, bool], ...] = (
+                ("policy", bypassable),
+                ("request", requested),
+                ("config", bypass_config_enabled),
+            )
+            return tuple(requirement for requirement, ok in met if not ok)
+
         return cls(
             policy=policy,
             source="request",
@@ -176,8 +199,8 @@ class ExecutionGrant:
             dangerous_requested=allow_dangerous,
             heavy_geometry_requested=allow_heavy_geometry,
             mutation=bypassable,
-            dangerous=bypassable and allow_dangerous and bypass_config_enabled,
-            heavy_geometry=bypassable and allow_heavy_geometry and bypass_config_enabled,
+            dangerous_unmet=unmet(allow_dangerous),
+            heavy_geometry_unmet=unmet(allow_heavy_geometry),
         )
 
     @classmethod
@@ -194,8 +217,8 @@ class ExecutionGrant:
             dangerous_requested=False,
             heavy_geometry_requested=True,
             mutation=True,
-            dangerous=False,
-            heavy_geometry=True,
+            dangerous_unmet=("source",),
+            heavy_geometry_unmet=(),
         )
 
     def as_audit(self) -> dict[str, bool]:
@@ -259,7 +282,7 @@ _BYPASS_AUDIT_LEVEL: dict[GrantSource, int] = {
 
 @dataclass(frozen=True)
 class _BypassGate:
-    """One request-flag capability: where it is scanned, where it is granted, how a refusal reads."""
+    """One request-flag capability: where it is scanned, what it still lacks, how a refusal reads."""
 
     capability: str  # the audit key, and the prefix of the refusal's patterns field
     flag: str  # the request flag that asks for it
@@ -268,7 +291,7 @@ class _BypassGate:
     alternative: str  # a bounded tool to reach for first, or nothing
     patterns: Callable[[DetectedPatterns], list[str]]
     requested: Callable[[ExecutionGrant], bool]
-    granted: Callable[[ExecutionGrant], bool]
+    unmet: Callable[[ExecutionGrant], tuple[Requirement, ...]]
 
 
 # [LAW:one-type-per-behavior] Dangerous and heavy-geometry access differ only in
@@ -282,7 +305,7 @@ _BYPASS_GATES: tuple[_BypassGate, ...] = (
         alternative="",
         patterns=lambda detected: detected.dangerous,
         requested=lambda grant: grant.dangerous_requested,
-        granted=lambda grant: grant.dangerous,
+        unmet=lambda grant: grant.dangerous_unmet,
     ),
     _BypassGate(
         capability="heavy_geometry",
@@ -292,45 +315,47 @@ _BYPASS_GATES: tuple[_BypassGate, ...] = (
         alternative="Use get_geo_summary() for bounded geometry inspection. ",
         patterns=lambda detected: detected.heavy_geometry,
         requested=lambda grant: grant.heavy_geometry_requested,
-        granted=lambda grant: grant.heavy_geometry,
+        unmet=lambda grant: grant.heavy_geometry_unmet,
     ),
 )
 
 
-def _bypass_refusal(gate: _BypassGate, grant: ExecutionGrant) -> tuple[str, str, str]:
-    """``(blocked_reason, message, hint)`` for code that needs ``gate`` under ``grant``.
+# What the caller does to meet each requirement; a refusal's hint is these, for the unmet ones.
+_REQUIREMENT_STEP: dict[Requirement, str] = {
+    "policy": "Re-run with policy='normal'.",
+    "request": "Set {flag}=True.",
+    "config": "Enable HOUDINI_MCP_ALLOW_BYPASS on the server.",
+    "source": (
+        "A server-authored program is never granted {capability} access; "
+        "the tool that generated it is at fault."
+    ),
+}
 
-    The refusal is one of the grant's own states - the policy forbids it, the
-    config forbids it, or nobody asked - and the hint names every input still
-    short of the grant, never one already met.
-    """
-    # [LAW:one-source-of-truth] The three inputs ExecutionGrant.resolve ANDs
-    # together, each with what the caller does to meet it; the hint is the unmet ones.
-    unmet = [
-        step
-        for step, met in (
-            ("re-run with policy='normal'", grant.mutation),
-            (f"set {gate.flag}=True", gate.requested(grant)),
-            ("enable HOUDINI_MCP_ALLOW_BYPASS on the server", grant.bypass_config_enabled),
-        )
-        if not met
-    ]
-    steps = " and ".join(unmet)
-    hint = f"{gate.alternative}{steps[0].upper()}{steps[1:]}."
-    if not grant.mutation:
+
+def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...]) -> str:
+    steps = (
+        _REQUIREMENT_STEP[requirement].format(flag=gate.flag, capability=gate.capability)
+        for requirement in unmet
+    )
+    return gate.alternative + " ".join(steps)
+
+
+def _bypass_refusal(
+    gate: _BypassGate, unmet: tuple[Requirement, ...], grant: ExecutionGrant
+) -> tuple[str, str]:
+    """``(blocked_reason, message)`` for code that needs ``gate`` while ``unmet`` is still short of it."""
+    if "policy" in unmet:
         return (
             gate.pattern_reason,
             f"{gate.found} under policy {grant.policy!r}, which permits inspection only.",
-            hint,
         )
-    if gate.requested(grant) and not grant.bypass_config_enabled:
+    if unmet == ("config",):
         return (
             "bypass_config_disabled",
             f"Bypass requested ({gate.flag}=True) but server config "
             "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
-            hint,
         )
-    return (gate.pattern_reason, gate.found, hint)
+    return (gate.pattern_reason, gate.found)
 
 
 def _resolve_undo_primitive(hou: Any) -> Any | None:
@@ -668,15 +693,17 @@ def _execute_with_grant(
 
     for gate in _BYPASS_GATES:
         patterns = gate.patterns(detected)
-        if patterns and not gate.granted(grant):
-            reason, message, hint = _bypass_refusal(gate, grant)
+        unmet = gate.unmet(grant)
+        if patterns and unmet:
+            reason, message = _bypass_refusal(gate, unmet, grant)
             raise _blocked(
                 code=code,
                 grant=grant,
                 detected=detected,
                 reason=reason,
                 message=message,
-                hint=hint,
+                hint=_bypass_hint(gate, unmet),
+                unmet_requirements=list(unmet),
                 bypass_requested=gate.requested(grant),
                 bypass_config_enabled=grant.bypass_config_enabled,
                 **{f"{gate.capability}_patterns": patterns},
