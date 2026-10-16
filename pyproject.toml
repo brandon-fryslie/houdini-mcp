@@ -35,6 +35,8 @@ dependencies = [
     "starlette>=1.7",
     # Field() constrains the served render schema (tools/_common.py)
     "pydantic>=2.14",
+    # A held call runs its sync body on anyio's thread pool (server.py)
+    "anyio>=4.15",
 ]
 
 [dependency-groups]

@@ -38,8 +38,6 @@ from .failure import (
     failure_response,
     tool_error,
 )
-from .transactions import TOOL_POLICIES, SceneAccess
-from .workers import NO_WAIT, WORKERS, SceneWait
 
 T = TypeVar("T")
 
@@ -116,7 +114,6 @@ logger = logging.getLogger("houdini_mcp.tools")
 import functools
 import inspect
 from collections.abc import Callable
-from contextlib import nullcontext
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
@@ -129,16 +126,12 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. A tool whose policy needs the scene to itself
-    (``SceneAccess.EXCLUSIVE``) holds it in the worker ledger for its whole
-    body: it waits for a call already holding it, and its response's
-    ``scene_wait`` says what for and how long; it is refused, with the worker
-    named, while a program is still running against Houdini.
+    tears the connection down. Who holds the scene while the tool runs is the
+    server's to arbitrate, around this boundary (``houdini_mcp.server.held``).
 
     Args:
-        operation_name: The tool's name: it keys ``TOOL_POLICIES`` (an
-            unclassified tool fails here, at import) and names the operation
-            in error responses.
+        operation_name: The tool's name: it names the operation in error
+            responses.
 
     Returns:
         Decorated function with error handling
@@ -152,64 +145,39 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
 
     def decorator(func: ToolFn) -> ToolFn:
-        signature = inspect.signature(func)
-        # [LAW:single-enforcer] Whether a tool needs the scene to itself is its
-        # policy's fact; who holds the scene is the ledger's. This is the one
-        # place both meet, so no tool can write alongside another call or a
-        # timed-out worker unseen. A tool that shares the scene holds nothing.
-        exclusive = TOOL_POLICIES[operation_name].access is SceneAccess.EXCLUSIVE
-
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
         # the caller's bug and raises as one, before the boundary opens; only what
         # the tool itself raises becomes an error response.
+        signature = inspect.signature(func)
 
         # A served tool that finishes its result asynchronously (summarizing it,
         # then capping it) is the same boundary awaited: whatever that finishing
         # raises is the tool's failure, not a protocol error.
         if inspect.iscoroutinefunction(func):
-            hold_async = WORKERS.hold_async if exclusive else _holds_nothing
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
                 signature.bind(*args, **kwargs)
-                wait = NO_WAIT
                 try:
-                    async with hold_async(operation_name) as wait:
-                        result: dict[str, Any] = await func(*args, **kwargs)
+                    result: dict[str, Any] = await func(*args, **kwargs)
+                    return result
                 except Exception as e:
-                    result = failure_response(e, operation_name)
-                return _told_wait(result, wait)
+                    return failure_response(e, operation_name)
 
             return cast(ToolFn, async_wrapper)
-
-        hold = WORKERS.hold if exclusive else _holds_nothing
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
             signature.bind(*args, **kwargs)
-            wait = NO_WAIT
             try:
-                with hold(operation_name) as wait:
-                    result: dict[str, Any] = func(*args, **kwargs)
+                result: dict[str, Any] = func(*args, **kwargs)
+                return result
             except Exception as e:
-                result = failure_response(e, operation_name)
-            return _told_wait(result, wait)
+                return failure_response(e, operation_name)
 
         return cast(ToolFn, wrapper)
 
     return decorator
-
-
-def _holds_nothing(operation: str) -> nullcontext[SceneWait]:
-    """The hold of a tool that shares the scene: it never waits."""
-    return nullcontext(NO_WAIT)
-
-
-def _told_wait(result: dict[str, Any], wait: SceneWait) -> dict[str, Any]:
-    """The response, telling a call that waited for the scene what it waited for."""
-    if wait.waited_for:
-        result["scene_wait"] = wait.describe()
-    return result
 
 
 # =============================================================================

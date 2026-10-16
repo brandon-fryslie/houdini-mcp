@@ -1,6 +1,7 @@
 """A scene has one snapshot, every reader of the scene's structure derives from
 it, and a snapshot that cannot be read is an error the caller sees."""
 
+import asyncio
 import logging
 import threading
 import time
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from houdini_mcp.server import held
 from houdini_mcp.tools import code as code_module
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
@@ -234,13 +236,13 @@ class TestADiffIsItsOwnRunsAlone:
         """Start run A on its own thread and hold it in its after-read until the
         returned event is set; return once A is held there."""
         real = code_module.scene_snapshot
-        held, release = threading.Event(), threading.Event()
+        paused, release = threading.Event(), threading.Event()
         reads: list[str] = []
 
         def hold_the_after_read(*args: Any) -> Any:
             reads.append("read")
             if len(reads) == 2:
-                held.set()
+                paused.set()
                 assert release.wait(5), "run A was never released"
             return real(*args)
 
@@ -249,26 +251,30 @@ class TestADiffIsItsOwnRunsAlone:
 
         def run_a() -> None:
             result.update(
-                execute_code(
-                    "hou.node('/obj').createNode('geo', 'from_a')",
-                    capture_diff=True,
-                    host="localhost",
-                    port=18811,
+                asyncio.run(
+                    held(execute_code)(
+                        "hou.node('/obj').createNode('geo', 'from_a')",
+                        capture_diff=True,
+                        host="localhost",
+                        port=18811,
+                    )
                 )
             )
 
         a = threading.Thread(target=run_a)
         a.start()
-        assert held.wait(5), "run A never reached its after-read"
+        assert paused.wait(5), "run A never reached its after-read"
         return a, result, release
 
     @staticmethod
     def _run_b() -> dict[str, Any]:
-        return execute_code(
-            "hou.node('/obj').createNode('geo', 'from_b')",
-            capture_diff=True,
-            host="localhost",
-            port=18811,
+        return asyncio.run(
+            held(execute_code)(
+                "hou.node('/obj').createNode('geo', 'from_b')",
+                capture_diff=True,
+                host="localhost",
+                port=18811,
+            )
         )
 
     def test_a_program_arriving_mid_capture_waits_for_the_capture_to_end(

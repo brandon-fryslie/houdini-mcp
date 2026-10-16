@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent calls could interleave, and a writer could run inside a program's
   open undo group. A call that arrives while another is running waits for it,
   and its response's `scene_wait` names what it waited for and for how long.
+  A call cancelled while it waits, because its client timed out, never runs.
   A call that arrives while a timed-out program still runs is refused with
   `worker_still_running` as before. An `execute_code` that arrives while
   another is still running inside its own call now waits for it instead of

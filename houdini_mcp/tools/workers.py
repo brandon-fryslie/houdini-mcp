@@ -13,6 +13,10 @@ ends, and a call that arrives meanwhile queues behind it, because bodies end. A
 worker the call launched keeps the slot after the call returns, and a call that
 arrives then is refused, because a worker may never end. Nothing else starts a
 worker thread, and nothing else decides whether a mutation may proceed.
+
+A queued call waits on its event loop, not on a thread: waiting costs no thread
+from the pool that runs tool bodies, and a call cancelled while it waits - its
+client gave up - leaves the queue without ever running.
 """
 
 from __future__ import annotations
@@ -72,27 +76,12 @@ HOW_A_WORKER_ENDS = (
 )
 
 
-class WorkerStillRunning(RuntimeError):
-    """A call that needs the scene to itself was refused because a worker still holds it."""
-
-    def __init__(self, operation: str, worker: RunningWorker) -> None:
-        self.operation = operation
-        self.worker = worker
-        super().__init__(
-            f"{operation} refused: a program launched by {worker.operation} "
-            f"(sha256 {worker.code_sha256[:12]}, "
-            f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
-            "still holding Houdini - running with its undo group open, or reading the scene "
-            f"around itself - and this call would interleave with it. {HOW_A_WORKER_ENDS}"
-        )
-
-
 @dataclass(frozen=True)
 class SceneWait:
     """What a call waited behind before it held the scene, and for how long.
 
-    ``waited_for`` names the calls ahead of it in arrival order, the holder
-    first, and is empty for a call that found the scene free.
+    ``waited_for`` names the calls that held the scene while it waited, in the
+    order they held it, and is empty for a call that found the scene free.
     """
 
     waited_for: tuple[str, ...]
@@ -105,16 +94,46 @@ class SceneWait:
 NO_WAIT = SceneWait((), 0.0)
 
 
+class WorkerStillRunning(RuntimeError):
+    """A call that needs the scene to itself was refused because a worker still holds it.
+
+    ``wait`` is what the call queued behind before the worker refused it.
+    """
+
+    def __init__(self, operation: str, worker: RunningWorker, wait: SceneWait) -> None:
+        self.operation = operation
+        self.worker = worker
+        self.wait = wait
+        super().__init__(
+            f"{operation} refused: a program launched by {worker.operation} "
+            f"(sha256 {worker.code_sha256[:12]}, "
+            f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
+            "still holding Houdini - running with its undo group open, or reading the scene "
+            f"around itself - and this call would interleave with it. {HOW_A_WORKER_ENDS}"
+        )
+
+
+@dataclass(frozen=True)
+class _Refused:
+    worker: RunningWorker
+    wait: SceneWait
+
+
 @dataclass(eq=False)
 class _Waiter:
-    """A call queued for the slot. ``outcome`` is None until the ledger settles
-    it under its lock: the scene, or the worker that refuses it."""
+    """A call queued for the slot. ``held_by`` grows, under the ledger's lock, by
+    each call that takes the scene while this one waits. ``outcome`` is None
+    until the ledger settles it under its lock: the scene, or the worker that
+    refuses it."""
 
     operation: str
-    waited_for: tuple[str, ...]
+    held_by: list[str]
     arrived_at: float
     wake: Callable[[], object]
-    outcome: SceneWait | RunningWorker | None = None
+    outcome: SceneWait | _Refused | None = None
+
+    def wait(self) -> SceneWait:
+        return SceneWait(tuple(self.held_by), time.monotonic() - self.arrived_at)
 
 
 class WorkerLedger:
@@ -142,24 +161,15 @@ class WorkerLedger:
         with self._lock:
             return self._worker
 
-    @contextmanager
-    def hold(self, operation: str) -> Iterator[SceneWait]:
+    @asynccontextmanager
+    async def hold(self, operation: str) -> AsyncIterator[SceneWait]:
         """Hold the scene for ``operation`` until the block ends.
 
-        Blocks while another call holds it, and raises
-        :class:`WorkerStillRunning` when a worker does.
+        Waits on the running event loop while another call holds it, and raises
+        :class:`WorkerStillRunning` when a worker does. A call cancelled while
+        waiting gives up its place, or the scene it was handed as it was
+        cancelled.
         """
-        woken = threading.Event()
-        waiter = self._arrive(operation, woken.set)
-        woken.wait()
-        with self._held(waiter) as wait:
-            yield wait
-
-    @asynccontextmanager
-    async def hold_async(self, operation: str) -> AsyncIterator[SceneWait]:
-        """:meth:`hold` for a coroutine: it waits without blocking its event loop,
-        and a call cancelled while waiting gives up its place, or the scene it
-        was handed as it was cancelled."""
         loop = asyncio.get_running_loop()
         woken: asyncio.Future[None] = loop.create_future()
         waiter = self._arrive(operation, lambda: loop.call_soon_threadsafe(_resolve, woken))
@@ -181,14 +191,14 @@ class WorkerLedger:
     ) -> RunningWorker:
         """Start ``target`` on a daemon thread and record it as the running worker.
 
-        Called from inside the launching tool's :meth:`hold`. Daemon, because a
+        Called from inside the launching call's :meth:`hold`. Daemon, because a
         timed-out program must not keep the process alive. Raises
         :class:`WorkerStillRunning` naming ``operation`` rather than ever holding
         two workers: overwriting the slot would lose the first one's existence.
         """
         with self._lock:
             if self._worker is not None:
-                _refuse(operation, self._worker)
+                _refuse(operation, self._worker, NO_WAIT)
 
             def run() -> None:
                 try:
@@ -223,24 +233,25 @@ class WorkerLedger:
 
     def _arrive(self, operation: str, wake: Callable[[], object]) -> _Waiter:
         with self._lock:
-            ahead = [self._call] if self._call is not None else []
+            ahead = [queued.operation for queued in self._queue]
             waiter = _Waiter(
                 operation,
-                waited_for=(*ahead, *(queued.operation for queued in self._queue)),
+                held_by=[self._call] if self._call is not None else [],
                 arrived_at=time.monotonic(),
                 wake=wake,
             )
             self._queue.append(waiter)
             self._settle_queue()
-        if waiter.waited_for:
-            logger.info("%s waits for the scene behind %s", operation, ", ".join(waiter.waited_for))
+            behind = [*waiter.held_by, *ahead] if waiter.outcome is None else []
+        if behind:
+            logger.info("%s waits for the scene behind %s", operation, ", ".join(behind))
         return waiter
 
     @contextmanager
     def _held(self, waiter: _Waiter) -> Iterator[SceneWait]:
         outcome = waiter.outcome
-        if isinstance(outcome, RunningWorker):
-            _refuse(waiter.operation, outcome)
+        if isinstance(outcome, _Refused):
+            _refuse(waiter.operation, outcome.worker, outcome.wait)
         assert outcome is not None, "a woken waiter has been settled"
         if outcome.waited_for:
             logger.info(
@@ -264,10 +275,15 @@ class WorkerLedger:
 
     def _abandon(self, waiter: _Waiter) -> None:
         with self._lock:
-            if waiter.outcome is None:
+            outcome = waiter.outcome
+            if outcome is None:
                 self._queue.remove(waiter)
-            elif isinstance(waiter.outcome, SceneWait):
+            elif isinstance(outcome, SceneWait):
                 self._release_locked()
+        if outcome is None:
+            logger.info("%s gave up its place in the queue for the scene", waiter.operation)
+        elif isinstance(outcome, SceneWait):
+            logger.info("%s was cancelled as it took the scene, and handed it on", waiter.operation)
 
     def _settle_queue(self) -> None:
         """Settle queued calls while no call holds the slot: refused while a
@@ -275,10 +291,12 @@ class WorkerLedger:
         while self._call is None and self._queue:
             waiter = self._queue.popleft()
             if self._worker is not None:
-                waiter.outcome = self._worker
+                waiter.outcome = _Refused(self._worker, waiter.wait())
             else:
                 self._call = waiter.operation
-                waiter.outcome = SceneWait(waiter.waited_for, time.monotonic() - waiter.arrived_at)
+                waiter.outcome = waiter.wait()
+                for queued in self._queue:
+                    queued.held_by.append(waiter.operation)
             waiter.wake()
 
 
@@ -288,7 +306,7 @@ def _resolve(woken: asyncio.Future[None]) -> None:
         woken.set_result(None)
 
 
-def _refuse(operation: str, worker: RunningWorker) -> NoReturn:
+def _refuse(operation: str, worker: RunningWorker, wait: SceneWait) -> NoReturn:
     """The one refusal: logged, then raised, whichever gate found the worker."""
     logger.warning(
         "%s refused: %s worker code_sha256=%s still running after %.3fs (timeout %ss)",
@@ -298,7 +316,7 @@ def _refuse(operation: str, worker: RunningWorker) -> NoReturn:
         worker.running_for_seconds(),
         worker.timeout,
     )
-    raise WorkerStillRunning(operation, worker)
+    raise WorkerStillRunning(operation, worker, wait)
 
 
 # The process has one Houdini and therefore one ledger.

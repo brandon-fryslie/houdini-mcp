@@ -80,16 +80,18 @@ worker; plain reads,
 Those same tools hold the scene for the whole call, so two of them never run
 at once. A call that arrives while another one is running waits for it to
 finish, then runs. Its response, success or error, carries `scene_wait`,
-which names the calls it waited behind (in arrival order, the one holding the
-scene first) and how long it waited:
+which names the calls that held the scene while it waited (in the order they
+held it) and how long it waited:
 
 ```python
-{"status": "success", ..., "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
+{"status": "success", "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
 ```
 
 A call that finds the scene free has no `scene_wait`. A call still waiting
 when a timed-out program takes over the scene is refused with
-`worker_still_running`, as above.
+`worker_still_running`, as above. A call cancelled while it waits (its client
+timed out or gave up) leaves the queue and never runs, so retrying it cannot
+apply the same write twice.
 
 ## render_viewport
 

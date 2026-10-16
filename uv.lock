@@ -874,6 +874,7 @@ name = "houdini-mcp"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "beautifulsoup4" },
     { name = "fastmcp" },
     { name = "httpx" },
@@ -901,6 +902,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.15" },
     { name = "beautifulsoup4", specifier = ">=4.15" },
     { name = "fastmcp", specifier = ">=4.1" },
     { name = "httpx", specifier = ">=0.28" },
