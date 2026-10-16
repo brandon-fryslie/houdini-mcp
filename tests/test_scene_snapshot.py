@@ -171,10 +171,14 @@ class TestExecuteCodeDiff:
         assert result["diff_truncated"] is True
         assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
         assert get_last_scene_diff()["diff"] == changes
-        assert (
-            "execute_code scene diff of /obj: added=3 removed=4 modified=0"
-            " truncated=['added', 'removed', 'added_nodes']"
-        ) in caplog.messages
+        assert any(
+            m.startswith("execute_code scene diff of /obj, program took ")
+            and m.endswith(
+                "of timeout 30s: added=3 removed=4 modified=0"
+                " truncated=['added', 'removed', 'added_nodes']"
+            )
+            for m in caplog.messages
+        )
 
     def test_a_capture_of_an_empty_scene_is_still_the_last_diff(
         self, mock_connection: MockHouModule
@@ -291,15 +295,22 @@ class TestADiffIsItsOwnRunsAlone:
         assert get_last_scene_diff()["diff"] == a_result["scene_changes"]
 
     def test_a_run_whose_first_read_failed_has_no_diff_and_writes_nothing(
-        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_connection: MockHouModule,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
         assert get_last_scene_diff()["status"] == "success"
+        caplog.set_level(logging.WARNING, logger="houdini_mcp.tools.code")
         monkeypatch.setattr(mock_connection, "hscript", lambda _command: ("", "Error:  busy\n"))
         result = self._run_b()
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert mock_connection.node("/obj/from_b") is None
         assert get_last_scene_diff()["status"] == "warning"
+        assert any(
+            "did not run: the scene before it could not be read" in m for m in caplog.messages
+        )
 
     @pytest.mark.parametrize("raised", ["SystemExit(0)", "KeyboardInterrupt"])
     def test_a_program_that_exits_failed_and_has_no_diff(
@@ -312,7 +323,24 @@ class TestADiffIsItsOwnRunsAlone:
             port=18811,
         )
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
-        assert raised.split("(")[0] in result["traceback"]
+        assert result["message"].startswith(raised.split("(")[0])
+        assert get_last_scene_diff()["status"] == "warning"
+
+    def test_a_diff_that_cannot_be_computed_leaves_the_run_standing(
+        self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def cannot_diff(*_args: Any) -> Any:
+            raise KeyError("path")
+
+        monkeypatch.setattr(code_module, "scene_diff", cannot_diff)
+        result = execute_code(
+            "hou.node('/obj').createNode('geo', 'ran')",
+            capture_diff=True,
+            host="localhost",
+            port=18811,
+        )
+        assert result["status"] == "success"
+        assert "path" in result["scene_changes_error"]["message"]
         assert get_last_scene_diff()["status"] == "warning"
 
     def test_the_timeout_is_the_programs_not_the_scene_reads(

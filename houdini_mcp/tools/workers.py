@@ -26,7 +26,8 @@ logger = logging.getLogger("houdini_mcp.tools.workers")
 
 @dataclass(frozen=True)
 class RunningWorker:
-    """One program running in its own thread, undo group open until it ends.
+    """One program running in its own thread, undo group open until it ends, and
+    any reads its tool makes around it in that thread.
 
     ``operation`` is the tool that launched it: ``execute_code`` for a caller's
     program, ``get_geo_summary`` for the server's own.
@@ -85,8 +86,9 @@ class WorkerLedger:
 
     [LAW:no-shared-mutable-globals] Invariants: at most one worker exists; the
     slot is filled before the thread starts and cleared by the thread itself
-    once the program and its undo group have ended, so :meth:`running` is
-    ``None`` exactly when no caller code is executing against Houdini. Callers
+    once its target has ended - the program, its undo group, and any scene
+    reads around it - so :meth:`running` is ``None`` exactly when no worker is
+    using Houdini. Callers
     ask the ledger, never the thread: the thread outlives the slot by a log line.
     """
 

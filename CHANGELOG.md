@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A program that raises `SystemExit` or `KeyboardInterrupt` fails**
   (houdini-laws-etg.c91): `execute_code` reports it as `operation_failed` with
-  its traceback, like any other exception; it returned success.
+  its traceback, like any other exception; it returned success. The message of
+  any exception a program raises now leads with its type (`ValueError: boom`);
+  it was the bare text, which for these is empty or `0`.
 
 - **BREAKING (wire)**: `list_node_types` and `manage_cache("warmup")` fail with
   `operation_failed` when Houdini refuses the node-type walk

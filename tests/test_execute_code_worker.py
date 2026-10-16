@@ -145,16 +145,49 @@ class TestWorkerBlocksMutation:
 
 
 class TestATimedOutRunsDiff:
-    def test_appears_once_the_program_ends(self, mock_connection, stalled_program):
+    def test_appears_once_the_program_ends(self, mock_connection, stalled_program, caplog):
         program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
         _time_out(program, capture_diff=True)
         assert get_last_scene_diff()["status"] == "warning"
         worker = WORKERS.running()
-        mock_connection.stall_gate.set()
-        worker.thread.join(5)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            mock_connection.stall_gate.set()
+            worker.thread.join(5)
+        # The diff's event says it came late: the program outlasted its timeout.
+        [event] = [m for m in caplog.messages if "scene diff of /obj" in m]
+        took = float(event.split("program took ")[1].split("s of timeout 1s")[0])
+        assert took > 1
         assert get_last_scene_diff()["diff"]["added_nodes"] == [
             {"path": "/obj/late", "type": "geo"}
         ]
+
+    def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
+        self, mock_connection, stalled_program, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from houdini_mcp.tools import failure as failure_module
+
+        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
+        _time_out(program, capture_diff=True)
+        # The old link is gone by the time the program ends; a newer one may be open.
+        disconnects: list[str] = []
+        monkeypatch.setattr(failure_module, "disconnect", lambda: disconnects.append("x"))
+        monkeypatch.setattr(
+            failure_module,
+            "transport_failure",
+            lambda e: SimpleNamespace(exc=e) if isinstance(e, EOFError) else None,
+        )
+
+        def lost(_command):
+            raise EOFError("connection closed by peer")
+
+        monkeypatch.setattr(mock_connection, "hscript", lost)
+        worker = WORKERS.running()
+        mock_connection.stall_gate.set()
+        worker.thread.join(5)
+        assert disconnects == []
+        assert get_last_scene_diff()["status"] == "warning"
 
 
 class TestWorkerLifetime:

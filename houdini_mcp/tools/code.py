@@ -42,6 +42,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -375,9 +376,16 @@ class _Diff:
 
 @dataclass(frozen=True)
 class _DiffFailed:
-    """Why a program that ran has no diff: the scene after it could not be read."""
+    """Why a program that ran has no diff."""
 
-    failure: dict[str, Any]
+    error: Exception
+
+
+@dataclass(frozen=True)
+class _NeverRan:
+    """Why a program never ran: the scene before it could not be read."""
+
+    error: Exception
 
 
 def _build_audit(
@@ -689,10 +697,10 @@ def _execute_with_grant(
     exec_exception: list[BaseException | None] = [None]
     exec_traceback: list[str] = [""]
     # With capture_diff, the worker writes this on every way out: the program's
-    # diff, why it has none, or why the program never ran on the scene (an
-    # Exception, raised). Its first value stands only if the worker died
-    # without writing it. Without capture_diff, or once the program raised: None.
-    scene: _Diff | _DiffFailed | Exception | None = (
+    # diff, why it has none, or why the program never ran. Its first value
+    # stands only if the worker died without writing it. Without capture_diff,
+    # or once the program raised: None.
+    scene: _Diff | _DiffFailed | _NeverRan | Exception | None = (
         RuntimeError(f"{operation}'s worker ended before it wrote the scene diff")
         if capture_diff
         else None
@@ -700,30 +708,28 @@ def _execute_with_grant(
     # The program's clock: timeout is the program's, not the scene reads around it.
     program_starts, program_ends = threading.Event(), threading.Event()
 
-    def read_scene() -> SceneSnapshot | Exception:
-        try:
-            return scene_snapshot(hou, _DIFF_ROOT)
-        except Exception as error:  # noqa: BLE001
-            return error
-
-    def diff_since(before: SceneSnapshot) -> _Diff | _DiffFailed:
+    def diff_since(before: SceneSnapshot, program_took: float) -> _Diff | _DiffFailed:
         # [LAW:one-source-of-truth] The worker is the one writer of its run's
         # last diff, so a program that outlived its caller's timeout still
         # leaves its diff once it ends.
-        after = read_scene()
-        if isinstance(after, Exception):
-            # [LAW:no-silent-failure] The program ran; only its diff is missing,
-            # and the result says why instead of reporting the run as failed.
-            failure = failure_for(after, operation)
-            logger.warning("%s ran but its scene diff failed: %s", operation, failure.message)
-            return _DiffFailed(failure.model_dump())
-        changes = scene_diff(before, after)
+        try:
+            changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
+        except Exception as error:  # noqa: BLE001
+            # [LAW:no-silent-failure] The program ran; only its diff is missing.
+            # [LAW:effects-at-boundaries] Classifying the error is the caller's:
+            # a lost link classified here would drop the connection, and a worker
+            # that outlived its call would drop one opened since.
+            logger.warning("%s ran but its scene diff failed: %r", operation, error)
+            return _DiffFailed(error)
         lists = ("added", "removed", "modified", "added_nodes")
         over = [key for key in lists if len(changes[key]) > max_diff_nodes]
-        logger.debug(
-            "%s scene diff of %s: added=%d removed=%d modified=%d truncated=%s",
+        logger.info(
+            "%s scene diff of %s, program took %.3fs of timeout %ss: "
+            "added=%d removed=%d modified=%d truncated=%s",
             operation,
             _DIFF_ROOT,
+            program_took,
+            timeout,
             *(len(changes[key]) for key in ("added", "removed", "modified")),
             over,
         )
@@ -745,11 +751,17 @@ def _execute_with_grant(
                 # [LAW:one-source-of-truth] From its first act until its diff
                 # exists, the last capture is this run's, with no diff.
                 LAST_SCENE_DIFF.record(None)
-                read = read_scene()
-                if isinstance(read, Exception):
-                    scene = read
+                try:
+                    before = scene_snapshot(hou, _DIFF_ROOT)
+                except Exception as error:  # noqa: BLE001
+                    logger.warning(
+                        "%s did not run: the scene before it could not be read: %r",
+                        operation,
+                        error,
+                    )
+                    scene = _NeverRan(error)
                     return
-                before = read
+            started = time.monotonic()
             program_starts.set()
             run_program()
         finally:
@@ -757,7 +769,11 @@ def _execute_with_grant(
             program_ends.set()
             if before is not None:
                 # A program that raised has no diff; its scene is not read again.
-                scene = None if exec_exception[0] is not None else diff_since(before)
+                scene = (
+                    None
+                    if exec_exception[0] is not None
+                    else diff_since(before, time.monotonic() - started)
+                )
 
     def run_program() -> None:
         # Never retry user code if the undo context fails: __exit__ may raise
@@ -789,9 +805,9 @@ def _execute_with_grant(
         )
 
     # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
-    # starts the thread, the thread clears the slot once the program and its
-    # undo group have ended, and every scene-writing tool asks it first. A
-    # timeout leaves the slot occupied.
+    # starts the thread, the thread clears the slot once the program, its undo
+    # group, and the scene reads around it have ended, and every scene-writing
+    # tool asks it first. A timeout leaves the slot occupied.
     worker = WORKERS.launch(
         run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
     )
@@ -866,10 +882,15 @@ def _execute_with_grant(
             error_fields["stdout_truncated"] = True
         if stderr_truncated:
             error_fields["stderr_truncated"] = True
-        raise OperationFailed(str(exec_exception[0]), **error_fields)
+        # The exception's type leads, for some say nothing else: SystemExit(0) is "0".
+        told = traceback.format_exception_only(exec_exception[0])
+        raise OperationFailed("".join(told).strip(), **error_fields)
 
     # [LAW:no-silent-failure] A scene that could not be read before the program
     # is raised: the program never ran on it.
+    if isinstance(scene, _NeverRan):
+        raise scene.error
+    # The worker died without writing what became of the scene.
     if isinstance(scene, Exception):
         raise scene
 
@@ -893,7 +914,7 @@ def _execute_with_grant(
         result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
     if isinstance(scene, _DiffFailed):
-        result["scene_changes_error"] = scene.failure
+        result["scene_changes_error"] = failure_for(scene.error, operation).model_dump()
     if isinstance(scene, _Diff):
         if scene.truncated:
             result["diff_truncated"] = True
