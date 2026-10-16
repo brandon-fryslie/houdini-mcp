@@ -206,10 +206,11 @@ All tools return consistent response dictionaries:
 `execute_code` runs the caller's program in a thread the server cannot kill.
 When it times out, the program keeps running with its undo group open, and
 `WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
-ends, every tool whose `TransactionPolicy.waits_for_worker` is true (see
-`TOOL_POLICIES` in `tools/transactions.py`: the scene writers, and
-`get_geo_summary`, which reads through a program in the same worker slot) is
-refused at the tool boundary:
+ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (see
+`TOOL_POLICIES` in `tools/transactions.py`: the scene writers,
+`get_geo_summary`, which reads through a program in the same worker slot, and
+the render tools, which add a camera rig and a ROP for the call) is refused at
+the tool boundary:
 
 ```python
 {

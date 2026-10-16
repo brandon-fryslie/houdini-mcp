@@ -70,6 +70,8 @@ from .summarization import (
 from .transactions import (
     MUTATING_TOOL_POLICIES,
     TOOL_POLICIES,
+    SceneAccess,
+    ToolPolicy,
     TransactionConflict,
     TransactionManager,
     TransactionPolicy,
@@ -87,6 +89,8 @@ __all__ = [
     # Transaction management
     "MUTATING_TOOL_POLICIES",
     "TOOL_POLICIES",
+    "SceneAccess",
+    "ToolPolicy",
     "TransactionConflict",
     "TransactionManager",
     "TransactionPolicy",
