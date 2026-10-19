@@ -30,7 +30,7 @@ import socket
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
 
@@ -270,6 +270,14 @@ class SecurityPolicy:
         }
 
 
+# [LAW:parse-dont-validate] the stamp a policy carries once the policy gate
+# (RemoteListener._admitted) has admitted it. Only a stamped policy reaches a
+# bind: passing an unstamped one fails the type check CI runs on this package.
+# The stamp is a cast, not a check, so it is applied once, behind the gate's
+# ``allowed`` test; an ``AdmittedPolicy(...)`` anywhere else forges it.
+AdmittedPolicy = NewType("AdmittedPolicy", SecurityPolicy)
+
+
 def resolve_security_policy(config: ListenerConfig) -> SecurityPolicy:
     """Evaluate a bind request against the "no silent exposure" policy.
 
@@ -422,7 +430,7 @@ class RunningListener:
 
     server: HrpycServer
     config: ListenerConfig
-    policy: SecurityPolicy
+    policy: AdmittedPolicy
     bound_port: int
 
     @property
@@ -517,13 +525,58 @@ class RemoteListener:
         return held is not None and held.serving
 
     def start(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
-        """Start the listener. Idempotent: a second call reports already_running.
+        """Start the listener. Idempotent: while one serves, a second call reports already_running.
+
+        A config the policy refuses is refused whether or not one serves, and stops nothing.
 
         Args:
             config: bind configuration.
             raise_on_policy: when True, a policy violation raises
                 :class:`SecurityError` instead of returning an error dict.
         """
+        return self._admitted("start", config, raise_on_policy, self._start)
+
+    def _admitted(
+        self,
+        action: Literal["start", "reload"],
+        config: ListenerConfig,
+        raise_on_policy: bool,
+        then: Callable[[ListenerConfig, AdmittedPolicy], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """``then(config, policy)`` for a config the policy admits; *action*'s refusal otherwise.
+
+        [LAW:single-enforcer] start() and reload() both pass through here before
+        either touches the held server, so a refused config stops nothing and
+        starts nothing, whichever was asked.
+        """
+        policy = resolve_security_policy(config)
+        if policy.allowed:
+            return then(config, AdmittedPolicy(policy))
+        # Read under the lock, once: a reload in flight is waited out, not caught
+        # between its stop and its start, and running and message share one report.
+        with self._lock:
+            held = self._running
+            standing = None if held is None else held.report()
+        # ``running`` is the listener left as it was, and the message names it; the
+        # refused host is only in the reason, so no field reads as the exposure refused.
+        message = (
+            policy.reason
+            if standing is None
+            else f"{policy.reason} Nothing was changed: {standing['message']}"
+        )
+        logger.warning("Refusing to %s listener: %s", action, message)
+        if raise_on_policy:
+            raise SecurityError(message)
+        return {
+            "status": "error",
+            "error_type": "security",
+            "running": standing is not None and standing["running"],
+            "message": message,
+            "security": policy.as_dict(),
+        }
+
+    def _start(self, cfg: ListenerConfig, policy: AdmittedPolicy) -> dict[str, Any]:
+        """Bind *cfg*, which *policy* admitted, unless a server is already serving."""
         with self._lock:
             held = self._running
             if held is not None and held.serving:
@@ -537,23 +590,6 @@ class RemoteListener:
                     "hrpyc listener on %s had stopped serving; let go of it", held.endpoint
                 )
                 self._running = None
-
-            cfg = config
-            policy = resolve_security_policy(cfg)
-
-            if not policy.allowed:
-                logger.warning("Refusing to start listener: %s", policy.reason)
-                if raise_on_policy:
-                    raise SecurityError(policy.reason)
-                return {
-                    "status": "error",
-                    "error_type": "security",
-                    "running": False,
-                    "host": cfg.host,
-                    "port": cfg.port,
-                    "message": policy.reason,
-                    "security": policy.as_dict(),
-                }
 
             try:
                 hrpyc = self._resolve_hrpyc()
@@ -611,7 +647,7 @@ class RemoteListener:
         }
 
     def _launch_server(
-        self, hrpyc: HrpycModule, cfg: ListenerConfig, policy: SecurityPolicy
+        self, hrpyc: HrpycModule, cfg: ListenerConfig, policy: AdmittedPolicy
     ) -> tuple[HrpycServer, int]:
         """Construct the ThreadedServer, start listening, and spawn its accept loop.
 
@@ -706,14 +742,18 @@ class RemoteListener:
     def reload(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Stop (if running) and start again with *config*. Idempotent restart.
 
-        The result is ``start()``'s, carrying ``stop()``'s under ``"stop"``: a
-        server that failed to close is reported, not replaced by the fresh start.
+        For a config the policy admits, the result is ``start()``'s, carrying
+        ``stop()``'s under ``"stop"``: a server that failed to close is reported,
+        not replaced by the fresh start. A config it refuses is refused as start()
+        refuses it, before anything is stopped, so the result has no ``"stop"``
+        and the running listener keeps serving.
         """
+        return self._admitted("reload", config, raise_on_policy, self._restart)
+
+    def _restart(self, cfg: ListenerConfig, policy: AdmittedPolicy) -> dict[str, Any]:
         with self._lock:
             stopped = self.stop()
-            result = self.start(config, raise_on_policy=raise_on_policy)
-            result["stop"] = stopped
-            return result
+            return {**self._start(cfg, policy), "stop": stopped}
 
     # -- introspection --------------------------------------------------------
 
