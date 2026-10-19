@@ -277,12 +277,20 @@ class TestServedSchemas:
     ) -> None:
         for name in ("camera_position", "camera_rotation"):
             assert await accepts(client, served, "render_viewport", {name: [1, 2.5, -3]}), name
-            assert await accepts(client, served, "render_viewport", {name: None}), name
             for value in ([1, 2], ["1", "2", "3"], [True, 2, 3]):
                 assert not await accepts(client, served, "render_viewport", {name: value}), (
                     name,
                     value,
                 )
+        # A null position is the one computed from the framing.
+        assert await accepts(client, served, "render_viewport", {"camera_position": None})
+
+    async def test_render_viewport_camera_rotation_defaults_to_isometric(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        rotation = served["render_viewport"].input_schema["properties"]["camera_rotation"]
+        assert rotation["default"] == [-30, 45, 0]
+        assert not await accepts(client, served, "render_viewport", {"camera_rotation": None})
 
     async def test_a_color_is_three_finite_numbers(
         self, client: Client[Any], served: dict[str, Tool]

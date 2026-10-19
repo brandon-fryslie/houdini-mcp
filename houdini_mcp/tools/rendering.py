@@ -62,6 +62,7 @@ _PADDING = 1.2
 _MIN_DISTANCE = 5.0
 _UNFRAMED_SIZE = 10.0
 
+# The view an omitted camera_rotation renders, and a quad render's perspective view.
 _ISOMETRIC: Vec3 = (-30.0, 45.0, 0.0)
 
 # The three axis-aligned views of a quad render, by camera rotation.
@@ -458,7 +459,7 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
 @handle_connection_errors("render_viewport")
 def render_viewport(
     camera_position: Vec3 | None = None,
-    camera_rotation: Vec3 | None = None,
+    camera_rotation: Vec3 = _ISOMETRIC,
     look_at: str | None = None,
     resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: Renderer = "opengl",
@@ -479,7 +480,7 @@ def render_viewport(
 
     Args:
         camera_position: [x, y, z] world position for camera (default: auto-calculated)
-        camera_rotation: [rx, ry, rz] rotation in degrees (default: [-30, 45, 0] isometric)
+        camera_rotation: [rx, ry, rz] rotation in degrees, isometric by default
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
@@ -521,13 +522,12 @@ def render_viewport(
         framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
     else:
         framing = Framing(bounds=None)
-    rotation = _ISOMETRIC if camera_rotation is None else camera_rotation
     offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
 
     with _temporary_nodes() as create:
         rig = _build_rig(create, prepared, "_mcp_", framing)
         rop = _build_rop(create, prepared, "_mcp_", rig)
-        _aim(rig, rotation, offset, orthographic, framing)
+        _aim(rig, camera_rotation, offset, orthographic, framing)
         image = _render_picture(rop, prepared, output_format)
 
     result: dict[str, Any] = {

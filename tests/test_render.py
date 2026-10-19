@@ -70,14 +70,6 @@ class TestRenderViewportLookAt:
 class TestRenderViewportCameraSetup:
     """Tests for render_viewport camera setup."""
 
-    def test_default_camera_rotation(self, mock_connection):
-        """Test default camera rotation is isometric."""
-        from houdini_mcp.tools import render_viewport
-
-        # Just verify it doesn't crash with defaults
-        result = render_viewport(auto_frame=False, host="localhost", port=18811)
-        assert "status" in result
-
     def test_custom_camera_rotation_front(self, mock_connection):
         """Test front view camera rotation."""
         from houdini_mcp.tools import render_viewport
@@ -1085,6 +1077,16 @@ class TestRenderFraming:
         assert result["status"] == "success", result
         assert [f["projection"] for f in frames] == [0, 0, 0, 0]
         assert [v["orthographic"] for v in result["views"]] == [False] * 4
+
+    def test_viewport_aims_isometric_when_no_rotation_is_asked_for(
+        self, frames: list[dict[str, Any]]
+    ) -> None:
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert frames[0]["pivot_r"] == (-30.0, 45.0, 0.0)
 
     def test_viewport_aims_at_the_rotation_asked_for(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_viewport
