@@ -98,7 +98,9 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
     """
     hou = ensure_connected(host, port)
 
-    hou.hipFile.load(file_path)
+    # [LAW:single-enforcer] The boundary backed up the unsaved work, so a graphical
+    # Houdini's save prompt would only stall the call on the artist's answer.
+    hou.hipFile.load(file_path, suppress_save_prompt=True)
 
     # Invalidate caches since scene context changed
     invalidate_all_caches()
@@ -119,7 +121,9 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     hou = ensure_connected(host, port)
 
-    hou.hipFile.clear()
+    # [LAW:single-enforcer] As in load_scene: the backup, not the prompt, keeps the
+    # unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+    hou.hipFile.clear(suppress_save_prompt=True)
 
     # Invalidate caches since scene context changed
     invalidate_all_caches()

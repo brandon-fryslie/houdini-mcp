@@ -64,6 +64,8 @@ class TestBackedUpFirst:
     def test_replacing_the_scene_backs_up_its_unsaved_work_first(
         self, tool, mock_connection, caplog
     ):
+        """...and replaces it without Houdini's save prompt, which the backup has made
+        redundant."""
         call, replaces = REPLACERS[tool]
         hip = mock_connection.hipFile
         hip.hasUnsavedChanges.return_value = True
@@ -71,61 +73,103 @@ class TestBackedUpFirst:
         hip.saveAsBackup.side_effect = lambda: (
             done.append("backup") or "/scenes/backup/shot_bak3.hip"
         )
-        getattr(hip, replaces).side_effect = lambda *_: done.append(replaces)
+        getattr(hip, replaces).side_effect = lambda *_, **prompt: done.append((replaces, prompt))
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
             result = call()
 
         assert result["status"] == "success"
         assert result["checkpoint"] == "/scenes/backup/shot_bak3.hip"
-        assert done == ["backup", replaces]
+        assert done == ["backup", (replaces, {"suppress_save_prompt": True})]
         assert (
             f"{tool} backed up the scene's unsaved work to /scenes/backup/shot_bak3.hip"
             in caplog.text
         )
 
     @pytest.mark.parametrize("tool", REPLACERS)
-    def test_a_scene_with_nothing_unsaved_is_replaced_without_a_backup(self, tool, mock_connection):
+    def test_a_scene_with_nothing_unsaved_is_replaced_without_a_backup(
+        self, tool, mock_connection, caplog
+    ):
         call, _ = REPLACERS[tool]
 
-        result = call()
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
+            result = call()
 
         assert result["status"] == "success"
         assert "checkpoint" not in result
         mock_connection.hipFile.saveAsBackup.assert_not_called()
+        assert f"{tool} replaces a scene with nothing unsaved: no backup" in caplog.text
 
     @pytest.mark.parametrize("tool", REPLACERS)
     def test_a_never_saved_scene_holding_nodes_is_refused_not_discarded(
-        self, tool, mock_connection
+        self, tool, mock_connection, caplog
     ):
         call, replaces = REPLACERS[tool]
         hip = mock_connection.hipFile
         hip.isNewFile.return_value = True
         mock_connection.node("/obj").createNode("geo", "work")
 
-        result = call()
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            result = call()
 
-        assert result["kind"] == "operation_failed"
-        assert result["message"] == (
+        refusal = (
             f"{tool} would discard a scene that has never been saved, and Houdini can back "
             "up only a saved scene. Save it with save_scene(file_path) first."
         )
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == refusal
         getattr(hip, replaces).assert_not_called()
         hip.saveAsBackup.assert_not_called()
+        assert f"{tool} failed (operation_failed): {refusal}" in caplog.text
 
     @pytest.mark.parametrize("tool", REPLACERS)
-    def test_a_never_saved_empty_scene_is_replaced(self, tool, mock_connection):
+    def test_a_never_saved_empty_scene_is_replaced(self, tool, mock_connection, caplog):
         """A Houdini with no UI reports even a fresh scene as unsaved; an empty one
         holds nothing to lose."""
         hip = mock_connection.hipFile
         hip.isNewFile.return_value = True
         hip.hasUnsavedChanges.return_value = True
 
-        result = REPLACERS[tool][0]()
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
+            result = REPLACERS[tool][0]()
 
         assert result["status"] == "success"
         assert "checkpoint" not in result
         hip.saveAsBackup.assert_not_called()
+        assert f"{tool} replaces a never-saved scene holding no node: no backup" in caplog.text
+
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_backup_houdini_cannot_write_leaves_the_scene_in_place(self, tool, mock_connection):
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        hip.saveAsBackup.side_effect = raised_inside_houdini(
+            RuntimeError("Unable to write /library/backup/ref_bak1.hip")
+        )
+
+        result = call()
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"].startswith("Unable to write /library/backup/ref_bak1.hip")
+        assert result["message"].endswith(
+            f"\n{tool} left the scene in place: its unsaved work could not be backed up. "
+            "Save it with save_scene(file_path) first."
+        )
+        getattr(hip, replaces).assert_not_called()
+
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_link_lost_while_backing_up_is_connection_loss(self, tool, mock_connection):
+        """Saving is no way on when the link is gone, so the failure does not offer it."""
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        hip.saveAsBackup.side_effect = EOFError("stream has been closed")
+
+        result = call()
+
+        assert result["kind"] == "connection_lost", result
+        assert "save_scene" not in result["message"]
+        getattr(hip, replaces).assert_not_called()
 
     def test_a_failed_load_tells_where_the_backup_is(self, mock_connection):
         hip = mock_connection.hipFile

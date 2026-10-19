@@ -1,9 +1,10 @@
 """What each tool leaves behind in Houdini, and how a call recovers from it.
 
-[LAW:single-enforcer] Every tool call passes through :func:`recovering`, entered by the
-tool boundary (``handle_connection_errors``) around the tool's body. A call that
-replaces the scene first backs up the scene's unsaved work there; no tool body
-recovers its own effect.
+[LAW:single-enforcer] The tool boundary (``handle_connection_errors``) enters
+:func:`recovering` around every sync tool's body and refuses a scene writer that is
+not sync, so every call that can leave an effect in the scene passes through it. A
+call that replaces the scene first backs up the scene's unsaved work there; no tool
+body recovers its own effect.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, assert_never
 
+from ..connection import transport_failure
 from .failure import OperationFailed, add_note
 
 logger = logging.getLogger("houdini_mcp.tools.transactions")
@@ -28,8 +30,8 @@ class TransactionPolicy(StrEnum):
     CHECKPOINT_REQUIRED = "checkpoint_required"
     """The call replaces the scene, so the scene's unsaved work is backed up first."""
     PROGRAM_UNDO_GROUP = "program_undo_group"
-    """The tool's program runs in its own undo group for as long as it runs, which
-    can be after the call has returned."""
+    """As undoable, but the tool's program goes on editing the scene for as long as
+    it runs, which can be after the call has returned."""
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
     """A file outside the scene: nothing in Houdini to recover."""
 
@@ -179,12 +181,25 @@ def _backed_up_first(operation: str, hou: Any) -> Iterator[dict[str, Any]]:
                 f"{operation} would discard a scene that has never been saved, and Houdini "
                 "can back up only a saved scene. Save it with save_scene(file_path) first."
             )
+        logger.info("%s replaces a never-saved scene holding no node: no backup", operation)
         yield {}
         return
     if not hip.hasUnsavedChanges():
+        logger.info("%s replaces a scene with nothing unsaved: no backup", operation)
         yield {}
         return
-    checkpoint = str(hip.saveAsBackup())
+    try:
+        checkpoint = str(hip.saveAsBackup())
+    except Exception as failure:
+        # A link that failed is the connection owner's to report; a backup Houdini
+        # could not write leaves the scene as it was, and saving it is the way on.
+        if transport_failure(failure) is None:
+            add_note(
+                failure,
+                f"{operation} left the scene in place: its unsaved work could not be backed "
+                "up. Save it with save_scene(file_path) first.",
+            )
+        raise
     logger.info("%s backed up the scene's unsaved work to %s", operation, checkpoint)
     try:
         yield {"checkpoint": checkpoint}

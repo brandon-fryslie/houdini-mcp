@@ -905,7 +905,9 @@ class TestSceneOperations:
         result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        mock_connection.hipFile.load.assert_called_once_with("/path/to/scene.hip")
+        mock_connection.hipFile.load.assert_called_once_with(
+            "/path/to/scene.hip", suppress_save_prompt=True
+        )
 
     def test_new_scene_success(self, mock_connection):
         """Test creating new scene successfully."""
@@ -3073,7 +3075,7 @@ class TestConnectionErrorHandling:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors(operation)
-        def tool():
+        def tool(host: str = "localhost", port: int = 18811):
             raise exc
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
@@ -3106,7 +3108,7 @@ class TestConnectionErrorHandling:
     def test_handle_connection_error_reset_arrives_as_eof(self):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
         result, disconnect = self._run(
-            EOFError("[Errno 54] Connection reset by peer"), "find_nodes"
+            EOFError("[Errno 54] Connection reset by peer"), "create_node"
         )
 
         assert result["kind"] == "connection_lost"
@@ -3125,7 +3127,7 @@ class TestConnectionErrorHandling:
     )
     def test_file_and_os_errors_leave_the_connection_standing(self, exc):
         """A bad path is the tool's error, not the link's: no disconnect, no retry invitation."""
-        result, disconnect = self._run(exc, "get_parameter_schema")
+        result, disconnect = self._run(exc, "set_parameter")
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
@@ -3152,7 +3154,7 @@ class TestConnectionErrorHandling:
         from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
 
         use_houdini(IN_PROCESS_HOUDINI)
-        result, disconnect = self._run(EOFError("Ran out of input"), "get_scene_info")
+        result, disconnect = self._run(EOFError("Ran out of input"), "execute_code")
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"

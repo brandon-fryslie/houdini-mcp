@@ -31,9 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-transactions-75y): `new_scene` and `load_scene` save the current
   scene's unsaved work with Houdini's own backup, into the `backup` folder
   beside its hip file, before replacing it, and return the backup's path as
-  `checkpoint`. A scene that has never been saved cannot be backed up, so one
-  holding any node is refused until `save_scene(file_path)` saves it. A failed
-  load says where the backup is. `execute_code` takes no backup.
+  `checkpoint`. Graphical Houdini no longer asks whether to save first. A scene
+  that has never been saved cannot be backed up, so one holding any node is
+  refused until `save_scene(file_path)` saves it, and so is a scene whose backup
+  Houdini cannot write. A failed load says where the backup is. `execute_code`
+  takes no backup.
 
 - **A result's text is a dense shorthand of its JSON**
   (houdini-laws-spine-cqp.kx6): a list of objects names its keys once and
