@@ -7,79 +7,23 @@ server can give is reported.
 
 import dataclasses
 import json
-from typing import Any
 
 import httpx
 import pytest
 
+from houdini_mcp import shorthand
 from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
 from houdini_mcp.settings import InvalidSetting, Summarizer, summarizer
 from houdini_mcp.tools import summarization
-from tests.conftest import SUMMARIZER, ClientBuilder, summarizer_through
+from houdini_mcp.tools.summarization import EXCERPT_BYTES, Excerpt
+from tests.conftest import SUMMARIZER, completion
 
 DISABLED = dataclasses.replace(SUMMARIZER, enabled=False)
 
-
-def completion(content: Any = "Test summary", finish_reason: str = "stop") -> dict:
-    """An OpenAI chat-completions response body, shaped as the omlx server sends it."""
-    return {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "model": SUMMARIZER.model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": finish_reason,
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-
-
-class Wire:
-    """The fake far end of the summarizer's transport: every request sent, and one answer."""
-
-    def __init__(self) -> None:
-        self.sent: list[httpx.Request] = []
-        self.response: httpx.Response | type[Exception] = httpx.Response(200, json=completion())
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        self.sent.append(request)
-        if isinstance(self.response, type):
-            raise self.response("boom")
-        return self.response
-
-
-@pytest.fixture
-def wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> Wire:
-    """Route the summarizer through a fake transport that answers with a finished completion."""
-    wire = Wire()
-    monkeypatch.setattr(
-        summarization,
-        "summarizer_client",
-        summarizer_through(production_summarizer_client, wire.handle),
-    )
-    return wire
-
-
-@pytest.fixture
-def no_wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> None:
-    """A summarizer transport that fails the test if anything is sent on it."""
-
-    def refuse(request: httpx.Request) -> httpx.Response:
-        pytest.fail(f"a summarization request was sent: {request.url}")
-
-    monkeypatch.setattr(
-        summarization, "summarizer_client", summarizer_through(production_summarizer_client, refuse)
-    )
-
-
-SUMMARIZERS = [
-    summarization._summarize_errors,
-    summarization._summarize_geometry,
-    summarization._summarize_scene,
-]
+BRIEFS = pytest.mark.parametrize(
+    "brief",
+    [summarization.ERRORS_BRIEF, summarization.GEOMETRY_BRIEF, summarization.SCENE_BRIEF],
+)
 # A result read inline, and one too large to read whole: it arrives as a file.
 SMALL = {"status": "success", "nodes": ["/obj/geo1/node"] * 50}
 LARGE = {"status": "success", "nodes": ["/obj/geo1/node"] * 2000}
@@ -93,48 +37,69 @@ def at_the_bound() -> dict:
     return result
 
 
+def past_the_bound() -> dict:
+    """The smallest result too large to read whole: one byte past the bound."""
+    result = at_the_bound()
+    result["text"] += "x"
+    return result
+
+
 class TestSummarized:
     """summarize is one bool: False is off, True summarizes what is too large to read whole."""
 
     def test_the_results_straddle_the_bound(self):
         assert Reading.of(SMALL).fits and not Reading.of(LARGE).fits
 
-    @pytest.mark.parametrize("summarize", SUMMARIZERS)
-    async def test_false_sends_nothing_however_large(self, no_wire, summarize):
+    @BRIEFS
+    async def test_false_sends_nothing_however_large(self, no_wire, brief):
         result = await summarization.summarized(
-            dict(LARGE), summarize, summarizer=SUMMARIZER, asked=False
+            dict(LARGE), brief, summarizer=SUMMARIZER, asked=False
         )
         assert result == LARGE
 
-    @pytest.mark.parametrize("summarize", SUMMARIZERS)
-    async def test_true_summarizes_a_result_too_large_to_read_whole(self, wire, summarize):
+    @BRIEFS
+    async def test_true_summarizes_a_result_too_large_to_read_whole(self, wire, brief):
         result = await summarization.summarized(
-            dict(LARGE), summarize, summarizer=SUMMARIZER, asked=True
+            dict(LARGE), brief, summarizer=SUMMARIZER, asked=True
         )
-        assert result == {**LARGE, "ai_summary": "Test summary", "_summarized": True}
+        assert result == {
+            **LARGE,
+            "ai_summary": "Test summary",
+            "summarized_bytes": EXCERPT_BYTES,
+        }
         assert len(wire.sent) == 1
 
-    @pytest.mark.parametrize("summarize", SUMMARIZERS)
-    async def test_true_leaves_a_result_at_the_bound_as_is(self, no_wire, summarize):
+    @BRIEFS
+    async def test_true_leaves_a_result_at_the_bound_as_is(self, no_wire, brief):
         result = at_the_bound()
         summarized = summarization.summarized(
-            dict(result), summarize, summarizer=SUMMARIZER, asked=True
+            dict(result), brief, summarizer=SUMMARIZER, asked=True
         )
         assert await summarized == result
 
-    @pytest.mark.parametrize("summarize", SUMMARIZERS)
-    async def test_disabled_leaves_the_result_as_is(self, no_wire, summarize):
+    @BRIEFS
+    async def test_disabled_leaves_the_result_as_is(self, no_wire, brief):
         """A setting, not a failure: no request, no ai_summary_error, no warning."""
-        result = await summarization.summarized(
-            dict(LARGE), summarize, summarizer=DISABLED, asked=True
-        )
+        result = await summarization.summarized(dict(LARGE), brief, summarizer=DISABLED, asked=True)
         assert result == LARGE
+
+    @BRIEFS
+    async def test_a_summary_that_does_not_come_back_leaves_only_its_reason(self, wire, brief):
+        """No summary covers any of the result, so none says how much."""
+        wire.response = httpx.Response(500, text="Internal error")
+
+        result = await summarization.summarized(
+            dict(LARGE), brief, summarizer=SUMMARIZER, asked=True
+        )
+
+        assert result.keys() == {*LARGE, "ai_summary_error"}
+        assert result["ai_summary_error"].endswith("s: answered 500: Internal error")
 
     async def test_a_result_no_caller_can_read_is_refused_unsummarized(self, no_wire):
         with pytest.raises(Unreadable, match="not JSON-serializable"):
             await summarization.summarized(
                 {"status": "success", "node": object()},
-                summarization._summarize_scene,
+                summarization.SCENE_BRIEF,
                 summarizer=SUMMARIZER,
                 asked=True,
             )
@@ -149,20 +114,94 @@ class TestSummarized:
         ],
     )
     async def test_logs_the_decision_and_its_inputs(
-        self, no_wire, caplog, enabled, asked, result, decided
+        self, wire, caplog, enabled, asked, result, decided
     ):
-        async def unchanged(data: dict, _summarizer: Summarizer) -> dict:
-            return data
-
         configured = dataclasses.replace(SUMMARIZER, enabled=enabled)
         with caplog.at_level("DEBUG", logger="houdini_mcp.summarization"):
             await summarization.summarized(
-                dict(result), unchanged, summarizer=configured, asked=asked
+                dict(result), "Summarize this.", summarizer=configured, asked=asked
             )
-        assert caplog.messages == [
+        assert [m for m in caplog.messages if m.startswith("Summarize:")] == [
             f"Summarize: {decided} (enabled={enabled}, asked={asked}, "
             f"{len(Reading.of(result).encoded)} bytes, bound {RESPONSE_BOUND_BYTES})"
         ]
+        assert len(wire.sent) == decided
+
+
+class TestCoverage:
+    """A summary is written from the start of the result's text, and both the request and
+    the response say how much of it."""
+
+    @BRIEFS
+    async def test_the_request_says_it_is_part_of_the_result(self, wire, brief):
+        """The summarizer is sent the brief, the key to the shorthand, the excerpt, and
+        how much of the whole that is."""
+        whole = Reading.of(LARGE).encoded
+        await summarization.summarized(dict(LARGE), brief, summarizer=SUMMARIZER, asked=True)
+
+        [prompt] = wire.prompts
+        assert prompt.startswith(brief)
+        assert shorthand.KEY in prompt
+        assert whole[:EXCERPT_BYTES].decode() in prompt
+        assert whole[: EXCERPT_BYTES + 1].decode() not in prompt
+        assert f"is {len(whole)} bytes" in prompt
+        assert f"first {EXCERPT_BYTES}" in prompt
+
+    @BRIEFS
+    async def test_the_response_says_how_much_its_file_the_summary_read(self, wire, brief):
+        """The file holds the summarized result's text, and its first summarized_bytes
+        bytes are what the summary was written from."""
+        result = await summarization.summarized(
+            dict(LARGE), brief, summarizer=SUMMARIZER, asked=True
+        )
+
+        file = Reading.of(result).encoded
+        covered = result["summarized_bytes"]
+        [prompt] = wire.prompts
+        assert covered < len(Reading.of(LARGE).encoded)
+        assert f"\n{file[:covered].decode()}\n```" in prompt
+
+    async def test_the_smallest_result_summarized_is_summarized_from_part_of_it(self, wire):
+        """So the request's "the rest is not shown" is true of every summary."""
+        result = past_the_bound()
+
+        summarized = await summarization.summarized(
+            dict(result), summarization.SCENE_BRIEF, summarizer=SUMMARIZER, asked=True
+        )
+
+        assert summarized["summarized_bytes"] < len(Reading.of(result).encoded)
+
+    def test_a_character_the_cut_splits_is_left_out(self):
+        """The excerpt is whole characters, and covered counts the bytes it is."""
+        result = {"status": "success", "text": "x"}
+        before = len(Reading.of(result).encoded) - 1
+        # The first byte of a three-byte character is the last byte the cut keeps.
+        result["text"] = "x" * (EXCERPT_BYTES - 1 - before) + "€" * 3000
+        reading = Reading.of(result)
+        assert reading.encoded[EXCERPT_BYTES - 1 : EXCERPT_BYTES + 2] == "€".encode()
+
+        excerpt = Excerpt.of(reading)
+
+        assert (excerpt.covered, excerpt.total) == (EXCERPT_BYTES - 1, len(reading.encoded))
+        assert excerpt.text.encode() == reading.encoded[: EXCERPT_BYTES - 1]
+
+    def test_a_text_within_the_budget_is_excerpted_whole(self):
+        reading = Reading.of(SMALL)
+        assert Excerpt.of(reading) == Excerpt(
+            reading.text, len(reading.encoded), len(reading.encoded)
+        )
+
+    @BRIEFS
+    async def test_the_summary_event_says_how_much_it_read(self, wire, caplog, brief):
+        with caplog.at_level("INFO", logger="houdini_mcp.summarization"):
+            await summarization.summarized(dict(LARGE), brief, summarizer=SUMMARIZER, asked=True)
+
+        [event] = caplog.messages
+        assert event.startswith(
+            f"Summarized the first {EXCERPT_BYTES} of {len(Reading.of(LARGE).encoded)} bytes "
+            f"with {SUMMARIZER.model} in "
+        )
+        assert event.endswith("s: 12 chars")
 
 
 class TestDefaults:
@@ -262,14 +301,15 @@ class TestGetSummarizationStatus:
         }
 
 
-class TestComplete:
+class TestSummarize:
     """The chat-completions request the summarizer sends, and how each answer is reported."""
 
     async def test_sends_a_chat_completions_request(self, wire):
         """The request goes to /v1/chat/completions with the key, model, budget and prompt."""
-        result = await summarization._complete("test prompt", SUMMARIZER)
+        reading = Reading.of(LARGE)
+        result = await summarization._summarize("Summarize this.", reading, SUMMARIZER)
 
-        assert result == summarization.Summary("Test summary")
+        assert result == summarization.Summary("Test summary", EXCERPT_BYTES)
         [request] = wire.sent
         assert request.method == "POST"
         assert request.url.path == "/v1/chat/completions"
@@ -277,16 +317,13 @@ class TestComplete:
         assert json.loads(request.content) == {
             "model": SUMMARIZER.model,
             "max_tokens": summarization.SUMMARY_TOKENS,
-            "messages": [{"role": "user", "content": "test prompt"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": summarization._prompt("Summarize this.", Excerpt.of(reading)),
+                }
+            ],
         }
-
-    async def test_logs_the_summary_event(self, wire, caplog):
-        """A finished summary is logged with the model that wrote it and its size."""
-        with caplog.at_level("INFO", logger="houdini_mcp.summarization"):
-            await summarization._complete("test prompt", SUMMARIZER)
-
-        assert f"Summarized with {SUMMARIZER.model} in " in caplog.text
-        assert "s: 12 chars" in caplog.text
 
     @pytest.mark.parametrize(
         ("body", "reason"),
@@ -301,7 +338,7 @@ class TestComplete:
         wire.response = httpx.Response(200, json=body)
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt", SUMMARIZER)
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.endswith(f"s: no finished summary: {reason} chars")
@@ -316,7 +353,7 @@ class TestComplete:
         )
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt", SUMMARIZER)
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert "s: answered 507: " in result.reason
@@ -341,7 +378,7 @@ class TestComplete:
         wire.response = response
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt", SUMMARIZER)
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert f"s: {logged}" in result.reason
@@ -352,76 +389,14 @@ class TestComplete:
         wire.response = httpx.ConnectTimeout
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt", SUMMARIZER)
+            result = await summarize_large()
 
         named = f"{SUMMARIZER.model} at {SUMMARIZER.base_url} failed after "
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.startswith(named)
-        assert f"Summarization by {named}" in caplog.text
+        read = f"the first {EXCERPT_BYTES} of {len(Reading.of(LARGE).encoded)} bytes"
+        assert f"Summarization of {read} by {named}" in caplog.text
 
 
-class TestSummarizeGeometry:
-    """Tests for geometry summarization."""
-
-    async def test_summarize_geometry_adds_summary(self, wire):
-        """Test geometry summarization adds ai_summary field."""
-        geo_data = {
-            "point_count": 1000,
-            "primitive_count": 500,
-            "bounding_box": {"min": [0, 0, 0], "max": [1, 1, 1]},
-        }
-
-        result = await summarization._summarize_geometry(geo_data, SUMMARIZER)
-
-        assert result["ai_summary"] == "Test summary"
-        assert result["_summarized"] is True
-        [request] = wire.sent
-        assert "1000" in json.loads(request.content)["messages"][0]["content"]
-
-    async def test_summarize_geometry_no_summary_on_error(self, wire):
-        """When no summary comes back, the geometry data carries the reason instead."""
-        wire.response = httpx.Response(500, text="Internal error")
-        geo_data = {"point_count": 1000}
-
-        result = await summarization._summarize_geometry(geo_data, SUMMARIZER)
-
-        assert result.keys() == {"point_count", "ai_summary_error"}
-        assert result["ai_summary_error"].endswith("s: answered 500: Internal error")
-
-
-class TestSummarizeErrors:
-    """Tests for error summarization."""
-
-    async def test_summarize_errors_adds_summary(self, wire):
-        """Test error summarization adds ai_summary field."""
-        error_data = {
-            "error_nodes": [
-                {"path": "/obj/geo1/bad_node", "errors": ["Missing input"]},
-            ],
-            "error_count": 1,
-        }
-
-        result = await summarization._summarize_errors(error_data, SUMMARIZER)
-
-        assert result["ai_summary"] == "Test summary"
-        assert result["_summarized"] is True
-        [request] = wire.sent
-        assert "/obj/geo1/bad_node" in json.loads(request.content)["messages"][0]["content"]
-
-
-class TestSummarizeScene:
-    """Tests for scene summarization."""
-
-    async def test_summarize_scene_adds_summary(self, wire):
-        """Test scene summarization adds ai_summary field."""
-        scene_data = {
-            "children": [
-                {"name": "geo1", "type": "geo"},
-                {"name": "geo2", "type": "geo"},
-            ],
-        }
-
-        result = await summarization._summarize_scene(scene_data, SUMMARIZER)
-
-        assert result["ai_summary"] == "Test summary"
-        assert result["_summarized"] is True
+async def summarize_large() -> summarization.Summary | summarization.NoSummary:
+    return await summarization._summarize("Summarize this.", Reading.of(LARGE), SUMMARIZER)

@@ -281,7 +281,9 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 
 `find_error_nodes`, `get_geo_summary` and `serialize_scene` summarize a result too large
 to read inline by default, so a result that arrives as a file carries its summary beside
-the pointer; `summarize=False` sends nothing to the summarizer.
+the pointer; `summarize=False` sends nothing to the summarizer. The summarizer reads the
+first 8KB of the file's text and is told that is part of the result, and
+`summarized_bytes` says how many bytes from the file's start the summary covers.
 
 ### Infrastructure (`_common.py`, `cache.py`)
 - **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`

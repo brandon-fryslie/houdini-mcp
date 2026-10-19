@@ -39,10 +39,10 @@ from pydantic import ValidationError
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
-from houdini_mcp.settings import Summarizer
+from houdini_mcp.tools import summarization
 from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import Policy
-from tests.conftest import DEFAULT_SETTINGS
+from tests.conftest import DEFAULT_SETTINGS, Wire
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
 
@@ -655,20 +655,20 @@ class TestServedFailures:
         assert "hou is mid-shutdown" in failure.message
 
 
-# The tools that summarize: each one's module, the read it summarizes, its summarizer,
-# and the arguments a call needs.
+# The tools that summarize: each one's module, the read it summarizes, the brief its
+# summary is written to, and the arguments a call needs.
 SUMMARIZING = pytest.mark.parametrize(
-    ("name", "module", "read", "summarizer", "arguments"),
+    ("name", "module", "read", "brief", "arguments"),
     [
-        ("find_error_nodes", "errors", "_scan_error_nodes", "_summarize_errors", {}),
+        ("find_error_nodes", "errors", "_scan_error_nodes", summarization.ERRORS_BRIEF, {}),
         (
             "get_geo_summary",
             "geometry",
             "_read_geometry",
-            "_summarize_geometry",
+            summarization.GEOMETRY_BRIEF,
             {"node_path": "/obj/geo1/sphere1"},
         ),
-        ("serialize_scene", "scene", "_scene_tree", "_summarize_scene", {}),
+        ("serialize_scene", "scene", "_scene_tree", summarization.SCENE_BRIEF, {}),
     ],
 )
 
@@ -687,15 +687,16 @@ class TestServedSummaries:
         self,
         client: Client[Any],
         monkeypatch: pytest.MonkeyPatch,
+        wire: Wire,
         name: str,
         module: str,
         read: str,
-        summarizer: str,
+        brief: str,
         arguments: dict[str, Any],
     ) -> None:
         """Too large to read whole is one line: past it a result arrives as a file with
-        its summary beside the pointer, and within it inline with none, whatever its
-        JSON's length. summarize=False sends nothing either way.
+        its summary, written to the tool's brief, beside the pointer, and within it inline
+        with none, whatever its JSON's length. summarize=False sends nothing either way.
 
         The two results straddle the rule this replaced, an estimated 5000 tokens of
         JSON (its length / 4): one is under it but too large to read inline, the other
@@ -717,14 +718,7 @@ class TestServedSummaries:
 
         tool = importlib.import_module(f"houdini_mcp.tools.{module}")
         returned: list[dict[str, Any]] = []
-        asked: list[dict[str, Any]] = []
-
-        async def record(data: dict[str, Any], _summarizer: Summarizer) -> dict[str, Any]:
-            asked.append(data)
-            return {**data, "ai_summary": "summary"}
-
         monkeypatch.setattr(tool, read, lambda *_a, **_k: dict(returned[-1]))
-        monkeypatch.setattr(tool, summarizer, record)
 
         async def sent(result: dict[str, Any], **asking: bool) -> dict[str, Any]:
             returned.append(result)
@@ -733,12 +727,18 @@ class TestServedSummaries:
             return reply.structured_content
 
         pointer = await sent(narrow)
-        assert asked == [narrow]
-        assert pointer["ai_summary"] == "summary" and "result_file" in pointer
+        [prompt] = wire.prompts
+        assert prompt.startswith(brief)
+        assert pointer["ai_summary"] == "Test summary"
+        assert pointer["summarized_bytes"] == summarization.EXCERPT_BYTES
+        read_by_the_summary = pathlib.Path(pointer["result_file"]).read_bytes()[
+            : pointer["summarized_bytes"]
+        ]
+        assert read_by_the_summary.decode() in prompt
         assert await sent(wide) == wide
-        assert asked == [narrow]
+        assert len(wire.sent) == 1
         unsummarized = await sent(narrow, summarize=False)
-        assert asked == [narrow]
+        assert len(wire.sent) == 1
         assert "result_file" in unsummarized and "ai_summary" not in unsummarized
 
     @SUMMARIZING
@@ -749,7 +749,7 @@ class TestServedSummaries:
         name: str,
         module: str,
         read: str,
-        summarizer: str,
+        brief: str,
         arguments: dict[str, Any],
     ) -> None:
         """Measuring a result for its summary meets what delivery would: the same failure arm."""
@@ -768,7 +768,7 @@ class TestServedSummaries:
         assert "ran, but returned a result that is not JSON-serializable" in failures[0].message
 
     async def test_find_error_nodes_never_summarizes_a_failure(
-        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch, wire: Wire
     ) -> None:
         """A call that read no node has no errors to triage, however large its failure."""
         from houdini_mcp.reading import RESPONSE_BOUND_BYTES
@@ -780,17 +780,10 @@ class TestServedSummaries:
                 "Could not list the nodes under /obj: " + "x" * RESPONSE_BOUND_BYTES
             )
 
-        asked: list[dict[str, Any]] = []
-
-        async def record(data: dict[str, Any], _summarizer: Summarizer) -> dict[str, Any]:
-            asked.append(data)
-            return data
-
         monkeypatch.setattr(errors, "_scan_error_nodes", nothing_read)
-        monkeypatch.setattr(errors, "_summarize_errors", record)
 
         reply = await client.call_tool("find_error_nodes", {})
         assert reply.structured_content is not None
         assert reply.structured_content["kind"] == "operation_failed"
         assert "result_file" in reply.structured_content
-        assert asked == []
+        assert wire.sent == []

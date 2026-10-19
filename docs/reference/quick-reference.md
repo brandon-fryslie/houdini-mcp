@@ -251,6 +251,8 @@ if result["status"] == "error":
 - The pointer keeps `status`, a failure's fields, any `ai_summary` (whole up to
   8KB), and paging fields (a long string cut to fit and marked); the file
   holds the whole result, in the same shorthand
+- `summarized_bytes`, beside `ai_summary`, is how many bytes from the file's
+  start the summary was written from; it did not see the rest
 - Result files are kept until the same server's newer results fill 64MB; the
   oldest are removed, the newest always kept. A stopped server's results are
   removed when another starts

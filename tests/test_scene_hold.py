@@ -84,7 +84,7 @@ class TestCallsHoldTheScene:
 
         summarizing, answer = asyncio.Event(), asyncio.Event()
 
-        async def slow_summary(result: dict, summarize, *, summarizer, asked: bool) -> dict:
+        async def slow_summary(result: dict, brief: str, *, summarizer, asked: bool) -> dict:
             summarizing.set()
             await answer.wait()
             return result

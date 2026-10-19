@@ -23,7 +23,7 @@ from ._common import (
 from .cache import invalidate_all_caches
 from .parms import evaluated
 from .snapshot import scene_snapshot
-from .summarization import _summarize_scene, summarized
+from .summarization import SCENE_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -160,12 +160,13 @@ async def serialize_scene(
     Returns:
         Dict with scene structure, optionally with ai_summary field containing
         insights about organization, complexity, and optimization opportunities,
+        and summarized_bytes, how many bytes it covers from result_file's start;
         or ai_summary_error saying why no summary could be made.
     """
     result = await on_the_scene(
         "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
     )
-    return await summarized(result, _summarize_scene, summarizer=summarizer, asked=summarize)
+    return await summarized(result, SCENE_BRIEF, summarizer=summarizer, asked=summarize)
 
 
 def _scene_tree(

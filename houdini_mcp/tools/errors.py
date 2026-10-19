@@ -17,7 +17,7 @@ from ._common import (
     on_the_scene,
 )
 from .failure import OperationFailed, Undone, batch_status
-from .summarization import _summarize_errors, summarized
+from .summarization import ERRORS_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
@@ -62,6 +62,7 @@ async def find_error_nodes(
           when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
         - ai_summary: (if summarized) AI-generated triage with prioritized fixes
+        - summarized_bytes: (with ai_summary) how many bytes it covers, from result_file's start
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Examples:
@@ -74,7 +75,7 @@ async def find_error_nodes(
     result = await on_the_scene(
         "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
-    return await summarized(result, _summarize_errors, summarizer=summarizer, asked=summarize)
+    return await summarized(result, ERRORS_BRIEF, summarizer=summarizer, asked=summarize)
 
 
 def _scan_error_nodes(
@@ -122,18 +123,6 @@ def _scan_error_nodes(
         if warnings:
             warning_nodes.append({**identity, "warnings": warnings})
 
-    report: dict[str, Any] = {
-        "root_path": root_path,
-        "error_nodes": error_nodes,
-        "error_count": len(error_nodes),
-        "uninspected": uninspected,
-        "total_scanned": total_scanned,
-    }
-
-    if include_warnings:
-        report["warning_nodes"] = warning_nodes
-        report["warning_count"] = len(warning_nodes)
-
     # [LAW:one-source-of-truth] limited is read off what the scan reached, not re-derived
     # from the cap: a scan that ends exactly at max_results was not cut short
     present = 1 + len(descendants)
@@ -144,8 +133,20 @@ def _scan_error_nodes(
         present,
         len(uninspected),
     )
+    # The scan's counts come before its lists, so the start of the result's text - all a
+    # summary is written from (summarization.EXCERPT_BYTES) - says what the scan found.
+    counts: dict[str, Any] = {
+        "root_path": root_path,
+        "total_scanned": total_scanned,
+        "error_count": len(error_nodes),
+    }
+    lists: dict[str, Any] = {"error_nodes": error_nodes, "uninspected": uninspected}
+    if include_warnings:
+        counts["warning_count"] = len(warning_nodes)
+        lists["warning_nodes"] = warning_nodes
     if total_scanned < present:
-        report["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
+        counts["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
+    report = {**counts, **lists}
 
     # [LAW:single-enforcer] success means every node scanned was inspected
     failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
