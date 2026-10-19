@@ -17,9 +17,10 @@ class InputConnection:
     """One wire into a node: which input, from which item, from which of its outputs.
 
     ``source`` is what the wire is drawn from inside this network: a ``hou.Node``,
-    or the ``hou.SubnetIndirectInput`` when the node sits in a subnet and is fed
-    from one of the subnet's inputs. Either is a valid ``setInput`` source, so a
-    wire read here can be put back exactly as it was.
+    a ``hou.NetworkDot`` the wire is routed through, or the
+    ``hou.SubnetIndirectInput`` when the node sits in a subnet and is fed from one
+    of the subnet's inputs. Each is a valid ``setInput`` source, so a wire read
+    here can be put back exactly as it was.
     """
 
     input_index: int

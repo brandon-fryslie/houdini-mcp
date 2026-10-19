@@ -8,8 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-import rpyc
-import rpyc.utils.server
 
 from houdini_mcp.tools.pane_screenshot import (
     capture_pane_screenshot,
@@ -17,7 +15,7 @@ from houdini_mcp.tools.pane_screenshot import (
     pane_type_member,
     pane_type_names,
 )
-from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, closing_once_served
+from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, served_namespace
 
 MOCK_PANE_TYPES = ["NetworkEditor", "Parm", "SceneViewer"]
 
@@ -32,27 +30,14 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
     ``isinstance`` across netrefs; a classic SlaveService serving a fake enum
     holds that path for the members, the dunders, ``thisown`` and a name the
     enum lacks (rpyc raises on a by-value ``__doc__`` or ``None``)."""
-    server = rpyc.utils.server.ThreadedServer(
-        rpyc.core.SlaveService,
-        hostname="127.0.0.1",
-        port=0,
-        logger=logging.getLogger("test_pane_screenshot"),
-    )
-    server._start_in_thread()
-    with (
-        closing_once_served(server),
-        rpyc.classic.connect("127.0.0.1", server.port) as conn,
-    ):
-        conn.execute(
-            "class EnumValue: pass\n"
-            "class paneTabType:\n"
-            "    NetworkEditor = EnumValue()\n"
-            "    Parm = EnumValue()\n"
-            "    thisown = property(lambda self: True)\n"
-        )
-        hou = SimpleNamespace(
-            EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
-        )
+    with served_namespace(
+        "class EnumValue: pass\n"
+        "class paneTabType:\n"
+        "    NetworkEditor = EnumValue()\n"
+        "    Parm = EnumValue()\n"
+        "    thisown = property(lambda self: True)\n"
+    ) as remote:
+        hou = SimpleNamespace(EnumValue=remote["EnumValue"], paneTabType=remote["paneTabType"])
         assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
         assert pane_type_member(hou, "ChannelEditr") is None
         assert pane_type_member(hou, "thisown") is None

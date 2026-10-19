@@ -8,17 +8,14 @@ only the exact remote class, while every real item is a subclass (``hou.SopNode`
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Generator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import rpyc
-import rpyc.utils.server
 
 from houdini_mcp.tools import connect_nodes
-from tests.conftest import closing_once_served
+from tests.conftest import served_namespace
 
 # The served hou. Only subclasses are ever handed out, as in Houdini, and each
 # networkItemType() call returns a fresh EnumValue equal to the member by value, so
@@ -85,6 +82,7 @@ class OpNetworkBox:
     def path(self): return "/obj/geo1/box1"
     def networkItemType(self): return EnumValue("NetworkBox")
 
+obj = Node("/obj", "Manager", child_category="Object")
 geo = ObjNode("/obj/geo1", "Object", child_category="Sop")
 subnet = SopNode("/obj/geo1/subnet1", "Sop", child_category="Sop")
 items = {i.path(): i for i in [
@@ -95,6 +93,7 @@ items = {i.path(): i for i in [
     OpSubnetIndirectInput("/obj/geo1/subnet1/1", subnet),
     SopNode("/obj/geo1/subnet1/xform1", "Sop"),
     OpNetworkDot("/obj/geo1/dot1", geo),
+    OpNetworkDot("/obj/dot1", obj),
     OpNetworkBox(),
 ]}
 
@@ -108,19 +107,7 @@ def node(path):
 @pytest.fixture
 def rpyc_hou(connected_to: Callable[[Any], Any]) -> Generator[Any, None, None]:
     """The tools connected to a hou served over a real rpyc connection."""
-    server = rpyc.utils.server.ThreadedServer(
-        rpyc.core.SlaveService,
-        hostname="127.0.0.1",
-        port=0,
-        logger=logging.getLogger("test_connect_nodes_over_rpyc"),
-    )
-    server._start_in_thread()
-    with (
-        closing_once_served(server),
-        rpyc.classic.connect("127.0.0.1", server.port) as conn,
-    ):
-        conn.execute(REMOTE_HOU)
-        remote = conn.namespace
+    with served_namespace(REMOTE_HOU) as remote:
         yield connected_to(
             SimpleNamespace(
                 **{name: remote[name] for name in ("item", "node", "networkItemType")},
@@ -156,8 +143,10 @@ def test_a_network_dot_is_wired(rpyc_hou: Any) -> None:
     assert result["connection"]["source_node"] == "/obj/geo1/dot1"
 
 
-def test_a_subclass_node_takes_its_category_from_its_own_type(rpyc_hou: Any) -> None:
-    result = connect_nodes("/obj/geo1", "/obj/geo1/xform1")
+@pytest.mark.parametrize("src_path", ["/obj/geo1", "/obj/dot1"])
+def test_a_source_takes_its_own_category(rpyc_hou: Any, src_path: str) -> None:
+    """A node's category is its type's; a dot's is the network it sits in."""
+    result = connect_nodes(src_path, "/obj/geo1/xform1")
 
     assert (result["status"], result["kind"]) == ("error", "invalid_input")
     assert "Incompatible node types: Object -> Sop" in result["message"]

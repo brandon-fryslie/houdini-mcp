@@ -11,6 +11,8 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+import rpyc
+import rpyc.utils.server
 from fastmcp import FastMCP
 from rpyc.core import vinegar
 from rpyc.utils.server import Server
@@ -953,6 +955,26 @@ def closing_once_served(server: Server) -> Generator[Server, None, None]:
             yield server
         finally:
             await_clients_served(server)
+
+
+@contextlib.contextmanager
+def served_namespace(source: str) -> Generator[Any, None, None]:
+    """The namespace ``source`` defines, run on a real rpyc server and seen through a
+    classic connection: every name a netref, so ``isinstance`` and ``==`` behave as
+    they do against a live Houdini."""
+    server = rpyc.utils.server.ThreadedServer(
+        rpyc.core.SlaveService,
+        hostname="127.0.0.1",
+        port=0,
+        logger=logging.getLogger("served_namespace"),
+    )
+    server._start_in_thread()
+    with (
+        closing_once_served(server),
+        rpyc.classic.connect("127.0.0.1", server.port) as conn,
+    ):
+        conn.execute(source)
+        yield conn.namespace
 
 
 class MockEnumValue:
