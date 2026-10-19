@@ -905,7 +905,9 @@ class TestSceneOperations:
         result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        mock_connection.hipFile.load.assert_called_once_with("/path/to/scene.hip")
+        mock_connection.hipFile.load.assert_called_once_with(
+            "/path/to/scene.hip", suppress_save_prompt=True
+        )
 
     def test_new_scene_success(self, mock_connection):
         """Test creating new scene successfully."""
@@ -3073,7 +3075,7 @@ class TestConnectionErrorHandling:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors(operation)
-        def tool():
+        def tool(host: str = "localhost", port: int = 18811):
             raise exc
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
@@ -3388,7 +3390,9 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("reorder_inputs")
-        def echo(order: list[int], flag: bool = False) -> dict:
+        def echo(
+            order: list[int], flag: bool = False, host: str = "localhost", port: int = 18811
+        ) -> dict:
             return {"status": "success", "order": order, "flag": flag}
 
         assert echo((1, 0))["order"] == [1, 0]

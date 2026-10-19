@@ -594,7 +594,10 @@ class MockHouModule:
         self.hipFile = MagicMock()
         self.hipFile.path.return_value = self._hip_file
         self.hipFile.save = MagicMock()
-        self.hipFile.saveAndBackup = MagicMock()
+        # A scene loaded from its file and not changed since: nothing to back up.
+        self.hipFile.hasUnsavedChanges.return_value = False
+        self.hipFile.isNewFile.return_value = False
+        self.hipFile.saveAsBackup.return_value = "/path/to/backup/test_bak1.hip"
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
 

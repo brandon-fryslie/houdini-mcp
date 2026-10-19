@@ -50,6 +50,7 @@ __all__ = [
     "TimedOut",
     "ProgramStillRunning",
     "tool_error",
+    "add_note",
     "failure_for",
     "failure_response",
     "BatchStatus",
@@ -296,6 +297,16 @@ def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
 # =============================================================================
 # The enforcer
 # =============================================================================
+
+
+def add_note(e: BaseException, note: str) -> None:
+    """Add ``note`` to ``e``, for :func:`failure_for` to tell after its message.
+
+    rpyc rebuilds a Houdini exception with the remote instance's attributes
+    copied onto it, ``add_note`` among them as a string, so the method is
+    called from the class.
+    """
+    BaseException.add_note(e, note)
 
 
 def failure_for(e: Exception, operation: str) -> _Failure:

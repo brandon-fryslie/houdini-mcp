@@ -28,6 +28,7 @@ from ._common import (
     node_at,
     node_category,
 )
+from .failure import add_note
 from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
@@ -130,15 +131,15 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
         # are Houdini's to keep.
         if transport_failure(body) is None:
             for path, failure in _destroy(created):
-                body.add_note(f"also failed to destroy temporary render node {path}: {failure!r}")
+                add_note(body, f"also failed to destroy temporary render node {path}: {failure!r}")
         raise
     else:
         failures = _destroy(created)
         if failures:
             first_path, first = failures[0]
-            first.add_note(f"destroying temporary render node {first_path}")
+            add_note(first, f"destroying temporary render node {first_path}")
             for path, other in failures[1:]:
-                first.add_note(f"also failed to destroy {path}: {other!r}")
+                add_note(first, f"also failed to destroy {path}: {other!r}")
             raise first
 
 

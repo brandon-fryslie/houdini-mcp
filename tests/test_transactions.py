@@ -1,170 +1,197 @@
-"""Transaction safety, policy coverage, checkpoints, conflicts, and audit tests."""
+"""A call recovers from its effect on the scene as its tool's policy says: a call
+that replaces the scene backs up the scene's unsaved work first."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import logging
+from typing import Any
 
 import pytest
 
+from houdini_mcp.tools import execute_code, load_scene, new_scene
+from houdini_mcp.tools._common import handle_connection_errors
 from houdini_mcp.tools.transactions import (
-    RECOVERABLE_TOOL_POLICIES,
+    TOOL_POLICIES,
     SceneAccess,
     ToolPolicy,
-    TransactionConflict,
-    TransactionManager,
     TransactionPolicy,
 )
-
-
-def manager(mock_connection, tmp_path: Path, revision):
-    return TransactionManager(
-        mock_connection,
-        revision,
-        checkpoint_dir=tmp_path / "checkpoints",
-        audit_path=tmp_path / "transactions.jsonl",
-        checkpoint_retention=2,
-    )
+from tests.conftest import raised_inside_houdini
 
 
 @pytest.mark.parametrize("render_tool", ["render_viewport", "render_quad_view"])
-def test_render_tools_need_no_transaction(render_tool):
-    """A render leaves the scene as it found it, so there is no checkpoint to pay for;
-    that it still waits for a running program is test_execute_code_worker's."""
-    assert render_tool not in RECOVERABLE_TOOL_POLICIES
+def test_render_tools_need_no_recovery(render_tool):
+    """A render leaves the scene as it found it; that it still waits for a running
+    program is test_execute_code_worker's."""
+    assert TOOL_POLICIES[render_tool].recovery is None
 
 
 @pytest.mark.parametrize(
-    "recovery", [TransactionPolicy.UNDOABLE, TransactionPolicy.CHECKPOINT_REQUIRED]
+    "recovery",
+    [
+        TransactionPolicy.UNDOABLE,
+        TransactionPolicy.CHECKPOINT_REQUIRED,
+        TransactionPolicy.PROGRAM_UNDO_GROUP,
+    ],
 )
 def test_a_scene_writer_cannot_share_the_scene(recovery):
     with pytest.raises(ValueError, match="cannot share it"):
         ToolPolicy(recovery, SceneAccess.SHARED)
 
 
-def test_failed_multistep_transaction_closes_group_then_undoes(mock_connection, tmp_path):
-    revision = ["before"]
-    tx_manager = manager(mock_connection, tmp_path, lambda: revision[0])
+async def _async_body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+    return {"status": "success"}
 
-    with (
-        pytest.raises(ValueError, match="step two"),
-        tx_manager.begin(["create_node", "set_parameter"], affected_paths=["/obj/geo1"]),
+
+def _no_target() -> dict[str, Any]:
+    return {"status": "success"}
+
+
+@pytest.mark.parametrize("body", [_async_body, _no_target], ids=["async", "no_host_port"])
+def test_a_scene_writer_the_boundary_cannot_recover_is_refused_where_declared(body):
+    with pytest.raises(TypeError, match="create_node writes the scene"):
+        handle_connection_errors("create_node")(body)
+
+
+REPLACERS = {
+    "new_scene": (lambda: new_scene(), "clear"),
+    "load_scene": (lambda: load_scene("/scenes/next.hip"), "load"),
+}
+
+
+class TestBackedUpFirst:
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_replacing_the_scene_backs_up_its_unsaved_work_first(
+        self, tool, mock_connection, caplog
     ):
-        revision[0] = "mutated"
-        raise ValueError("step two failed")
+        """...and replaces it without Houdini's save prompt, which the backup has made
+        redundant."""
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        done: list[str] = []
+        hip.saveAsBackup.side_effect = lambda: (
+            done.append("backup") or "/scenes/backup/shot_bak3.hip"
+        )
+        getattr(hip, replaces).side_effect = lambda *_, **prompt: done.append((replaces, prompt))
 
-    assert mock_connection.undos.open_groups == []
-    assert mock_connection.undos.performed_undos == 1
-    assert tx_manager.history[-1].result == "rolled_back"
-    assert tx_manager.active is None
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
+            result = call()
 
+        assert result["status"] == "success"
+        assert result["checkpoint"] == "/scenes/backup/shot_bak3.hip"
+        assert done == ["backup", (replaces, {"suppress_save_prompt": True})]
+        assert (
+            f"{tool} backed up the scene's unsaved work to /scenes/backup/shot_bak3.hip"
+            in caplog.text
+        )
 
-def test_undo_refuses_intervening_human_edit(mock_connection, tmp_path):
-    revision = ["before"]
-    tx_manager = manager(mock_connection, tmp_path, lambda: revision[0])
-    with tx_manager.begin(["set_parameter"], affected_paths=["/obj/geo1"]):
-        revision[0] = "agent-after"
-
-    revision[0] = "human-after"
-    with pytest.raises(TransactionConflict, match="changed after"):
-        tx_manager.undo_last_agent_action()
-    assert mock_connection.undos.performed_undos == 0
-
-
-def test_undo_last_agent_action_when_revision_matches(mock_connection, tmp_path):
-    revision = ["before"]
-    tx_manager = manager(mock_connection, tmp_path, lambda: revision[0])
-    with tx_manager.begin(["set_node_position"], affected_paths=["/obj/geo1"]):
-        revision[0] = "agent-after"
-
-    record = tx_manager.undo_last_agent_action()
-    assert record.result == "undone"
-    assert mock_connection.undos.performed_undos == 1
-
-
-def test_checkpoint_is_atomic_and_retention_bounded(mock_connection, tmp_path, monkeypatch):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "scene")
-
-    def save_backup(path):
-        Path(path).write_text("hip", encoding="utf-8")
-
-    mock_connection.hipFile.saveAndBackup.side_effect = save_backup
-    for index in range(3):
-        with tx_manager.begin(
-            ["load_scene"],
-            policy=TransactionPolicy.CHECKPOINT_REQUIRED,
-            affected_paths=[f"scene-{index}"],
-        ):
-            pass
-
-    files = list((tmp_path / "checkpoints").glob("mcp-*.hip"))
-    assert len(files) == 2
-    assert not list((tmp_path / "checkpoints").glob("*.tmp"))
-
-
-def test_external_side_effect_is_not_claimed_rolled_back(mock_connection, tmp_path):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "scene")
-    with (
-        pytest.raises(RuntimeError),
-        tx_manager.begin(["save_scene"], affected_paths=["/tmp/output.hip"]) as tx,
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_scene_with_nothing_unsaved_is_replaced_without_a_backup(
+        self, tool, mock_connection, caplog
     ):
-        tx.add_external_side_effect("saved /tmp/output.hip")
-        raise RuntimeError("post-render failure")
+        call, _ = REPLACERS[tool]
 
-    record = tx_manager.history[-1]
-    assert record.result == "failed"
-    assert record.side_effects == ["saved /tmp/output.hip"]
-    assert mock_connection.undos.performed_undos == 0
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
+            result = call()
 
+        assert result["status"] == "success"
+        assert "checkpoint" not in result
+        mock_connection.hipFile.saveAsBackup.assert_not_called()
+        assert f"{tool} replaces a scene with nothing unsaved: no backup" in caplog.text
 
-def test_audit_contains_attribution_paths_duration_and_result(mock_connection, tmp_path):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "rev")
-    with tx_manager.begin(
-        ["connect_nodes"],
-        affected_paths=["/obj/a", "/obj/b"],
-        caller="mcp-agent",
-        session_id="session-42",
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_never_saved_scene_holding_nodes_is_refused_not_discarded(
+        self, tool, mock_connection, caplog
     ):
-        pass
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.isNewFile.return_value = True
+        mock_connection.node("/obj").createNode("geo", "work")
 
-    row = json.loads((tmp_path / "transactions.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    assert row["transaction_id"]
-    assert row["caller"] == "mcp-agent"
-    assert row["session_id"] == "session-42"
-    assert row["tools"] == ["connect_nodes"]
-    assert row["affected_paths"] == ["/obj/a", "/obj/b"]
-    assert row["duration_ms"] >= 0
-    assert row["result"] == "committed"
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            result = call()
 
+        refusal = (
+            f"{tool} would discard a scene that has never been saved, and Houdini can back "
+            "up only a saved scene. Save it with save_scene(file_path) first."
+        )
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == refusal
+        getattr(hip, replaces).assert_not_called()
+        hip.saveAsBackup.assert_not_called()
+        assert f"{tool} failed (operation_failed): {refusal}" in caplog.text
 
-def test_policy_uses_most_conservative_tool(mock_connection, tmp_path):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "rev")
-    tx = tx_manager.begin(["create_node", "save_scene"])
-    assert tx.record.policy == TransactionPolicy.EXTERNAL_SIDE_EFFECT
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_never_saved_empty_scene_is_replaced(self, tool, mock_connection, caplog):
+        """A Houdini with no UI reports even a fresh scene as unsaved; an empty one
+        holds nothing to lose."""
+        hip = mock_connection.hipFile
+        hip.isNewFile.return_value = True
+        hip.hasUnsavedChanges.return_value = True
 
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"):
+            result = REPLACERS[tool][0]()
 
-def test_rollback_failure_is_audited_as_unknown_consistency(mock_connection, tmp_path):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "rev")
-    mock_connection.undos.performUndo = lambda: (_ for _ in ()).throw(RuntimeError("undo failed"))
-    with pytest.raises(RuntimeError, match="undo failed"), tx_manager.begin(["create_node"]):
-        raise ValueError("body failed")
-    assert tx_manager.history[-1].result == "unknown_consistency"
-    assert tx_manager.history[-1].rollback_error == "undo failed"
+        assert result["status"] == "success"
+        assert "checkpoint" not in result
+        hip.saveAsBackup.assert_not_called()
+        assert f"{tool} replaces a never-saved scene holding no node: no backup" in caplog.text
 
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_backup_houdini_cannot_write_leaves_the_scene_in_place(self, tool, mock_connection):
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        hip.saveAsBackup.side_effect = raised_inside_houdini(
+            RuntimeError("Unable to write /library/backup/ref_bak1.hip")
+        )
 
-def test_undo_refuses_when_agent_label_is_not_stack_top(mock_connection, tmp_path):
-    revision = ["before"]
-    tx_manager = manager(mock_connection, tmp_path, lambda: revision[0])
-    with tx_manager.begin(["set_parameter"]):
-        revision[0] = "after"
-    mock_connection.undos.closed_groups.append("Human edit")
-    with pytest.raises(TransactionConflict, match="not the next undo"):
-        tx_manager.undo_last_agent_action()
-    assert mock_connection.undos.performed_undos == 0
+        result = call()
 
+        assert result["kind"] == "operation_failed"
+        assert result["message"].startswith("Unable to write /library/backup/ref_bak1.hip")
+        assert result["message"].endswith(
+            f"\n{tool} left the scene in place: its unsaved work could not be backed up. "
+            "Save it with save_scene(file_path) first."
+        )
+        getattr(hip, replaces).assert_not_called()
 
-def test_undo_never_runs_while_group_is_open(mock_connection, tmp_path):
-    tx_manager = manager(mock_connection, tmp_path, lambda: "rev")
-    with tx_manager.begin(["create_node"]), pytest.raises(TransactionConflict, match="active"):
-        tx_manager.undo_last_agent_action()
-    assert mock_connection.undos.performed_undos == 0
+    @pytest.mark.parametrize("tool", REPLACERS)
+    def test_a_link_lost_while_backing_up_is_connection_loss(self, tool, mock_connection):
+        """Saving is no way on when the link is gone, so the failure does not offer it."""
+        call, replaces = REPLACERS[tool]
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        hip.saveAsBackup.side_effect = EOFError("stream has been closed")
+
+        result = call()
+
+        assert result["kind"] == "connection_lost", result
+        assert "save_scene" not in result["message"]
+        getattr(hip, replaces).assert_not_called()
+
+    def test_a_failed_load_tells_where_the_backup_is(self, mock_connection):
+        hip = mock_connection.hipFile
+        hip.hasUnsavedChanges.return_value = True
+        hip.load.side_effect = raised_inside_houdini(
+            RuntimeError("Unable to open file: /scenes/next.hip")
+        )
+
+        result = load_scene("/scenes/next.hip")
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"].startswith("Unable to open file: /scenes/next.hip")
+        assert result["message"].endswith(
+            "\nThe scene's unsaved work is backed up at /path/to/backup/test_bak1.hip."
+        )
+
+    def test_execute_code_backs_nothing_up(self, mock_connection):
+        """The boundary backs up only for a tool that replaces the scene; a program is
+        not one, whatever it calls."""
+        mock_connection.hipFile.hasUnsavedChanges.return_value = True
+
+        result = execute_code("print('hi')", host="localhost", port=18811)
+
+        assert result["status"] == "success"
+        mock_connection.hipFile.saveAsBackup.assert_not_called()
