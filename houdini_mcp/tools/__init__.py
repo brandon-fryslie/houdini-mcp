@@ -55,7 +55,6 @@ from .rendering import (
 )
 from .scene import get_scene_info, load_scene, new_scene, save_scene, serialize_scene
 from .summarization import (
-    estimate_tokens,
     get_summarization_status,
 )
 from .transactions import (
@@ -139,7 +138,6 @@ __all__ = [
     "ping_houdini",
     # AI Summarization
     "get_summarization_status",
-    "estimate_tokens",
     # Pane screenshots
     "capture_pane_screenshot",
     "list_visible_panes",

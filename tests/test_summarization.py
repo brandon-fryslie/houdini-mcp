@@ -102,9 +102,9 @@ def no_wire(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 SUMMARIZERS = [
-    summarization.summarize_errors,
-    summarization.summarize_geometry,
-    summarization.summarize_scene,
+    summarization._summarize_errors,
+    summarization._summarize_geometry,
+    summarization._summarize_scene,
 ]
 RESULT = {"status": "success", "nodes": ["/obj/geo1/node"] * 50}
 
@@ -366,7 +366,7 @@ class TestSummarizeGeometry:
             "bounding_box": {"min": [0, 0, 0], "max": [1, 1, 1]},
         }
 
-        result = await summarization.summarize_geometry(geo_data)
+        result = await summarization._summarize_geometry(geo_data)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True
@@ -378,7 +378,7 @@ class TestSummarizeGeometry:
         wire.response = httpx.Response(500, text="Internal error")
         geo_data = {"point_count": 1000}
 
-        result = await summarization.summarize_geometry(geo_data)
+        result = await summarization._summarize_geometry(geo_data)
 
         assert result.keys() == {"point_count", "ai_summary_error"}
         assert result["ai_summary_error"].endswith("s: answered 500: Internal error")
@@ -396,7 +396,7 @@ class TestSummarizeErrors:
             "error_count": 1,
         }
 
-        result = await summarization.summarize_errors(error_data)
+        result = await summarization._summarize_errors(error_data)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True
@@ -416,7 +416,7 @@ class TestSummarizeScene:
             ],
         }
 
-        result = await summarization.summarize_scene(scene_data)
+        result = await summarization._summarize_scene(scene_data)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True

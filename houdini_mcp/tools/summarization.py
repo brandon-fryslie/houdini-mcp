@@ -156,7 +156,7 @@ async def summarized(
     return await summarizer(result) if summarize else result
 
 
-async def summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize geometry data for AI consumption.
 
     Extracts key insights from geometry statistics:
@@ -192,7 +192,7 @@ Summary:"""
     return _annotate(geo_data, await _complete(prompt))
 
 
-async def summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize error/warning data with triage and prioritization.
 
     Analyzes errors and provides:
@@ -233,7 +233,7 @@ Summary:"""
     return _annotate(error_data, await _complete(prompt))
 
 
-async def summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize scene structure for understanding and optimization.
 
     Analyzes scene hierarchy and provides:

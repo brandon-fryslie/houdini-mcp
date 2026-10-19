@@ -22,7 +22,7 @@ from ._common import (
 from .cache import invalidate_all_caches
 from .parms import evaluated
 from .snapshot import scene_snapshot
-from .summarization import summarize_scene, summarized
+from .summarization import _summarize_scene, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -163,7 +163,7 @@ async def serialize_scene(
     result = await on_the_scene(
         "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
     )
-    return await summarized(result, summarize_scene, asked=summarize)
+    return await summarized(result, _summarize_scene, asked=summarize)
 
 
 def _scene_tree(

@@ -17,10 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   summarized a large result and `true` summarized a small one too. With
   `SUMMARIZATION_ENABLED=false` nothing is sent either, and every result comes
   back as is: no `ai_summary_error`, no warning logged.
-  `should_summarize` is gone from `houdini_mcp.tools`, and so are
-  `summarize_errors`, `summarize_geometry` and `summarize_scene`: a summary is
-  reached only through the three tools, where the setting and the threshold
-  are decided. `summarize_render_settings`, which no tool called, is deleted.
+  `should_summarize` and `estimate_tokens` are gone from `houdini_mcp.tools`,
+  and `summarize_errors`, `summarize_geometry` and `summarize_scene` are
+  private to `summarization.py`: a summary is reached only through the three
+  tools, where the setting and the threshold are decided. `summarize_render_settings`, which no tool called, is deleted.
 
 - **BREAKING (Python API)**: importing `houdini_mcp.server` builds no server
   and reads none of `HOUDINI_HOST`, `HOUDINI_PORT`, `LOG_LEVEL`, `MCP_TRANSPORT`
