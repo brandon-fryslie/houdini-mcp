@@ -1,14 +1,8 @@
-"""Houdini MCP Plugin - the MCP server's two ways into a running Houdini.
+"""Houdini MCP Plugin - the hrpyc listener the MCP server reaches Houdini through.
 
-1. **stdio mode**: the MCP server runs in-process inside Houdini.
-   - ``start_server()`` serves this process's stdin; the server ends when the
-     MCP client closes it (there is no stop).
-   - No network configuration required.
-
-2. **remote mode**: an hrpyc listener that an external MCP server (for
-   example the Docker gateway) connects to over RPyC.
-   - ``start_hrpyc_server()`` / ``stop_hrpyc_server()``, with status,
-     self-test and reload beside them (see :mod:`houdini_mcp_plugin.remote`).
+- ``start_hrpyc_server()`` / ``stop_hrpyc_server()``, with status, self-test and
+  reload beside them (see :mod:`houdini_mcp_plugin.remote`).
+- The listener primitives they are built on (see :mod:`houdini_mcp_plugin.listener`).
 """
 
 __version__ = "0.2.0"
@@ -34,15 +28,9 @@ from .remote import (
     start_hrpyc_server,
     stop_hrpyc_server,
 )
-from .server import AlreadyServing, is_server_running, serving_target, start_server
 
 __all__ = [
-    # stdio mode (MCP server in Houdini)
-    "start_server",
-    "is_server_running",
-    "serving_target",
-    "AlreadyServing",
-    # remote mode (hrpyc for external MCP server)
+    # the hrpyc listener the MCP server connects to
     "start_hrpyc_server",
     "stop_hrpyc_server",
     "reload_hrpyc_server",

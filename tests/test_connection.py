@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 
 from houdini_mcp.connection import (
-    IN_PROCESS_HOUDINI,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
     TransportFailure,
@@ -21,7 +20,6 @@ from houdini_mcp.connection import (
     is_connected,
     ping,
     transport_failure,
-    use_houdini,
 )
 from tests.conftest import MockHouModule, MockRpycConnection, raised_inside_houdini
 
@@ -147,16 +145,6 @@ class TestConnect:
 
         assert "sync request" in str(exc_info.value)
         assert "half-torn" not in str(exc_info.value)
-
-    def test_in_process_failure_names_the_remedy(self, reset_connection_state):
-        """Outside hython the in-process open cannot retry, and the one error it raises
-        still carries the target's remedy."""
-        use_houdini(IN_PROCESS_HOUDINI)
-        with pytest.raises(HoudiniConnectionError) as exc_info:
-            connect("localhost", 18811, max_retries=3, retry_delay=0.01)
-
-        assert "Non-retryable" in str(exc_info.value)
-        assert IN_PROCESS_HOUDINI.remedy in str(exc_info.value)
 
     @pytest.mark.parametrize(
         "exc",
@@ -722,18 +710,3 @@ class TestTransportFailure:
         remote = raised_inside_houdini(exc)
         assert isinstance(remote, type(exc))  # same class on arrival...
         assert transport_failure(remote) is None  # ...but the link is intact
-
-    @pytest.mark.parametrize(
-        "exc",
-        [
-            EOFError("truncated pickle"),
-            ConnectionResetError("render farm reset"),
-            TimeoutError("cook timed out"),
-        ],
-        ids=lambda e: type(e).__name__,
-    )
-    def test_in_process_there_is_no_link_to_lose(self, reset_connection_state, exc):
-        """The stdio plugin runs in Houdini's interpreter: no rpyc, no ``_remote_tb`` tag,
-        and no transport, so the same exceptions are the code's own."""
-        use_houdini(IN_PROCESS_HOUDINI)
-        assert transport_failure(exc) is None

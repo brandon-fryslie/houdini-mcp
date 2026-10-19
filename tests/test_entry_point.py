@@ -104,8 +104,10 @@ def test_a_results_root_that_cannot_hold_the_servers_results_stops_it_from_start
 
 
 def test_importing_the_server_module_builds_and_reads_nothing() -> None:
-    """[LAW:effects-at-boundaries] a module that imports the server gets no server."""
+    """[LAW:effects-at-boundaries] a module that imports the server gets no server, and
+    its logging is left as it was."""
     probe = f"""
+import logging
 import os
 
 from tests.recording_environ import Recording
@@ -116,6 +118,8 @@ from fastmcp import FastMCP
 
 assert not [v for v in vars(server).values() if isinstance(v, FastMCP)], "a server was built"
 assert not os.environ.read & set({READ_AT_START!r}), os.environ.read & set({READ_AT_START!r})
+root = logging.getLogger()
+assert root.handlers == [] and root.level == logging.WARNING, (root.handlers, root.level)
 """
     env = dict.fromkeys(READ_AT_START, "not-a-value") | UNSET
     # Run from the repo root, where the probe's own import of tests resolves.

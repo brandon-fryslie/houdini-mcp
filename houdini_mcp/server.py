@@ -166,11 +166,7 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
 
 
 def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None:
-    """Serve ``mcp`` on a transport, leaving process logging alone.
-
-    Entry point for hosts that already own logging - the Houdini plugin runs
-    this inside Houdini's interpreter.
-    """
+    """Serve ``mcp`` on a transport, leaving process logging to the caller."""
 
     if transport == "stdio":
         logger.info("Starting Houdini MCP Server on stdio")

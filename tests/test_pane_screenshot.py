@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from houdini_mcp.tools.pane_screenshot import (
+    _get_qt_modules,
     capture_pane_screenshot,
     list_visible_panes,
     pane_type_member,
@@ -41,6 +43,20 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
         assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
         assert pane_type_member(hou, "ChannelEditr") is None
         assert pane_type_member(hou, "thisown") is None
+
+
+def test_qt_comes_from_the_connected_houdini(
+    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+) -> None:
+    fakes = {name: object() for name in ("QtWidgets", "QtCore", "QtGui")}
+    for name, module in fakes.items():
+        monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
+
+    assert _get_qt_modules("localhost", 18811) == (
+        fakes["QtWidgets"],
+        fakes["QtCore"],
+        fakes["QtGui"],
+    )
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:
