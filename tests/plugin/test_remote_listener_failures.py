@@ -129,12 +129,16 @@ class TestBindFailure:
 
 
 class TestSecurityEnforcement:
-    def test_wildcard_bind_refused_without_opt_in(self, fake_hrpyc, fake_hou):
+    @pytest.mark.parametrize("ask", [RemoteListener.start, RemoteListener.reload])
+    def test_wildcard_bind_refused_without_opt_in(self, ask, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        result = listener.start(ListenerConfig(host="0.0.0.0", port=0))
+        result = ask(listener, ListenerConfig(host="0.0.0.0", port=0))
 
+        # With nothing held, a refused reload is start()'s refusal: no stop result.
+        assert set(result) == {"status", "error_type", "running", "message", "security"}
         assert result["status"] == "error"
         assert result["error_type"] == "security"
+        assert result["running"] is False
         assert listener.is_running() is False
         # No server was ever created -> no silent exposure.
         assert fake_hrpyc.servers == []

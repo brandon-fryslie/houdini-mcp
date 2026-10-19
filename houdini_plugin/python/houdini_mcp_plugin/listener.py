@@ -272,7 +272,9 @@ class SecurityPolicy:
 
 # [LAW:parse-dont-validate] the stamp a policy carries once the policy gate
 # (RemoteListener._admitted) has admitted it. Only a stamped policy reaches a
-# bind: a caller that skips the gate fails the type check CI runs on this package.
+# bind: passing an unstamped one fails the type check CI runs on this package.
+# The stamp is a cast, not a check, so it is applied once, behind the gate's
+# ``allowed`` test; an ``AdmittedPolicy(...)`` anywhere else forges it.
 AdmittedPolicy = NewType("AdmittedPolicy", SecurityPolicy)
 
 
