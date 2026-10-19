@@ -475,7 +475,7 @@ class TestServedFailures:
         from houdini_mcp.tools import geometry
 
         def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
-            return {"status": "success", "points": {1, 2}}
+            return {"status": "success", "points": object()}
 
         monkeypatch.setattr(geometry, "_read_geometry", unserializable)
         failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})

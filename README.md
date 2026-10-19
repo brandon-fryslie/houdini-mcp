@@ -191,7 +191,7 @@ Environment variables:
 | `MCP_PORT` | `3055` | MCP server HTTP port |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse) |
 | `LOG_LEVEL` | `INFO` | Logging level |
-| `HOUDINI_MCP_RESULTS_DIR` | *(system temp)*`/houdini-mcp-results` | Where results too large to return inline are written |
+| `HOUDINI_MCP_RESULTS_DIR` | a new private directory in the system temp, per server process | Where results too large to return inline are written |
 
 ## Tool Categories (43 Tools)
 

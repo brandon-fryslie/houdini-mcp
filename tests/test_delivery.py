@@ -16,13 +16,17 @@ from typing import Any
 import pytest
 from fastmcp import Client
 
-from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, deliver, read_result
+from houdini_mcp import delivery
+from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, WIRE, deliver, read_result
 from houdini_mcp.server import mcp
 from houdini_mcp.tools._common import FAILURE
 
 
 @pytest.fixture
-async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(
+    in_process_houdini: Any, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Client[Any]]:
+    monkeypatch.setattr(delivery, "RESULTS_DIR", tmp_path)
     async with Client(mcp) as client:
         yield client
 
@@ -51,6 +55,16 @@ class TestServedResults:
         assert result.structured_content["status"] == "success"
         assert "result_file" not in result.structured_content
         assert "structure" in result.structured_content
+
+    async def test_a_large_result_lands_in_the_servers_results_directory(
+        self, client: Client[Any], large_scene: int, tmp_path: pathlib.Path
+    ) -> None:
+        pointer = (
+            await client.call_tool("serialize_scene", {"root_path": "/obj"})
+        ).structured_content
+        assert pointer is not None
+
+        assert pathlib.Path(pointer["result_file"]).parent == tmp_path
 
     async def test_a_large_async_result_arrives_whole_in_a_file(
         self, client: Client[Any], large_scene: int, caplog: pytest.LogCaptureFixture
@@ -128,8 +142,8 @@ class TestDeliver:
 
     def test_a_result_exactly_at_the_bound_arrives_inline(self, tmp_path: pathlib.Path) -> None:
         result = {"status": "success", "text": ""}
-        result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(json.dumps(result)))
-        assert len(json.dumps(result)) == RESPONSE_BOUND_BYTES
+        result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(WIRE.dump_json(result)))
+        assert len(WIRE.dump_json(result)) == RESPONSE_BOUND_BYTES
 
         assert deliver("t", result, results_dir=tmp_path) is result
         assert list(tmp_path.iterdir()) == []
@@ -154,4 +168,46 @@ class TestDeliver:
 
         failure = FAILURE.validate_python(response)
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
+        assert "not JSON-serializable" in failure.message
+
+    def test_a_summary_reaches_the_caller_beside_the_pointer(self, tmp_path: pathlib.Path) -> None:
+        """A summary is written to be read in place of a large result."""
+        result = {
+            "status": "success",
+            "structure": {"children": ["x" * 100] * 400},
+            "ai_summary": "400 geometry nodes, none cooked",
+        }
+
+        pointer = deliver("serialize_scene", result, results_dir=tmp_path)
+
+        assert pointer["ai_summary"] == "400 geometry nodes, none cooked"
+        assert "structure" not in pointer
+        assert whole(pointer) == result
+
+    def test_a_result_that_cannot_be_written_says_the_tool_ran(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        blocked = tmp_path / "not-a-directory"
+        blocked.write_text("")
+        result = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
+
+        failure = FAILURE.validate_python(deliver("execute_code", result, results_dir=blocked))
+
+        assert (failure.kind, failure.retry) == ("operation_failed", "none")
+        assert failure.message.startswith("execute_code ran, but its")
+
+    def test_a_result_is_written_as_the_wire_carries_it(self, tmp_path: pathlib.Path) -> None:
+        """A non-finite float is null inline, so it is null in the file too."""
+        result = {"status": "success", "bounds": [float("inf")], "text": "x" * RESPONSE_BOUND_BYTES}
+
+        pointer = deliver("t", result, results_dir=tmp_path)
+
+        assert whole(pointer)["bounds"] == [None]
+
+    def test_a_circular_result_is_the_tools_failure(self, tmp_path: pathlib.Path) -> None:
+        result: dict[str, Any] = {"status": "success"}
+        result["self"] = result
+
+        failure = FAILURE.validate_python(deliver("t", result, results_dir=tmp_path))
+
         assert "not JSON-serializable" in failure.message

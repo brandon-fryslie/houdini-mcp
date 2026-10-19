@@ -1,5 +1,6 @@
 """Houdini MCP Server - Main server entry point."""
 
+import asyncio
 import functools
 import inspect
 import logging
@@ -122,7 +123,11 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     # [LAW:single-enforcer] every served tool's result crosses this one boundary.
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return delivery.deliver(tool.__name__, await tool(*args, **kwargs))
+        result = await tool(*args, **kwargs)
+        # Serializing and writing a large result is blocking work, kept off the loop.
+        return await asyncio.to_thread(
+            delivery.deliver, tool.__name__, result, results_dir=delivery.RESULTS_DIR
+        )
 
     return call
 
@@ -146,7 +151,7 @@ for _tool in SERVED_TOOLS:
 @mcp.resource(delivery.RESULT_URI, mime_type="application/json")
 def delivered_result(name: str) -> str:
     """A tool result too large to return inline, by the name in its ``result_uri``."""
-    return delivery.read_result(name)
+    return delivery.read_result(name, results_dir=delivery.RESULTS_DIR)
 
 
 def serve(transport: str = "http", port: int = 3055) -> None:
