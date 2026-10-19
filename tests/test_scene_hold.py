@@ -195,7 +195,7 @@ class TestCallsHoldTheScene:
 
 
 class TestAClientThatGivesUp:
-    async def test_a_call_whose_client_times_out_while_queued_never_runs(self, heard):
+    async def test_a_call_whose_client_times_out_while_queued_never_runs(self, heard, results):
         """The client's timeout cancels the queued call on the server, so its
         write never starts."""
         log: list[str] = []
@@ -203,8 +203,8 @@ class TestAClientThatGivesUp:
         late.gate.set()
         gave_up = heard("create_node gave up its place in the queue for the scene")
         mcp = FastMCP("scene-hold")
-        mcp.add_tool(served(holder.tool, DEFAULT_TARGET))
-        mcp.add_tool(served(late.tool, DEFAULT_TARGET))
+        mcp.add_tool(served(holder.tool, DEFAULT_TARGET, results))
+        mcp.add_tool(served(late.tool, DEFAULT_TARGET, results))
 
         async with Client(mcp) as client:
             holding = asyncio.create_task(client.call_tool("set_parameter", {}))

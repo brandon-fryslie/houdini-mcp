@@ -27,6 +27,7 @@ from houdini_mcp.connection import (
     get_connection_info,
     ping,
 )
+from houdini_mcp.results import taken
 from houdini_mcp.settings import InvalidSetting, Target
 
 
@@ -331,7 +332,7 @@ class TestPluginStartsTheSharedServer:
         """A background Start reports the failure itself; its thread has no caller."""
         import houdini_mcp.server as shared_server
 
-        def unbuildable(_target: Target) -> FastMCP:
+        def unbuildable(_target: Target, _results: object) -> FastMCP:
             raise KeyError("an_unclassified_tool")
 
         monkeypatch.setattr(shared_server, "build_server", unbuildable)
@@ -425,7 +426,7 @@ class TestPluginStartsTheSharedServer:
         assert "stdin closed" in caplog.text
 
     def test_failed_thread_start_leaves_nothing_serving(
-        self, plugin_server: Any, held_serve: dict[str, Any]
+        self, plugin_server: Any, held_serve: dict[str, Any], results_root: Any
     ) -> None:
         """A thread that never ran cannot clear itself; the failed start does."""
 
@@ -437,6 +438,9 @@ class TestPluginStartsTheSharedServer:
             with pytest.raises(RuntimeError, match="can't start new thread"):
                 plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is False
+        [unserved] = list(results_root.glob("*.lock"))
+        with open(unserved, "a+b") as lock:
+            assert taken(lock), "the failed start still holds its results"
 
         plugin_server.start_server(use_thread=True)
         assert plugin_server.is_server_running() is True

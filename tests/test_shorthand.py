@@ -17,6 +17,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from houdini_mcp.delivery import deliver
+from houdini_mcp.results import Results
 from houdini_mcp.shorthand import KEY, render
 from tests.shorthand_reader import read
 
@@ -132,15 +133,19 @@ class TestRoundTrip:
 
 
 class TestTheWire:
-    def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(self) -> None:
-        sent = deliver("t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}).structured_content
+    def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(
+        self, results: Results
+    ) -> None:
+        sent = deliver(
+            "t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}, results
+        ).structured_content
 
         assert sent == {"x": None, "y": None, "s": "NaN"}
         assert read(render(sent)) == sent
 
-    def test_a_pointer_carries_what_the_wire_carries(self) -> None:
+    def test_a_pointer_carries_what_the_wire_carries(self, results: Results) -> None:
         reply = deliver(
-            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, bound=8
+            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, results, bound=8
         )
 
         pointer = reply.structured_content

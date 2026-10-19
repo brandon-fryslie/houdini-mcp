@@ -8,6 +8,7 @@ server starts, never when a module is imported.
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, TypeVar
 
 from pydantic import BeforeValidator, Field, TypeAdapter, ValidationError
@@ -69,3 +70,17 @@ def houdini_target(environ: Mapping[str, str]) -> Target:
 def log_level(environ: Mapping[str, str]) -> int:
     """The logging level ``LOG_LEVEL`` names, in any case."""
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
+
+
+def results_dir(environ: Mapping[str, str]) -> Path:
+    """The root ``HOUDINI_MCP_RESULTS_DIR`` names for results too large to return
+    inline, as an absolute path: by default, under the user's own cache.
+
+    Raises:
+        InvalidSetting: it names a home directory the user does not have.
+    """
+    named = environ.get("HOUDINI_MCP_RESULTS_DIR") or "~/.cache/houdini-mcp/results"
+    try:
+        return Path(named).expanduser().absolute()
+    except RuntimeError as e:
+        raise InvalidSetting(f"HOUDINI_MCP_RESULTS_DIR: {e}, got {named!r}") from None

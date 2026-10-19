@@ -251,6 +251,9 @@ if result["status"] == "error":
 - The pointer keeps `status`, a failure's fields, any `ai_summary`, and paging
   fields (a long string cut to 2KB and marked); the file
   holds the whole result, in the same shorthand
+- Result files are kept until the same server's newer results fill 64MB; the
+  oldest are removed, the newest always kept. A stopped server's results are
+  removed when another starts
 
 ### list_children():
 - `max_depth=10`: Prevents infinite recursion
