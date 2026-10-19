@@ -47,7 +47,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from ._common import (
     InvalidInput,
@@ -105,7 +105,6 @@ LAST_SCENE_DIFF = LastSceneDiff()
 
 # Policy profiles, from strictest to most permissive.
 Policy = Literal["read-only", "normal"]
-VALID_POLICIES: tuple[str, ...] = get_args(Policy)
 DEFAULT_POLICY: Policy = "normal"
 
 # Where a grant came from: the MCP request, or a server tool that wrote the code itself.
@@ -587,17 +586,6 @@ def execute_code(
         allow_heavy_geometry=allow_heavy_geometry,
         bypass_config_enabled=_bypass_config_enabled(),
     )
-    # [LAW:parse-dont-validate] An unknown policy already holds no permission;
-    # refuse it by name so the caller learns the value, not a mutation refusal.
-    if policy not in VALID_POLICIES:
-        raise _blocked(
-            code=code,
-            grant=grant,
-            detected=DetectedPatterns.scan(code),
-            reason="unknown_policy",
-            message=f"Unknown policy {policy!r}. Valid policies: {', '.join(VALID_POLICIES)}.",
-            hint=f"Pass policy as one of: {', '.join(VALID_POLICIES)}.",
-        )
     return _execute_with_grant(
         code,
         grant,

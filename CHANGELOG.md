@@ -12,11 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Closed-domain parameters publish their legal values**
   (houdini-laws-etg.4id): `renderer`, `output_format` and `karma_engine` on
   the render tools, `manage_cache`'s `action`, and `get_houdini_help`'s
-  `help_type` are enums in the served schema, and the server refuses any
-  other value before the tool runs. Matching is exact: `"OpenGL"` was
-  accepted before and is refused now. An unknown `MCP_TRANSPORT` stops
-  `python -m houdini_mcp` with the legal transports named, instead of
-  serving http.
+  `help_type` are enums in the served schema. Every tool, served or called
+  from Python, refuses a value outside a parameter's declared type before it
+  runs, as `invalid_input` naming the parameter and its legal values.
+  Matching is exact: `"OpenGL"` was accepted before and is refused now. An
+  unknown `execute_code` policy is `invalid_input` too, not an audited
+  `unknown_policy` block. An unknown `MCP_TRANSPORT` or a non-port
+  `MCP_PORT` stops the `houdini-mcp` command and `python -m houdini_mcp`
+  with what the variable may hold, instead of serving http; the
+  `houdini-mcp` command reads both variables, where it ignored them before.
 
 - **A result's text is a dense shorthand of its JSON**
   (houdini-laws-spine-cqp.kx6): a list of objects names its keys once and

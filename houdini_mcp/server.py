@@ -176,7 +176,7 @@ def serve(transport: Transport = "http", port: int = 3055) -> None:
 
 
 def run_server(transport: Transport = "http", port: int = 3055) -> None:
-    """CLI entry point: configure this process's logging, then serve.
+    """Serve as a process of its own: configure this process's logging, then serve.
 
     [LAW:effects-at-boundaries] ``logging.basicConfig`` reconfigures the root
     logger of whatever process imports us, so it lives here, at the edge where
@@ -189,7 +189,3 @@ def run_server(transport: Transport = "http", port: int = 3055) -> None:
     )
     logger.info(f"Log level: {log_level}")
     serve(transport, port)
-
-
-if __name__ == "__main__":
-    run_server()

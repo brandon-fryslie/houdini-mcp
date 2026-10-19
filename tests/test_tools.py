@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2547,6 +2548,17 @@ class TestGetHoudiniHelp:
                 f"https://www.sidefx.com/docs/houdini/{section}/test_item.html"
             )
 
+    @patch("requests.get")
+    def test_every_advertised_help_type_has_a_page(self, mock_get):
+        """A help type the schema accepts is one the docs can be fetched for."""
+        from houdini_mcp.tools import get_houdini_help
+        from houdini_mcp.tools.help import HelpType
+
+        mock_get.return_value = MagicMock(status_code=404)
+        for help_type in get_args(HelpType):
+            assert get_houdini_help(help_type, "test_item")["kind"] != "operation_failed"
+        assert mock_get.call_count == len(get_args(HelpType))
+
 
 class TestMaterialTools:
     """Tests for material creation and assignment tools."""
@@ -3364,7 +3376,7 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("get_scene_info")
-        def function_with_args(a, b, c=10):
+        def function_with_args(a: int, b: int, c: int = 10) -> dict:
             return {"status": "success", "result": a + b + c}
 
         result = function_with_args(1, 2, c=5)

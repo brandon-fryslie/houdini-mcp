@@ -27,7 +27,7 @@ import re
 import textwrap
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 import jsonschema
 import pytest
@@ -40,7 +40,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.server import mcp
 from houdini_mcp.tools._common import FAILURE
-from houdini_mcp.tools.code import VALID_POLICIES
+from houdini_mcp.tools.code import Policy
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
 
@@ -162,7 +162,7 @@ class TestServedSchemas:
     ) -> None:
         """[LAW:parse-dont-validate] a client learns the legal policies from the schema."""
         policy = served["execute_code"].input_schema["properties"]["policy"]
-        assert policy["enum"] == list(VALID_POLICIES)
+        assert policy["enum"] == list(get_args(Policy))
         assert policy["default"] == "normal"
         assert not await accepts(client, served, "execute_code", {"code": "", "policy": "yolo"})
 
@@ -206,10 +206,13 @@ class TestServedSchemas:
         required: dict[str, Any],
     ) -> None:
         """[LAW:parse-dont-validate] a client reads the legal values from the schema,
-        and the server refuses any other before the tool runs."""
+        and an illegal value is refused before the tool runs, served or called directly."""
         assert served[tool].input_schema["properties"][parameter]["enum"] == domain
         for illegal in ("bogus", domain[0].upper()):
             assert not await accepts(client, served, tool, {**required, parameter: illegal})
+            refused = getattr(tools, tool)(**{**required, parameter: illegal})
+            assert (refused["kind"], refused["parameter"]) == ("invalid_input", parameter)
+            assert repr(illegal) in refused["message"]
 
     async def test_render_viewport_parameters(
         self, client: Client[Any], served: dict[str, Tool]

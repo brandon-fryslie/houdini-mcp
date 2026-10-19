@@ -103,7 +103,10 @@ logger = logging.getLogger("houdini_mcp.tools")
 
 import functools
 import inspect
+import typing
 from collections.abc import Callable
+
+from pydantic import ValidationError
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
@@ -139,6 +142,26 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         # the caller's bug and raises as one, before the boundary opens; only what
         # the tool itself raises becomes an error response.
         signature = inspect.signature(func)
+        hints = typing.get_type_hints(func, include_extras=True)
+        undeclared = sorted(signature.parameters.keys() - hints.keys())
+        if undeclared:
+            raise TypeError(f"{operation_name} parameters have no declared type: {undeclared}")
+        adapters = {name: TypeAdapter(hints[name]) for name in signature.parameters}
+
+        def parsed(bound: inspect.BoundArguments) -> inspect.BoundArguments:
+            """The call with every argument parsed as its parameter's type.
+
+            [LAW:single-enforcer] the one check of a value against its declared
+            domain, for a Python caller exactly as the served schema checks an MCP
+            one: a body never re-checks what its signature already says.
+            """
+            for name, value in bound.arguments.items():
+                try:
+                    bound.arguments[name] = adapters[name].validate_python(value)
+                except ValidationError as e:
+                    told = "; ".join(error["msg"] for error in e.errors())
+                    raise InvalidInput(f"{name}: {told}, got {value!r}", parameter=name) from None
+            return bound
 
         # A served tool that finishes its result asynchronously (summarizing it,
         # then capping it) is the same boundary awaited: whatever that finishing
@@ -147,9 +170,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
-                signature.bind(*args, **kwargs)
+                bound = signature.bind(*args, **kwargs)
                 try:
-                    result: dict[str, Any] = await func(*args, **kwargs)
+                    call = parsed(bound)
+                    result: dict[str, Any] = await func(*call.args, **call.kwargs)
                     return result
                 except Exception as e:
                     return failure_response(e, operation_name)
@@ -158,9 +182,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
-            signature.bind(*args, **kwargs)
+            bound = signature.bind(*args, **kwargs)
             try:
-                result: dict[str, Any] = func(*args, **kwargs)
+                call = parsed(bound)
+                result: dict[str, Any] = func(*call.args, **call.kwargs)
                 return result
             except Exception as e:
                 return failure_response(e, operation_name)
