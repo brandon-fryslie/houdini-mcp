@@ -56,7 +56,8 @@ class TestServedResults:
     async def test_every_client_is_told_how_a_large_result_arrives(
         self, client: Client[Any]
     ) -> None:
-        assert client.instructions == delivery.CALLER_GUIDE
+        assert client.instructions is not None
+        assert delivery.CALLER_GUIDE in client.instructions
 
     async def test_a_result_within_the_bound_arrives_inline(self, client: Client[Any]) -> None:
         result = await client.call_tool("serialize_scene", {"root_path": "/obj"})

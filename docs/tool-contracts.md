@@ -12,6 +12,24 @@ reads it through the server (`houdini-mcp://results/{name}`) for a client on
 another machine; and `result_bytes`. A `render_viewport` image is usually over
 the bound, so its `image_base64` is in the file.
 
+## Every Tool: The Text Is a Shorthand of the JSON
+
+A result's structured content is its JSON. Its text content, the part a model
+reads, is the same value in a shorthand that names each list's keys once and
+writes each element as one row. A tree's rows indent under their parent, and a
+path is written from where its parent's ends (`~`):
+
+```
+structure:
+ path: /obj
+ children[1]{path,type,name}/children:
+  ~/geo1,geo,geo1
+   ~/box1,box,box1
+```
+
+Every client is told how to read it at initialize. The shorthand is lossless:
+it reads back as exactly the JSON.
+
 ## execute_code
 
 ### The `hou` Module is Pre-Injected
