@@ -968,10 +968,11 @@ class MockEnumValue:
 class MockNetworkItemType:
     """``hou.networkItemType``: the kind of a network item, the discriminator tool
     code classifies by (class identity does not survive rpyc). Only the members
-    some fake item reports are here."""
+    tool code reads are here."""
 
     Node = MockEnumValue("Node")
     SubnetIndirectInput = MockEnumValue("SubnetIndirectInput")
+    NetworkDot = MockEnumValue("NetworkDot")
 
 
 class MockPaneTabType:

@@ -58,12 +58,12 @@ def connect_nodes(
     """
     hou = ensure_connected(host, port)
 
-    # A reported wire's source_node may name a subnet indirect input; it goes back
-    # here as is.
+    # A reported wire's source_node may name a subnet indirect input or a dot; it
+    # goes back here as is.
     src = wire_source(hou, src_path)
     if src is None:
         raise InvalidInput(
-            f"Source node not found: {src_path} (no node or subnet indirect input there)",
+            f"Source node not found: {src_path} (no node, subnet indirect input or dot there)",
             path=src_path,
         )
 

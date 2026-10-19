@@ -82,11 +82,11 @@ class WireSource:
 
 
 def wire_source(hou: Any, path: str) -> WireSource | None:
-    """The wire source at ``path``: a ``hou.Node`` or a ``hou.SubnetIndirectInput``,
-    the two items ``setInput`` accepts; None when ``path`` holds neither.
+    """The wire source at ``path``: a ``hou.Node``, a ``hou.SubnetIndirectInput`` or a
+    ``hou.NetworkDot``, the items ``setInput`` accepts; None when ``path`` holds none.
 
     [LAW:parse-dont-validate] The one place a source path is classified. ``hou.item``
-    also resolves network boxes, sticky notes and dots; none is a source, so they
+    also resolves network boxes and sticky notes; neither is a source, so they
     resolve to None exactly as an empty path does, and nothing downstream re-asks
     what kind of item it holds. Houdini's own ``networkItemType()`` is the
     discriminator, never ``isinstance``: over rpyc a netref matches only its exact
@@ -100,8 +100,9 @@ def wire_source(hou: Any, path: str) -> WireSource | None:
     kind = item.networkItemType()
     if kind == hou.networkItemType.Node:
         return WireSource(item, node_category(item))
-    if kind == hou.networkItemType.SubnetIndirectInput:
-        # An indirect input feeds the subnet's children, so it takes their category.
+    if kind in (hou.networkItemType.SubnetIndirectInput, hou.networkItemType.NetworkDot):
+        # An indirect input or a dot passes a wire on inside the network it sits in,
+        # so it takes that network's child category.
         return WireSource(item, str(item.parent().childTypeCategory().name()))
     return None
 

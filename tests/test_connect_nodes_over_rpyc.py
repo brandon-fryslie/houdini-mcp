@@ -20,17 +20,22 @@ import rpyc.utils.server
 from houdini_mcp.tools import connect_nodes
 from tests.conftest import closing_once_served
 
-# The served hou. Only subclasses are ever handed out, as in Houdini. A Node has no
+# The served hou. Only subclasses are ever handed out, as in Houdini, and each
+# networkItemType() call returns a fresh EnumValue equal to the member by value, so
+# classification rests on == across a netref, never on identity. A Node has no
 # parent(), so a node misread as an indirect input fails loudly instead of quietly
 # borrowing its parent's category.
 REMOTE_HOU = """
 class EnumValue:
     def __init__(self, name): self._name = name
     def name(self): return self._name
+    def __eq__(self, other): return isinstance(other, EnumValue) and other._name == self._name
+    def __hash__(self): return hash(self._name)
 
 class networkItemType:
     Node = EnumValue("Node")
     SubnetIndirectInput = EnumValue("SubnetIndirectInput")
+    NetworkDot = EnumValue("NetworkDot")
     NetworkBox = EnumValue("NetworkBox")
 
 class Category:
@@ -52,7 +57,7 @@ class Node:
         self._path, self._category, self._child_category = path, category, child_category
         self._wires = {}
     def path(self): return self._path
-    def networkItemType(self): return networkItemType.Node
+    def networkItemType(self): return EnumValue("Node")
     def type(self): return NodeType(self._category)
     def childTypeCategory(self): return Category(self._child_category)
     def setInput(self, index, item, output=0): self._wires[index] = (item, output)
@@ -66,22 +71,30 @@ class SubnetIndirectInput:
     def __init__(self, path, subnet): self._path, self._subnet = path, subnet
     def path(self): return self._path
     def parent(self): return self._subnet
-    def networkItemType(self): return networkItemType.SubnetIndirectInput
+    def networkItemType(self): return EnumValue("SubnetIndirectInput")
 
 class OpSubnetIndirectInput(SubnetIndirectInput): pass
 
+class OpNetworkDot:
+    def __init__(self, path, network): self._path, self._network = path, network
+    def path(self): return self._path
+    def parent(self): return self._network
+    def networkItemType(self): return EnumValue("NetworkDot")
+
 class OpNetworkBox:
     def path(self): return "/obj/geo1/box1"
-    def networkItemType(self): return networkItemType.NetworkBox
+    def networkItemType(self): return EnumValue("NetworkBox")
 
+geo = ObjNode("/obj/geo1", "Object", child_category="Sop")
 subnet = SopNode("/obj/geo1/subnet1", "Sop", child_category="Sop")
 items = {i.path(): i for i in [
-    ObjNode("/obj/geo1", "Object", child_category="Sop"),
+    geo,
     SopNode("/obj/geo1/sphere1", "Sop"),
     SopNode("/obj/geo1/xform1", "Sop"),
     subnet,
     OpSubnetIndirectInput("/obj/geo1/subnet1/1", subnet),
     SopNode("/obj/geo1/subnet1/xform1", "Sop"),
+    OpNetworkDot("/obj/geo1/dot1", geo),
     OpNetworkBox(),
 ]}
 
@@ -134,6 +147,13 @@ def test_a_subclass_subnet_indirect_input_is_wired(rpyc_hou: Any) -> None:
 
     assert result["status"] == "success"
     assert result["connection"]["source_node"] == "/obj/geo1/subnet1/1"
+
+
+def test_a_network_dot_is_wired(rpyc_hou: Any) -> None:
+    result = connect_nodes("/obj/geo1/dot1", "/obj/geo1/xform1")
+
+    assert result["status"] == "success"
+    assert result["connection"]["source_node"] == "/obj/geo1/dot1"
 
 
 def test_a_subclass_node_takes_its_category_from_its_own_type(rpyc_hou: Any) -> None:

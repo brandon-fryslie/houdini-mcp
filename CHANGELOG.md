@@ -362,7 +362,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and over rpyc that matches only the exact class while every real node is a
   subclass (`hou.SopNode`, `hou.ObjNode`, ...). The source is now classified by
   Houdini's own `networkItemType()`. An unknown `src_path` now returns
-  `invalid_input` instead of `operation_failed`.
+  `invalid_input` instead of `operation_failed`. A network dot is accepted as a
+  source, so a wire reported through a dot can be put back.
 
 - **Reloading the remote listener with a refused config leaves it serving**
   (houdini-listener-5od): `reload_hrpyc_server()` stopped the running listener
