@@ -6,7 +6,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
-import functools
 import importlib
 import logging
 import random
@@ -191,8 +190,13 @@ class HoudiniTarget(NamedTuple):
 
 def remote_houdini(token: str | None) -> HoudiniTarget:
     """The Houdini an rpyc listener serves, reached presenting ``token`` (None: no token)."""
+
+    # A closure, not a partial: a partial's repr shows the token wherever the target is.
+    def open_presenting_token(host: str, port: int, sync_timeout: float) -> Any:
+        return _open_rpyc(token, host, port, sync_timeout)
+
     return HoudiniTarget(
-        functools.partial(_open_rpyc, token),
+        open_presenting_token,
         lambda host, port: f"{host}:{port}",
         "Make sure Houdini is running with RPC server enabled "
         "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "

@@ -15,10 +15,10 @@ IMPORTANT:
 Usage:
     RUN_LIVE_REMOTE_CHECK=1 \
     HOUDINI_HOST=127.0.0.1 HOUDINI_PORT=18811 \
-    python scripts/verify_remote_listener.py
+    uv run python scripts/verify_remote_listener.py
 
 Environment (read as the MCP server reads it, through houdini_mcp.settings):
-    RUN_LIVE_REMOTE_CHECK   must be on (1, true, yes) to run (safety gate)
+    RUN_LIVE_REMOTE_CHECK   must be on (1/true/yes/on/t/y, any case) to run (safety gate)
     HOUDINI_HOST            listener host (default localhost)
     HOUDINI_PORT            listener port (default 18811)
     HOUDINI_RPC_TOKEN       optional shared secret (presented before the rpyc stream)

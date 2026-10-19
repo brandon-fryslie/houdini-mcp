@@ -304,6 +304,10 @@ class TestMcpServerPresentsToken:
         connection.connect("houdini-box", 18811)
         assert seen == [("houdini-box", 18811, TOKEN)]
 
+    def test_a_target_never_shows_its_token(self):
+        """A target is logged and held in tracebacks' locals, so it carries no secret."""
+        assert TOKEN not in repr(connection.remote_houdini(TOKEN))
+
     def test_no_token_against_tokened_listener_names_the_token(
         self, reset_connection_state, tokened_server
     ):

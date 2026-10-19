@@ -51,8 +51,13 @@ ApiBase = Annotated[str, AfterValidator(_api_base)]
 
 
 def _masked(url: str) -> str:
-    """``url`` as an error may show it: any credentials in it masked, parsed or not."""
-    return repr(re.sub(r"(?<=//)[^/]*@", "***@", url))
+    """``url`` as an error may show it: all of it before its last ``@`` masked, but
+    a leading ``scheme://``.
+
+    A refused URL may not parse, so where its credentials end is unknown; whatever
+    precedes an ``@`` may be one.
+    """
+    return repr(re.sub(r"^(\w+://)?.*@", r"\1***@", url, flags=re.DOTALL))
 
 
 class InvalidSetting(ValueError):

@@ -111,7 +111,7 @@ Houdini. It only runs when explicitly enabled:
 ```bash
 RUN_LIVE_REMOTE_CHECK=1 \
 HOUDINI_HOST=127.0.0.1 HOUDINI_PORT=18811 \
-python scripts/verify_remote_listener.py
+uv run python scripts/verify_remote_listener.py
 ```
 
 Exit codes: `0` reachable/responsive, `1` failed, `2` disabled/misconfigured.

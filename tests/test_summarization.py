@@ -218,6 +218,13 @@ class TestDefaults:
                 "carries credentials; set SUMMARIZATION_API_KEY",
             ),
             ("http://user:secret@host:abc/v1", "http://***@host:abc/v1", "not a URL"),
+            (
+                "user:secret@host:8000/v1",
+                "***@host:8000/v1",
+                "must be an http(s) URL with a host",
+            ),
+            ("http:/user:secret@host/v1", "***@host/v1", "must be an http(s) URL with a host"),
+            ("http://user:se/cret@host/v1", "http://***@host/v1", "not a URL"),
         ],
     )
     def test_a_base_url_carrying_credentials_is_refused_with_them_masked(self, raw, shown, told):

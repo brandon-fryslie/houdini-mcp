@@ -192,8 +192,8 @@ Environment variables:
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server |
 | `LOG_LEVEL` | `INFO` | Logging level: any name Python's `logging` knows (DEBUG, INFO, WARNING or WARN, ERROR, CRITICAL or FATAL, NOTSET), any case; any other value stops the server |
 | `HOUDINI_MCP_RESULTS_DIR` | `~/.cache/houdini-mcp/results` | The root under which each running server keeps results too large to return inline, in a directory of its own: its newest that fit in 64MB. A stopped server's results are removed when another starts |
-| `HOUDINI_MCP_ALLOW_BYPASS` | `false` | Whether `execute_code`'s `allow_dangerous` and `allow_heavy_geometry` can be honored at all: true/yes/on/1 or false/no/off/0; any other value stops the server |
-| `SUMMARIZATION_ENABLED` | `true` | Whether a result too large to read inline is summarized: true/yes/on/1 or false/no/off/0; any other value stops the server |
+| `HOUDINI_MCP_ALLOW_BYPASS` | `false` | Whether `execute_code`'s `allow_dangerous` and `allow_heavy_geometry` can be honored at all: true/yes/on/1/t/y or false/no/off/0/f/n, in any case; any other value stops the server |
+| `SUMMARIZATION_ENABLED` | `true` | Whether a result too large to read inline is summarized: true/yes/on/1/t/y or false/no/off/0/f/n, in any case; any other value stops the server |
 | `SUMMARIZATION_BASE_URL` | `http://100.66.66.66:8000/v1` | The OpenAI-compatible chat-completions server summaries are asked of; anything but an http(s) URL with a host, and no credentials, stops the server |
 | `SUMMARIZATION_API_KEY` | `1234` | Bearer token for that server |
 | `SUMMARIZATION_MODEL` | `mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit` | The model summaries are asked of; empty stops the server |

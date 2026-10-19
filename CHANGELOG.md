@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (configuration, Python API)**: every environment setting is read
   once, when its entry point starts, and a value it cannot be stops that start
   with the variable and the value named (houdini-laws-spine-cqp.8pm).
-  `SUMMARIZATION_ENABLED` and `HOUDINI_MCP_ALLOW_BYPASS` take true/yes/on/1 or
-  false/no/off/0 in any case, and anything else, empty included, stops the
+  `SUMMARIZATION_ENABLED` and `HOUDINI_MCP_ALLOW_BYPASS` take true/yes/on/1/t/y
+  or false/no/off/0/f/n in any case, and anything else, empty included, stops the
   server: `SUMMARIZATION_ENABLED=yes` used to mean off, as did any
   `HOUDINI_MCP_ALLOW_BYPASS` outside 1/true/yes/on. A bad `SUMMARIZATION_*`
   value used to fail the import with a bare `ValueError`, and an empty
@@ -28,10 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `Target`, and the server binds each tool's configuration as a keyword-only
   parameter: `summarizer` on `find_error_nodes`, `get_geo_summary`,
   `serialize_scene` and `get_summarization_status`, and `bypass_config_enabled`
-  on `execute_code` and `get_geo_summary`. `houdini_mcp_handshake.token_from_env()`
-  is `token_from(environ)`. `scripts/verify_remote_listener.py` reads its
+  on `execute_code` and `get_geo_summary`. The token is no longer read on connect:
+  a Python caller reaching a listener that enforces one installs
+  `use_houdini(remote_houdini(token))` before serving, as `houdini-mcp` does.
+  `houdini_mcp_handshake.token_from_env()` is `token_from(environ)`. `scripts/verify_remote_listener.py` reads its
   settings through `houdini_mcp.settings`, so `HOUDINI_HOST` defaults to
-  `localhost` and `RUN_LIVE_REMOTE_CHECK` takes any word for on.
+  `localhost`, `RUN_LIVE_REMOTE_CHECK` takes those same words for on where it
+  took only `1`, and the script runs where houdini-mcp is installed
+  (`uv run python scripts/verify_remote_listener.py`).
 
 - **BREAKING (wire, configuration)**: a large result's pointer fits the 16KB
   bound whatever its strings hold, and carries its summary whole
