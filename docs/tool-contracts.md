@@ -4,7 +4,8 @@ This document clarifies the input/output contracts for Houdini MCP tools and doc
 
 ## Every Tool: Large Results Arrive as a File
 
-A result over 16KB serialized is not returned inline. The call returns its
+A result whose text (the shorthand below) is over 16KB is not returned inline,
+and the file holds all of it in the same shorthand. The call returns its
 `status`, a failure's fields, any `ai_summary`, a page's paging fields (a
 long string cut to 2KB and marked), and a pointer to the whole
 result: `result_file`, its path on the server's machine; `result_uri`, which

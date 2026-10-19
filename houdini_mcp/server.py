@@ -130,18 +130,10 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     async def call(*args: Any, **kwargs: Any) -> ToolResult:
         result = await tool(*args, **kwargs)
         # Serializing and writing a large result is blocking work, kept off the loop.
-        reply: ToolResult = await run_in_executor(reaching_caller, tool.__name__, result)
+        reply: ToolResult = await run_in_executor(delivery.deliver, tool.__name__, result)
         return reply
 
     return call
-
-
-def reaching_caller(tool: str, result: dict[str, Any]) -> ToolResult:
-    """A result as the caller receives it: JSON for programs, its shorthand for a model to read."""
-    sent = delivery.deliver(tool, result)
-    text = shorthand.render(sent)
-    logger.debug("replied to %s with %d characters of shorthand", tool, len(text))
-    return ToolResult(content=text, structured_content=sent)
 
 
 def served(tool: Callable[..., Any]) -> Tool:
@@ -160,7 +152,7 @@ for _tool in SERVED_TOOLS:
     mcp.add_tool(served(_tool))
 
 
-@mcp.resource(delivery.RESULT_URI, mime_type="application/json")
+@mcp.resource(delivery.RESULT_URI, mime_type="text/plain")
 def delivered_result(name: str) -> str:
     """A tool result too large to return inline, by the name in its ``result_uri``."""
     return delivery.read_result(name)
