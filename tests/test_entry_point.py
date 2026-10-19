@@ -84,47 +84,54 @@ assert not read & set({STARTUP_SETTINGS!r}), read & set({STARTUP_SETTINGS!r})
     subprocess.run([sys.executable, "-c", probe], env=env, check=True, timeout=60)
 
 
-async def test_a_server_started_after_the_environment_changed_reaches_the_new_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    started: list[FastMCP] = []
-    monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: started.append(self))
-    monkeypatch.setattr("logging.basicConfig", lambda **_kwargs: None)
+@pytest.fixture
+def started(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """What ``main()`` hands its process and transport, with no developer environment;
+    the test sets the environment it starts with."""
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(FastMCP, "run", lambda mcp, **run: seen.update(mcp=mcp, run=run))
+    monkeypatch.setattr("logging.basicConfig", lambda **config: seen.update(config=config))
+    for name in STARTUP_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    return seen
 
+
+async def test_a_server_started_after_the_environment_changed_reaches_the_new_target(
+    monkeypatch: pytest.MonkeyPatch, started: dict[str, Any]
+) -> None:
     def unreachable(host: str, port: int) -> None:
         raise conn_module.HoudiniConnectionError("not here", target=f"{host}:{port}")
 
     monkeypatch.setattr(link, "ensure_link", unreachable)
-    for name in STARTUP_SETTINGS:
-        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
     monkeypatch.setenv("MCP_TRANSPORT", "stdio")
 
     main()
 
-    async with Client(started[0]) as client:
+    async with Client(started["mcp"]) as client:
         payload: Any = (await client.call_tool("check_connection", {})).structured_content
     assert payload["target"] == "studio-box:19000"
 
 
-def test_starting_logs_the_target_and_the_level_it_resolved(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_starting_applies_and_logs_what_it_resolved(
+    monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(FastMCP, "run", lambda _self, **_kwargs: None)
-    monkeypatch.setattr("logging.basicConfig", lambda **_kwargs: None)
-    for name in STARTUP_SETTINGS:
-        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
-    monkeypatch.setenv("LOG_LEVEL", "warn")
+    monkeypatch.setenv("MCP_PORT", "3100")
+    monkeypatch.setenv("LOG_LEVEL", "debug")
 
-    with caplog.at_level(logging.INFO, logger="houdini_mcp.server"):
+    # the stubbed basicConfig applies nothing, so caplog admits what DEBUG would
+    with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
         main()
 
+    assert started["config"]["level"] == logging.DEBUG
+    assert started["run"] == {"transport": "http", "host": "0.0.0.0", "port": 3100}
     logged = [r.getMessage() for r in caplog.records]
+    assert "Log level: DEBUG" in logged
     assert "Houdini connection target: studio-box:19000" in logged
-    assert "Log level: WARNING" in logged
+    assert "Starting Houdini MCP Server on http://0.0.0.0:3100" in logged
 
 
 @pytest.mark.parametrize("command", COMMANDS.values(), ids=COMMANDS.keys())
