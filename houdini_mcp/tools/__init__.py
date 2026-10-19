@@ -64,14 +64,11 @@ from .summarization import (
     summarize_scene,
 )
 from .transactions import (
-    RECOVERABLE_TOOL_POLICIES,
     TOOL_POLICIES,
     SceneAccess,
     ToolPolicy,
-    TransactionConflict,
-    TransactionManager,
     TransactionPolicy,
-    TransactionRecord,
+    recovering,
 )
 from .wiring import connect_nodes, disconnect_node_input, reorder_inputs, set_node_flags
 from .workers import WORKERS, RunningWorker, WorkerLedger, WorkerStillRunning
@@ -82,15 +79,12 @@ __all__ = [
     "RunningWorker",
     "WorkerLedger",
     "WorkerStillRunning",
-    # Transaction management
-    "RECOVERABLE_TOOL_POLICIES",
+    # What a tool leaves behind, and how a call recovers from it
     "TOOL_POLICIES",
     "SceneAccess",
     "ToolPolicy",
-    "TransactionConflict",
-    "TransactionManager",
     "TransactionPolicy",
-    "TransactionRecord",
+    "recovering",
     # Scene management
     "get_scene_info",
     "serialize_scene",

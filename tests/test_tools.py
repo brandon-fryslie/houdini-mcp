@@ -3106,7 +3106,7 @@ class TestConnectionErrorHandling:
     def test_handle_connection_error_reset_arrives_as_eof(self):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
         result, disconnect = self._run(
-            EOFError("[Errno 54] Connection reset by peer"), "create_node"
+            EOFError("[Errno 54] Connection reset by peer"), "find_nodes"
         )
 
         assert result["kind"] == "connection_lost"
@@ -3125,7 +3125,7 @@ class TestConnectionErrorHandling:
     )
     def test_file_and_os_errors_leave_the_connection_standing(self, exc):
         """A bad path is the tool's error, not the link's: no disconnect, no retry invitation."""
-        result, disconnect = self._run(exc, "set_parameter")
+        result, disconnect = self._run(exc, "get_parameter_schema")
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
@@ -3152,7 +3152,7 @@ class TestConnectionErrorHandling:
         from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
 
         use_houdini(IN_PROCESS_HOUDINI)
-        result, disconnect = self._run(EOFError("Ran out of input"), "execute_code")
+        result, disconnect = self._run(EOFError("Ran out of input"), "get_scene_info")
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
@@ -3173,12 +3173,14 @@ class TestConnectionErrorHandling:
         assert result["connection_reset"] is True
         assert "timed out" in result["message"]
 
-    @patch("houdini_mcp.tools.nodes.ensure_connected")
-    def test_create_node_handles_eof_error(self, mock_ensure):
-        """Test that create_node handles EOFError gracefully."""
+    def test_create_node_handles_eof_error(self, mock_connection, monkeypatch):
+        """A link that closes partway through a scene write is connection loss."""
         from houdini_mcp.tools import create_node
 
-        mock_ensure.side_effect = EOFError("Connection closed")
+        def closed(path: str) -> None:
+            raise EOFError("Connection closed")
+
+        monkeypatch.setattr(mock_connection, "node", closed)
 
         result = create_node("geo", host="localhost", port=18811)
 

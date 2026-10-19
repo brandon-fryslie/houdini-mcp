@@ -228,7 +228,7 @@ class TestEveryFailureIsOneArm:
         refused: the arm is the worker's, naming it, with the link standing."""
 
         @handle_connection_errors("execute_code")
-        def tool() -> dict[str, Any]:
+        def tool(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
             raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:

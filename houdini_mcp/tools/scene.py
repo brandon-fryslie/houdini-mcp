@@ -85,7 +85,13 @@ def save_scene(
 @handle_connection_errors("load_scene")
 def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
-    Load a Houdini scene file.
+    Load a Houdini scene file in place of the current scene.
+
+    Unsaved changes to the current scene are backed up first, into Houdini's
+    backup folder beside its hip file, and the result's ``checkpoint`` is the
+    backup's path; it is absent when nothing was unsaved. A scene that has never
+    been saved cannot be backed up, so with unsaved changes the call is refused:
+    save it with save_scene(file_path) first.
 
     Args:
         file_path: Path to the .hip file to load
@@ -103,9 +109,13 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
 @handle_connection_errors("new_scene")
 def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
-    Create a new empty Houdini scene.
+    Create a new empty Houdini scene in place of the current scene.
 
-    Warning: This will clear the current scene. Make sure to save first if needed.
+    Unsaved changes to the current scene are backed up first, into Houdini's
+    backup folder beside its hip file, and the result's ``checkpoint`` is the
+    backup's path; it is absent when nothing was unsaved. A scene that has never
+    been saved cannot be backed up, so with unsaved changes the call is refused:
+    save it with save_scene(file_path) first.
     """
     hou = ensure_connected(host, port)
 

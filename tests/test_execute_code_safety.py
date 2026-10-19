@@ -626,12 +626,14 @@ class TestTimeoutRollback:
         """Undoing an open group can revert the previous human action."""
         from houdini_mcp.tools import execute_code
 
-        before = mock_connection.undos.performed_undos
+        with mock_connection.undos.group("human edit"):
+            mock_connection.node("/obj").createNode("null", "human")
         result = execute_code(stalled_program, timeout=1, host="localhost", port=18811)
 
         assert result["status"] == "error"
         assert result.get("timeout") == 1
-        assert mock_connection.undos.performed_undos == before
+        assert mock_connection.undos.undoLabels() == ("human edit",)
+        assert mock_connection.node("/obj/human") is not None
         assert result["audit"]["timed_out"] is True
         assert result["audit"]["rollback_attempted"] is False
         assert result["rollback"] == {
@@ -668,13 +670,20 @@ class TestTimeoutRollback:
         assert len(calls) == 1
         assert "undo exit failed" in result["message"]
 
-    def test_undo_group_opened_around_execution(self, mock_connection):
-        """Successful runs must be wrapped in a named undo group for later rollback."""
+    def test_program_is_one_named_undo_step(self, mock_connection):
+        """A program's changes are one step on Houdini's undo stack, named for execute_code."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('wrapped')", host="localhost", port=18811)
+        result = execute_code(
+            "hou.node('/obj').createNode('null', 'a')\nhou.node('/obj').createNode('null', 'b')",
+            host="localhost",
+            port=18811,
+        )
         assert result["status"] == "success"
-        assert mock_connection.undos.closed_groups, "expected a named undo group"
+        assert mock_connection.undos.undoLabels() == ("houdini-mcp execute_code",)
+        mock_connection.undos.performUndo()
+        assert mock_connection.node("/obj/a") is None
+        assert mock_connection.node("/obj/b") is None
 
     def test_fail_closed_when_no_undo_primitive(
         self, monkeypatch, mock_connection, stalled_program

@@ -36,6 +36,7 @@ from .failure import (
     failure_response,
     tool_error,
 )
+from .transactions import TOOL_POLICIES, SceneAccess, recovering
 
 T = TypeVar("T")
 
@@ -121,8 +122,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. Who holds the scene while the tool's Houdini
-    work runs is :func:`on_the_scene`'s to arbitrate.
+    tears the connection down. A sync tool's body runs inside
+    :func:`~houdini_mcp.tools.transactions.recovering`, so a scene write that
+    fails is undone before its failure is built. Who holds the scene while the
+    tool's Houdini work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
         operation_name: The tool's name: it names the operation in error
@@ -180,6 +183,15 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                     ) from None
             return bound
 
+        # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
+        # body, off the event loop, in the Houdini its host and port name.
+        if TOOL_POLICIES[operation_name].writes_scene and (
+            inspect.iscoroutinefunction(func) or not {"host", "port"} <= signature.parameters.keys()
+        ):
+            raise TypeError(
+                f"{operation_name} writes the scene, so it is sync and takes host and port"
+            )
+
         # A served tool that finishes its result asynchronously (summarizing it,
         # then capping it) is the same boundary awaited: whatever that finishing
         # raises is the tool's failure, not a protocol error.
@@ -202,8 +214,16 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             bound = signature.bind(*args, **kwargs)
             try:
                 call = parsed(bound)
-                result: dict[str, Any] = func(*call.args, **call.kwargs)
-                return result
+                # The Houdini the call names, its defaults applied, for a recovery
+                # that acts there.
+                target = signature.bind(*call.args, **call.kwargs)
+                target.apply_defaults()
+                with recovering(
+                    operation_name,
+                    lambda: ensure_connected(target.arguments["host"], target.arguments["port"]),
+                ) as recovered:
+                    result: dict[str, Any] = func(*call.args, **call.kwargs)
+                return {**result, **recovered}
             except Exception as e:
                 return failure_response(e, operation_name)
 
@@ -319,7 +339,6 @@ from contextlib import nullcontext
 
 import anyio
 
-from .transactions import TOOL_POLICIES, SceneAccess
 from .workers import NO_WAIT, WORKERS, SceneWait
 
 # Default semaphore limit for bounded parallel execution
