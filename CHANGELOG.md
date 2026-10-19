@@ -319,6 +319,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reloading the remote listener with a refused config leaves it serving**
+  (houdini-listener-5od): `reload_hrpyc_server()` stopped the running listener
+  before the security policy checked the new config, so a refused one (say
+  `HOUDINI_RPC_BIND_HOST=0.0.0.0` with no trusted-network opt-in or token) left
+  nothing serving. The policy now refuses it before anything is stopped, and
+  the error names the listener still serving. `start()` checks the policy
+  first too: a refused config beside a running listener is that error, not
+  `already_running`.
+
 - **A note on a Houdini exception no longer replaces it**
   (houdini-transactions-75y): rpyc copies a Houdini exception's `add_note` onto
   it as a string. So when a render tool's temporary node would not go, the

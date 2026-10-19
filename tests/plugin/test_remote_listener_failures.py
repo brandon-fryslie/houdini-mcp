@@ -124,7 +124,7 @@ class TestBindFailure:
 
 
 # ---------------------------------------------------------------------------
-# Security enforcement at start()
+# Security enforcement at start() and reload()
 # ---------------------------------------------------------------------------
 
 
@@ -143,6 +143,47 @@ class TestSecurityEnforcement:
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         with pytest.raises(SecurityError):
             listener.start(ListenerConfig(host="0.0.0.0", port=0), raise_on_policy=True)
+
+    # Both are asked with a listener serving: a refused config must leave it so.
+    @pytest.mark.parametrize("ask", [RemoteListener.start, RemoteListener.reload])
+    def test_refused_config_leaves_the_serving_listener_untouched(
+        self, ask, fake_hrpyc, fake_hou, caplog
+    ):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        port = started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))["bound_port"]
+
+        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
+            result = ask(listener, ListenerConfig(host="0.0.0.0", port=0))
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "security"
+        assert result["security"]["allowed"] is False
+        message = result["message"]
+        assert "refusing to bind non-loopback host '0.0.0.0'" in message
+        assert f"Nothing was changed: hrpyc listener is running on 127.0.0.1:{port}." in message
+        assert f"Refusing to start listener: {message}" in caplog.text
+        assert result["running"] is True
+        assert len(fake_hrpyc.servers) == 1
+        assert fake_hrpyc.servers[0].active is True
+        assert listener.is_running() is True
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            pass
+
+    @pytest.mark.parametrize("ask", [RemoteListener.start, RemoteListener.reload])
+    def test_refused_config_raises_before_anything_is_stopped(self, ask, fake_hrpyc, fake_hou):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
+
+        with pytest.raises(
+            SecurityError, match="refusing to bind non-loopback host '0.0.0.0'"
+        ) as e:
+            ask(listener, ListenerConfig(host="0.0.0.0", port=0), raise_on_policy=True)
+
+        assert "Nothing was changed: hrpyc listener is running on 127.0.0.1:" in str(e.value)
+
+        assert len(fake_hrpyc.servers) == 1
+        assert fake_hrpyc.servers[0].active is True
+        assert listener.is_running() is True
 
     def test_wildcard_bind_allowed_with_trusted_network(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
@@ -323,25 +364,21 @@ class TestSelfTestAndStatus:
         }
         assert listener.self_test()["message"] == "hrpyc listener is not running; start it."
 
-    def test_a_dead_server_is_let_go_of_even_when_the_restart_is_refused(
-        self, fake_hrpyc, fake_hou, caplog
-    ):
-        """start() lets go of the dead server before it checks the new config."""
+    def test_a_refused_start_leaves_a_dead_server_reported_stale(self, fake_hrpyc, fake_hou):
+        """A refused config changes nothing, a server that stopped serving included."""
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
+        port = started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))["bound_port"]
         fake_hrpyc.servers[0].close()
 
-        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
-            refused = listener.start(ListenerConfig(host="0.0.0.0", port=0))
+        refused = listener.start(ListenerConfig(host="0.0.0.0", port=0))
         assert refused["status"] == "error"
         assert refused["error_type"] == "security"
-        assert "had stopped serving; let go of it" in caplog.text
-        assert "Refusing to start listener" in caplog.text
-        assert listener.status() == {
-            "running": False,
-            "stale": False,
-            "message": "hrpyc listener is not running; start it.",
-        }
+        assert refused["running"] is False
+        assert refused["message"].endswith(
+            f"Nothing was changed: hrpyc listener on 127.0.0.1:{port} stopped serving; "
+            "start it again."
+        )
+        assert listener.status()["stale"] is True
         assert len(fake_hrpyc.servers) == 1
 
 

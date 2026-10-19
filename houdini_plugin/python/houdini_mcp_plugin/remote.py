@@ -76,6 +76,9 @@ def self_test_hrpyc() -> dict:
 def reload_hrpyc_server(port: int | None = None) -> dict:
     """Restart the hrpyc listener with current environment configuration.
 
+    A config the security policy refuses stops nothing: the result is the
+    refusal, and the running listener keeps serving.
+
     Raises:
         ValueError: a listener variable is set to something it cannot mean
             (see :meth:`ListenerConfig.from_env`); the running listener is

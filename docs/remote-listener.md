@@ -61,6 +61,9 @@ enforces this policy:
 
 If neither is set, `Start Remote` returns a security error and **no listener is
 created** — there is no code path that silently binds `0.0.0.0` without auth.
+A refused config changes nothing: `reload_hrpyc_server()` checks the new config
+before it stops anything, so the running listener keeps serving, and the error
+says where.
 
 ### Limitations (read this)
 
