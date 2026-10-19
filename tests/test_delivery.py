@@ -170,7 +170,7 @@ class TestDeliver:
         assert list(tmp_path.iterdir()) == []
 
     def test_the_bound_measures_the_text_a_model_reads_not_the_json(
-        self, tmp_path: pathlib.Path
+        self, tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A listing whose JSON is far past the bound reads inline as its shorthand."""
         result = {
@@ -181,8 +181,12 @@ class TestDeliver:
         }
         assert len(json.dumps(result, separators=(",", ":"))) > RESPONSE_BOUND_BYTES
 
-        assert sent("list_children", result) == result
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.delivery"):
+            assert sent("list_children", result) == result
+
         assert list(tmp_path.iterdir()) == []
+        size = len(render(result).encode("utf-8"))
+        assert f"delivered list_children inline: {size} bytes" in caplog.messages
 
     def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
         result = {"status": "success", "text": "é" * (RESPONSE_BOUND_BYTES // 2)}

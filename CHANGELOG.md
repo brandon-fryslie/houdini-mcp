@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A result's text is a dense shorthand of its JSON**
+  (houdini-laws-spine-cqp.kx6): a list of objects names its keys once and
+  gives each object one line of values, and a tree's rows indent under their
+  parent, each path written from where its parent's ends. The server explains
+  the shorthand once, at initialize. Structured content still carries the
+  JSON. The 16KB bound measures this text, and a result over it is written to
+  its file in the same shorthand.
+
 - **Large results arrive whole, as a file** (houdini-laws-etg.6op): every
-  tool's result passes one bound, 16KB serialized. A result over it is written
-  whole to a JSON file under `HOUDINI_MCP_RESULTS_DIR`, and the call returns
+  tool's result passes one bound, 16KB. A result over it is written
+  whole to a file under `HOUDINI_MCP_RESULTS_DIR`, and the call returns
   its `status` (and a failure's declared fields, any `ai_summary`, and a page's
   paging fields, each string previewed to 2KB), `result_file`,
   `result_bytes`, and `result_uri`, which reads the file through the server

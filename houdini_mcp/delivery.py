@@ -114,11 +114,11 @@ def deliver(
         )
         return reply(failure_response(unserializable, tool))
     text = shorthand.render(sent)
-    size = len(text.encode("utf-8"))
-    if size <= bound:
-        logger.debug("delivered %s inline: %d bytes", tool, size)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= bound:
+        logger.debug("delivered %s inline: %d bytes", tool, len(encoded))
         return ToolResult(content=text, structured_content=sent)
-    return reply(stored(tool, sent, text, size, bound))
+    return reply(stored(tool, sent, encoded, bound))
 
 
 def reply(sent: dict[str, Any]) -> ToolResult:
@@ -126,14 +126,15 @@ def reply(sent: dict[str, Any]) -> ToolResult:
     return ToolResult(content=shorthand.render(sent), structured_content=sent)
 
 
-def stored(tool: str, sent: dict[str, Any], text: str, size: int, bound: int) -> dict[str, Any]:
-    """The pointer to ``text`` written whole to a file, or the failure that says it could not be."""
+def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[str, Any]:
+    """The pointer to ``encoded`` written whole to a file, or the failure that says it could not be."""
+    size = len(encoded)
     name = f"{tool}-{uuid.uuid4().hex}.txt"
     try:
         directory = results_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = directory / name
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(encoded)
     except OSError as e:
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
