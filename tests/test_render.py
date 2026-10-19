@@ -1305,7 +1305,7 @@ class TestRenderFraming:
         result = render_viewport(look_at=path, host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["message"] == f"look_at must name an object or a SOP: {path}"
+        assert result["message"] == f"look_at must name an object, or a SOP inside one: {path}"
         assert frames == []
 
     @pytest.mark.parametrize("name", ["user_cam", "bare_geo", "pivot"])

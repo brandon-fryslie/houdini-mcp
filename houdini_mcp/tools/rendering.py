@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ..connection import transport_failure
 from ._common import (
@@ -256,7 +256,9 @@ def _look_at(hou: Any, path: str) -> tuple[Any, list[_Shape]]:
     while anchor is not None and node_category(anchor) != "Object":
         anchor = anchor.parent()
     if anchor is None:
-        raise InvalidInput(f"look_at must name an object or a SOP: {path}", look_at=path)
+        raise InvalidInput(
+            f"look_at must name an object, or a SOP inside one: {path}", look_at=path
+        )
     return anchor, [_Shape(source=target.path(), geometry=target.geometry(), placer=anchor)]
 
 
@@ -324,8 +326,7 @@ def _transformed(box: Box, matrix: Matrix4) -> Box:
 def _placement(obj: Any) -> Matrix4:
     """[LAW:effects-at-boundaries] an object's world transform, read over the link once,
     as plain numbers."""
-    rows: Matrix4 = obj.worldTransform().asTupleOfTuples()
-    return rows
+    return cast(Matrix4, obj.worldTransform().asTupleOfTuples())
 
 
 def _world_box(shape: _Shape) -> Box | _Unframed:
@@ -347,14 +348,15 @@ def _world_box(shape: _Shape) -> Box | _Unframed:
 def _framing(shapes: Sequence[_Shape]) -> Framing:
     """Frame the shapes together, in world space."""
     placed = [(shape.source, _world_box(shape)) for shape in shapes]
-    boxes = [box for _, box in placed if not isinstance(box, str)]
+    framed = {source: box for source, box in placed if not isinstance(box, str)}
+    left_out = {source: why for source, why in placed if isinstance(why, str)}
     framing = Framing(
-        bounds=_enclosing([corner for box in boxes for corner in box]) if boxes else None
+        bounds=_enclosing([corner for box in framed.values() for corner in box]) if framed else None
     )
     logger.info(
         "Framed %s, left out %s: bounds=%s distance=%.3f ortho_width=%.3f",
-        [source for source, box in placed if not isinstance(box, str)],
-        {source: box for source, box in placed if isinstance(box, str)},
+        list(framed),
+        left_out,
         framing.bounds,
         framing.distance,
         framing.ortho_width,
