@@ -72,24 +72,38 @@ def input_connections(node: Any) -> list[InputConnection]:
     )
 
 
-def wire_source(hou: Any, path: str) -> Any | None:
-    """What a wire can be drawn from at ``path``: a ``hou.Node`` or a
-    ``hou.SubnetIndirectInput``, the two items ``setInput`` accepts.
+@dataclass(frozen=True)
+class WireSource:
+    """What a wire can be drawn from, resolved: the item ``setInput`` takes, and the
+    node category it belongs to, read once while the item was classified."""
 
-    [LAW:parse-dont-validate] ``hou.item`` also resolves network boxes, sticky
-    notes and dots; none is a source, so they resolve to None here exactly as an
-    empty path does, and nothing downstream re-asks what kind of item it holds.
+    item: Any
+    category: str
+
+
+def wire_source(hou: Any, path: str) -> WireSource | None:
+    """The wire source at ``path``: a ``hou.Node`` or a ``hou.SubnetIndirectInput``,
+    the two items ``setInput`` accepts; None when ``path`` holds neither.
+
+    [LAW:parse-dont-validate] The one place a source path is classified. ``hou.item``
+    also resolves network boxes, sticky notes and dots; none is a source, so they
+    resolve to None exactly as an empty path does, and nothing downstream re-asks
+    what kind of item it holds. Houdini's own ``networkItemType()`` is the
+    discriminator, never ``isinstance``: over rpyc a netref matches only its exact
+    remote class, and a real item is always a subclass (``hou.SopNode``,
+    ``hou.OpSubnetIndirectInput``), so ``isinstance(item, hou.Node)`` is False for
+    every one of them.
     """
     item = hou.item(path)
-    return item if isinstance(item, (hou.Node, hou.SubnetIndirectInput)) else None
-
-
-def source_category(hou: Any, source: Any) -> str:
-    """The node category a wire source belongs to: a node's own type category, or
-    for a subnet indirect input, the category of the subnet's children it feeds."""
-    if isinstance(source, hou.Node):
-        return node_category(source)
-    return str(source.parent().childTypeCategory().name())
+    if item is None:
+        return None
+    kind = item.networkItemType()
+    if kind == hou.networkItemType.Node:
+        return WireSource(item, node_category(item))
+    if kind == hou.networkItemType.SubnetIndirectInput:
+        # An indirect input feeds the subnet's children, so it takes their category.
+        return WireSource(item, str(item.parent().childTypeCategory().name()))
+    return None
 
 
 def wire_at(connections: list[InputConnection], input_index: int) -> InputConnection | None:

@@ -356,6 +356,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`connect_nodes` refused every node in a live Houdini**
+  (houdini-connections-ob5): it answered "Source node not found" for any real
+  source, because it classified the source with `isinstance` against `hou.Node`,
+  and over rpyc that matches only the exact class while every real node is a
+  subclass (`hou.SopNode`, `hou.ObjNode`, ...). The source is now classified by
+  Houdini's own `networkItemType()`. An unknown `src_path` now returns
+  `invalid_input` instead of `operation_failed`.
+
 - **Reloading the remote listener with a refused config leaves it serving**
   (houdini-listener-5od): `reload_hrpyc_server()` stopped the running listener
   before the security policy checked the new config, so a refused one (say

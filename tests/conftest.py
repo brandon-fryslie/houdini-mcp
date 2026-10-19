@@ -63,6 +63,9 @@ class MockSubnetIndirectInput:
     def parent(self) -> "MockHouNode":
         return self._subnet
 
+    def networkItemType(self) -> "MockEnumValue":
+        return MockNetworkItemType.SubnetIndirectInput
+
 
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
@@ -510,6 +513,9 @@ class MockHouNode:
         """Return the parent node."""
         return self._parent
 
+    def networkItemType(self) -> "MockEnumValue":
+        return MockNetworkItemType.Node
+
     def displayNode(self) -> Optional["MockHouNode"]:
         """The SOP inside this object whose display flag is set, as hou.ObjNode.displayNode:
         None for an object whose children are not SOPs, and for one with no children."""
@@ -626,8 +632,7 @@ class MockHouModule:
         self.Vector3 = MockVector3
         self.Vector4 = MockVector4
         self.Ramp = MockRamp
-        self.Node = MockHouNode
-        self.SubnetIndirectInput = MockSubnetIndirectInput
+        self.networkItemType = MockNetworkItemType
 
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
@@ -958,6 +963,15 @@ class MockEnumValue:
 
     def name(self) -> str:
         return self._name
+
+
+class MockNetworkItemType:
+    """``hou.networkItemType``: the kind of a network item, the discriminator tool
+    code classifies by (class identity does not survive rpyc). Only the members
+    some fake item reports are here."""
+
+    Node = MockEnumValue("Node")
+    SubnetIndirectInput = MockEnumValue("SubnetIndirectInput")
 
 
 class MockPaneTabType:
