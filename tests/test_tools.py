@@ -3274,18 +3274,6 @@ class TestConnectionErrorHandling:
         assert "cook timed out" in result["message"]
         disconnect.assert_not_called()
 
-    def test_in_process_eof_leaves_the_interpreter_standing(self, reset_connection_state):
-        """Under the stdio plugin an EOFError is a truncated file, not a dead link."""
-        from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
-
-        use_houdini(IN_PROCESS_HOUDINI)
-        result, disconnect = self._run(EOFError("Ran out of input"), "execute_code")
-
-        assert result["status"] == "error"
-        assert result["kind"] == "operation_failed"
-        assert "EOFError" in result["traceback"]
-        disconnect.assert_not_called()
-
     @patch("houdini_mcp.tools.scene.ensure_connected")
     def test_get_scene_info_handles_timeout(self, mock_ensure):
         """Test that get_scene_info handles TimeoutError gracefully."""

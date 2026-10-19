@@ -86,25 +86,25 @@ arm; the contract tests do exactly that.
 
 **Location:** `houdini_mcp/connection.py`
 
-Only a failure of the link itself is connection loss. `transport_failure(exc)` returns a
-`TransportFailure` proof, or `None`, and the installed `HoudiniTarget` is what decides:
+Only a failure of the link itself is connection loss. `transport_failure(exc)` is the one
+classification: it returns a `TransportFailure` proof when both of these hold, and `None`
+otherwise.
 
-- Over rpyc (`remote_houdini(token)`), the type must be one the channel raises: `EOFError`
-  (peer closed, reset, or broken pipe: rpyc's `SocketStream` wraps every socket error
-  it meets into `EOFError`, so no `ConnectionError` crosses a live channel), or
-  `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout` is that
-  same class). `OSError` is deliberately not admitted: it is also the base of
-  `FileNotFoundError` and `PermissionError`, which are the tool's errors, not the link's.
-  And the exception must not have been raised inside Houdini: rpyc rebuilds a remote
-  exception locally as the same class and tags it with `_remote_tb`; a `TimeoutError`
-  carrying that tag came over an intact link and is reported as its own kind.
-- In-process (`IN_PROCESS_HOUDINI`, the plugin's stdio server) there is no link to lose,
-  so nothing is a transport failure.
+- The type is one the channel raises: `EOFError` (peer closed, reset, or broken pipe:
+  rpyc's `SocketStream` wraps every socket error it meets into `EOFError`, so no
+  `ConnectionError` crosses a live channel), or `TimeoutError` (a sync request never
+  answered; rpyc's `AsyncResultTimeout` is that same class). `OSError` is deliberately
+  not admitted: it is also the base of `FileNotFoundError` and `PermissionError`, which
+  are the tool's errors, not the link's.
+- The exception was not raised inside Houdini. rpyc rebuilds a remote exception locally
+  as the same class and tags it with `_remote_tb`; a `TimeoutError` carrying that tag
+  came over an intact link and is reported as its own kind.
 
-Opening the link is a retry decision, not a proof (`HoudiniTarget.open_is_retryable`): before a
-connection exists only the socket layer can raise an `OSError`, so at connect time the
-whole family - unreachable network, unresolved host, refused or denied socket, a
-stalled handshake - is retried. A rejected token raises `HandshakeError` and is not.
+Opening the link is a retry decision, not a proof, and one rule makes it: any `OSError`
+or `EOFError` that Houdini did not raise is retried. Before a connection exists only the
+socket layer can raise an `OSError`, so the whole family - unreachable network,
+unresolved host, refused or denied socket, a stalled handshake - is the link's. A
+rejected token raises `HandshakeError` and is not retried.
 
 A bad save or render path, a denied file, or a Houdini operation error therefore never
 tears the session down and is never `connection_lost` or `timeout` with
@@ -141,25 +141,23 @@ calls `disconnect()` so the next call reconnects, then builds the arm.
 #### Retry with Exponential Backoff
 
 Opening a link is the one place anything retries, in `_open_link_with_retries()`,
-which `connect()` and `ensure_connected()` both go through. Whether an open-time
-failure is worth another attempt is the installed `HoudiniTarget`'s decision
-(`open_is_retryable`): over rpyc any socket-layer `OSError`/`EOFError` is, a rejected
-token is not, and in-process nothing is. The delay starts at `retry_delay` (1.0s),
-doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s), and then carries up to
-10% jitter on top of the capped value so clients that lost Houdini together do not
-reconnect in lockstep, even once they are all at the cap. After `max_retries` (3)
-attempts it raises `HoudiniConnectionError` with the last error; `max_retries` below 1
-is rejected with `ValueError`.
+which `connect()` and `ensure_connected()` both go through. The one retry rule above
+decides whether an open-time failure is worth another attempt: any `OSError` or
+`EOFError` that Houdini did not raise is, and a rejected token is not. The delay starts
+at `retry_delay` (1.0s), doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s),
+and then carries up to 10% jitter on top of the capped value so clients that lost
+Houdini together do not reconnect in lockstep, even once they are all at the cap. After
+`max_retries` (3) attempts it raises `HoudiniConnectionError` with the last error;
+`max_retries` below 1 is rejected with `ValueError`.
 
 #### `ensure_connected()` Function
 
 Returns the `hou` of the Houdini `host:port` names, reconnecting when the link is
 gone. Connection state has one owner, `HoudiniConnection`: the target in use and at
-most one open `Link` (target, host, port, connection, `hou`), written only under its
+most one open `Link` (host, port, connection, `hou`), written only under its
 lock, so concurrent tool calls that find the link gone share one reconnect. A live
 link to a *different* Houdini is not an answer: the call raises
-`HoudiniConnectionError` naming both, and the link it did not ask for stands.
-In-process (the Houdini plugin), every address names this interpreter.
+`HoudiniTargetMismatch` naming both, and the link it did not ask for stands.
 
 ```python
 def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:

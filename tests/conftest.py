@@ -2,6 +2,7 @@
 
 import contextlib
 import copy
+import importlib
 import json
 import logging
 import math
@@ -20,7 +21,6 @@ from fastmcp import FastMCP
 from rpyc.core import vinegar
 from rpyc.utils.server import Server
 
-from houdini_mcp.connection import _InterpreterModules
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
@@ -597,18 +597,27 @@ class MockHouNode:
         self.setInput(0, node)
 
 
-class MockModuleNamespace(_InterpreterModules):
+class MockModuleNamespace:
     """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
     Any other name imports here - the plugin tree is on this interpreter's path as
-    it is on Houdini's - so Houdini-side modules run against the double.
+    it is on Houdini's - so Houdini-side modules run against the double. Like rpyc's
+    module namespace, it answers both ``modules.hou`` and ``modules["PySide2.QtWidgets"]``.
     """
 
     def __init__(self, hou_module: "MockHouModule"):
         self._hou = hou_module
 
     def __getitem__(self, name: str) -> Any:
-        return self._hou if name == "hou" else super().__getitem__(name)
+        return self._hou if name == "hou" else importlib.import_module(name)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except ImportError as e:
+            # attribute protocol: ``hasattr`` and friends expect AttributeError;
+            # the import's own words stay, since they are the diagnosis
+            raise AttributeError(str(e)) from e
 
 
 class MockRpycConnection:
@@ -961,29 +970,6 @@ def mcp(server_results: Results) -> FastMCP:
 def mock_hou() -> MockHouModule:
     """Create a mock hou module."""
     return MockHouModule()
-
-
-@pytest.fixture
-def in_process_houdini(
-    monkeypatch: pytest.MonkeyPatch, mock_hou: MockHouModule, reset_connection_state: None
-) -> Generator[MockHouModule, None, None]:
-    """This interpreter *is* Houdini (a fake one), and rpyc is unreachable.
-
-    The server then serves tools against ``mock_hou`` exactly as the plugin's
-    stdio server does inside Houdini.
-    """
-    import sys
-
-    import houdini_mcp.connection as conn_module
-    from houdini_mcp.connection import IN_PROCESS_HOUDINI, use_houdini
-
-    def _no_rpyc(*_a: Any, **_k: Any) -> None:
-        raise AssertionError("rpyc must not be used when Houdini is in-process")
-
-    monkeypatch.setitem(sys.modules, "hou", mock_hou)
-    monkeypatch.setattr(conn_module.handshake, "connect", _no_rpyc)
-    use_houdini(IN_PROCESS_HOUDINI)
-    yield mock_hou
 
 
 # Every test's: the Houdini a test reaches is installed by the test process, as an entry

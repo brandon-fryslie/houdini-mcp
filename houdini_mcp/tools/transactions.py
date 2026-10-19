@@ -86,8 +86,8 @@ _FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHA
 
 # [LAW:types-are-the-program] Every tool the server exposes is classified here:
 # the server looks every served tool's name up when it registers it, so one with
-# no policy cannot be served, and tests/plugin/test_server_surface.py holds the
-# served tool names equal to these keys.
+# no policy cannot be served, and tests/test_tool_contracts.py holds the served
+# tool names equal to these keys.
 TOOL_POLICIES: dict[str, ToolPolicy] = {
     "assign_material": _UNDOABLE,
     "capture_multiple_panes": _FILE_WRITE,

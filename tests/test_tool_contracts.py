@@ -51,7 +51,7 @@ WRONG_EXAMPLE_MARK = "❌"
 
 
 @pytest.fixture
-async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(mcp: FastMCP, mock_rpyc_with_reset: Any) -> AsyncIterator[Client[Any]]:
     """One session with the server for the whole test, served against a fake Houdini."""
     async with Client(mcp) as client:
         yield client
@@ -109,6 +109,13 @@ class TestServedSchemas:
             schema = tool.input_schema
             assert json.loads(json.dumps(schema)) == schema, tool.name
             jsonschema.Draft202012Validator.check_schema(schema)
+
+    def test_every_served_tool_has_a_policy(self, served: dict[str, Tool]) -> None:
+        """TOOL_POLICIES is the map of the served surface: a new tool must be classified,
+        and a policy for a tool nobody serves is a stale entry."""
+        from houdini_mcp.tools.transactions import TOOL_POLICIES
+
+        assert set(served) == set(TOOL_POLICIES)
 
     def test_every_served_parameter_is_documented(self, served: dict[str, Tool]) -> None:
         """A client learns what each argument means from the schema it reads."""
@@ -592,24 +599,24 @@ class TestServedFailures:
                 FAILURE.validate_python(result.structured_content)
 
     async def test_the_probes_report_the_one_record_of_the_houdini_reached(
-        self, client: Client[Any], in_process_houdini: Any
+        self, client: Client[Any], mock_rpyc_with_reset: Any
     ) -> None:
         """Both probes answer with the same record, naming the Houdini actually
-        reached: in-process that is this interpreter, never a configured host:port
-        the connection did not use."""
+        reached: the configured one."""
+        target = DEFAULT_SETTINGS.target
         records = {
             probe: (await client.call_tool(probe, {})).structured_content
             for probe in ("check_connection", "ping_houdini")
         }
         for probe, record in records.items():
             assert record is not None, probe
-            assert record["target"] == "this interpreter", probe
-            assert record["houdini_version"] == in_process_houdini.applicationVersionString()
-            assert record["hip_file"] == in_process_houdini.hipFile.path(), probe
+            assert record["target"] == f"{target.host}:{target.port}", probe
+            assert record["houdini_version"] == mock_rpyc_with_reset.applicationVersionString()
+            assert record["hip_file"] == mock_rpyc_with_reset.hipFile.path(), probe
         assert set(records["check_connection"]) == set(records["ping_houdini"])
 
     async def test_a_ping_whose_houdini_cannot_answer_is_the_fault_it_raised(
-        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+        self, client: Client[Any], mock_rpyc_with_reset: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The probe that opens its own link classifies a fault the same way: what
         the reached Houdini raises while answering is ``operation_failed`` naming
@@ -618,14 +625,14 @@ class TestServedFailures:
         def cannot_answer() -> str:
             raise RuntimeError("hou is mid-shutdown")
 
-        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        monkeypatch.setattr(mock_rpyc_with_reset, "applicationVersionString", cannot_answer)
         failure = await self.failure_of(client, "ping_houdini", {})
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.exception == "RuntimeError"
         assert "hou is mid-shutdown" in failure.message
 
     async def test_a_fresh_connect_whose_houdini_cannot_answer_is_the_fault_it_raised(
-        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+        self, client: Client[Any], mock_rpyc_with_reset: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """With no link yet, opening one reads nothing Houdini answers, so the
         version read's fault is still the fault it is, not "not reached"."""
@@ -633,12 +640,12 @@ class TestServedFailures:
         def cannot_answer() -> str:
             raise RuntimeError("hou is mid-shutdown")
 
-        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        monkeypatch.setattr(mock_rpyc_with_reset, "applicationVersionString", cannot_answer)
         failure = await self.failure_of(client, "check_connection", {})
         assert (failure.kind, failure.exception) == ("operation_failed", "RuntimeError")
 
     async def test_a_probe_whose_houdini_cannot_answer_is_not_connected(
-        self, client: Client[Any], in_process_houdini: Any, monkeypatch: pytest.MonkeyPatch
+        self, client: Client[Any], mock_rpyc_with_reset: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A live link whose Houdini raises on the version read is a failure that
         names what raised - never a success record, and never a bare "disconnected"
@@ -648,7 +655,7 @@ class TestServedFailures:
         def cannot_answer() -> str:
             raise RuntimeError("hou is mid-shutdown")
 
-        monkeypatch.setattr(in_process_houdini, "applicationVersionString", cannot_answer)
+        monkeypatch.setattr(mock_rpyc_with_reset, "applicationVersionString", cannot_answer)
         failure = await self.failure_of(client, "check_connection", {})
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.exception == "RuntimeError"

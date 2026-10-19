@@ -169,8 +169,8 @@ class TestTheWire:
 
 
 @pytest.fixture
-async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
-    obj = in_process_houdini.node("/obj")
+async def client(mcp: FastMCP, mock_rpyc_with_reset: Any) -> AsyncIterator[Client[Any]]:
+    obj = mock_rpyc_with_reset.node("/obj")
     for i in range(30):
         geo = obj.createNode("geo", f"geo_{i}")
         for j in range(5):

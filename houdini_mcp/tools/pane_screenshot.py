@@ -35,8 +35,8 @@ logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
     """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``host:port`` names,
     or the one failure every capture tool reports when Houdini has no PySide2."""
-    # [LAW:single-enforcer] the connection module owns the connection; it is the
-    # same object whether Houdini is remote (rpyc) or this interpreter.
+    # [LAW:single-enforcer] the connection module owns the connection; Qt comes
+    # over it the way ``hou`` does.
     conn = ensure_link(host, port).conn
     try:
         return (

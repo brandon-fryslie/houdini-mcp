@@ -6,7 +6,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 3. IMPORTANT: rpyc must be version 5.x (6.x has protocol incompatibility)
 """
 
-import importlib
 import logging
 import random
 import threading
@@ -42,9 +41,8 @@ TransportException = EOFError | TimeoutError
 class TransportFailure:
     """Proof that an exception came from the link to Houdini, not from code Houdini ran.
 
-    Only ``transport_failure`` produces one, and only the installed ``HoudiniTarget``
-    decides. Holding it is what entitles a caller to tear the connection down and
-    report connection loss.
+    Only ``transport_failure`` produces one. Holding it is what entitles a caller to
+    tear the connection down and report connection loss.
     """
 
     exc: TransportException
@@ -56,13 +54,7 @@ def _raised_inside_houdini(exc: BaseException) -> bool:
     return hasattr(exc, "_remote_tb")
 
 
-def _rpyc_transport_failure(exc: BaseException) -> TransportFailure | None:
-    if isinstance(exc, TransportException) and not _raised_inside_houdini(exc):
-        return TransportFailure(exc)
-    return None
-
-
-def _rpyc_open_is_retryable(exc: BaseException) -> bool:
+def _open_is_retryable(exc: BaseException) -> bool:
     # [LAW:types-are-the-program] Before the link exists nothing but the socket layer
     # can raise an OSError - unreachable network, unresolved host, refused or denied
     # socket, a handshake that stalls - so at open time the whole family is the
@@ -70,32 +62,23 @@ def _rpyc_open_is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, (OSError, EOFError)) and not _raised_inside_houdini(exc)
 
 
-def _no_transport(exc: BaseException) -> None:
-    # In-process there is no link to fail: every exception is the code's own.
-    return None
-
-
-def _never_retry(exc: BaseException) -> bool:
-    # In-process, opening is importing hou; a second import will not go differently.
-    return False
-
-
 def transport_failure(exc: BaseException) -> TransportFailure | None:
     """Decide, once, whether an exception means the link to Houdini failed in use.
 
     [LAW:parse-dont-validate] [LAW:single-enforcer] The one place connection loss is
-    classified, and the installed target is what decides it: over rpyc, the channel's
-    own exceptions when Houdini's code did not raise them; in-process, nothing.
+    classified: the channel's own exceptions, when Houdini's code did not raise them.
     """
-    return _houdini.target.transport_failure(exc)
+    if isinstance(exc, TransportException) and not _raised_inside_houdini(exc):
+        return TransportFailure(exc)
+    return None
 
 
 class HoudiniConnectionError(Exception):
     """Raised when the Houdini a call named cannot be reached.
 
-    [LAW:types-are-the-program] ``target`` names that Houdini the way its
-    ``HoudiniTarget`` describes it, so the failure a client reads says where
-    Houdini was expected rather than leaving it to be parsed out of the message.
+    [LAW:types-are-the-program] ``target`` names that Houdini as ``describe_target``
+    does, so the failure a client reads says where Houdini was expected rather
+    than leaving it to be parsed out of the message.
     """
 
     def __init__(self, message: str, *, target: str) -> None:
@@ -117,44 +100,6 @@ class HoudiniTargetMismatch(Exception):
         self.connected = connected
 
 
-class _InterpreterModules:
-    """``conn.modules`` for a connection that *is* this interpreter.
-
-    rpyc's module namespace answers both ``modules.hou`` and
-    ``modules["PySide2.QtWidgets"]``; so does this one.
-    """
-
-    def __getitem__(self, name: str) -> Any:
-        return importlib.import_module(name)
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            return self[name]
-        except ImportError as e:
-            # attribute protocol: ``hasattr`` and friends expect AttributeError;
-            # the import's own words stay, since they are the diagnosis
-            raise AttributeError(str(e)) from e
-
-
-class InProcessConnection:
-    """The connection surface the tools use, satisfied by the interpreter they run in.
-
-    [LAW:one-type-per-behavior] rpyc's classic connection and this class are two
-    instances of one contract: ``modules``, ``closed``, ``close``. Tools cannot
-    tell them apart, so the whole tool surface - rails, audit, transactions,
-    response shapes - is shared by construction. Neither is asked to execute a
-    program: [LAW:single-enforcer] the gate in ``tools/code.py`` is the one
-    place that runs one, and it does so with the ``hou`` these expose.
-    """
-
-    def __init__(self) -> None:
-        self.modules = _InterpreterModules()
-        self.closed = False
-
-    def close(self) -> None:
-        self.closed = True
-
-
 def _open_rpyc(token: str | None, host: str, port: int, sync_timeout: float) -> Any:
     presenting = "with no token" if token is None else "presenting a token"
     logger.info(f"Connecting to Houdini at {host}:{port}, {presenting}")
@@ -164,28 +109,26 @@ def _open_rpyc(token: str | None, host: str, port: int, sync_timeout: float) -> 
     return handshake.connect(host, port, token=token, sync_request_timeout=sync_timeout)
 
 
-def _open_in_process(host: str, port: int, sync_timeout: float) -> InProcessConnection:
-    logger.info("Connecting to Houdini in-process")
-    return InProcessConnection()
+def describe_target(host: str, port: int) -> str:
+    """Name the Houdini a connection to ``host:port`` reaches.
+
+    [LAW:one-source-of-truth] the one spelling of where. A request matches the live
+    link by this name alone, so ``localhost`` and ``127.0.0.1`` are different
+    Houdinis here even when one listener answers both.
+    """
+    return f"{host}:{port}"
 
 
 class HoudiniTarget(NamedTuple):
-    """Where Houdini lives: how to open a connection to it, how to name it, and
-    which failures are the link's rather than the code's.
+    """The Houdini connections reach: how to open a connection to it, and the
+    remedy for failing to.
 
-    [LAW:one-source-of-truth] the opener, the words diagnostics use for the
-    target, the remedy for failing to reach it, and the classification of its
-    failures travel together, so an error can never describe a host:port - or
-    prescribe a listener, or report a lost link - that the connection never used.
-    ``describe`` names the Houdini a connection to ``host:port`` reaches, so two
-    requests name the same Houdini exactly when their descriptions are equal.
+    [LAW:one-source-of-truth] the opener and its remedy travel together, so an
+    error never prescribes a listener the connection was not opened to.
     """
 
     open: Callable[[str, int, float], Any]
-    describe: Callable[[str, int], str]
     remedy: str
-    open_is_retryable: Callable[[BaseException], bool]
-    transport_failure: Callable[[BaseException], TransportFailure | None]
 
 
 def remote_houdini(token: str | None) -> HoudiniTarget:
@@ -197,13 +140,10 @@ def remote_houdini(token: str | None) -> HoudiniTarget:
 
     return HoudiniTarget(
         open_presenting_token,
-        lambda host, port: f"{host}:{port}",
         "Make sure Houdini is running with RPC server enabled "
         "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
         "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
         "(a listener that rejects this client's stream looks like one that is not running).",
-        _rpyc_open_is_retryable,
-        _rpyc_transport_failure,
     )
 
 
@@ -216,18 +156,8 @@ def _open_uninstalled(host: str, port: int, sync_timeout: float) -> Any:
 # connect, instead of reaching a listener without the token its environment holds.
 NO_HOUDINI = HoudiniTarget(
     _open_uninstalled,
-    lambda host, port: f"{host}:{port}",
     "The entry point that serves installs the Houdini its connections reach with "
-    "use_houdini: remote_houdini(token) for an rpyc listener, IN_PROCESS_HOUDINI inside Houdini.",
-    _never_retry,
-    _no_transport,
-)
-IN_PROCESS_HOUDINI = HoudiniTarget(
-    _open_in_process,
-    lambda _host, _port: "this interpreter",
-    "This interpreter must be Houdini's own (hython or a Houdini session) with 'hou' importable.",
-    _never_retry,
-    _no_transport,
+    "use_houdini(remote_houdini(token)).",
 )
 
 
@@ -237,12 +167,11 @@ class Link:
 
     [LAW:types-are-the-program] ``conn`` and ``hou`` are installed together, after the
     link proved it reaches Houdini, so no holder can see one without the other.
-    ``target``, ``host`` and ``port`` are what the link was opened to: a request is
+    ``host`` and ``port`` are what the link was opened to: a request is
     checked against the Houdini actually reached, and diagnostics name that one.
     Identity is the instance: a reconnect is a new ``Link``.
     """
 
-    target: HoudiniTarget
     host: str
     port: int
     conn: Any
@@ -250,7 +179,7 @@ class Link:
 
     @property
     def name(self) -> str:
-        return self.target.describe(self.host, self.port)
+        return describe_target(self.host, self.port)
 
     @property
     def alive(self) -> bool:
@@ -267,9 +196,8 @@ class Link:
 
         [LAW:no-silent-failure] a link that cannot answer for its version raises;
         the tool boundary classifies that, instead of a success carrying ``error``.
-        [LAW:one-source-of-truth] ``target`` is the one name for where: in-process
-        it is this interpreter, so no ``host``/``port`` field can name a socket the
-        link never used.
+        [LAW:one-source-of-truth] ``target`` is the one name for where, so no
+        ``host``/``port`` field beside it can disagree with it.
         """
         version_tuple = self.hou.applicationVersion()
         return {
@@ -300,7 +228,7 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
         hou = conn.modules.hou
     except BaseException as validation_error:
         logger.warning(
-            f"Closing link to {target.describe(host, port)}: failed validation: "
+            f"Closing link to {describe_target(host, port)}: failed validation: "
             f"{type(validation_error).__name__}: {validation_error}"
         )
         try:
@@ -309,7 +237,7 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    return Link(target, host, port, conn, hou)
+    return Link(host, port, conn, hou)
 
 
 def _open_link_with_retries(
@@ -338,11 +266,11 @@ def _open_link_with_retries(
             return _open_link(target, host, port, sync_timeout)
 
         except Exception as e:
-            if not target.open_is_retryable(e):
+            if not _open_is_retryable(e):
                 raise HoudiniConnectionError(
                     f"Non-retryable error connecting to Houdini at "
-                    f"{target.describe(host, port)}: {e}. {target.remedy}",
-                    target=target.describe(host, port),
+                    f"{describe_target(host, port)}: {e}. {target.remedy}",
+                    target=describe_target(host, port),
                 ) from e
             last_error = e
             logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
@@ -360,10 +288,10 @@ def _open_link_with_retries(
                 current_delay *= 2  # Exponential backoff
 
     raise HoudiniConnectionError(
-        f"Failed to connect to Houdini at {target.describe(host, port)} after {max_retries} attempts. "
+        f"Failed to connect to Houdini at {describe_target(host, port)} after {max_retries} attempts. "
         f"{target.remedy} "
         f"Last error: {last_error}",
-        target=target.describe(host, port),
+        target=describe_target(host, port),
     ) from last_error
 
 
@@ -421,7 +349,7 @@ class HoudiniConnection:
         with self._lock:
             link = self._link
             if link is not None and link.alive:
-                requested = self._target.describe(host, port)
+                requested = describe_target(host, port)
                 if link.name != requested:
                     raise HoudiniTargetMismatch(
                         f"Connected to Houdini at {link.name}, but {requested} was requested. "
@@ -478,7 +406,7 @@ class HoudiniConnection:
         if link is not None:
             return {**link.info(), "connected": True}
         return {
-            "target": self._target.describe(host, port),
+            "target": describe_target(host, port),
             "connected": False,
             "houdini_version": None,
             "houdini_build": None,
@@ -486,19 +414,14 @@ class HoudiniConnection:
         }
 
 
-# [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
-# not a branch: every connect, ping and diagnostic reads whichever target is installed.
+# [LAW:dataflow-not-control-flow] which Houdini connections reach is a value the owner
+# holds, not a branch: every connect and ping opens through whichever target is installed.
 _houdini = HoudiniConnection(NO_HOUDINI)
 
 
-def describe_target(host: str, port: int) -> str:
-    """Name the Houdini a connection to ``host:port`` would actually reach."""
-    return _houdini.target.describe(host, port)
-
-
 def use_houdini(target: HoudiniTarget) -> None:
-    """Make every connection resolve to ``target``: ``IN_PROCESS_HOUDINI`` for the
-    Houdini plugin's stdio server, ``remote_houdini(token)`` for an rpyc listener."""
+    """Make every connection resolve to ``target``: ``remote_houdini(token)`` for an
+    rpyc listener."""
     _houdini.use(target)
 
 
@@ -606,7 +529,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     Returns:
         The Houdini reached, as ``Link.info`` records it: the same record
         ``check_connection`` reports, whose ``target`` names the Houdini the probe
-        actually reached - in-process, this interpreter.
+        actually reached.
 
     Raises:
         HoudiniConnectionError: naming the target and the cause, when no Houdini
@@ -618,10 +541,10 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     """
     # [LAW:single-enforcer] opening, proving and naming an unreached Houdini are the
     # connect path's, one attempt, so the probe reaches Houdini exactly when a tool's
-    # connect would and fails in the same words; the target is read once, so the
-    # probe classifies by the Houdini it tried even if another is installed meanwhile.
+    # connect would and fails in the same words.
+    target = _houdini.target
     link = _open_link_with_retries(
-        _houdini.target,
+        target,
         host,
         port,
         max_retries=1,
@@ -634,13 +557,13 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     try:
         return link.info()
     except Exception as e:
-        # [LAW:parse-dont-validate] the link's target says which exceptions are the
+        # [LAW:parse-dont-validate] ``transport_failure`` says which exceptions are the
         # link's. Those are the probe's "no answer", not the loss of the server's own
         # link, which a raw transport failure would tear down. The rest are the code's.
-        if link.target.transport_failure(e) is None:
+        if transport_failure(e) is None:
             raise
         raise HoudiniConnectionError(
-            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {link.target.remedy}",
+            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {target.remedy}",
             target=link.name,
         ) from e
     finally:

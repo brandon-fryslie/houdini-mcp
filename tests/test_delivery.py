@@ -34,15 +34,15 @@ from tests.shorthand_reader import read
 
 
 @pytest.fixture
-async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(mcp: FastMCP, mock_rpyc_with_reset: Any) -> AsyncIterator[Client[Any]]:
     async with Client(mcp) as client:
         yield client
 
 
 @pytest.fixture
-def large_scene(in_process_houdini: Any) -> int:
+def large_scene(mock_rpyc_with_reset: Any) -> int:
     """A scene whose /obj listing serializes far past the bound."""
-    obj = in_process_houdini.node("/obj")
+    obj = mock_rpyc_with_reset.node("/obj")
     count = 400
     for i in range(count):
         obj.createNode("geo", f"geo_with_a_long_name_{i}")
