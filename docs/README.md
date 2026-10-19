@@ -4,15 +4,15 @@
 
 Detailed implementation notes for each feature in the SOP Workflow MVP:
 
-| Document | Feature | Issue |
-|----------|---------|-------|
-| [overview.md](implementation/overview.md) | Implementation summary | - |
-| [network-introspection.md](implementation/network-introspection.md) | list_children, find_nodes, get_node_info | HDMCP-5 |
-| [node-wiring.md](implementation/node-wiring.md) | connect_nodes, disconnect, flags, reorder | HDMCP-6 |
-| [parameter-schema.md](implementation/parameter-schema.md) | get_parameter_schema | HDMCP-7 |
-| [error-introspection.md](implementation/error-introspection.md) | get_node_info with errors | HDMCP-8 |
-| [geometry-summary.md](implementation/geometry-summary.md) | get_geo_summary | HDMCP-9 |
-| [examples-docs.md](implementation/examples-docs.md) | Example workflows | HDMCP-10 |
+| Document | Feature |
+|----------|---------|
+| [overview.md](implementation/overview.md) | Implementation summary |
+| [network-introspection.md](implementation/network-introspection.md) | list_children, find_nodes, get_node_info |
+| [node-wiring.md](implementation/node-wiring.md) | connect_nodes, disconnect, flags, reorder |
+| [parameter-schema.md](implementation/parameter-schema.md) | get_parameter_schema |
+| [error-introspection.md](implementation/error-introspection.md) | get_node_info with errors |
+| [geometry-summary.md](implementation/geometry-summary.md) | get_geo_summary |
+| [examples-docs.md](implementation/examples-docs.md) | Example workflows |
 
 ## Quick Reference
 

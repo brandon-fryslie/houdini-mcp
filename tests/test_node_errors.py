@@ -1,4 +1,4 @@
-"""Tests for node error/warning introspection (HDMCP-8)."""
+"""Tests for node error/warning introspection."""
 
 import logging
 from unittest.mock import MagicMock, patch

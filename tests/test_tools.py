@@ -224,7 +224,7 @@ class TestExecuteCode:
 
 
 class TestExecuteCodeSafetyRails:
-    """Tests for execute_code safety rails (HDMCP-11)."""
+    """Tests for execute_code safety rails."""
 
     # --- Dangerous Pattern Detection Tests ---
 
@@ -1314,7 +1314,7 @@ class TestListNodeTypes:
 
 
 class TestListChildren:
-    """Tests for list_children function (HDMCP-5)."""
+    """Tests for list_children function."""
 
     def test_list_children_basic(self, mock_connection):
         """Test listing children with basic info."""
@@ -1617,7 +1617,7 @@ class TestListChildren:
 
 
 class TestFindNodes:
-    """Tests for find_nodes function (HDMCP-5)."""
+    """Tests for find_nodes function."""
 
     def test_find_nodes_wildcard_pattern(self, mock_connection):
         """Test finding nodes with wildcard pattern."""
@@ -1939,7 +1939,7 @@ class TestFindErrorNodes:
 
 
 class TestGetNodeInfoExtended:
-    """Tests for get_node_info with input_details (HDMCP-5)."""
+    """Tests for get_node_info with input_details."""
 
     def test_get_node_info_with_input_details(self, mock_connection):
         """Test get_node_info includes detailed input connections."""
@@ -2029,7 +2029,7 @@ class TestGetNodeInfoExtended:
 
 
 class TestConnectNodes:
-    """Tests for connect_nodes function (HDMCP-6)."""
+    """Tests for connect_nodes function."""
 
     def test_connect_nodes_success(self, mock_connection):
         """Test connecting two nodes successfully."""
@@ -2167,7 +2167,7 @@ class TestConnectNodes:
 
 
 class TestDisconnectNodeInput:
-    """Tests for disconnect_node_input function (HDMCP-6)."""
+    """Tests for disconnect_node_input function."""
 
     def test_disconnect_node_input_success(self, mock_connection):
         """Test disconnecting an input successfully."""
@@ -2239,7 +2239,7 @@ class TestDisconnectNodeInput:
 
 
 class TestSetNodeFlags:
-    """Tests for set_node_flags function (HDMCP-6)."""
+    """Tests for set_node_flags function."""
 
     def test_set_node_flags_display_and_render(self, mock_connection):
         """Test setting display and render flags."""
@@ -2347,7 +2347,7 @@ class TestSetNodeFlags:
 
 
 class TestReorderInputs:
-    """Tests for reorder_inputs function (HDMCP-6)."""
+    """Tests for reorder_inputs function."""
 
     def test_reorder_inputs_swap_first_two(self, mock_connection):
         """Test swapping first two inputs on a merge node."""

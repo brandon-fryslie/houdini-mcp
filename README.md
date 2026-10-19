@@ -1,13 +1,13 @@
 # Houdini MCP Server
 
-An MCP (Model Context Protocol) server for controlling SideFX Houdini via `hrpyc`, enabling AI assistants like Claude, Cursor, and Letta agents to interact with Houdini sessions.
+An MCP (Model Context Protocol) server for controlling SideFX Houdini via `hrpyc`, enabling AI assistants like Claude and Cursor to interact with Houdini sessions.
 
 ## Architecture
 
 ```
 +-----------------+      MCP (HTTP)       +------------------+      hrpyc:18811      +-------------+
 |  Claude/Cursor  | <------------------> |   MCP Server     | <------------------> |   Houdini   |
-|  Letta Agents   |                      |  (Python/FastMCP)|                      |   Session   |
+|                 |                      |  (Python/FastMCP)|                      |   Session   |
 +-----------------+                      +------------------+                      +-------------+
 ```
 
@@ -138,7 +138,7 @@ hrpyc.start_server(port=18811)
 
 ```bash
 # Clone the repository
-git clone https://github.com/oculairmedia/houdini-mcp.git
+git clone https://github.com/brandon-fryslie/houdini-mcp.git
 cd houdini-mcp
 
 # Copy and configure environment
@@ -171,12 +171,12 @@ docker compose up -d
 
 ```bash
 # Clone and install
-git clone https://github.com/oculairmedia/houdini-mcp.git
+git clone https://github.com/brandon-fryslie/houdini-mcp.git
 cd houdini-mcp
 uv sync
 
-# Run
-HOUDINI_HOST=192.168.50.90 uv run python -m houdini_mcp
+# Run against Houdini on this machine (set HOUDINI_HOST to reach another)
+uv run python -m houdini_mcp
 ```
 
 ## Configuration
@@ -489,10 +489,6 @@ Add to your MCP client configuration:
 }
 ```
 
-### With Letta
-
-Add as an MCP server in Letta's configuration to give agents Houdini control.
-
 ### Example Prompts
 
 - "Create a sphere → transform → color → OUT network"
@@ -559,13 +555,14 @@ houdini_plugin/            # Houdini plugin for stdio mode
 ├── toolbar/               # Shelf tools
 └── houdini_mcp.json       # Package descriptor
 
-tests/                     # 418 tests (406 passing)
+tests/                     # pytest suite
 docs/                      # Implementation documentation
 examples/                  # Working example scripts
 ```
 
 ## Credits
 
+- Forked from [oculairmedia/houdini-mcp](https://github.com/oculairmedia/houdini-mcp)
 - Based on hrpyc integration patterns from [OpenWebUI Houdini Pipeline](https://github.com/oculairmedia/Houdinipipeline)
 - Inspired by [capoomgit/houdini-mcp](https://github.com/capoomgit/houdini-mcp)
 

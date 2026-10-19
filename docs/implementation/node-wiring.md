@@ -1,4 +1,4 @@
-# HDMCP-6: Node Wiring Tools - Implementation Summary
+# Node Wiring Tools - Implementation Summary
 
 ## ✅ Implementation Complete
 

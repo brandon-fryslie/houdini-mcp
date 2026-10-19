@@ -1,5 +1,5 @@
 """
-Integration tests for HDMCP-10 workflow examples.
+Integration tests for the workflow examples.
 
 These tests verify that the example workflows function correctly:
 1. Build from scratch (sphere → xform → color → OUT)

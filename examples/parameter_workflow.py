@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HDMCP-10 Example 3: Parameter Discovery → Set → Verify
+Example 3: Parameter Discovery → Set → Verify
 =======================================================
 
 Demonstrates intelligent parameter handling workflow:
@@ -65,7 +65,7 @@ def main():
     """Demonstrate parameter discovery and intelligent setting."""
 
     print("=" * 70)
-    print("HDMCP-10 Example 3: Parameter Workflow")
+    print("Example 3: Parameter Workflow")
     print("Schema → Set → Verify")
     print("=" * 70)
 

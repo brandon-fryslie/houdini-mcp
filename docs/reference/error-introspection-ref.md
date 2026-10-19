@@ -1,4 +1,4 @@
-# HDMCP-8 Quick Reference: Node Error Introspection
+# Quick Reference: Node Error Introspection
 
 ## Overview
 Extended `get_node_info()` to optionally include cook state and error/warning information.
@@ -152,10 +152,3 @@ info = get_node_info(node_path, cook_info="inspect")
 - `houdini_mcp/server.py` - MCP tool exposure
 - `tests/conftest.py` - Mock support
 - `tests/test_node_errors.py` - New tests
-
-## Demo
-
-Run the demo script:
-```bash
-python3 hdmcp8_demo.py
-```

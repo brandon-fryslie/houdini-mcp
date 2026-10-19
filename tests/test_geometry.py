@@ -1,4 +1,4 @@
-"""Tests for geometry summary tool (HDMCP-9).
+"""Tests for geometry summary tool.
 
 The get_geo_summary function now executes geometry analysis code on the Houdini side
 via the trusted-grant execution door and parses JSON from stdout. These tests mock that door directly.

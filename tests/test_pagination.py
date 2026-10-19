@@ -1,4 +1,4 @@
-"""Tests for response pagination (HDMCP-52 / houdini-mcp-2t6): one paging contract, one clamp."""
+"""Tests for response pagination (houdini-mcp-2t6): one paging contract, one clamp."""
 
 
 def _page(items, limit, cursor=0):

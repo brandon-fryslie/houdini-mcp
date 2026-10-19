@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HDMCP-10 Example 2: Augment Existing Scene
+Example 2: Augment Existing Scene
 ===========================================
 
 Demonstrates augmenting an existing node network by inserting a new node:
@@ -47,7 +47,7 @@ def main():
     """Augment existing scene by inserting a mountain node."""
 
     print("=" * 70)
-    print("HDMCP-10 Example 2: Augment Existing Scene")
+    print("Example 2: Augment Existing Scene")
     print("Insert mountain between grid → noise")
     print("=" * 70)
 

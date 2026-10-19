@@ -1,4 +1,4 @@
-# HDMCP-5 Quick Reference Guide
+# Quick Reference Guide
 
 ## New Tools Available
 
@@ -295,4 +295,4 @@ pytest tests/test_tools.py::TestGetNodeInfoExtended -v
 pytest tests/test_tools.py -v
 ```
 
-All tests should pass: 62 total (17 new HDMCP-5 tests)
+All tests should pass.

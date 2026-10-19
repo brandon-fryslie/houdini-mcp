@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HDMCP-10 Example 4: Error Detection → Fix → Verify
+Example 4: Error Detection → Fix → Verify
 ===================================================
 
 Demonstrates robust error handling workflow:
@@ -80,7 +80,7 @@ def main():
     """Demonstrate error detection, diagnosis, and fixing."""
 
     print("=" * 70)
-    print("HDMCP-10 Example 4: Error Handling Workflow")
+    print("Example 4: Error Handling Workflow")
     print("Detect → Fix → Verify")
     print("=" * 70)
 

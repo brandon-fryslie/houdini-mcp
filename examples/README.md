@@ -245,7 +245,7 @@ After running these examples:
 
 1. Study the integration tests to see how to test workflows
 2. Review the main README for full tool reference
-3. Check HDMCP implementation documents for advanced patterns
+3. Check the implementation documents in [docs/implementation/](../docs/implementation/) for advanced patterns
 4. Build your own workflows combining these patterns
 
 ## Questions?

@@ -1,4 +1,4 @@
-# HDMCP-9 Implementation: Geometry Summary Tool
+# Geometry Summary Tool - Implementation
 
 ## Overview
 Successfully implemented the `get_geo_summary` tool for the Houdini MCP Server, providing comprehensive geometry statistics and metadata for verification.
@@ -171,8 +171,6 @@ for i, pt in enumerate(points_list[:max_sample_points]):
 
 ## Acceptance Criteria ✅
 
-Per Meridian's requirements:
-
 1. ✅ **Hard limits**: Max 10K sample points, graceful failure beyond limits
 2. ✅ **Return point/prim/vertex counts**: All topology stats included
 3. ✅ **Bounding box**: min, max, size, center vectors
@@ -243,7 +241,7 @@ for pt in result["sample_points"][:5]:
 
 ## Conclusion
 
-HDMCP-9 implementation is **complete** and **production-ready**:
+The geometry summary implementation is **complete** and **production-ready**:
 - ✅ All acceptance criteria met
 - ✅ Comprehensive test coverage (15 tests)
 - ✅ All edge cases handled

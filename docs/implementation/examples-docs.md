@@ -1,4 +1,4 @@
-# HDMCP-10 Implementation Summary
+# Example Workflows - Implementation Summary
 
 **Status**: ✅ **COMPLETE**  
 **Date**: December 18, 2024  
@@ -6,7 +6,7 @@
 
 ## Overview
 
-Created comprehensive examples and documentation demonstrating how to use the Houdini MCP Server for common SOP workflow patterns. All acceptance criteria from Meridian have been met.
+Created comprehensive examples and documentation demonstrating how to use the Houdini MCP Server for common SOP workflow patterns.
 
 ## Deliverables
 
@@ -262,7 +262,7 @@ houdini-mcp/
 │   └── integration/
 │       └── test_workflow_examples.py  # Integration tests for examples
 ├── README.md                          # Updated with comprehensive docs
-└── HDMCP-10_IMPLEMENTATION.md         # This file
+└── docs/implementation/examples-docs.md # This file
 ```
 
 ## Example Output
@@ -271,7 +271,7 @@ houdini-mcp/
 
 ```
 ======================================================================
-HDMCP-10 Example 1: Build from Scratch
+Example 1: Build from Scratch
 Building: sphere → xform → color → OUT
 ======================================================================
 
@@ -307,7 +307,7 @@ Bounding Box:
 
 ```
 ======================================================================
-HDMCP-10 Example 2: Augment Existing Scene
+Example 2: Augment Existing Scene
 Insert mountain between grid → noise
 ======================================================================
 
@@ -338,7 +338,7 @@ Bounding box size change:
 ### Run Examples Manually
 
 ```bash
-cd /opt/stacks/houdini-mcp/examples
+cd examples
 python build_from_scratch.py
 python augment_existing_scene.py
 python parameter_workflow.py
@@ -348,7 +348,6 @@ python error_handling.py
 ### Run Integration Tests
 
 ```bash
-cd /opt/stacks/houdini-mcp
 uv run pytest -m integration tests/integration/test_workflow_examples.py
 ```
 
@@ -467,7 +466,7 @@ test_workflow_examples.py::TestErrorHandling::test_safe_geometry_access_pattern 
 
 ## Conclusion
 
-HDMCP-10 is **COMPLETE**. All acceptance criteria from Meridian have been met:
+This work delivered:
 
 1. ✅ **Build from scratch recipe**: `build_from_scratch.py` with sphere→xform→color→OUT
 2. ✅ **Augment existing scene recipe**: `augment_existing_scene.py` with mountain insertion

@@ -1,4 +1,4 @@
-# HDMCP-5 Implementation Summary
+# Network Introspection Tools - Implementation Summary
 
 ## Completed Tasks
 

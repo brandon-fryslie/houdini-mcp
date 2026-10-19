@@ -68,9 +68,9 @@ dev = [
 required-version = "~=0.12.15"
 
 [project.urls]
-Homepage = "https://github.com/oculairmedia/houdini-mcp"
-Repository = "https://github.com/oculairmedia/houdini-mcp"
-Issues = "https://github.com/oculairmedia/houdini-mcp/issues"
+Homepage = "https://github.com/brandon-fryslie/houdini-mcp"
+Repository = "https://github.com/brandon-fryslie/houdini-mcp"
+Issues = "https://github.com/brandon-fryslie/houdini-mcp/issues"
 
 [project.scripts]
 houdini-mcp = "houdini_mcp.__main__:main"
