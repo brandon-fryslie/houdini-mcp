@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (plugin, Python API)**: the Houdini plugin no longer serves MCP over
+  stdio (houdini-tuneup-ef3.9e3). A client configured to launch `hython` runs
+  `uv run --directory <clone> houdini-mcp` with `MCP_TRANSPORT=stdio` instead, as
+  README's Option 1 shows, and that server reaches Houdini through the hrpyc
+  listener, which Start Remote or `hrpyc.start_server` starts in a Houdini session
+  or a headless `hython`. `houdini_mcp_plugin` loses `start_server`,
+  `serving_target`, `is_server_running` and `AlreadyServing`, and the shelf loses
+  Start MCP and MCP Status; Start Remote, Stop Remote, Remote Status and Remote
+  Self-Test stay. `houdini_mcp.connection` loses `IN_PROCESS_HOUDINI` and
+  `InProcessConnection`, and `HoudiniTarget`, the type `use_houdini` takes, keeps
+  only `open` and `remedy`: `describe`, `open_is_retryable` and
+  `transport_failure` are gone, because naming a Houdini (`describe_target`, which
+  is `host:port`), classifying connection loss (`transport_failure()`) and
+  retrying an open no longer vary by target. README no longer has Houdini's Python
+  install the server: `hython -m pip install .` served only the plugin's stdio
+  server, since the listener imports nothing from `houdini_mcp`.
+
 - **BREAKING (Docker Compose)**: every `docker compose` command, `down` and
   `logs` included, stops with "required variable HOUDINI_HOST is missing a
   value" unless `HOUDINI_HOST` is set, in `.env` or the shell

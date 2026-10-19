@@ -5,7 +5,7 @@ An MCP (Model Context Protocol) server for controlling SideFX Houdini via `hrpyc
 ## Architecture
 
 ```
-+-----------------+      MCP (HTTP)       +------------------+      hrpyc:18811      +-------------+
++-----------------+   MCP (stdio/HTTP)    +------------------+      hrpyc:18811      +-------------+
 |  Claude/Cursor  | <------------------> |   MCP Server     | <------------------> |   Houdini   |
 |                 |                      |  (Python/FastMCP)|                      |   Session   |
 +-----------------+                      +------------------+                      +-------------+
@@ -52,61 +52,39 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 For Codex Desktop on Windows, see the dedicated setup notes in
 [`docs/codex-windows-setup.md`](docs/codex-windows-setup.md).
 
-### Option 1: Houdini Plugin (stdio mode)
+### Option 1: stdio
 
-The Houdini plugin runs the MCP server directly inside Houdini, using stdio transport. This is the simplest setup with no network configuration required. It serves the same server as the other modes - every tool, safety rail and response shape in `houdini_mcp` - connected to the Houdini it runs inside instead of over RPyC.
+Your MCP client starts the server from a clone of this repository and talks to it
+over stdio, and the server reaches Houdini over hrpyc. Any Houdini that runs the
+listener will do, a graphical session or a headless `hython`.
 
-**Installation:**
+**Step 1: Start the listener in Houdini**
 
-1. Copy the `houdini_plugin` folder to your Houdini packages directory:
-   ```bash
-   # Windows
-   copy houdini_plugin %USERPROFILE%\Documents\houdini20.5\packages\houdini_mcp
+Click **"Start Remote"** on the Houdini MCP shelf, which the
+[plugin](#houdini-plugin) adds, or run `import hrpyc; hrpyc.start_server(port=18811)`
+in Houdini's Python Shell, as in [Prerequisites](#prerequisites). `find_nodes`
+needs the plugin installed either way.
 
-   # Linux/Mac
-   cp -r houdini_plugin ~/houdini20.5/packages/houdini_mcp
-   ```
+**Step 2: Configure your MCP client**
 
-2. Copy the package JSON:
-   ```bash
-   # Windows
-   copy houdini_plugin\houdini_mcp.json %USERPROFILE%\Documents\houdini20.5\packages\
+The client runs the server with `uv`; replace `/path/to/houdini-mcp` with the
+path to your clone:
 
-   # Linux/Mac
-   cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
-   ```
-
-3. Install the server into Houdini's Python. This installs `houdini_mcp` and
-   every dependency it declares; there is no separate list to keep in step.
-   It upgrades Houdini's bundled `rpyc` 4.x to 5.x, which the hrpyc remote
-   listener runs on without change:
-   ```bash
-   # From the repo root, with Houdini's Python
-   hython -m pip install .
-
-   # Or from Houdini's Python Shell
-   import subprocess, sys
-   subprocess.run([sys.executable, "-m", "pip", "install", "/path/to/houdini-mcp"])
-   ```
-
-4. Restart Houdini and find the "Houdini MCP" shelf
-
-**Usage:**
-- Click "Start MCP" on the shelf to start the server
-- Configure your MCP client (Claude Desktop, Cursor, etc.) to use stdio transport
-- The server ends when the MCP client closes its stdin; "MCP Status" shows whether it is serving, and the Houdini version and hip file it serves
-
-**MCP Client Configuration (stdio mode):**
 ```json
 {
   "mcpServers": {
     "houdini": {
-      "command": "hython",
-      "args": ["-c", "from houdini_mcp_plugin import start_server; start_server(use_thread=False)"]
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/houdini-mcp", "houdini-mcp"],
+      "env": {"MCP_TRANSPORT": "stdio"}
     }
   }
 }
 ```
+
+To reach a listener on another host or port, or one that enforces a token, add
+`HOUDINI_HOST`, `HOUDINI_PORT` or `HOUDINI_RPC_TOKEN` to `env`, as described under
+[Configuration](#configuration).
 
 ### Option 2: Docker (Remote mode)
 
@@ -126,8 +104,8 @@ If you have the Houdini MCP plugin installed:
 
 Or manually in Houdini's Python Shell. Every tool but `find_nodes` works this
 way; `find_nodes` runs its search inside Houdini, so it also needs the plugin
-installed as in [Option 1](#option-1-houdini-plugin-stdio-mode), whose package
-JSON puts its modules on Houdini's path when Houdini starts:
+[installed](#houdini-plugin), and its package JSON puts its modules on
+Houdini's path when Houdini starts:
 ```python
 import hrpyc
 
@@ -166,6 +144,31 @@ docker compose up -d
 - MCP server runs in Docker for easy deployment
 - Full tool set with advanced features
 - Server-side processing capabilities
+
+### Houdini Plugin
+
+The plugin adds the "Houdini MCP" shelf, whose tools start, stop and check the
+hrpyc listener, and it holds the search `find_nodes` runs inside Houdini.
+
+1. Copy the `houdini_plugin` folder to your Houdini packages directory:
+   ```bash
+   # Windows
+   copy houdini_plugin %USERPROFILE%\Documents\houdini20.5\packages\houdini_mcp
+
+   # Linux/Mac
+   cp -r houdini_plugin ~/houdini20.5/packages/houdini_mcp
+   ```
+
+2. Copy the package JSON:
+   ```bash
+   # Windows
+   copy houdini_plugin\houdini_mcp.json %USERPROFILE%\Documents\houdini20.5\packages\
+
+   # Linux/Mac
+   cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
+   ```
+
+3. Restart Houdini and find the "Houdini MCP" shelf
 
 ### Local Development
 
@@ -529,7 +532,7 @@ uv run python -m houdini_mcp
 ```
 houdini_mcp/
 ├── server.py              # FastMCP server: serves the tool functions in tools/
-├── connection.py          # One owner of the RPyC/in-process link, retry/backoff
+├── connection.py          # One owner of the RPyC link, with retry/backoff
 └── tools/                 # The tools: each function's signature and docstring is its MCP contract
     ├── _common.py         # Shared utilities, error handling
     ├── cache.py           # Node type caching with TTL, manage_cache
@@ -549,7 +552,7 @@ houdini_mcp/
     ├── summarization.py   # AI response summarization
     └── wiring.py          # Node connection tools
 
-houdini_plugin/            # Houdini plugin for stdio mode
+houdini_plugin/            # Houdini plugin: the hrpyc remote listener, find_nodes' search
 ├── python/houdini_mcp_plugin/
 ├── toolbar/               # Shelf tools
 └── houdini_mcp.json       # Package descriptor
