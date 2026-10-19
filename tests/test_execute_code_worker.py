@@ -8,6 +8,7 @@ resume. A call meets the ledger where the server runs it (``held``).
 
 import logging
 import threading
+import time
 
 import pytest
 
@@ -20,6 +21,15 @@ from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
 
 def _child_names(mock_connection) -> list[str]:
     return [child.name() for child in mock_connection.node("/obj").children()]
+
+
+def _use_event(monkeypatch, event_type) -> None:
+    """execute_code waits for its program on events of this type."""
+    from types import SimpleNamespace
+
+    from houdini_mcp.tools import code as code_module
+
+    monkeypatch.setattr(code_module, "threading", SimpleNamespace(Event=event_type))
 
 
 def _time_out(stalled_program: str, **kwargs):
@@ -162,24 +172,32 @@ class TestATimedOutRunsDiff:
         ]
 
     def test_a_wait_that_wakes_early_does_not_cut_the_timeout_short(
-        self, mock_connection, stalled_program, monkeypatch, caplog
+        self, mock_connection, stalled_program, monkeypatch
     ):
-        from types import SimpleNamespace
-
-        from houdini_mcp.tools import code as code_module
-
         class EarlyEvent(threading.Event):
             def wait(self, timeout=None):
                 return super().wait(None if timeout is None else timeout / 2)
 
-        monkeypatch.setattr(code_module, "threading", SimpleNamespace(Event=EarlyEvent))
-        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.code"):
-            _time_out(stalled_program)
+        _use_event(monkeypatch, EarlyEvent)
+        result = _time_out(stalled_program)
         worker = WORKERS.running()
         assert worker.running_for_seconds() >= worker.timeout
-        [event] = [r for r in caplog.records if "exceeded timeout" in r.getMessage()]
-        _operation, _timeout, woke_early, _sha = event.args
-        assert woke_early >= 1
+        assert result["audit"]["woke_early"] >= 1
+
+    def test_a_wait_that_keeps_its_deadline_did_not_wake_early(
+        self, mock_connection, stalled_program, monkeypatch
+    ):
+        class MonotonicEvent(threading.Event):
+            def wait(self, timeout=None):
+                if timeout is None:
+                    return super().wait()
+                end = time.monotonic() + timeout
+                while not super().wait(max(end - time.monotonic(), 0)) and time.monotonic() < end:
+                    pass
+                return self.is_set()
+
+        _use_event(monkeypatch, MonotonicEvent)
+        assert _time_out(stalled_program)["audit"]["woke_early"] == 0
 
     def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
         self, mock_connection, stalled_program, monkeypatch

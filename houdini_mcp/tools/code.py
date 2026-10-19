@@ -439,6 +439,7 @@ def _build_audit(
     grant: ExecutionGrant,
     detected: DetectedPatterns,
     timed_out: bool = False,
+    woke_early: int | None = None,
     rollback_attempted: bool = False,
     rollback_succeeded: bool | None = None,
     blocked_reason: str | None = None,
@@ -456,6 +457,9 @@ def _build_audit(
         "heavy_geometry_patterns": detected.heavy_geometry,
         "mutation_patterns": detected.mutation,
         "timed_out": timed_out,
+        # How often the wait for the program woke before its monotonic deadline;
+        # None when the call was refused before anything was waited on.
+        "woke_early": woke_early,
         "rollback_attempted": rollback_attempted,
         "rollback_succeeded": rollback_succeeded,
         "blocked_reason": blocked_reason,
@@ -872,11 +876,9 @@ def _execute_with_grant(
         # closed yet, while the worker can continue mutating afterward. Never
         # touch the undo stack from this state.
         logger.warning(
-            "%s exceeded timeout of %ss (wait woke early %d times); "
-            "worker code_sha256=%s still running, undo not attempted",
+            "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
             operation,
             timeout,
-            woke_early,
             detected.code_sha256,
         )
         raise ProgramStillRunning(
@@ -908,6 +910,7 @@ def _execute_with_grant(
                 grant=grant,
                 detected=detected,
                 timed_out=True,
+                woke_early=woke_early,
                 rollback_attempted=False,
                 rollback_succeeded=False,
             ),
@@ -915,7 +918,7 @@ def _execute_with_grant(
 
     # The program ended; what remains of the worker is the scene read after it.
     worker.thread.join()
-    audit = _build_audit(code=code, grant=grant, detected=detected)
+    audit = _build_audit(code=code, grant=grant, detected=detected, woke_early=woke_early)
 
     # --- Exception during execution -----------------------------------------
     if exec_exception[0] is not None:
