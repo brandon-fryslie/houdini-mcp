@@ -108,6 +108,25 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     assert payload["target"] == "studio-box:19000"
 
 
+def test_starting_logs_the_target_and_the_level_it_resolved(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(FastMCP, "run", lambda _self, **_kwargs: None)
+    monkeypatch.setattr("logging.basicConfig", lambda **_kwargs: None)
+    for name in STARTUP_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOUDINI_HOST", "studio-box")
+    monkeypatch.setenv("HOUDINI_PORT", "19000")
+    monkeypatch.setenv("LOG_LEVEL", "warn")
+
+    with caplog.at_level(logging.INFO, logger="houdini_mcp.server"):
+        main()
+
+    logged = [r.getMessage() for r in caplog.records]
+    assert "Houdini connection target: studio-box:19000" in logged
+    assert "Log level: WARNING" in logged
+
+
 @pytest.mark.parametrize("command", COMMANDS.values(), ids=COMMANDS.keys())
 @pytest.mark.parametrize(
     ("name", "value", "told"),
