@@ -265,11 +265,10 @@ class TestErrorHandling:
         assert noise_info["status"] == "success"
         assert "cook_info" in noise_info
 
-        # Noise without input won't error, but has no geometry
+        # Noise without input cooks to no geometry at all
         geo = await get_geo_summary(noise_path, max_sample_points=0, **at)
-        if geo.get("status") == "success":
-            # Should have 0 points (no input)
-            assert geo["point_count"] == 0
+        assert geo["status"] == "error", geo
+        assert geo["kind"] == "operation_failed", geo
 
         # Fix: Add grid input
         grid = create_node("grid", geo_path, "grid1", **at)

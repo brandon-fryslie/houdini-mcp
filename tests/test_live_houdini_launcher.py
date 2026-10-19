@@ -17,6 +17,7 @@ from tests.live_houdini import (
     HoudiniDidNotStart,
     hython_executable,
     running_listener,
+    signal_group,
 )
 
 
@@ -36,10 +37,7 @@ def group_gone(pid_file: Path) -> bool:
     pgid = int(pid_file.read_text())
     stop_at = time.monotonic() + 5
     while time.monotonic() < stop_at:
-        try:
-            os.killpg(pgid, 0)
-        # macOS: EPERM while only an unreaped zombie holds the group.
-        except (ProcessLookupError, PermissionError):
+        if not signal_group(pgid, 0):
             return True
         time.sleep(0.05)
     return False
@@ -64,6 +62,13 @@ def test_yields_the_reported_port_and_ends_the_whole_group(
     ready, stopped = (r.getMessage() for r in caplog.records)
     assert "port=4242 ready in" in ready
     assert "exit=0" in stopped
+
+
+def test_a_port_reported_just_before_the_child_exits_is_still_the_report(tmp_path: Path) -> None:
+    body = "os.write(fd, b'4242\\n')\n"
+
+    with running_listener(stand_in(tmp_path / "pid", body), os.environ, tmp_path / "log") as target:
+        assert target.port == 4242
 
 
 def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:

@@ -31,18 +31,23 @@ PLUGIN_PYTHON = Path(__file__).resolve().parents[1] / "houdini_plugin" / "python
 # The child's whole job, given the readiness pipe's write end as {fd}.
 # [LAW:one-source-of-truth] the plugin is this checkout's, first on sys.path, so an
 # installed houdini_mcp package (which prepends its own copy to PYTHONPATH) is not
-# the code under test; the log names the file that loaded. The bind config is
+# the code under test, and a copy something imported first stops the run. The bind config is
 # stated here, not read from an environment the child inherits.
 _SERVE_LISTENER = """\
 import os, sys
 sys.path.insert(0, {plugin!r})
-import houdini_mcp_plugin
 from houdini_mcp_plugin.listener import ListenerConfig, RemoteListener
-print("plugin", houdini_mcp_plugin.__file__, flush=True)
 listener = RemoteListener()
 started = listener.start(ListenerConfig(host="127.0.0.1", port=0), raise_on_policy=True)
 if started["status"] != "success":
     sys.exit(f"listener did not start: {{started}}")
+foreign = {{
+    name: sys.modules[name].__file__
+    for name in os.listdir({plugin!r})
+    if name in sys.modules and not sys.modules[name].__file__.startswith({plugin!r})
+}}
+if foreign:
+    sys.exit(f"plugin modules loaded from outside this checkout: {{foreign}}")
 os.write({fd}, b"%d\\n" % started["bound_port"])
 os.close({fd})
 """
@@ -105,7 +110,9 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
     poller.register(ready, select.POLLIN)
     stop_at = time.monotonic() + deadline
     while (left := stop_at - time.monotonic()) > 0:
-        readable = poller.poll(min(left, 0.25) * 1000)
+        # The exit is read before the pipe, so a report written before it is never missed.
+        code = child.poll()
+        readable = poller.poll(0 if code is not None else min(left, 0.25) * 1000)
         # One write far under PIPE_BUF arrives whole: a line, or EOF.
         sent = os.read(ready, 64) if readable else b""
         if report := re.fullmatch(rb"(\d+)\n", sent):
@@ -115,22 +122,26 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
                 f"reported {sent!r}, not a port; log {log_path}:\n{_log_tail(log_path)}"
             )
         # EOF says no port is coming; the child's exit says why, once it lands.
-        if readable:
+        if readable and code is None:
             with contextlib.suppress(subprocess.TimeoutExpired):
-                child.wait(left)
-        if (code := child.poll()) is not None:
+                code = child.wait(left)
+        if code is not None:
             raise HoudiniDidNotStart(
                 f"exited {code} without a port; log {log_path}:\n{_log_tail(log_path)}"
             )
     raise HoudiniDidNotStart(f"no port within {deadline}s; log {log_path}:\n{_log_tail(log_path)}")
 
 
-def _signal_group(pgid: int, sig: signal.Signals) -> None:
+def signal_group(pgid: int, sig: int) -> bool:
+    """Whether a process in group ``pgid`` was left to take ``sig``; 0 only asks."""
     # [LAW:no-silent-failure] a group with no live process is the state a stop exists
-    # to reach; raising here would bury the error that named why the child stopped.
-    # macOS says so with EPERM, not ESRCH, while an unreaped zombie still holds the group.
-    with contextlib.suppress(ProcessLookupError, PermissionError):
+    # to reach, answered False, never raised over the error that named why the child
+    # stopped. macOS says so with EPERM, not ESRCH, while an unreaped zombie holds it.
+    try:
         os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
 def _stop(child: subprocess.Popen[bytes], grace: float) -> None:
@@ -142,7 +153,7 @@ def _stop(child: subprocess.Popen[bytes], grace: float) -> None:
     child.stdin.close()
     with contextlib.suppress(subprocess.TimeoutExpired):
         child.wait(grace)
-    _signal_group(child.pid, signal.SIGKILL)
+    signal_group(child.pid, signal.SIGKILL)
     logger.info("listener pid=%d stopped exit=%d", child.pid, child.wait())
 
 
