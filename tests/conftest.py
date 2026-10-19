@@ -11,6 +11,7 @@ from collections.abc import Callable, Generator, Sequence
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import rpyc
 import rpyc.utils.server
@@ -831,6 +832,41 @@ def results_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pat
     root = tmp_path / "results-root"
     monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(root))
     return root
+
+
+def summarizer_through(
+    production: Callable[[], httpx.AsyncClient],
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
+    """The client ``production`` builds - its server, key and timeouts - with ``handler``
+    answering in place of the network."""
+    real = production()
+    return httpx.AsyncClient(
+        base_url=real.base_url,
+        headers=real.headers,
+        timeout=real.timeout,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+@pytest.fixture(autouse=True)
+def production_summarizer_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], httpx.AsyncClient]:
+    """The summarizer's production client builder, which a test reaches the summarizer
+    through only by routing its own: in its place is a server that refuses every
+    connection, so no test sends a request off this machine."""
+    from houdini_mcp.tools import summarization
+
+    production = summarization.summarizer_client
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("tests reach no summarizer", request=request)
+
+    monkeypatch.setattr(
+        summarization, "summarizer_client", lambda: summarizer_through(production, refuse)
+    )
+    return production
 
 
 @pytest.fixture

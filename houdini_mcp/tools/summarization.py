@@ -20,6 +20,9 @@ from typing import Any
 
 import httpx
 
+from ..reading import RESPONSE_BOUND_BYTES, Reading
+from ._common import run_in_executor
+
 logger = logging.getLogger("houdini_mcp.summarization")
 
 # Configuration. The SUMMARIZATION_ prefix keeps an OPENAI_* key or URL set for some
@@ -53,8 +56,6 @@ SUMMARIZATION_MODEL = os.getenv(
 )
 SUMMARIZATION_ENABLED = os.getenv("SUMMARIZATION_ENABLED", "true").lower() == "true"
 
-# Thresholds for automatic summarization (in estimated tokens)
-AUTO_SUMMARIZE_THRESHOLD = int(os.getenv("AUTO_SUMMARIZE_THRESHOLD", "5000"))
 # Target summary size
 TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
 
@@ -120,16 +121,6 @@ def parse_completion(body: Any) -> Completion:
     return Completion(text=content, finish_reason=finish_reason)
 
 
-def estimate_tokens(data: Any) -> int:
-    """Estimate token count for data.
-
-    Rough estimate: ~4 characters per token for JSON.
-    """
-    if isinstance(data, str):
-        return len(data) // 4
-    return len(json.dumps(data, default=str)) // 4
-
-
 async def summarized(
     result: dict[str, Any],
     summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
@@ -137,21 +128,29 @@ async def summarized(
     asked: bool,
 ) -> dict[str, Any]:
     """The result with its AI summary when summarization is enabled, the caller asked for
-    one, and it is too large to read whole; anything else comes back as is, and nothing
-    leaves the process."""
-    tokens = estimate_tokens(result)
+    one, and it is too large to read whole, so it will arrive as a file; anything else
+    comes back as is, and nothing leaves the process.
+
+    Raises:
+        Unreadable: the wire cannot carry ``result`` as JSON.
+    """
+    # [LAW:one-source-of-truth] too large to read whole is the line delivery draws, so
+    # a summary always stands in for a file, and a result read inline never has one.
+    # A summary only adds fields, so a result measured too large here is too large
+    # when it is delivered. Rendering is blocking work, kept off the loop.
+    reading: Reading = await run_in_executor(Reading.of, result)
     # [LAW:no-mode-explosion] summarize is one bool: False is off, and True summarizes
-    # only past the threshold - a result small enough to read gains nothing from one.
+    # only past the bound - a result small enough to read gains nothing from one.
     # [LAW:single-enforcer] Every summary is decided here, so SUMMARIZATION_ENABLED=false
     # is a setting the result is left alone under, not a request that fails.
-    summarize = SUMMARIZATION_ENABLED and asked and tokens > AUTO_SUMMARIZE_THRESHOLD
+    summarize = SUMMARIZATION_ENABLED and asked and not reading.fits
     logger.debug(
-        "Summarize: %s (enabled=%s, asked=%s, ~%d tokens, threshold %d)",
+        "Summarize: %s (enabled=%s, asked=%s, %d bytes, bound %d)",
         summarize,
         SUMMARIZATION_ENABLED,
         asked,
-        tokens,
-        AUTO_SUMMARIZE_THRESHOLD,
+        len(reading.encoded),
+        RESPONSE_BOUND_BYTES,
     )
     return await summarizer(result) if summarize else result
 
@@ -344,14 +343,14 @@ def get_summarization_status() -> dict[str, Any]:
         - enabled: Whether AI summarization is active
         - model: Model the summaries are requested from
         - base_url: The chat-completions server (OpenAI API base, ending in /v1)
-        - auto_threshold_tokens: Estimated tokens a result must exceed to be summarized;
-          a tool called with summarize=False is never summarized
+        - response_bound_bytes: A result whose text is larger arrives as a file, and
+          is summarized; a tool called with summarize=False is never summarized
         - target_summary_tokens: Target size for generated summaries
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,
         "model": SUMMARIZATION_MODEL,
         "base_url": str(SUMMARIZATION_BASE_URL),
-        "auto_threshold_tokens": AUTO_SUMMARIZE_THRESHOLD,
+        "response_bound_bytes": RESPONSE_BOUND_BYTES,
         "target_summary_tokens": TARGET_SUMMARY_TOKENS,
     }

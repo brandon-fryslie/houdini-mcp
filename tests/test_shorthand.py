@@ -17,6 +17,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from houdini_mcp.delivery import deliver
+from houdini_mcp.reading import RESPONSE_BOUND_BYTES
 from houdini_mcp.results import Results
 from houdini_mcp.shorthand import KEY, render
 from tests.shorthand_reader import read
@@ -145,7 +146,9 @@ class TestTheWire:
 
     def test_a_pointer_carries_what_the_wire_carries(self, results: Results) -> None:
         reply = deliver(
-            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, results, bound=8
+            "t",
+            {"status": "success", "total": float("nan"), "data": "x" * RESPONSE_BOUND_BYTES},
+            results,
         )
 
         pointer = reply.structured_content
