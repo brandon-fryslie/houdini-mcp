@@ -67,8 +67,8 @@ def results_dir() -> Path:
     """Where results too large to return inline are written.
 
     By default one directory per user, the same for every server process, so a
-    server's removals bound what earlier ones left too; only its user can read it,
-    since results carry scene contents and program output. The override is for a
+    server's removals bound what earlier ones left too. Each file is readable by
+    its user alone, since results carry scene contents and program output. The override is for a
     deployment that must name where they land.
     """
     return Path(
@@ -143,18 +143,20 @@ def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[
     try:
         directory = results_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # [LAW:no-ambient-temporal-coupling] room is made before the write, so the
-        # file this pointer names is never among those removed to make it.
-        removed = make_room(directory, size)
         path = directory / name
-        path.write_bytes(encoded)
-    except OSError as e:
+        write_private(path, encoded)
+    except (OSError, RuntimeError) as e:
+        # RuntimeError: Path.home() when the user has no home directory.
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
         unwritten = OperationFailed(
             f"{tool} ran, but its {size}-byte result could not be stored as {name}: {e}"
         )
         return failure_response(unwritten, tool)
+    # [LAW:no-ambient-temporal-coupling] room is made after the write, around the file
+    # just written: a failed write removes nothing, and the last of several servers
+    # writing at once to finish sees all their files and brings them within the budget.
+    removed = make_room(directory, path, size)
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s; "
         "removed %d older results, %d bytes",
@@ -173,33 +175,58 @@ def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[
     }
 
 
+def write_private(path: Path, data: bytes) -> None:
+    """``data`` as a new file at ``path`` only its user can read, or nothing at ``path``."""
+    try:
+        with open(path, "xb", opener=lambda file, flags: os.open(file, flags, 0o600)) as out:
+            out.write(data)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def held(directory: Path) -> list[tuple[int, int, Path]]:
     """Every result file in ``directory``: when it was written, its size, and where it is."""
     files = []
-    for entry in os.scandir(directory):
-        if not RESULT_NAME.fullmatch(entry.name):
-            continue
-        try:
-            stat = entry.stat()
-        except FileNotFoundError:
-            # Another server writing here removed it after it was listed: it is
-            # already what removal would have made it.
-            continue
-        files.append((stat.st_mtime_ns, stat.st_size, Path(entry.path)))
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if not RESULT_NAME.fullmatch(entry.name):
+                continue
+            try:
+                stat = entry.stat()
+            except FileNotFoundError:
+                # Another server writing here removed it after it was listed: it is
+                # already what removal would have made it.
+                logger.debug("%s was removed by another server before it was weighed", entry.path)
+                continue
+            files.append((stat.st_mtime_ns, stat.st_size, Path(entry.path)))
     return files
 
 
-def make_room(directory: Path, incoming: int) -> list[int]:
-    """Remove the oldest results in ``directory`` until the rest and ``incoming`` bytes
-    fit ``RESULTS_BUDGET_BYTES``; the sizes of those removed.
+def make_room(directory: Path, newest: Path, size: int) -> list[int]:
+    """Remove the oldest results in ``directory`` until they fit ``RESULTS_BUDGET_BYTES``
+    beside ``newest``, which is ``size`` bytes and always kept; the sizes of those removed.
+
+    A result that cannot be removed is left, and said so: the newest is delivered
+    either way, and the next delivery tries again.
     """
-    removed = []
-    filled = incoming
-    for _, size, path in sorted(held(directory), reverse=True):
-        filled += size
-        if filled > RESULTS_BUDGET_BYTES:
+    removed: list[int] = []
+    try:
+        older = [file for file in held(directory) if file[2] != newest]
+    except OSError as e:
+        logger.warning("could not list %s to keep its results within the budget: %s", directory, e)
+        return removed
+    filled = size
+    for _, bytes_held, path in sorted(older, reverse=True):
+        filled += bytes_held
+        if filled <= RESULTS_BUDGET_BYTES:
+            continue
+        try:
             path.unlink(missing_ok=True)
-            removed.append(size)
+        except OSError as e:
+            logger.warning("could not remove %s to keep results within the budget: %s", path, e)
+            continue
+        removed.append(bytes_held)
     return removed
 
 
@@ -207,7 +234,13 @@ def read_result(name: str) -> str:
     """The text of a result ``deliver`` wrote, by the name in its ``result_uri``."""
     if not RESULT_NAME.fullmatch(name):
         raise ValueError(f"not a delivered result name: {name!r}")
+    directory = results_dir()
     try:
-        return (results_dir() / name).read_text(encoding="utf-8")
+        return (directory / name).read_text(encoding="utf-8")
     except FileNotFoundError as e:
-        raise FileNotFoundError(f"result {name} is no longer held: {RETENTION}.") from e
+        logger.info("read of result %s missed: not in %s", name, directory)
+        raise FileNotFoundError(
+            f"result {name} is not in {directory}: either it was removed, since {RETENTION}; "
+            f"or it was written to another directory, by a server with another "
+            f"HOUDINI_MCP_RESULTS_DIR."
+        ) from e

@@ -15,8 +15,8 @@ the bound, so its `image_base64` is in the file.
 
 Read the file soon. Result files are kept until newer results, from any server
 writing to the same directory, fill 64MB; then the oldest are removed. The
-newest result is always kept. Reading a removed result's `result_uri` fails
-and says it was removed under this rule.
+newest result is always kept. Reading a `result_uri` whose file is gone fails,
+names the directory it looked in, and gives this rule.
 
 ## Every Tool: The Text Is a Shorthand of the JSON
 

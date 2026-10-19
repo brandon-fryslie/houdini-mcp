@@ -7,6 +7,7 @@ server by its URI - with the fields that say how the call ended. Nothing is cut.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -311,6 +312,16 @@ def large(share: float) -> dict[str, Any]:
     return {"status": "success", "text": "x" * int(delivery.RESULTS_BUDGET_BYTES * share)}
 
 
+TURN = iter(range(10**9))
+
+
+def written_in_turn(pointer: dict[str, Any]) -> dict[str, Any]:
+    """``pointer``, its file dated a second after the one before: two writes in one
+    tick of a coarse filesystem clock would otherwise tie, and order nothing."""
+    os.utime(pointer["result_file"], ns=(0, 10**18 + next(TURN) * 10**9))
+    return pointer
+
+
 class TestRetention:
     """Result files stay within the declared budget, newest kept, the rest removed."""
 
@@ -318,7 +329,7 @@ class TestRetention:
         self, results: pathlib.Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.delivery"):
-            pointers = [sent("render_viewport", large(0.4)) for _ in range(4)]
+            pointers = [written_in_turn(sent("render_viewport", large(0.4))) for _ in range(4)]
 
         assert on_disk(results) <= delivery.RESULTS_BUDGET_BYTES
         assert [pathlib.Path(p["result_file"]).exists() for p in pointers] == [
@@ -371,8 +382,131 @@ class TestRetention:
         removed = sent("render_viewport", large(0.6))
         sent("render_viewport", large(0.6))
 
-        with pytest.raises(Exception, match="is no longer held: a result file is kept until"):
+        with pytest.raises(Exception, match="either it was removed, since a result file is kept"):
             await client.read_resource(removed["result_uri"])
+
+    def test_a_missed_read_is_logged(
+        self, results: pathlib.Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        name = "render_viewport-" + "0" * 32 + ".txt"
+
+        with (
+            caplog.at_level(logging.INFO, logger="houdini_mcp.delivery"),
+            pytest.raises(FileNotFoundError, match="another HOUDINI_MCP_RESULTS_DIR"),
+        ):
+            read_result(name)
+
+        assert f"read of result {name} missed: not in {results}" in caplog.messages
+
+    def test_a_result_that_cannot_be_removed_does_not_cost_the_newest(
+        self,
+        results: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An old file held open on Windows refuses removal; the new result still arrives."""
+        stuck = written_in_turn(sent("render_viewport", large(0.6)))
+        unlink = pathlib.Path.unlink
+
+        def refused(path: pathlib.Path, missing_ok: bool = False) -> None:
+            if str(path) == stuck["result_file"]:
+                raise PermissionError("in use")
+            unlink(path, missing_ok=missing_ok)
+
+        monkeypatch.setattr(pathlib.Path, "unlink", refused)
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.delivery"):
+            newest = sent("render_viewport", large(0.6))
+
+        assert read(read_result(newest["result_uri"].rsplit("/", 1)[1])) == whole(newest)
+        assert pathlib.Path(stuck["result_file"]).exists()
+        assert (
+            f"could not remove {stuck['result_file']} to keep results within the budget: in use"
+            in caplog.messages
+        )
+
+    def test_a_directory_that_cannot_be_listed_does_not_cost_the_newest(
+        self,
+        results: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def unlistable(directory: Any) -> Any:
+            raise OSError("too many open files")
+
+        monkeypatch.setattr(delivery.os, "scandir", unlistable)
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.delivery"):
+            newest = sent("render_viewport", large(0.4))
+
+        assert pathlib.Path(newest["result_file"]).exists()
+        assert (
+            f"could not list {results} to keep its results within the budget: too many open files"
+            in caplog.messages
+        )
+
+    def test_a_result_removed_while_weighed_is_skipped_and_logged(
+        self,
+        results: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        results.mkdir()
+        gone = results / ("render_viewport-" + "0" * 32 + ".txt")
+        gone.write_bytes(b"x")
+        scandir = os.scandir
+
+        class Vanishing:
+            def __init__(self, entry: os.DirEntry[str]) -> None:
+                self.name, self.path = entry.name, entry.path
+
+            def stat(self) -> os.stat_result:
+                raise FileNotFoundError(self.path)
+
+        @contextlib.contextmanager
+        def racing(directory: Any) -> Any:
+            with scandir(directory) as entries:
+                yield [Vanishing(entry) for entry in entries]
+
+        monkeypatch.setattr(delivery.os, "scandir", racing)
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.delivery"):
+            assert delivery.held(results) == []
+
+        assert f"{gone} was removed by another server before it was weighed" in caplog.messages
+
+    def test_a_result_file_is_readable_by_its_user_alone(self, results: pathlib.Path) -> None:
+        results.mkdir(mode=0o755)
+
+        pointer = sent("render_viewport", large(0.1))
+
+        assert os.stat(pointer["result_file"]).st_mode & 0o077 == 0
+
+    def test_a_failed_write_leaves_nothing_and_removes_nothing(
+        self, results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        older = sent("render_viewport", large(0.6))
+
+        @contextlib.contextmanager
+        def full(path: Any, mode: str, **kwargs: Any) -> Any:
+            with open(path, mode, **kwargs) as out:
+                out.write(b"partial")
+                raise OSError(28, "No space left on device")
+                yield out
+
+        monkeypatch.setattr(delivery, "open", full, raising=False)
+        failure = FAILURE.validate_python(sent("render_viewport", large(0.6)))
+
+        assert "could not be stored" in failure.message
+        assert sorted(results.iterdir()) == [pathlib.Path(older["result_file"])]
+
+    def test_a_user_with_no_home_learns_the_tool_ran(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def homeless() -> pathlib.Path:
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.delenv("HOUDINI_MCP_RESULTS_DIR")
+        monkeypatch.setattr(pathlib.Path, "home", homeless)
+        failure = FAILURE.validate_python(sent("execute_code", large(0.1)))
+
+        assert failure.message.startswith("execute_code ran, but its")
+        assert "Could not determine home directory." in failure.message
 
     def test_every_client_is_told_the_rule(self) -> None:
         assert delivery.RETENTION in delivery.CALLER_GUIDE

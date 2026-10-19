@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   like any other value that is not three numbers; omit the argument instead.
   `camera_position` still takes null, which means the framed position.
 
+- **BREAKING (wire)**: result files are removed (houdini-laws-spine-cqp.cwa).
+  A result too large to return inline is kept until newer results, from any
+  server writing to the same directory, fill 64MB; then the oldest are
+  removed, and the newest is always kept. Before, no result file was ever
+  removed. `HOUDINI_MCP_RESULTS_DIR` defaults to `~/.cache/houdini-mcp/results`,
+  one directory shared by every server the user runs, instead of a new
+  temporary directory per server process. Each result file is readable by its
+  user alone. Reading a `result_uri` whose file is gone fails and names the
+  directory it looked in.
+
 - **BREAKING (wire, Python API)**: `summarize` on `find_error_nodes`,
   `get_geo_summary` and `serialize_scene` defaults to `true`, and it is the
   whole rule (houdini-laws-etg.0yy). `true` summarizes a result over
