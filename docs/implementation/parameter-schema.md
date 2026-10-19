@@ -214,56 +214,13 @@ Potential improvements for future iterations:
 Run all tests:
 ```bash
 # Integration tests (comprehensive, recommended)
-pytest tests/test_parameter_schema_integration.py -v
+uv run pytest tests/test_parameter_schema_integration.py -v
 
 # Unit tests
-pytest tests/test_parameter_schema.py -v
+uv run pytest tests/test_parameter_schema.py -v
 
 # All existing tests (verify no regressions)
-pytest tests/test_tools.py -v
-```
-
-Run manual verification:
-```bash
-python3 << 'EOF'
-from unittest.mock import MagicMock, patch
-from houdini_mcp.connection import connect
-from houdini_mcp.tools import get_parameter_schema
-
-mock_hou = MagicMock()
-mock_hou.parmTemplateType.Float = "Float"
-
-mock_node = MagicMock()
-mock_template = MagicMock()
-mock_template.name.return_value = "radx"
-mock_template.label.return_value = "Radius"
-mock_template.type.return_value = "Float"
-mock_template.numComponents.return_value = 1
-mock_template.defaultValue.return_value = [1.0]
-mock_template.minValue.return_value = 0.0
-mock_template.maxValue.return_value = None
-
-mock_parm = MagicMock()
-mock_parm.parmTemplate.return_value = mock_template
-mock_parm.eval.return_value = 2.5
-
-mock_node.parm.return_value = mock_parm
-mock_hou.node.return_value = mock_node
-
-# Install mock_hou through the connection's own API: the handshake seam hands
-# out a connection whose ``modules.hou`` is the mock.
-mock_conn = MagicMock(closed=False)
-mock_conn.modules.hou = mock_hou
-with patch('houdini_mcp.connection.handshake') as handshake:
-    handshake.connect.return_value = mock_conn
-    connect()
-
-result = get_parameter_schema("/obj/geo1/sphere1", "radx")
-print(f"✓ Status: {result['status']}")
-print(f"✓ Parameter: {result['parameters'][0]['name']}")
-print(f"✓ Type: {result['parameters'][0]['type']}")
-print(f"✓ Current value: {result['parameters'][0]['current_value']}")
-EOF
+uv run pytest tests/test_tools.py -v
 ```
 
 ## Conclusion

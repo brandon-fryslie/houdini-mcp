@@ -6,6 +6,9 @@ the SideFX website. It does NOT require a Houdini connection.
 
 from typing import Any, Literal
 
+import requests
+from bs4 import BeautifulSoup
+
 from ._common import (
     InvalidInput,
     OperationFailed,
@@ -85,14 +88,6 @@ def get_houdini_help(
         get_houdini_help("python_hou", "Node")  # Get hou.Node class docs
         get_houdini_help("obj", "cam")  # Get camera object docs
     """
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-    except ImportError as e:
-        raise OperationFailed(
-            "Required packages not installed. Run: pip install requests beautifulsoup4"
-        ) from e
-
     full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{item_name}.html"
 
     try:
@@ -114,7 +109,7 @@ def get_houdini_help(
         # Extract title
         h1 = soup.find("h1", class_="title")
         if h1:
-            title_text = h1.contents[0].strip() if h1.contents else ""
+            title_text = next(h1.stripped_strings, "")
             subtitle = h1.find("span", class_="subtitle")
             subtitle_text = subtitle.get_text(strip=True) if subtitle else ""
             title = f"{title_text} - {subtitle_text}" if subtitle_text else title_text

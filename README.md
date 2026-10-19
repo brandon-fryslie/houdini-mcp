@@ -36,21 +36,23 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
 ## Prerequisites
 
-1. **Houdini with RPC enabled** - Start Houdini's RPC server:
+1. **Houdini 22** - macOS on Apple Silicon is the primary platform; on
+   [Windows and Linux](#windows-and-linux) only the paths differ.
+
+2. **Houdini with RPC enabled** - Start Houdini's RPC server:
    - In Houdini: `Windows > Python Shell`, then run:
      ```python
      import hrpyc
 
      hrpyc.start_server(port=18811)
      ```
-   - Or add to your `123.py` startup script for automatic startup
+   - Or put those two lines in
+     `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
+     runs in every graphical session once its UI is up
 
-2. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
+3. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
 
 ## Installation
-
-For Codex Desktop on Windows, see the dedicated setup notes in
-[`docs/codex-windows-setup.md`](docs/codex-windows-setup.md).
 
 ### Option 1: stdio
 
@@ -82,6 +84,15 @@ path to your clone:
     }
   }
 }
+```
+
+Codex takes the same server in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.houdini]
+command = "uv"
+args = ["run", "--directory", "/path/to/houdini-mcp", "houdini-mcp"]
+env = { MCP_TRANSPORT = "stdio" }
 ```
 
 A GUI client such as Claude Desktop may start with a `PATH` that lacks `uv`; if
@@ -155,37 +166,30 @@ docker compose up -d
 The plugin adds the "Houdini MCP" shelf, whose tools start, stop and check the
 hrpyc listener, and it holds the search `find_nodes` runs inside Houdini.
 
+From your clone of this repository:
+
 1. Copy the `houdini_plugin` folder to your Houdini packages directory:
    ```bash
-   # Windows
-   copy houdini_plugin %USERPROFILE%\Documents\houdini20.5\packages\houdini_mcp
-
-   # Linux/Mac
-   cp -r houdini_plugin ~/houdini20.5/packages/houdini_mcp
+   mkdir -p ~/Library/Preferences/houdini/22.0/packages
+   cp -r houdini_plugin ~/Library/Preferences/houdini/22.0/packages/houdini_mcp
    ```
 
 2. Copy the package JSON:
    ```bash
-   # Windows
-   copy houdini_plugin\houdini_mcp.json %USERPROFILE%\Documents\houdini20.5\packages\
-
-   # Linux/Mac
-   cp houdini_plugin/houdini_mcp.json ~/houdini20.5/packages/
+   cp houdini_plugin/houdini_mcp.json ~/Library/Preferences/houdini/22.0/packages/
    ```
 
 3. Restart Houdini and find the "Houdini MCP" shelf
 
-### Local Development
+### Windows and Linux
 
-```bash
-# Clone and install
-git clone https://github.com/brandon-fryslie/houdini-mcp.git
-cd houdini-mcp
-uv sync
-
-# Run against Houdini on this machine (set HOUDINI_HOST to reach another)
-uv run python -m houdini_mcp
-```
+The steps above are the same on Windows and Linux, with your platform's paths.
+Houdini's preferences directory, which holds `packages` and `python3.13libs`, is
+`%USERPROFILE%\Documents\houdini22.0` on Windows and `~/houdini22.0` on Linux,
+in place of macOS's `~/Library/Preferences/houdini/22.0`. On Windows the client
+config takes the clone's Windows path, and Codex reads
+`%USERPROFILE%\.codex\config.toml`. None of this has been tested on Windows or
+Linux with Houdini 22.
 
 ## Configuration
 
@@ -474,10 +478,10 @@ Complete working examples are available in the `examples/` directory:
 Run examples:
 
 ```bash
-python examples/build_from_scratch.py
-python examples/augment_existing_scene.py
-python examples/parameter_workflow.py
-python examples/error_handling.py
+uv run python examples/build_from_scratch.py
+uv run python examples/augment_existing_scene.py
+uv run python examples/parameter_workflow.py
+uv run python examples/error_handling.py
 ```
 
 ## Usage Examples
@@ -507,15 +511,21 @@ Add to your MCP client configuration:
 ## Development
 
 ```bash
+git clone https://github.com/brandon-fryslie/houdini-mcp.git
+cd houdini-mcp
+
 # Install runtime + dev dependencies from the lockfile
 uv sync
 
 # Run tests
 uv run pytest
 
-# Run server locally
-uv run python -m houdini_mcp
+# Run the server against Houdini on this machine (set HOUDINI_HOST to reach another)
+uv run houdini-mcp
 ```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers linting, the pre-commit hooks and the
+tests that run against a live Houdini.
 
 ## Troubleshooting
 
@@ -523,6 +533,9 @@ uv run python -m houdini_mcp
 - Verify Houdini is running with hrpyc server started
 - Check firewall allows port 18811
 - Verify HOUDINI_HOST is correct
+
+### Tools time out while `ping_houdini` answers
+- Close any modal dialog open in Houdini and try again
 
 ### Authentication errors
 - hrpyc uses no authentication by default

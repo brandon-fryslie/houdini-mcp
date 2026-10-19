@@ -6,8 +6,9 @@ Thank you for your interest in contributing to Houdini MCP!
 
 ### Prerequisites
 
-- Python 3.11+
-- SideFX Houdini (for integration testing)
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), which installs
+  the Python the project pins
+- SideFX Houdini 22 (for integration testing)
 - Git
 
 ### Initial Setup
@@ -27,42 +28,39 @@ uv run pre-commit install --hook-type pre-push
 
 ## Development Workflow
 
-The commands below run inside the uv environment: prefix each with `uv run`,
-or activate `.venv` first.
-
 ### Running Tests
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=houdini_mcp --cov-report=term-missing
+uv run pytest --cov=houdini_mcp --cov-report=term-missing
 
 # Run specific test file
-pytest tests/test_connection.py
+uv run pytest tests/test_connection.py
 
 # Run specific test
-pytest tests/test_tools.py::TestCreateNode::test_create_node_success
+uv run pytest tests/test_tools.py::TestCreateNode::test_create_node_success
 ```
 
 ### Code Quality
 
 ```bash
 # Format code
-ruff format .
+uv run ruff format .
 
 # Lint code
-ruff check .
+uv run ruff check .
 
 # Auto-fix lint issues
-ruff check --fix .
+uv run ruff check --fix .
 
 # Type checking
-mypy houdini_mcp/
+uv run mypy houdini_mcp/
 
 # Security scan
-bandit -r houdini_mcp/ -c pyproject.toml
+uv run bandit -r houdini_mcp/ -c pyproject.toml
 ```
 
 ### Pre-commit Hooks
@@ -71,10 +69,10 @@ Pre-commit hooks run automatically on commit. To run manually:
 
 ```bash
 # Run all hooks on all files
-pre-commit run --all-files
+uv run pre-commit run --all-files
 
 # Run specific hook
-pre-commit run ruff --all-files
+uv run pre-commit run ruff --all-files
 ```
 
 ## Testing with Live Houdini
@@ -144,7 +142,7 @@ def create_node(
 1. **Fork** the repository
 2. Create a **feature branch** (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. **Run tests** (`pytest`)
+4. **Run tests** (`uv run pytest`)
 5. **Commit** with descriptive message (`git commit -m 'Add amazing feature'`)
 6. **Push** to your fork (`git push origin feature/amazing-feature`)
 7. Open a **Pull Request**

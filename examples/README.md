@@ -6,7 +6,8 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 
 1. Houdini running with hrpyc server (port 18811)
 2. Houdini MCP Server running (port 3055)
-3. Python 3.11+ (the project floor) with `requests` library
+3. [uv](https://docs.astral.sh/uv/getting-started/installation/) and a clone of
+   this repository; `uv run` gives the examples the project's environment
 
 ## Examples
 
@@ -26,7 +27,7 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 
 **Run**:
 ```bash
-python examples/build_from_scratch.py
+uv run python examples/build_from_scratch.py
 ```
 
 **Expected Output**:
@@ -53,7 +54,7 @@ python examples/build_from_scratch.py
 
 **Run**:
 ```bash
-python examples/augment_existing_scene.py
+uv run python examples/augment_existing_scene.py
 ```
 
 **Expected Output**:
@@ -80,7 +81,7 @@ python examples/augment_existing_scene.py
 
 **Run**:
 ```bash
-python examples/parameter_workflow.py
+uv run python examples/parameter_workflow.py
 ```
 
 **Expected Output**:
@@ -111,7 +112,7 @@ python examples/parameter_workflow.py
 
 **Run**:
 ```bash
-python examples/error_handling.py
+uv run python examples/error_handling.py
 ```
 
 **Expected Output**:
@@ -227,7 +228,7 @@ MCP_URL = "http://your-host:your-port"
 
 ### Connection refused
 - Ensure Houdini is running with `hrpyc.start_server(port=18811)`
-- Ensure MCP server is running: `python -m houdini_mcp`
+- Ensure MCP server is running: `uv run houdini-mcp`
 
 ### Examples fail with errors
 - Check that Houdini hrpyc server is accessible

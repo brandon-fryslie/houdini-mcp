@@ -2571,8 +2571,7 @@ class TestGetHoudiniHelp:
         result = get_houdini_help("sop", "box")
 
         assert result["status"] == "success"
-        assert "Box" in result["title"]
-        assert "SOP" in result["title"]
+        assert result["title"] == "Box - SOP"
         assert "box" in result["description"].lower() or "cube" in result["description"].lower()
         assert "parameters" in result
         assert len(result["parameters"]) == 2

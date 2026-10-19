@@ -458,6 +458,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
+  now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
+  JSON one, and end with the Windows and Linux paths. The guide's own plugin
+  recipe left out `houdini_mcp_handshake` and `houdini_mcp_search`, so every
+  shelf tool failed to import.
+
 - The upstream org's internal infrastructure (houdini-tuneup-ef3.b06):
   AGENTS.md's instructions for its Huly tracker, Letta PM agent, Graphiti and
   BookStack; the `.letta/`, `.serena/` and `.vibesync-cache/` tool

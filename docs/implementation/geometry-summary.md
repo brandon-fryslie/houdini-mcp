@@ -110,16 +110,9 @@ def get_geo_summary(
 14. ✅ Cook failed state
 15. ✅ Vertex count calculation
 
-### Test Results:
+### Running the Tests:
 ```bash
-$ pytest tests/test_geometry.py -v
-15 passed in 2.86s
-```
-
-### Full Suite:
-```bash
-$ pytest tests/ --ignore=tests/test_parameter_schema.py --ignore=tests/integration/
-152 passed in 6.83s
+uv run pytest tests/test_geometry.py -v
 ```
 
 ## Technical Implementation
