@@ -3383,6 +3383,19 @@ class TestHandleConnectionErrorsDecorator:
         assert result["status"] == "success"
         assert result["result"] == 8
 
+    def test_an_argument_is_parsed_as_the_json_it_is_sent_as(self):
+        """A tuple is the array it crosses the wire as; a string is never a boolean."""
+        from houdini_mcp.tools._common import handle_connection_errors
+
+        @handle_connection_errors("reorder_inputs")
+        def echo(order: list[int], flag: bool = False) -> dict:
+            return {"status": "success", "order": order, "flag": flag}
+
+        assert echo((1, 0))["order"] == [1, 0]
+        refused = echo([1], flag="yes")
+        assert (refused["kind"], refused["parameter"]) == ("invalid_input", "flag")
+        assert echo(object())["message"].startswith("order: not expressible as JSON")
+
     def test_decorator_uses_operation_name_in_logs(self):
         """Test decorator uses operation name in error handling."""
         from houdini_mcp.tools._common import handle_connection_errors
