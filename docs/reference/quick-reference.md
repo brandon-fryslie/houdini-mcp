@@ -244,6 +244,13 @@ if result["status"] == "error":
 
 ## Safety Limits
 
+### Every tool:
+- A result over 16KB serialized arrives as a pointer: `result_file` (path on the
+  server's machine), `result_uri` (`houdini-mcp://results/{name}`, a resource the
+  server serves), and `result_bytes`
+- The pointer keeps `status`, a failure's fields, and any `ai_summary`; the file
+  holds the whole result
+
 ### list_children():
 - `max_depth=10`: Prevents infinite recursion
 - `max_nodes=1000`: Prevents memory overflow

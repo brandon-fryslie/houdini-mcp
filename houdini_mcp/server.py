@@ -31,7 +31,7 @@ HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 # [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
 # refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
 # would coerce them. One switch, so no parameter type has to say so itself.
-mcp = FastMCP("Houdini MCP", strict_input_validation=True)
+mcp = FastMCP("Houdini MCP", instructions=delivery.CALLER_GUIDE, strict_input_validation=True)
 
 
 # Health check endpoint
@@ -126,7 +126,7 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
         result = await tool(*args, **kwargs)
         # Serializing and writing a large result is blocking work, kept off the loop.
         return await asyncio.to_thread(
-            delivery.deliver, tool.__name__, result, results_dir=delivery.RESULTS_DIR
+            delivery.deliver, tool.__name__, result, results_dir=delivery.results_dir()
         )
 
     return call
@@ -151,7 +151,7 @@ for _tool in SERVED_TOOLS:
 @mcp.resource(delivery.RESULT_URI, mime_type="application/json")
 def delivered_result(name: str) -> str:
     """A tool result too large to return inline, by the name in its ``result_uri``."""
-    return delivery.read_result(name, results_dir=delivery.RESULTS_DIR)
+    return delivery.read_result(name, results_dir=delivery.results_dir())
 
 
 def serve(transport: str = "http", port: int = 3055) -> None:

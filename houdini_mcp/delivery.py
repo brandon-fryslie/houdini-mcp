@@ -10,6 +10,7 @@ ended - so a failure stays a parseable failure arm - and the AI summary written 
 stand in for it, when the tool made one.
 """
 
+import functools
 import logging
 import os
 import tempfile
@@ -28,16 +29,33 @@ logger = logging.getLogger("houdini_mcp.delivery")
 RESPONSE_BOUND_BYTES = 16 * 1024
 """The largest result, serialized, that a caller reads inline."""
 
-# A directory only this process's user can read: results carry scene contents and
-# program output. The override is for a deployment that must name where they land.
-RESULTS_DIR = Path(
-    os.getenv("HOUDINI_MCP_RESULTS_DIR") or tempfile.mkdtemp(prefix="houdini-mcp-results-")
-)
-
 RESULT_URI = "houdini-mcp://results/{name}"
 
-# [LAW:one-source-of-truth] The serializer FastMCP puts a result on the wire with, so
-# the bytes measured against the bound and written to the file are the bytes sent.
+CALLER_GUIDE = f"""\
+A tool result larger than {RESPONSE_BOUND_BYTES // 1024}KB serialized arrives as a pointer to a JSON \
+file holding all of it: `result_file` (its path on the server's machine), `result_uri` \
+(a resource this server serves, for a client on another machine), and `result_bytes`. \
+The pointer keeps `status`, a failure's fields, and any `ai_summary`; read the file \
+for everything else."""
+"""What every client is told at initialize about how a result reaches it."""
+
+
+@functools.cache
+def results_dir() -> Path:
+    """Where this process writes results too large to return inline, made on first use.
+
+    By default a directory only this process's user can read: results carry scene
+    contents and program output. The override is for a deployment that must name
+    where they land.
+    """
+    return Path(
+        os.getenv("HOUDINI_MCP_RESULTS_DIR") or tempfile.mkdtemp(prefix="houdini-mcp-results-")
+    )
+
+
+# [LAW:one-source-of-truth] The serializer FastMCP puts a result's structured content
+# on the wire with, so the bytes measured against the bound and written to the file
+# are the bytes sent.
 WIRE = TypeAdapter(Any)
 
 # [LAW:one-source-of-truth] The fields a failure cannot lose and still parse are the
@@ -59,7 +77,9 @@ def deliver(
     except PydanticSerializationError as e:
         # [LAW:single-enforcer] a result no caller can read is the tool's bug, and
         # failure_response is where every exception becomes the caller's failure arm.
-        unserializable = TypeError(f"{tool} returned a result that is not JSON-serializable: {e}")
+        unserializable = TypeError(
+            f"{tool} ran, but returned a result that is not JSON-serializable: {e}"
+        )
         return failure_response(unserializable, tool)
     size = len(text)
     if size <= bound:

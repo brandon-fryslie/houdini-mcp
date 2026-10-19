@@ -2,6 +2,15 @@
 
 This document clarifies the input/output contracts for Houdini MCP tools and documents common mistakes discovered through usage.
 
+## Every Tool: Large Results Arrive as a File
+
+A result over 16KB serialized is not returned inline. The call returns its
+`status`, a failure's fields, any `ai_summary`, and a pointer to the whole
+result: `result_file`, its path on the server's machine; `result_uri`, which
+reads it through the server (`houdini-mcp://results/{name}`) for a client on
+another machine; and `result_bytes`. A `render_viewport` image is usually over
+the bound, so its `image_base64` is in the file.
+
 ## execute_code
 
 ### The `hou` Module is Pre-Injected

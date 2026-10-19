@@ -60,7 +60,8 @@ TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
 
 AI_SUMMARY = "ai_summary"
 AI_SUMMARY_ERROR = "ai_summary_error"
-SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, AI_SUMMARY_ERROR})
+SUMMARIZED = "_summarized"
+SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, SUMMARIZED, AI_SUMMARY_ERROR})
 """The fields a summarized result carries: the summary, or why there is none."""
 
 # Room for a cold model load (about 7.5s) plus a full-length summary.
@@ -311,7 +312,7 @@ def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, A
     match outcome:
         case Summary(text):
             data[AI_SUMMARY] = text
-            data["_summarized"] = True
+            data[SUMMARIZED] = True
         case NoSummary(reason):
             # [LAW:no-silent-failure] A summary was attempted; the result says why there is none.
             data[AI_SUMMARY_ERROR] = reason

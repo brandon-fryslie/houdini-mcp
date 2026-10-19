@@ -26,7 +26,7 @@ from houdini_mcp.tools._common import FAILURE
 async def client(
     in_process_houdini: Any, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Client[Any]]:
-    monkeypatch.setattr(delivery, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(delivery, "results_dir", lambda: tmp_path)
     async with Client(mcp) as client:
         yield client
 
@@ -49,6 +49,11 @@ def whole(pointer: dict[str, Any]) -> dict[str, Any]:
 
 
 class TestServedResults:
+    async def test_every_client_is_told_how_a_large_result_arrives(
+        self, client: Client[Any]
+    ) -> None:
+        assert client.instructions == delivery.CALLER_GUIDE
+
     async def test_a_result_within_the_bound_arrives_inline(self, client: Client[Any]) -> None:
         result = await client.call_tool("serialize_scene", {"root_path": "/obj"})
         assert result.structured_content is not None
@@ -168,7 +173,7 @@ class TestDeliver:
 
         failure = FAILURE.validate_python(response)
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
-        assert "not JSON-serializable" in failure.message
+        assert "ran, but returned a result that is not JSON-serializable" in failure.message
 
     def test_a_summary_reaches_the_caller_beside_the_pointer(self, tmp_path: pathlib.Path) -> None:
         """A summary is written to be read in place of a large result."""
