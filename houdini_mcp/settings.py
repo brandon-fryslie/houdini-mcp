@@ -37,8 +37,10 @@ def _api_base(raw: str) -> str:
     """An OpenAI API base such as ``http://host:8000/v1``, as its URL spells it."""
     try:
         url = httpx.URL(raw)
-    except httpx.InvalidURL as exc:
-        raise ValueError(f"not a URL ({exc})") from None
+    except httpx.InvalidURL:
+        # httpx's reason quotes parts of the value, a password among them; the refusal
+        # shows the value once, masked.
+        raise ValueError("not a URL") from None
     if url.scheme not in ("http", "https") or not url.host:
         raise ValueError("must be an http(s) URL with a host")
     # The URL is logged and reported by get_summarization_status, so it holds no secret.

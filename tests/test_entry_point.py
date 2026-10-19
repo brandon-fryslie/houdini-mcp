@@ -37,9 +37,9 @@ STARTUP_SETTINGS = (
     "SUMMARIZATION_API_KEY",
     "SUMMARIZATION_MODEL",
 )
-# What a server reads of the environment, then: those, where its results go (each test
-# names its own), and the semaphore limit that was once read at import.
-READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR", "HOUDINI_MCP_SEMAPHORE_LIMIT")
+# What a server reads of the environment, then: those, and where its results go (each
+# test names its own).
+READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR")
 
 # This process's environment with none of them set, so the developer's shell decides nothing.
 UNSET = {name: value for name, value in os.environ.items() if name not in STARTUP_SETTINGS}

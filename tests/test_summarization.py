@@ -196,7 +196,7 @@ class TestDefaults:
     @pytest.mark.parametrize(
         ("raw", "told"),
         [
-            ("http://host:abc/v1", "not a URL (Invalid port: 'abc')"),
+            ("http://host:abc/v1", "not a URL"),
             ("localhost:8000/v1", "must be an http(s) URL with a host"),
             ("100.66.66.66:8000/v1", "must be an http(s) URL with a host"),
             ("", "must be an http(s) URL with a host"),
@@ -225,6 +225,7 @@ class TestDefaults:
             ),
             ("http:/user:secret@host/v1", "***@host/v1", "must be an http(s) URL with a host"),
             ("http://user:se/cret@host/v1", "http://***@host/v1", "not a URL"),
+            ("http://user:secret/@host/v1", "http://***@host/v1", "not a URL"),
         ],
     )
     def test_a_base_url_carrying_credentials_is_refused_with_them_masked(self, raw, shown, told):

@@ -127,6 +127,20 @@ class TestServedSchemas:
             assert not configured & set(tool.input_schema["properties"]), tool.name
             assert tool.input_schema["additionalProperties"] is False, tool.name
 
+    def test_every_parameter_a_tool_takes_from_the_server_is_one_it_binds(self) -> None:
+        """A keyword-only parameter with no default is configuration the tool takes from
+        the server; one the server does not bind would be published for the caller to choose."""
+        from houdini_mcp.server import SERVED_TOOLS
+
+        configured = set(DEFAULT_SETTINGS.bound())
+        for tool in SERVED_TOOLS:
+            taken = {
+                p.name
+                for p in inspect.signature(tool).parameters.values()
+                if p.kind is p.KEYWORD_ONLY and p.default is p.empty
+            }
+            assert taken <= configured, tool.__name__
+
     def test_serving_a_tool_logs_the_arguments_the_server_binds(
         self, caplog: pytest.LogCaptureFixture, results: Results
     ) -> None:
