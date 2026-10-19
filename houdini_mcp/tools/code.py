@@ -858,8 +858,9 @@ def _execute_with_grant(
     # program called timed out has run its whole timeout. Event.wait alone can
     # keep the wall clock (CPython on macOS) and return before it has.
     deadline = time.monotonic() + timeout
+    woke_early = 0
     while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
-        pass
+        woke_early += time.monotonic() < deadline
 
     # [LAW:one-source-of-truth] The program's own end, set once its undo group
     # has closed, says whether it is still running - not the ledger slot, which
@@ -871,9 +872,11 @@ def _execute_with_grant(
         # closed yet, while the worker can continue mutating afterward. Never
         # touch the undo stack from this state.
         logger.warning(
-            "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
+            "%s exceeded timeout of %ss (wait woke early %d times); "
+            "worker code_sha256=%s still running, undo not attempted",
             operation,
             timeout,
+            woke_early,
             detected.code_sha256,
         )
         raise ProgramStillRunning(

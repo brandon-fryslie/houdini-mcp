@@ -162,7 +162,7 @@ class TestATimedOutRunsDiff:
         ]
 
     def test_a_wait_that_wakes_early_does_not_cut_the_timeout_short(
-        self, mock_connection, stalled_program, monkeypatch
+        self, mock_connection, stalled_program, monkeypatch, caplog
     ):
         from types import SimpleNamespace
 
@@ -173,9 +173,13 @@ class TestATimedOutRunsDiff:
                 return super().wait(None if timeout is None else timeout / 2)
 
         monkeypatch.setattr(code_module, "threading", SimpleNamespace(Event=EarlyEvent))
-        _time_out(stalled_program)
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.code"):
+            _time_out(stalled_program)
         worker = WORKERS.running()
         assert worker.running_for_seconds() >= worker.timeout
+        [event] = [r for r in caplog.records if "exceeded timeout" in r.getMessage()]
+        _operation, _timeout, woke_early, _sha = event.args
+        assert woke_early >= 1
 
     def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
         self, mock_connection, stalled_program, monkeypatch
