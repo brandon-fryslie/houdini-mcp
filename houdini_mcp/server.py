@@ -154,17 +154,16 @@ def build_server(target: Target) -> FastMCP:
     for tool in SERVED_TOOLS:
         mcp.add_tool(served(tool, target))
     mcp.resource(delivery.RESULT_URI, mime_type="text/plain")(delivered_result)
+    logger.info(f"Houdini connection target: {describe_target(target.host, target.port)}")
     return mcp
 
 
-def serve(target: Target, transport: Transport = "http", port: int = 3055) -> None:
-    """Serve tools that reach ``target`` on a transport, leaving process logging alone.
+def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None:
+    """Serve ``mcp`` on a transport, leaving process logging alone.
 
     Entry point for hosts that already own logging - the Houdini plugin runs
     this inside Houdini's interpreter.
     """
-    mcp = build_server(target)
-    logger.info(f"Houdini connection target: {describe_target(target.host, target.port)}")
 
     if transport == "stdio":
         logger.info("Starting Houdini MCP Server on stdio")
@@ -186,4 +185,4 @@ def run_server(target: Target, transport: Transport, port: int, log_level: int) 
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
-    serve(target, transport, port)
+    serve(build_server(target), transport, port)

@@ -22,7 +22,6 @@ from fastmcp import Client, FastMCP
 import houdini_mcp.connection as conn_module
 from houdini_mcp.connection import (
     InProcessConnection,
-    describe_target,
     disconnect,
     ensure_connected,
     get_connection_info,
@@ -242,16 +241,17 @@ class TestPluginStartsTheSharedServer:
         stdin_closed.set()
         assert state["stdin_closed_in_time"] is not False, "test never closed stdin"
 
-    def test_start_server_binds_in_process_and_serves_stdio(
+    async def test_start_server_binds_in_process_and_serves_stdio(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any
     ) -> None:
         import houdini_mcp.server as shared_server
 
         runs: list[dict[str, Any]] = []
 
-        def fake_serve(target: Target, transport: str) -> None:
-            reached = describe_target(target.host, target.port)
-            runs.append({"target": target, "reaches": reached, "transport": transport})
+        def fake_serve(mcp: FastMCP, transport: str) -> None:
+            runs.append(
+                {"mcp": mcp, "target": plugin_server.serving_target(), "transport": transport}
+            )
 
         monkeypatch.setattr(shared_server, "serve", fake_serve)
         monkeypatch.setenv("HOUDINI_HOST", "studio-box")
@@ -259,8 +259,11 @@ class TestPluginStartsTheSharedServer:
 
         plugin_server.start_server(use_thread=False)
 
-        served = Target(host="studio-box", port=19000)
-        assert runs == [{"target": served, "reaches": "this interpreter", "transport": "stdio"}]
+        [run] = runs
+        assert (run["target"], run["transport"]) == (Target(host="studio-box", port=19000), "stdio")
+        async with Client(run["mcp"]) as client:
+            payload: Any = (await client.call_tool("check_connection", {})).structured_content
+        assert payload["target"] == "this interpreter"
         assert plugin_server.is_server_running() is False
 
     def test_mcp_status_reads_the_target_start_resolved(
@@ -321,6 +324,22 @@ class TestPluginStartsTheSharedServer:
         assert "None" not in shown
         held_serve["stdin"].set()
         _wait_until_stopped(plugin_server)
+
+    def test_a_server_that_cannot_be_built_fails_start_and_serves_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
+    ) -> None:
+        """A background Start reports the failure itself; its thread has no caller."""
+        import houdini_mcp.server as shared_server
+
+        def unbuildable(_target: Target) -> FastMCP:
+            raise KeyError("an_unclassified_tool")
+
+        monkeypatch.setattr(shared_server, "build_server", unbuildable)
+
+        with pytest.raises(KeyError, match="an_unclassified_tool"):
+            plugin_server.start_server(use_thread=True)
+        assert plugin_server.is_server_running() is False
+        assert held_serve["runs"] == 0
 
     def test_binding_without_hou_fails_start_and_serves_nothing(
         self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]

@@ -787,7 +787,7 @@ class MockHouModule:
         parent.attach(node)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def mcp() -> FastMCP:
     """The server as an entry point builds it, reaching the default target."""
     return build_server(DEFAULT_TARGET)

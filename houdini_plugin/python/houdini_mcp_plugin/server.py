@@ -39,7 +39,7 @@ class AlreadyServing(RuntimeError):
 def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
     """Bind connections to this interpreter's Houdini; return its target and what serves it."""
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
-    from houdini_mcp.server import serve
+    from houdini_mcp.server import build_server, serve
     from houdini_mcp.settings import houdini_target
 
     target = houdini_target(os.environ)
@@ -49,7 +49,10 @@ def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
     # ``hou`` fails Start instead of a client's first call.
     # [LAW:one-source-of-truth] opened to the host:port the served tools name.
     connect(target.host, target.port)
-    return target, lambda: serve(target=target, transport="stdio")
+    # [LAW:no-ambient-temporal-coupling] built here, not on the serving thread, so a
+    # server that cannot be built fails Start too.
+    mcp = build_server(target)
+    return target, lambda: serve(mcp=mcp, transport="stdio")
 
 
 class StdioServer:
@@ -75,8 +78,9 @@ class StdioServer:
             AlreadyServing: a server is serving; nothing is started.
             InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
             HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
-            Exception: binding to this Houdini failed, or (blocking only) the
-                transport failed; the caller is the one that reports it.
+            Exception: binding to this Houdini or building the server failed, or
+                (blocking only) the transport failed; the caller is the one
+                that reports it.
         """
         with self._lock:
             if self._serving is not None:
@@ -135,7 +139,7 @@ def start_server(use_thread: bool = True) -> None:
         AlreadyServing: a server is already serving this process's stdin.
         InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
         HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
-        Exception: binding to this Houdini failed, or a
+        Exception: binding to this Houdini or building the server failed, or a
             blocking serve failed. Nothing is left running; the caller (shelf
             or ``hython -c``) shows the cause.
     """
