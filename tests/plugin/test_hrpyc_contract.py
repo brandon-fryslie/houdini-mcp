@@ -158,13 +158,14 @@ class TestListenerAgainstRealRpyc:
             port = result["bound_port"]
             assert port != 0
             assert listener.self_test()["reachable"] is True
+            (server,) = hrpyc.servers
 
             conn = rpyc.classic.connect(probe_host(host), port, ipv6=is_ipv6_host(host))
             try:
                 assert conn.modules.math.sqrt(16.0) == 4.0
             finally:
                 conn.close()
-                await_clients_served(hrpyc.servers[0])
+                await_clients_served(server)
         finally:
             listener.stop()
 

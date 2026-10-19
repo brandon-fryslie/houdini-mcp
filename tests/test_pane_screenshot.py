@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,24 +40,26 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
         logger=logging.getLogger("test_pane_screenshot"),
     )
     server._start_in_thread()
-    try:
-        with rpyc.classic.connect("127.0.0.1", server.port) as conn:
-            conn.execute(
-                "class EnumValue: pass\n"
-                "class paneTabType:\n"
-                "    NetworkEditor = EnumValue()\n"
-                "    Parm = EnumValue()\n"
-                "    thisown = property(lambda self: True)\n"
-            )
-            hou = SimpleNamespace(
-                EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
-            )
-            assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
-            assert pane_type_member(hou, "ChannelEditr") is None
-            assert pane_type_member(hou, "thisown") is None
-    finally:
-        await_clients_served(server)
-        server.close()
+    # closing(): the server is closed on every path, and only after the wait
+    # has seen it finish serving the client.
+    with contextlib.closing(server):
+        try:
+            with rpyc.classic.connect("127.0.0.1", server.port) as conn:
+                conn.execute(
+                    "class EnumValue: pass\n"
+                    "class paneTabType:\n"
+                    "    NetworkEditor = EnumValue()\n"
+                    "    Parm = EnumValue()\n"
+                    "    thisown = property(lambda self: True)\n"
+                )
+                hou = SimpleNamespace(
+                    EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
+                )
+                assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
+                assert pane_type_member(hou, "ChannelEditr") is None
+                assert pane_type_member(hou, "thisown") is None
+        finally:
+            await_clients_served(server)
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:
