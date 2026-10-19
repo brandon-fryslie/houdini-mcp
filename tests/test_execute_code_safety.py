@@ -230,6 +230,14 @@ class TestPolicyProfiles:
         assert (result["kind"], result["parameter"]) == ("invalid_input", "policy")
         assert "'read-only' or 'normal'" in result["message"]
 
+    def test_a_string_never_grants_a_capability(self, mock_connection, allow_bypass_config):
+        """[LAW:single-enforcer] a Python caller is refused what the server refuses:
+        "yes" is not a boolean, so it cannot switch a bypass on."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code("print('x')", allow_dangerous="yes", host="localhost", port=18811)
+        assert (result["kind"], result["parameter"]) == ("invalid_input", "allow_dangerous")
+
     def test_read_only_denies_dangerous_even_with_flag_and_config(
         self, mock_connection, allow_bypass_config
     ):

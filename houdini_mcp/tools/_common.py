@@ -103,9 +103,11 @@ logger = logging.getLogger("houdini_mcp.tools")
 
 import functools
 import inspect
+import reprlib
 import typing
 from collections.abc import Callable
 
+from fastmcp.tools.function_tool import _validate_input
 from pydantic import ValidationError
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
@@ -152,15 +154,22 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             """The call with every argument parsed as its parameter's type.
 
             [LAW:single-enforcer] the one check of a value against its declared
-            domain, for a Python caller exactly as the served schema checks an MCP
-            one: a body never re-checks what its signature already says.
+            domain, so a body never re-checks what its signature already says.
+            [LAW:one-source-of-truth] it is FastMCP's own strict parse, the one the
+            server's ``strict_input_validation`` runs, so a Python caller is refused
+            exactly what an MCP caller is: "yes" is not a boolean on either path.
             """
             for name, value in bound.arguments.items():
                 try:
-                    bound.arguments[name] = adapters[name].validate_python(value)
+                    bound.arguments[name] = _validate_input(adapters[name], value, strict=True)
                 except ValidationError as e:
-                    told = "; ".join(error["msg"] for error in e.errors())
-                    raise InvalidInput(f"{name}: {told}, got {value!r}", parameter=name) from None
+                    told = "; ".join(
+                        f"{'.'.join(map(str, (name, *error['loc'])))}: {error['msg']}"
+                        for error in e.errors()
+                    )
+                    raise InvalidInput(
+                        f"{told}, got {reprlib.repr(value)}", parameter=name
+                    ) from None
             return bound
 
         # A served tool that finishes its result asynchronously (summarizing it,
