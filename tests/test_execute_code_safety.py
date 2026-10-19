@@ -183,6 +183,7 @@ class TestPolicyProfiles:
         result = execute_code(code, policy="read-only", host="localhost", port=18811)
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
+        assert result["audit"]["woke_early"] is None
 
     def test_normal_allows_houdini_parm_eval_read(self, mock_connection):
         from houdini_mcp.tools import _detect_dangerous_code, parse_code
@@ -497,6 +498,7 @@ class TestAuditFields:
         assert audit["dangerous_patterns"] == []
         assert audit["heavy_geometry_patterns"] == []
         assert audit["timed_out"] is False
+        assert audit["woke_early"] == 0
         assert "code_sha256" in audit
         assert "code_length" in audit
         # The permission decision is one value, and the audit reports it.
