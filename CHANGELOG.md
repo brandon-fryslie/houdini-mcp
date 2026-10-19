@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING (Python API)**: importing `houdini_mcp.server` builds no server
-  and reads no setting (houdini-laws-etg.y04). Every entry point resolves
-  `HOUDINI_HOST`, `HOUDINI_PORT` and `LOG_LEVEL` when it starts, so a value set
-  after import is the one served. A `HOUDINI_PORT` that is not a port, an empty
-  `HOUDINI_HOST`, or an unknown `LOG_LEVEL` stops the `houdini-mcp` command
+  and reads none of `HOUDINI_HOST`, `HOUDINI_PORT`, `LOG_LEVEL`, `MCP_TRANSPORT`
+  or `MCP_PORT` (houdini-laws-etg.y04). The `houdini-mcp` command and
+  `python -m houdini_mcp` resolve them when they start, and the plugin resolves
+  `HOUDINI_HOST` and `HOUDINI_PORT` when Start MCP runs (Houdini owns its
+  logging), so a value set after import is the one served. A `HOUDINI_PORT` that
+  is not a port, an empty or blank `HOUDINI_HOST`, or a `LOG_LEVEL` that
+  `logging` does not name stops the `houdini-mcp` command
   and `python -m houdini_mcp` naming the variable, where before a non-integer
   port raised at import, `99999` was accepted, and an unknown level ran as
   INFO; in Houdini, Start MCP shows the same error. `mcp`, `TARGET`,

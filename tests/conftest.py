@@ -16,10 +16,10 @@ from rpyc.utils.server import Server
 
 from houdini_mcp.connection import _InterpreterModules
 from houdini_mcp.server import build_server
-from houdini_mcp.settings import Target
+from houdini_mcp.settings import houdini_target
 
 # The Houdini the houdini-mcp command reaches when the environment names none.
-DEFAULT_TARGET = Target(host="localhost", port=18811)
+DEFAULT_TARGET = houdini_target({})
 
 
 def split_path(path: str) -> tuple[str, str]:

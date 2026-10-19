@@ -8,18 +8,25 @@ server starts, never when a module is imported.
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, TypeVar
 
 from pydantic import BeforeValidator, Field, TypeAdapter, ValidationError
 
 T = TypeVar("T")
 
 Port = Annotated[int, Field(ge=1, le=65535)]
-Host = Annotated[str, Field(min_length=1)]
-LogLevel = Annotated[
-    Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
-    BeforeValidator(lambda name: name.upper() if isinstance(name, str) else name),
-]
+Host = Annotated[str, Field(pattern=r"^\S+$")]
+
+
+def _level_named(name: object) -> int:
+    # [LAW:one-source-of-truth] logging owns the level names, WARN and NOTSET too
+    levels = logging.getLevelNamesMapping()
+    if isinstance(name, str) and name.upper() in levels:
+        return levels[name.upper()]
+    raise ValueError(f"Input should be one of {', '.join(levels)}")
+
+
+LogLevel = Annotated[int, BeforeValidator(_level_named)]
 
 
 class InvalidSetting(ValueError):
@@ -61,6 +68,4 @@ def houdini_target(environ: Mapping[str, str]) -> Target:
 
 def log_level(environ: Mapping[str, str]) -> int:
     """The logging level ``LOG_LEVEL`` names, in any case."""
-    return logging.getLevelNamesMapping()[
-        setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
-    ]
+    return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")

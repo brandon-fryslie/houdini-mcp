@@ -1,8 +1,8 @@
 """Run the Houdini MCP server inside Houdini over stdio.
 
-The tool surface is ``houdini_mcp.server``'s FastMCP instance - the same one the
-HTTP server exposes. This module only points its connection at the Houdini it
-is running inside and starts the stdio transport.
+The tool surface is the server ``houdini_mcp.server.build_server`` builds - the
+same one the HTTP server builds. This module only points its connection at the
+Houdini it is running inside and starts the stdio transport.
 
 [LAW:one-source-of-truth] No tool is defined here. Every tool's rails, audit,
 transactions and response shape have exactly one implementation, in
@@ -37,7 +37,7 @@ class AlreadyServing(RuntimeError):
 
 
 def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
-    """Bind the shared server to this interpreter's Houdini; return its target and what runs it."""
+    """Bind connections to this interpreter's Houdini; return its target and what serves it."""
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
     from houdini_mcp.server import serve
     from houdini_mcp.settings import houdini_target
@@ -135,7 +135,7 @@ def start_server(use_thread: bool = True) -> None:
         AlreadyServing: a server is already serving this process's stdin.
         InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
         HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
-        Exception: binding the shared server to this Houdini failed, or a
+        Exception: binding to this Houdini failed, or a
             blocking serve failed. Nothing is left running; the caller (shelf
             or ``hython -c``) shows the cause.
     """

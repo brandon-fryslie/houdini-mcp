@@ -38,9 +38,9 @@ from pydantic import ValidationError
 
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
-from houdini_mcp.settings import Target
 from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import Policy
+from tests.conftest import DEFAULT_TARGET
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
 
@@ -129,8 +129,8 @@ class TestServedSchemas:
         from houdini_mcp.server import served
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
-            served(tools.create_node, Target(host="localhost", port=18811))
-            served(tools.get_houdini_help, Target(host="localhost", port=18811))
+            served(tools.create_node, DEFAULT_TARGET)
+            served(tools.get_houdini_help, DEFAULT_TARGET)
         assert [r.getMessage() for r in caplog.records] == [
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",
