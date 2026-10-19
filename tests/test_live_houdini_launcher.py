@@ -2,13 +2,15 @@
 
 import logging
 import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
 
-from houdini_mcp.settings import Target
+from houdini_mcp.settings import InvalidSetting, Target
 from tests.live_houdini import (
     Command,
     HoudiniDidNotStart,
@@ -35,14 +37,16 @@ def group_gone(pid_file: Path) -> bool:
     while time.monotonic() < stop_at:
         try:
             os.killpg(pgid, 0)
-        except ProcessLookupError:
+        # macOS: EPERM while only an unreaped zombie holds the group.
+        except (ProcessLookupError, PermissionError):
             return True
         time.sleep(0.05)
     return False
 
 
+# Serves until its stdin closes, as the hython child does.
 REPORTS_THEN_SERVES = (
-    "subprocess.Popen(['sleep', '600'])\nos.write(fd, b'4242\\n')\nos.close(fd)\ntime.sleep(600)\n"
+    "subprocess.Popen(['sleep', '600'])\nos.write(fd, b'4242\\n')\nos.close(fd)\nsys.stdin.read()\n"
 )
 
 
@@ -60,7 +64,7 @@ def test_yields_the_reported_port_and_ends_the_whole_group(
     assert group_gone(pid_file)
     ready, stopped = (r.getMessage() for r in caplog.records)
     assert "port=4242 ready in" in ready
-    assert "exit=-15 forced=False" in stopped
+    assert "exit=-15" in stopped
 
 
 def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:
@@ -86,25 +90,39 @@ def test_a_child_that_ignores_term_is_killed(
         pass
 
     assert group_gone(pid_file)
-    assert "exit=-9 forced=True" in caplog.records[-1].getMessage()
+    assert "exit=-9" in caplog.records[-1].getMessage()
 
 
 @pytest.mark.parametrize(
-    ("body", "exit_code"),
+    ("body", "raised"),
     [
-        ("print('listener did not start: bind', file=sys.stderr)\nsys.exit(3)\n", 3),
+        ("print('listener did not start: bind', file=sys.stderr)\nsys.exit(3)\n", "exited 3"),
         # Bytes that are not a whole port line are no port, whatever follows them.
-        ("print('listener did not start: bind', file=sys.stderr)\nos.write(fd, b'42')\n", 0),
+        (
+            "print('listener did not start: bind', file=sys.stderr)\nos.write(fd, b'42')\n",
+            "reported b'42'",
+        ),
+        (
+            "print('listener did not start: bind', file=sys.stderr, flush=True)\n"
+            "os.write(fd, b'42')\ntime.sleep(600)\n",
+            "reported b'42'",
+        ),
+        # A grandchild holding the write end open hides EOF; the child's exit is still seen.
+        (
+            "subprocess.Popen(['sleep', '600'], pass_fds=(fd,))\n"
+            "print('listener did not start: bind', file=sys.stderr)\nsys.exit(3)\n",
+            "exited 3",
+        ),
     ],
 )
-def test_a_child_that_exits_without_a_port_raises_with_its_exit_and_log(
-    tmp_path: Path, body: str, exit_code: int
+def test_a_child_that_reports_no_port_raises_with_what_it_did_and_its_log(
+    tmp_path: Path, body: str, raised: str
 ) -> None:
     pid_file = tmp_path / "pid"
 
     with (
-        pytest.raises(HoudiniDidNotStart, match=rf"exited {exit_code} without a port(.|\n)*bind"),
-        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log"),
+        pytest.raises(HoudiniDidNotStart, match=rf"{raised}(.|\n)*bind"),
+        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=30),
     ):
         pytest.fail("a child that reported no port was yielded")
 
@@ -115,9 +133,10 @@ def test_a_child_that_never_reports_raises_at_the_deadline(tmp_path: Path) -> No
     pid_file = tmp_path / "pid"
     body = "print('still starting', flush=True)\ntime.sleep(600)\n"
 
+    # Long enough for a loaded runner to start Python and print before the deadline.
     with (
-        pytest.raises(HoudiniDidNotStart, match=r"no port within 0.5s(.|\n)*still starting"),
-        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=0.5),
+        pytest.raises(HoudiniDidNotStart, match=r"no port within 3s(.|\n)*still starting"),
+        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=3),
     ):
         pytest.fail("a child that reported no port was yielded")
 
@@ -125,5 +144,47 @@ def test_a_child_that_never_reports_raises_at_the_deadline(tmp_path: Path) -> No
 
 
 def test_hython_names_hython_when_it_names_no_executable(tmp_path: Path) -> None:
-    with pytest.raises(HoudiniDidNotStart, match="HYTHON: no executable hython at"):
+    with pytest.raises(InvalidSetting, match="HYTHON: .*got"):
         hython_executable({"HYTHON": str(tmp_path / "hython")})
+
+
+def test_hython_names_hython_when_it_names_a_file_that_cannot_run(tmp_path: Path) -> None:
+    (tmp_path / "hython").touch()
+
+    with pytest.raises(InvalidSetting, match="HYTHON: .*Path is not executable"):
+        hython_executable({"HYTHON": str(tmp_path / "hython")})
+
+
+# The process that runs the live tests, killed past any finally: its listener must still end.
+_STARTS_THEN_HANGS = """\
+import os, sys
+from pathlib import Path
+from tests.live_houdini import running_listener
+from tests.test_live_houdini_launcher import REPORTS_THEN_SERVES, stand_in
+with running_listener(stand_in(Path(sys.argv[1]), REPORTS_THEN_SERVES), os.environ, Path(sys.argv[2])):
+    print("ready", flush=True)
+    sys.stdin.read()
+"""
+
+
+def test_the_child_ends_when_the_process_that_started_it_is_killed(tmp_path: Path) -> None:
+    pid_file = tmp_path / "pid"
+    runner = subprocess.Popen(
+        [sys.executable, "-c", _STARTS_THEN_HANGS, str(pid_file), str(tmp_path / "log")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    assert runner.stdout is not None and runner.stdout.readline() == b"ready\n"
+
+    runner.send_signal(signal.SIGKILL)
+    runner.wait()
+
+    child = int(pid_file.read_text())
+    stop_at = time.monotonic() + 5
+    while time.monotonic() < stop_at:
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"listener pid={child} outlived the process that started it")

@@ -13,7 +13,7 @@ import pytest
 
 from houdini_mcp import connection
 from houdini_mcp.settings import Target
-from tests.live_houdini import PLUGIN_PYTHON, hython_executable, hython_listener, running_listener
+from tests.live_houdini import hython_executable, hython_listener, running_listener
 
 HERE = Path(__file__).parent
 
@@ -30,12 +30,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
     """The Houdini this session started, until the session ends."""
     command = hython_listener(hython_executable(os.environ))
-    env = {**os.environ, "PYTHONPATH": str(PLUGIN_PYTHON)}
     log_path = tmp_path_factory.mktemp("hython") / "hython.log"
     with pytest.MonkeyPatch.context() as mp:
         # The client presents a token at connect time; the listener started here takes none.
         mp.delenv("HOUDINI_RPC_TOKEN", raising=False)
-        with running_listener(command, env, log_path) as target:
+        with running_listener(command, os.environ, log_path) as target:
             try:
                 yield target
             finally:

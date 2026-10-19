@@ -80,8 +80,9 @@ pre-commit run ruff --all-files
 ## Testing with Live Houdini
 
 The tests in `tests/integration` run against a real Houdini. One command starts a
-headless `hython` serving the plugin's listener on a free loopback port, runs every
-live test against it, and stops it afterwards, whether the tests pass or fail:
+headless `hython` serving this checkout's plugin listener (never an installed
+`houdini_mcp` package's copy) on a free loopback port, runs every live test against
+it, and stops it afterwards, whether the tests pass or fail or the run itself is killed:
 
 ```bash
 uv run pytest -m integration

@@ -1,7 +1,9 @@
 """A headless Houdini the live tests start for themselves, serving the plugin's listener.
 
-The child process reports the port its listener bound over a readiness pipe:
-one ``"<port>\\n"`` line once the listener is serving, or EOF if it never is.
+The child speaks over two pipes. It reports the port its listener bound on a
+readiness pipe: one ``"<port>\\n"`` line once the listener is serving, or EOF if
+it never is. And it serves until its stdin closes, which happens when the run
+stops it or when the process that started it dies, however it dies.
 """
 
 import contextlib
@@ -13,36 +15,50 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Annotated
 
-from houdini_mcp.settings import Target
+from pydantic import AfterValidator, FilePath, TypeAdapter
+
+from houdini_mcp.settings import Target, setting
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HYTHON = "/Applications/Houdini/Current/Frameworks/Houdini.framework/Versions/Current/Resources/bin/hython"
 PLUGIN_PYTHON = Path(__file__).resolve().parents[1] / "houdini_plugin" / "python"
 
-# The child's whole job, given the readiness pipe's write end as {fd}. The fd is
-# made non-inheritable first, so nothing the child spawns holds the pipe open past
-# the child's own exit and turns its failure into a missed deadline.
-# [LAW:one-source-of-truth] the bind config is stated here, not read from an
-# environment the child inherits.
+# The child's whole job, given the readiness pipe's write end as {fd}.
+# [LAW:one-source-of-truth] the plugin is this checkout's, first on sys.path, so an
+# installed houdini_mcp package (which prepends its own copy to PYTHONPATH) is not
+# the code under test; the log names the file that loaded. The bind config is
+# stated here, not read from an environment the child inherits.
 _SERVE_LISTENER = """\
-import os, sys, threading
-os.set_inheritable({fd}, False)
+import os, sys
+sys.path.insert(0, {plugin!r})
+import houdini_mcp_plugin
 from houdini_mcp_plugin.listener import ListenerConfig, RemoteListener
+print("plugin", houdini_mcp_plugin.__file__, flush=True)
 listener = RemoteListener()
 started = listener.start(ListenerConfig(host="127.0.0.1", port=0), raise_on_policy=True)
 if started["status"] != "success":
     sys.exit(f"listener did not start: {{started}}")
 os.write({fd}, b"%d\\n" % started["bound_port"])
 os.close({fd})
-threading.Event().wait()
+sys.stdin.buffer.read()
 """
 
 # The command that starts a listener, given the readiness pipe's write end.
 Command = Callable[[int], Sequence[str]]
+
+
+def _executable(path: Path) -> Path:
+    if not os.access(path, os.X_OK):
+        raise ValueError("Path is not executable")
+    return path
+
+
+Executable = Annotated[FilePath, AfterValidator(_executable)]
 
 
 class HoudiniDidNotStart(RuntimeError):
@@ -53,17 +69,14 @@ def hython_executable(environ: Mapping[str, str]) -> Path:
     """The hython ``HYTHON`` names, by default the one /Applications/Houdini/Current holds.
 
     Raises:
-        HoudiniDidNotStart: naming HYTHON, when it names no executable file.
+        InvalidSetting: naming HYTHON, when it names no executable file.
     """
-    named = Path(environ.get("HYTHON", DEFAULT_HYTHON))
-    if not (named.is_file() and os.access(named, os.X_OK)):
-        raise HoudiniDidNotStart(f"HYTHON: no executable hython at {named}")
-    return named
+    return setting(environ, "HYTHON", TypeAdapter(Executable), DEFAULT_HYTHON)
 
 
 def hython_listener(hython: Path) -> Command:
-    """The command that runs the plugin's listener in a headless ``hython``."""
-    return lambda fd: [str(hython), "-c", _SERVE_LISTENER.format(fd=fd)]
+    """The command that runs this checkout's plugin listener in a headless ``hython``."""
+    return lambda fd: [str(hython), "-c", _SERVE_LISTENER.format(fd=fd, plugin=str(PLUGIN_PYTHON))]
 
 
 def _log_tail(log_path: Path, lines: int = 40) -> str:
@@ -71,46 +84,56 @@ def _log_tail(log_path: Path, lines: int = 40) -> str:
 
 
 def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log_path: Path) -> int:
-    """The port the child reports on ``ready``, read once within ``deadline`` seconds.
+    """The port the child reports on ``ready`` within ``deadline`` seconds.
+
+    The child's exit is watched beside the pipe, not inferred from EOF: anything
+    the child spawned may still hold the pipe's write end open.
 
     Raises:
-        HoudiniDidNotStart: with the child's exit code and log tail when it closed
-            the pipe without a port line, or the log tail when the deadline passed.
+        HoudiniDidNotStart: with the log tail, when the child reported something
+            other than a port line, exited first, or the deadline passed.
     """
-    readable, _, _ = select.select([ready], [], [], deadline)
-    if not readable:
-        raise HoudiniDidNotStart(
-            f"no port within {deadline}s; log {log_path}:\n{_log_tail(log_path)}"
-        )
-    # One write far under PIPE_BUF arrives whole: a line, or EOF.
-    report = re.fullmatch(rb"(\d+)\n", os.read(ready, 64))
-    if report is None:
-        code = child.wait()
-        raise HoudiniDidNotStart(
-            f"exited {code} without a port; log {log_path}:\n{_log_tail(log_path)}"
-        )
-    return int(report.group(1))
+    stop_at = time.monotonic() + deadline
+    while (left := stop_at - time.monotonic()) > 0:
+        readable, _, _ = select.select([ready], [], [], min(left, 0.25))
+        # One write far under PIPE_BUF arrives whole: a line, or EOF.
+        sent = os.read(ready, 64) if readable else b""
+        if report := re.fullmatch(rb"(\d+)\n", sent):
+            return int(report.group(1))
+        if sent:
+            raise HoudiniDidNotStart(
+                f"reported {sent!r}, not a port; log {log_path}:\n{_log_tail(log_path)}"
+            )
+        # EOF says no port is coming; the child's exit says why, once it lands.
+        if readable:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                child.wait(left)
+        if (code := child.poll()) is not None:
+            raise HoudiniDidNotStart(
+                f"exited {code} without a port; log {log_path}:\n{_log_tail(log_path)}"
+            )
+    raise HoudiniDidNotStart(f"no port within {deadline}s; log {log_path}:\n{_log_tail(log_path)}")
 
 
 def _signal_group(pgid: int, sig: signal.Signals) -> None:
-    # [LAW:no-silent-failure] no such group is the state a stop exists to reach;
-    # raising here would bury the error that named why the child stopped.
-    with contextlib.suppress(ProcessLookupError):
+    # [LAW:no-silent-failure] a group with no live process is the state a stop exists
+    # to reach; raising here would bury the error that named why the child stopped.
+    # macOS says so with EPERM, not ESRCH, while an unreaped zombie still holds the group.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, sig)
 
 
 def _stop(child: subprocess.Popen[bytes], grace: float) -> None:
-    """End the child's whole process group: TERM, ``grace`` seconds, then KILL for
-    whatever outlived it, so nothing the child started is left running."""
+    """End the child's whole process group: TERM, ``grace`` seconds for the child,
+    then KILL for whatever outlived it, so nothing the child started is left running.
+
+    The logged exit is the child's own: -9 when it outlived ``grace``.
+    """
     _signal_group(child.pid, signal.SIGTERM)
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         child.wait(grace)
-        forced = False
-    except subprocess.TimeoutExpired:
-        forced = True
     _signal_group(child.pid, signal.SIGKILL)
-    code = child.wait()
-    logger.info("listener pid=%d stopped exit=%d forced=%s", child.pid, code, forced)
+    logger.info("listener pid=%d stopped exit=%d", child.pid, child.wait())
 
 
 @contextmanager
@@ -125,26 +148,33 @@ def running_listener(
     the block exits, however it exits.
 
     [LAW:no-ambient-temporal-coupling] this block is the one owner of the child's
-    lifetime: ready is the listener's own report, and the stop always runs.
+    lifetime: ready is the listener's own report, the stop always runs, and the
+    child's stdin, whose write end only this process holds, outlives neither.
 
     Raises:
         HoudiniDidNotStart: the child exited, or ``deadline`` passed, first.
     """
-    ready, report = os.pipe()
-    argv = command(report)
-    started = time.monotonic()
-    with log_path.open("wb") as log:
-        child = subprocess.Popen(
-            argv,
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            pass_fds=(report,),
-            start_new_session=True,
-        )
-    # The child holds the write end now; with ours closed, its exit is EOF here.
-    os.close(report)
-    try:
+    with ExitStack() as fds:
+        ready, report = os.pipe()
+        fds.callback(os.close, ready)
+        try:
+            with log_path.open("wb") as log:
+                argv = command(report)
+                started = time.monotonic()
+                child = subprocess.Popen(
+                    argv,
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    pass_fds=(report,),
+                    start_new_session=True,
+                )
+        finally:
+            # The child holds the write end now, or never will; ours closes either way.
+            os.close(report)
+        fds.enter_context(child)
+        fds.callback(_stop, child, grace)
         port = _await_port(child, ready, deadline, log_path)
         logger.info(
             "listener %s pid=%d port=%d ready in %.1fs",
@@ -154,6 +184,3 @@ def running_listener(
             time.monotonic() - started,
         )
         yield Target(host="127.0.0.1", port=port)
-    finally:
-        os.close(ready)
-        _stop(child, grace)
