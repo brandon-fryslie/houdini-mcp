@@ -1,6 +1,7 @@
 """Tests for the render_viewport function."""
 
 import base64
+import math
 import os
 import pathlib
 import tempfile
@@ -646,6 +647,43 @@ class _RemoteOs:
         return self._replaced.get(name) or getattr(os, name)
 
 
+# Each rotation the render tests turn a camera to, and the way the camera then
+# backs away from what it looks at: its +Z in world space, as Houdini 22.0.466
+# reports it through cam.worldTransform(). The last one turns about all three axes.
+_BACK: dict[tuple[float, float, float], tuple[float, float, float]] = {
+    (0.0, 0.0, 0.0): (0.0, 0.0, 1.0),
+    (0.0, -90.0, 0.0): (-1.0, 0.0, 0.0),
+    (-90.0, 0.0, 0.0): (0.0, 1.0, 0.0),
+    (-30.0, 45.0, 0.0): (0.612372, 0.5, 0.612372),
+    (20.0, -130.0, 35.0): (-0.393489, -0.693053, -0.604023),
+}
+
+
+def _looks_at(frame: dict[str, Any], point: tuple[float, float, float]) -> bool:
+    """Whether the recorded camera looks straight at ``point``: it stands back from it along its +Z."""
+    distance = math.dist(frame["camera_t"], point)
+    back = _BACK[frame["camera_r"]]
+    expected = tuple(p + distance * b for p, b in zip(point, back, strict=True))
+    return bool(frame["camera_t"] == pytest.approx(expected, abs=1e-4))
+
+
+class TestViewpoint:
+    """Where a camera stands to look at the framed center from the framing distance."""
+
+    @pytest.mark.parametrize(("rotation", "back"), list(_BACK.items()))
+    def test_the_camera_backs_away_from_the_center_along_its_own_z(
+        self, rotation: tuple[float, float, float], back: tuple[float, float, float]
+    ) -> None:
+        from houdini_mcp.tools.rendering import Framing
+
+        framing = Framing(bounds=((4.0, -2.0, 1.0), (6.0, 2.0, 3.0)))
+
+        assert framing.viewpoint(rotation) == pytest.approx(
+            tuple(c + framing.distance * b for c, b in zip(framing.center, back, strict=True)),
+            abs=1e-5,
+        )
+
+
 def _geo_with_box(obj: Any, name: str, tx: float, lo: tuple, hi: tuple) -> Any:
     """A displayed geo at x=tx whose display SOP's geometry fills the box lo..hi (local)."""
     from tests.conftest import MockGeometry
@@ -662,7 +700,7 @@ class TestRenderLeavesSceneUnchanged:
     """A render is read-only to the scene: whatever it creates, it removes.
 
     Both outcomes are pinned. With a ROP that writes its picture the render
-    succeeds; with a ROP whose render raises it fails after the camera rig and
+    succeeds; with a ROP whose render raises it fails after the camera and
     the ROP exist. Either way the scene after the call is the scene before it,
     and a user's node that carries one of the temporary names is untouched.
     """
@@ -708,10 +746,7 @@ class TestRenderLeavesSceneUnchanged:
         assert result["status"] == "success", result
         assert [
             r.getMessage() for r in caplog.records if "temporary render nodes" in r.getMessage()
-        ] == [
-            "Removed temporary render nodes: "
-            "['/out/_mcp_opengl_rop', '/obj/_mcp_render_cam', '/obj/_mcp_cam_center']"
-        ]
+        ] == ["Removed temporary render nodes: ['/out/_mcp_opengl_rop', '/obj/_mcp_render_cam']"]
 
     @pytest.fixture
     def render_raises(self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -817,7 +852,7 @@ class TestRenderLeavesSceneUnchanged:
         assert result["message"] == (
             f"camera is locked\ndestroying temporary render node /obj/{cam}"
         ), result
-        # The locked camera is the one node left behind; null and ROP are gone.
+        # The locked camera is the one node left behind; the ROP is gone.
         after = self._names(self._scene(rendering_scene))
         assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
         events = [
@@ -832,7 +867,7 @@ class TestRenderLeavesSceneUnchanged:
             ),
             (
                 "DEBUG",
-                f"Removed temporary render nodes: ['/out/{prefix}opengl_rop', '/obj/{prefix}cam_center']",
+                f"Removed temporary render nodes: ['/out/{prefix}opengl_rop']",
             ),
         ]
 
@@ -906,13 +941,7 @@ class TestRenderLeavesSceneUnchanged:
             request.getfixturevalue("rendering_scene")
         obj = renders_locally.node("/obj")
         users = [
-            obj.createNode("geo", name)
-            for name in (
-                "_mcp_cam_center",
-                "_mcp_render_cam",
-                "_mcp_quad_cam_center",
-                "_mcp_quad_render_cam",
-            )
+            obj.createNode("geo", name) for name in ("_mcp_render_cam", "_mcp_quad_render_cam")
         ]
         out = renders_locally.node("/out")
         if out is not None:
@@ -960,7 +989,7 @@ class TestRenderFraming:
 
     @pytest.fixture
     def frames(self, framed_scene: Any, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-        """What the rig and ROP held at the moment of each render, in order."""
+        """What the camera and ROP held at the moment of each render, in order."""
         from tests.conftest import MockHouNode
 
         hou = framed_scene
@@ -968,7 +997,6 @@ class TestRenderFraming:
 
         def render(self: Any) -> None:
             camera = hou.node(self.parm("camera").eval())
-            pivot = hou.node(camera.path().replace("render_cam", "cam_center"))
             recorded.append(
                 {
                     "rop": self.path(),
@@ -987,9 +1015,10 @@ class TestRenderFraming:
                         if self.parm(name) is not None
                     },
                     "picture_suffix": pathlib.Path(self.parm("picture").eval()).suffix,
-                    "pivot_t": pivot.parmTuple("t").eval(),
-                    "pivot_r": pivot.parmTuple("r").eval(),
                     "camera_t": camera.parmTuple("t").eval(),
+                    "camera_r": camera.parmTuple("r").eval(),
+                    "camera_inputs": camera.inputs(),
+                    "camera_orders": (camera.parm("rOrd").eval(), camera.parm("xOrd").eval()),
                     "camera_res": (camera.parm("resx").eval(), camera.parm("resy").eval()),
                     "projection": camera.parm("projection").eval(),
                     "orthowidth": camera.parm("orthowidth").eval(),
@@ -1011,8 +1040,8 @@ class TestRenderFraming:
         assert result["status"] == "success", result
         assert result["bounding_box"] == self.BOX
         for frame in frames:
-            assert frame["pivot_t"] == (5.0, 0.0, 0.0)
-            assert frame["camera_t"] == (0.0, 0.0, self.DISTANCE)
+            assert _looks_at(frame, (5.0, 0.0, 0.0))
+            assert math.dist(frame["camera_t"], (5.0, 0.0, 0.0)) == pytest.approx(self.DISTANCE)
             assert frame["orthowidth"] == self.ORTHO_WIDTH
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -1032,9 +1061,9 @@ class TestRenderFraming:
             "center": [0.0, 0.0, 0.0],
             "size": 2.0,
         }
-        assert frames[0]["pivot_t"] == (0.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (0.0, 0.0, 0.0))
         # Two across, padded: closer than the minimum distance, so the camera stays at it.
-        assert frames[0]["camera_t"] == (0.0, 0.0, 5.0)
+        assert math.dist(frames[0]["camera_t"], (0.0, 0.0, 0.0)) == pytest.approx(5.0)
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_scene_with_no_geometry_is_framed_at_the_origin_and_reports_no_box(
@@ -1049,18 +1078,19 @@ class TestRenderFraming:
 
         assert result["status"] == "success", result
         assert "bounding_box" not in result
-        assert frames[0]["pivot_t"] == (0.0, 0.0, 0.0)
-        assert frames[0]["camera_t"] == (0.0, 0.0, pytest.approx(19.4853, abs=1e-3))
+        assert _looks_at(frames[0], (0.0, 0.0, 0.0))
+        assert math.dist(frames[0]["camera_t"], (0.0, 0.0, 0.0)) == pytest.approx(19.4853, abs=1e-3)
         assert frames[0]["orthowidth"] == pytest.approx(12.0)
 
-    def test_quad_view_aims_the_one_rig_at_each_view(self, frames: list[dict[str, Any]]) -> None:
+    def test_quad_view_aims_the_one_camera_at_each_view(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_quad_view
 
         result = render_quad_view(host="localhost", port=18811)
 
         assert result["status"] == "success", result
         assert [v["name"] for v in result["views"]] == ["front", "left", "top", "perspective"]
-        assert [f["pivot_r"] for f in frames] == [
+        assert [_looks_at(f, (5.0, 0.0, 0.0)) for f in frames] == [True] * 4
+        assert [f["camera_r"] for f in frames] == [
             (0.0, 0.0, 0.0),
             (0.0, -90.0, 0.0),
             (-90.0, 0.0, 0.0),
@@ -1078,6 +1108,51 @@ class TestRenderFraming:
         assert [f["projection"] for f in frames] == [0, 0, 0, 0]
         assert [v["orthographic"] for v in result["views"]] == [False] * 4
 
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_the_camera_turns_and_moves_in_the_orders_its_pose_is_stated_in(
+        self, frames: list[dict[str, Any]], tool: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A studio's own defaults for a camera's rotate and transform orders do not move
+        it: the render sets the orders camera_position and camera_rotation are stated in."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import _TYPE_DEFAULT_PARAMS
+
+        monkeypatch.setitem(
+            _TYPE_DEFAULT_PARAMS,
+            "cam",
+            {**_TYPE_DEFAULT_PARAMS["cam"], "rOrd": "zxy", "xOrd": "trs"},
+        )
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert {f["camera_orders"] for f in frames} == {("xyz", "srt")}
+
+    def test_each_aim_logs_where_the_camera_stands_and_how_it_is_turned(
+        self, frames: list[dict[str, Any]], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from houdini_mcp.tools import render_quad_view, render_viewport
+
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.rendering"):
+            render_viewport(
+                camera_position=[1.0, 2.0, 3.0],
+                camera_rotation=[20.0, -130.0, 35.0],
+                host="localhost",
+                port=18811,
+            )
+            render_quad_view(host="localhost", port=18811)
+
+        assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("Camera ")] == [
+            "Camera t=(1.0, 2.0, 3.0) r=(20.0, -130.0, 35.0)"
+            " orthographic=False camera_position=(1.0, 2.0, 3.0)",
+            *(
+                f"Camera t={f['camera_t']} r={f['camera_r']}"
+                f" orthographic={f['projection'] == 1} camera_position=None"
+                for f in frames[1:]
+            ),
+        ]
+        assert len(frames) == 5
+
     def test_viewport_aims_isometric_when_no_rotation_is_asked_for(
         self, frames: list[dict[str, Any]]
     ) -> None:
@@ -1086,30 +1161,52 @@ class TestRenderFraming:
         result = render_viewport(host="localhost", port=18811)
 
         assert result["status"] == "success", result
-        assert frames[0]["pivot_r"] == (-30.0, 45.0, 0.0)
+        assert frames[0]["camera_r"] == (-30.0, 45.0, 0.0)
 
-    def test_viewport_aims_at_the_rotation_asked_for(self, frames: list[dict[str, Any]]) -> None:
-        from houdini_mcp.tools import render_viewport
-
-        result = render_viewport(
-            camera_rotation=[-90.0, 0.0, 0.0], orthographic=True, host="localhost", port=18811
-        )
-
-        assert result["status"] == "success", result
-        assert frames[0]["pivot_r"] == (-90.0, 0.0, 0.0)
-        assert frames[0]["projection"] == 1
-        assert frames[0]["orthowidth"] == self.ORTHO_WIDTH
-
-    def test_viewport_camera_position_replaces_the_framed_offset(
-        self, frames: list[dict[str, Any]]
+    @pytest.mark.parametrize("rotation", [(-90.0, 0.0, 0.0), (20.0, -130.0, 35.0)])
+    def test_viewport_aims_at_the_rotation_asked_for(
+        self, frames: list[dict[str, Any]], rotation: tuple[float, float, float]
     ) -> None:
         from houdini_mcp.tools import render_viewport
 
-        result = render_viewport(camera_position=[1.0, 2.0, 3.0], host="localhost", port=18811)
+        result = render_viewport(
+            camera_rotation=list(rotation), orthographic=True, host="localhost", port=18811
+        )
 
         assert result["status"] == "success", result
-        assert frames[0]["pivot_t"] == (5.0, 0.0, 0.0)
-        assert frames[0]["camera_t"] == (1.0, 2.0, 3.0)
+        assert frames[0]["camera_r"] == rotation
+        assert _looks_at(frames[0], (5.0, 0.0, 0.0))
+        assert math.dist(frames[0]["camera_t"], (5.0, 0.0, 0.0)) == pytest.approx(self.DISTANCE)
+        assert frames[0]["projection"] == 1
+        assert frames[0]["orthowidth"] == self.ORTHO_WIDTH
+
+    @pytest.mark.parametrize(
+        ("arguments", "rotation"),
+        [
+            ({"camera_position": [1.0, 2.0, 3.0]}, (-30.0, 45.0, 0.0)),
+            (
+                {"camera_position": [10.0, 0.0, 0.0], "camera_rotation": [20.0, -130.0, 35.0]},
+                (20.0, -130.0, 35.0),
+            ),
+        ],
+    )
+    def test_viewport_camera_stands_at_camera_position_in_the_world(
+        self,
+        frames: list[dict[str, Any]],
+        arguments: dict[str, Any],
+        rotation: tuple[float, float, float],
+    ) -> None:
+        """The framed center is off the origin; the camera stands where it was told, not
+        offset from that center, and has no parent to move it."""
+        from houdini_mcp.tools import render_viewport
+
+        result = render_viewport(**arguments, host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"]["center"] == [5.0, 0.0, 0.0]
+        assert frames[0]["camera_t"] == tuple(arguments["camera_position"])
+        assert frames[0]["camera_r"] == rotation
+        assert frames[0]["camera_inputs"] == []
 
     def test_look_at_frames_only_that_node(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_viewport
@@ -1123,7 +1220,7 @@ class TestRenderFraming:
             "center": [10.0, 0.0, 0.0],
             "size": 2.0,
         }
-        assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
     def test_look_at_a_sop_frames_it_where_its_object_places_it(
         self, frames: list[dict[str, Any]]
@@ -1134,7 +1231,7 @@ class TestRenderFraming:
 
         assert result["status"] == "success", result
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
-        assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
     @pytest.mark.parametrize("path", ["/out", "/out/stray_box"])
     def test_look_at_a_node_outside_any_object_is_an_error(
@@ -1172,7 +1269,7 @@ class TestRenderFraming:
             "center": [7.0, 0.0, 0.0],
             "size": 0.0,
         }
-        assert frames[0]["pivot_t"] == (7.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (7.0, 0.0, 0.0))
         assert frames[0]["orthowidth"] == pytest.approx(12.0)
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -1233,7 +1330,7 @@ class TestRenderFraming:
             "center": [3.0, 0.0, 0.0],
             "size": 0.0,
         }
-        assert frames[0]["pivot_t"] == (3.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (3.0, 0.0, 0.0))
         assert frames[0]["orthowidth"] == pytest.approx(12.0)
 
     def test_a_temporary_file_that_will_not_go_is_logged_and_the_image_still_returned(
@@ -1402,7 +1499,7 @@ class TestRenderFraming:
 
         assert result["status"] == "success", result
         assert result["bounding_box"]["max"] == [21.0, 1.0, 1.0]
-        assert frames[0]["pivot_t"] == (10.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_displayed_objects_without_geometry_are_not_framed(
@@ -1481,7 +1578,7 @@ class TestRenderFraming:
 
         assert result["status"] == "success", result
         assert "bounding_box" not in result
-        assert frames[0]["pivot_t"] == (0.0, 0.0, 0.0)
+        assert _looks_at(frames[0], (0.0, 0.0, 0.0))
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize(

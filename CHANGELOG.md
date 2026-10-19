@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `render_viewport` stands its camera at `camera_position`,
+  a world position, as its description always said (houdini-laws-etg.d06).
+  Before, the value was an offset from the framed center along the rotated
+  view, so the camera landed elsewhere whenever `camera_rotation` was not
+  `[0, 0, 0]` or the framed geometry was off the origin. `camera_rotation` is
+  the camera's world rotation, turned about X, then Y, then Z. An omitted
+  `camera_position` frames as before. Renders no longer create the
+  `_mcp_cam_center` and `_mcp_quad_cam_center` nulls.
+
 - **BREAKING (wire, Python API)**: a render's camera rotation has one default
   and no null spelling (houdini-laws-etg.nhb). `render_viewport` publishes
   `[-30, 45, 0]` as the `camera_rotation` default in its schema, and an omitted

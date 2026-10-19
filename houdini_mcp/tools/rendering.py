@@ -153,10 +153,10 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
 class Framing:
     """What a render looks at: the world-space box around the framed geometry, or nothing.
 
-    [LAW:one-source-of-truth] every number the camera rig needs - where its
-    pivot sits, how far back the camera stands, how wide an orthographic view
-    opens, what box the caller is told about - derives from the one box here,
-    so no two render tools can frame the same scene differently.
+    [LAW:one-source-of-truth] every number the camera needs - what it looks at,
+    where it stands for each view, how wide an orthographic view opens, what
+    box the caller is told about - derives from the one box here, so no two
+    render tools can frame the same scene differently.
     """
 
     bounds: tuple[Vec3, Vec3] | None
@@ -187,6 +187,22 @@ class Framing:
         """How far back from the center a perspective camera stands to see the whole box."""
         fit = (self.size * _PADDING / 2) / math.tan(math.radians(_FOV_DEGREES / 2))
         return max(_MIN_DISTANCE, fit + self.size / 2)
+
+    def viewpoint(self, rotation: Vec3) -> Vec3:
+        """Where a camera turned to ``rotation`` stands to look at the center from the distance.
+
+        It backs away along its own +Z. The camera turns about world X, then Y,
+        then Z (rotate order xyz, which _build_camera sets), which carries +Z to
+        the direction below.
+        """
+        rx, ry, rz = (math.radians(angle) for angle in rotation)
+        back = (
+            math.cos(rx) * math.sin(ry) * math.cos(rz) + math.sin(rx) * math.sin(rz),
+            math.cos(rx) * math.sin(ry) * math.sin(rz) - math.sin(rx) * math.cos(rz),
+            math.cos(rx) * math.cos(ry),
+        )
+        (cx, cy, cz), d = self.center, self.distance
+        return (cx + d * back[0], cy + d * back[1], cz + d * back[2])
 
     @property
     def ortho_width(self) -> float:
@@ -308,7 +324,7 @@ def _framing_at(obj: Any) -> Framing:
 
 
 # =============================================================================
-# Rig and ROP
+# Camera and ROP
 # =============================================================================
 
 
@@ -353,55 +369,57 @@ def _prepare(
     )
 
 
-@dataclass(frozen=True)
-class _Rig:
-    """A camera on a pivot.
+def _build_camera(create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str) -> Any:
+    """A camera of no parent at the prepared resolution.
 
-    The pivot sits at the framed center and turns to each view; the camera hangs
-    off it at an offset, so turning the pivot swings the camera around what it
-    frames while the camera's own transform stays a plain offset.
+    [LAW:one-source-of-truth] with nothing above it, turned about X, then Y,
+    then Z, and moved after it turns, the camera's own t and r are its world
+    position and rotation, so the values a caller names are the values the
+    scene holds. The two orders are the ones the tools state the pose in, so
+    they are set here rather than left to the node's defaults.
     """
-
-    pivot: Any
-    camera: Any
-
-
-def _build_rig(
-    create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str, framing: Framing
-) -> _Rig:
-    pivot = create(prepared.obj, "null", f"{prefix}cam_center")
-    pivot.parmTuple("t").set(list(framing.center))
     camera = create(prepared.obj, "cam", f"{prefix}render_cam")
-    camera.setFirstInput(pivot)
+    camera.parm("rOrd").set("xyz")
+    camera.parm("xOrd").set("srt")
     camera.parm("resx").set(prepared.width)
     camera.parm("resy").set(prepared.height)
-    return _Rig(pivot=pivot, camera=camera)
+    return camera
 
 
 def _aim(
-    rig: _Rig,
-    rotation: Sequence[float],
-    offset: Sequence[float],
+    camera: Any,
+    camera_position: Vec3 | None,
+    rotation: Vec3,
     orthographic: bool,
     framing: Framing,
 ) -> None:
-    """Turn the rig to a view: the pivot to the rotation, the camera to its offset.
+    """Stand the camera at a world position, turned to a world rotation.
 
+    [LAW:single-enforcer] an omitted position is resolved here, for every render,
+    to where the rotation looks at the framed center.
     [LAW:dataflow-not-control-flow] both projections are configured every time;
     the projection parm alone decides which one renders.
     """
-    rig.pivot.parmTuple("r").set(list(rotation))
-    rig.camera.parmTuple("t").set(list(offset))
-    rig.camera.parm("projection").set(1 if orthographic else 0)
-    rig.camera.parm("orthowidth").set(framing.ortho_width)
+    position = framing.viewpoint(rotation) if camera_position is None else camera_position
+    camera.parmTuple("t").set(list(position))
+    camera.parmTuple("r").set(list(rotation))
+    camera.parm("projection").set(1 if orthographic else 0)
+    camera.parm("orthowidth").set(framing.ortho_width)
+    logger.info(
+        "Camera t=%s r=%s orthographic=%s camera_position=%s",
+        position,
+        rotation,
+        orthographic,
+        camera_position,
+    )
 
 
 def _build_rop(
-    create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str, rig: _Rig
+    create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str, camera: Any
 ) -> Any:
-    """The ROP that renders the rig's camera at the prepared resolution, current frame only."""
+    """The ROP that renders the camera at the prepared resolution, current frame only."""
     rop = create(prepared.out, prepared.rop_type, f"{prefix}{prepared.rop_type}_rop")
-    settings = {"camera": rig.camera.path(), "picture": "", "trange": 0, **prepared.rop_settings}
+    settings = {"camera": camera.path(), "picture": "", "trange": 0, **prepared.rop_settings}
     for name, value in settings.items():
         parm = rop.parm(name)
         if parm is None:
@@ -479,8 +497,12 @@ def render_viewport(
     the outcome: the scene is as it was before the call.
 
     Args:
-        camera_position: [x, y, z] world position for camera (default: auto-calculated)
-        camera_rotation: [rx, ry, rz] rotation in degrees, isometric by default
+        camera_position: [x, y, z] world position of the camera (default: where
+            camera_rotation looks at the center of what is framed, from far enough
+            back to see all of it)
+        camera_rotation: [rx, ry, rz] world rotation of the camera in degrees, turned
+            about X, then Y, then Z. It alone sets where the camera looks, wherever the
+            camera stands: [0, 0, 0] looks down -Z. Isometric by default
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
@@ -497,12 +519,14 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - bounding_box: The world-space box that was framed, when geometry was
+        - bounding_box: The world-space box around what look_at or auto_frame chose: of
+          no size where a look_at with no geometry stands, absent when nothing was chosen
 
     Examples:
         render_viewport()  # Auto-frame scene with isometric view
         render_viewport(camera_rotation=[0, 0, 0])  # Front view
         render_viewport(camera_rotation=[-90, 0, 0])  # Top view
+        render_viewport(camera_position=[0, 0, 10], camera_rotation=[0, 0, 0])  # Facing the origin
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
@@ -522,12 +546,10 @@ def render_viewport(
         framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
     else:
         framing = Framing(bounds=None)
-    offset = (0.0, 0.0, framing.distance) if camera_position is None else camera_position
-
     with _temporary_nodes() as create:
-        rig = _build_rig(create, prepared, "_mcp_", framing)
-        rop = _build_rop(create, prepared, "_mcp_", rig)
-        _aim(rig, camera_rotation, offset, orthographic, framing)
+        camera = _build_camera(create, prepared, "_mcp_")
+        rop = _build_rop(create, prepared, "_mcp_", camera)
+        _aim(camera, camera_position, camera_rotation, orthographic, framing)
         image = _render_picture(rop, prepared, output_format)
 
     result: dict[str, Any] = {
@@ -556,11 +578,11 @@ def render_quad_view(
     """
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
 
-    Creates a camera rig and renders standardized views for spatial understanding.
-    The rig and render node are removed again before returning, whatever the
+    Creates a camera and renders standardized views for spatial understanding.
+    The camera and render node are removed again before returning, whatever the
     outcome: the scene is as it was before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
-    calling render_viewport 4 times as it reuses the camera rig and calculates
+    calling render_viewport 4 times as it reuses the camera and calculates
     the bounding box only once.
 
     Args:
@@ -607,16 +629,15 @@ def render_quad_view(
         views.append(("perspective", _ISOMETRIC, False))
 
     framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
-    offset = (0.0, 0.0, framing.distance)
     view_results: list[dict[str, Any]] = []
 
     with _temporary_nodes() as create:
-        rig = _build_rig(create, prepared, "_mcp_quad_", framing)
-        rop = _build_rop(create, prepared, "_mcp_quad_", rig)
+        camera = _build_camera(create, prepared, "_mcp_quad_")
+        rop = _build_rop(create, prepared, "_mcp_quad_", camera)
         for name, rotation, is_ortho in views:
             view: dict[str, Any] = {"name": name, "rotation": list(rotation)}
             try:
-                _aim(rig, rotation, offset, is_ortho, framing)
+                _aim(camera, None, rotation, is_ortho, framing)
                 image = _render_picture(rop, prepared, output_format)
             except OperationFailed as e:
                 # A view owns only Houdini's failure to produce its picture, which
