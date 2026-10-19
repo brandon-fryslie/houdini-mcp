@@ -13,6 +13,7 @@ import logging
 import socket
 import threading
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import rpyc
@@ -27,7 +28,7 @@ from houdini_mcp_plugin.listener import (
     probe_host,
 )
 
-from tests.conftest import await_rpyc_client_threads
+from tests.conftest import await_clients_served
 from tests.plugin.conftest import FakeHrpycModule
 
 
@@ -44,9 +45,16 @@ needs_ipv6 = pytest.mark.skipif(not _ipv6_loopback_available(), reason="no IPv6 
 
 
 def real_hrpyc() -> SimpleNamespace:
+    """rpyc as hrpyc ships it, keeping every server it builds, as the fake does."""
+    servers: list[rpyc.utils.server.ThreadedServer] = []
+
+    def threaded_server(*args: Any, **kwargs: Any) -> rpyc.utils.server.ThreadedServer:
+        server = rpyc.utils.server.ThreadedServer(*args, **kwargs)
+        servers.append(server)
+        return server
+
     return SimpleNamespace(
-        SlaveService=rpyc.core.SlaveService,
-        ThreadedServer=rpyc.utils.server.ThreadedServer,
+        SlaveService=rpyc.core.SlaveService, ThreadedServer=threaded_server, servers=servers
     )
 
 
@@ -142,7 +150,8 @@ class TestListenerAgainstRealRpyc:
         reaches, over the address family the host literal names. The wildcard
         binds are the trusted-network opt-in's; a client reaches them on the
         loopback of their own family, which is also what self_test probes."""
-        listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
+        hrpyc = real_hrpyc()
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
         try:
             result = listener.start(ListenerConfig(host=host, port=0, trusted_network=True))
             assert result["status"] == "success", result
@@ -155,7 +164,7 @@ class TestListenerAgainstRealRpyc:
                 assert conn.modules.math.sqrt(16.0) == 4.0
             finally:
                 conn.close()
-                await_rpyc_client_threads()
+                await_clients_served(hrpyc.servers[0])
         finally:
             listener.stop()
 

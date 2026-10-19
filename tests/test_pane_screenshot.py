@@ -17,7 +17,7 @@ from houdini_mcp.tools.pane_screenshot import (
     pane_type_member,
     pane_type_names,
 )
-from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, await_rpyc_client_threads
+from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, await_clients_served
 
 MOCK_PANE_TYPES = ["NetworkEditor", "Parm", "SceneViewer"]
 
@@ -55,8 +55,8 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
             assert pane_type_member(hou, "ChannelEditr") is None
             assert pane_type_member(hou, "thisown") is None
     finally:
+        await_clients_served(server)
         server.close()
-        await_rpyc_client_threads()
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:
