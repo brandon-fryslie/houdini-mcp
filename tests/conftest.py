@@ -185,40 +185,6 @@ class MockHouNode:
         for child in children or []:
             self.attach(child)
 
-    # parm()/parmTuple() cache their mocks, whose setters write to this node; a
-    # copy rebuilds its own instead of writing through to the original.
-    _PARM_CACHES = frozenset({"_parm_objects", "_parm_tuple_objects"})
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "MockHouNode":
-        clone = object.__new__(type(self))
-        memo[id(self)] = clone
-        for key, value in vars(self).items():
-            if key not in self._PARM_CACHES:
-                setattr(clone, key, copy.deepcopy(value, memo))
-        return clone
-
-    def state(self) -> tuple[Any, ...]:
-        """This node and its subtree as one comparable value: what an undo step restores."""
-        return (
-            self._name,
-            self._node_type,
-            repr(sorted(self._params.items())),
-            tuple(
-                (index, source.path(), self._input_output_indexes.get(index, 0))
-                for index, source in enumerate(self._inputs)
-                if source is not None
-            ),
-            (self._display_flag, self._render_flag, self._bypass),
-            self._position,
-            repr(self._color),
-            tuple(
-                (box._name, box._label, repr(box._color), tuple(n.path() for n in box._nodes))
-                for box in self._network_boxes
-            ),
-            tuple(self.layout_calls),
-            tuple(child.state() for child in self._children),
-        )
-
     def attach(self, child: "MockHouNode") -> None:
         """Place a prebuilt child in this network; the child's path must say so.
 
@@ -655,7 +621,8 @@ class MockHouModule:
         self.Node = MockHouNode
         self.SubnetIndirectInput = MockSubnetIndirectInput
 
-        self.undos = MockUndos(self)
+        # Undo stack (used by execute_code rollback-on-timeout safety rail)
+        self.undos = MockUndos()
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
@@ -897,6 +864,25 @@ def mock_connection(mock_hou: MockHouModule, connected_to: Callable[[Any], Any])
     return connected_to(mock_hou)
 
 
+class MockUndoGroupContext:
+    """Context manager mimicking hou.undos.group()."""
+
+    def __init__(self, undos: "MockUndos", label: str):
+        self._undos = undos
+        self._label = label
+
+    def __enter__(self) -> "MockUndoGroupContext":
+        self._undos.open_groups.append(self._label)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        # Mirror Houdini: leaving the group closes it and records it as undoable.
+        if self._undos.open_groups and self._undos.open_groups[-1] == self._label:
+            self._undos.open_groups.pop()
+        self._undos.closed_groups.append(self._label)
+        return False
+
+
 def await_clients_served(server: Server, timeout: float = 5.0) -> None:
     """Wait until ``server`` has finished serving every client it accepted.
 
@@ -998,40 +984,33 @@ class MockUi:
 
 
 class MockUndos:
-    """hou.undos over the fake scene, as Houdini 22 keeps it.
+    """Mock hou.undos namespace for testing the rollback safety rail."""
 
-    A group that changed the scene is one undo step, a group that changed nothing
-    is no step at all, labels are listed newest first, and undoing a step puts
-    back the scene the group found. Nested groups are one step, the outermost's.
-    Set ``enabled`` False for a Houdini with undo turned off, where no group is a step.
-    """
+    def __init__(self) -> None:
+        self.open_groups: list[str] = []
+        self.closed_groups: list[str] = []
+        self.performed_undos = 0
+        self.performed_redos = 0
+        self._enabled = True
 
-    def __init__(self, hou: "MockHouModule") -> None:
-        self._hou = hou
-        self._steps: list[tuple[str, MockHouNode]] = []
-        self._depth = 0
-        self.enabled = True
-
-    @contextlib.contextmanager
-    def group(self, label: str) -> Generator[None, None, None]:
-        found = copy.deepcopy(self._hou._root) if self._depth == 0 else None
-        self._depth += 1
-        try:
-            yield
-        finally:
-            self._depth -= 1
-            if found is not None and self.enabled and found.state() != self._hou._root.state():
-                self._steps.append((label, found))
-
-    def undoLabels(self) -> tuple[str, ...]:
-        return tuple(label for label, _ in reversed(self._steps))
+    def group(self, label: str) -> MockUndoGroupContext:
+        return MockUndoGroupContext(self, label)
 
     def performUndo(self) -> None:
-        _, found = self._steps.pop()
-        self._hou._root = found
+        self.performed_undos += 1
 
-    def areEnabled(self) -> bool:
-        return self.enabled
+    def performRedo(self) -> None:
+        self.performed_redos += 1
+
+    def undoLabels(self) -> list[str]:
+        available = len(self.closed_groups) - self.performed_undos
+        return list(reversed(self.closed_groups[:available]))
+
+    def isUndoAvailable(self) -> bool:
+        return bool(self.closed_groups) and self.performed_undos < len(self.closed_groups)
+
+    def areUndosEnabled(self) -> bool:
+        return self._enabled
 
 
 class MockColor:

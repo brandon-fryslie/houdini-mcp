@@ -3173,14 +3173,12 @@ class TestConnectionErrorHandling:
         assert result["connection_reset"] is True
         assert "timed out" in result["message"]
 
-    def test_create_node_handles_eof_error(self, mock_connection, monkeypatch):
-        """A link that closes partway through a scene write is connection loss."""
+    @patch("houdini_mcp.tools.nodes.ensure_connected")
+    def test_create_node_handles_eof_error(self, mock_ensure):
+        """Test that create_node handles EOFError gracefully."""
         from houdini_mcp.tools import create_node
 
-        def closed(path: str) -> None:
-            raise EOFError("Connection closed")
-
-        monkeypatch.setattr(mock_connection, "node", closed)
+        mock_ensure.side_effect = EOFError("Connection closed")
 
         result = create_node("geo", host="localhost", port=18811)
 

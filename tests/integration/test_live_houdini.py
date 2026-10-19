@@ -13,14 +13,10 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any
 
 import pytest
 
 from houdini_mcp import tools
-from houdini_mcp.connection import ensure_connected
-from houdini_mcp.tools._common import handle_connection_errors
-from houdini_mcp.tools.failure import OperationFailed
 
 
 def _integration_enabled() -> bool:
@@ -130,37 +126,3 @@ def test_get_node_info_serializes_ramp_parameter() -> None:
     finally:
         if geo_path:
             tools.delete_node(geo_path, host, port)
-
-
-@pytest.mark.integration
-def test_a_failed_scene_write_leaves_the_scene_as_it_found_it() -> None:
-    host, port = _houdini_target()
-    name = f"mcp_it_partial_{uuid.uuid4().hex[:8]}"
-
-    @handle_connection_errors("create_node")
-    def half_built(host: str, port: int) -> dict[str, Any]:
-        ensure_connected(host, port).node("/obj").createNode("null", name)
-        raise OperationFailed("the second step failed")
-
-    result = half_built(host, port)
-
-    assert result["message"] == "the second step failed\nIts changes to the scene were undone."
-    assert tools.get_node_info(f"/obj/{name}", host=host, port=port)["kind"] == "invalid_input"
-
-
-@pytest.mark.integration
-def test_a_refused_scene_write_leaves_the_latest_undo_step_alone() -> None:
-    """Houdini records no step for a call that changed nothing, so the latest step
-    is the call before it, which the refused call must not undo."""
-    host, port = _houdini_target()
-    created = tools.create_node("null", "/obj", f"mcp_it_kept_{uuid.uuid4().hex[:8]}", host, port)
-    assert created["status"] == "success"
-
-    try:
-        refused = tools.create_node("null", "/obj/mcp_it_no_such_parent", None, host, port)
-
-        assert refused["kind"] == "invalid_input"
-        kept = tools.get_node_info(created["node_path"], detail="compact", host=host, port=port)
-        assert kept["status"] == "success"
-    finally:
-        tools.delete_node(created["node_path"], host, port)

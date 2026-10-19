@@ -123,9 +123,9 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; connection loss is the only failure that
     tears the connection down. A sync tool's body runs inside
-    :func:`~houdini_mcp.tools.transactions.recovering`, so a scene write that
-    fails is undone before its failure is built. Who holds the scene while the
-    tool's Houdini work runs is :func:`on_the_scene`'s to arbitrate.
+    :func:`~houdini_mcp.tools.transactions.recovering`, so a call that replaces
+    the scene has backed it up first. Who holds the scene while the tool's
+    Houdini work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
         operation_name: The tool's name: it names the operation in error

@@ -90,8 +90,8 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
     Unsaved changes to the current scene are backed up first, into Houdini's
     backup folder beside its hip file, and the result's ``checkpoint`` is the
     backup's path; it is absent when nothing was unsaved. A scene that has never
-    been saved cannot be backed up, so with unsaved changes the call is refused:
-    save it with save_scene(file_path) first.
+    been saved cannot be backed up, so one holding any node is refused: save it
+    with save_scene(file_path) first.
 
     Args:
         file_path: Path to the .hip file to load
@@ -114,8 +114,8 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     Unsaved changes to the current scene are backed up first, into Houdini's
     backup folder beside its hip file, and the result's ``checkpoint`` is the
     backup's path; it is absent when nothing was unsaved. A scene that has never
-    been saved cannot be backed up, so with unsaved changes the call is refused:
-    save it with save_scene(file_path) first.
+    been saved cannot be backed up, so one holding any node is refused: save it
+    with save_scene(file_path) first.
     """
     hou = ensure_connected(host, port)
 

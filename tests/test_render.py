@@ -859,6 +859,29 @@ class TestRenderLeavesSceneUnchanged:
             "RuntimeError('camera is locked')"
         ), result
 
+    def test_a_destroy_failure_houdini_raised_carries_its_notes(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rpyc rebuilds a Houdini exception with its ``add_note`` copied on as a string;
+        the notes still ride on it."""
+        from houdini_mcp.tools import render_viewport
+        from tests.conftest import MockHouNode, raised_inside_houdini
+
+        original = MockHouNode.destroy
+
+        def destroy(self: Any) -> None:
+            if self.type().name() == "cam":
+                raise raised_inside_houdini(RuntimeError("camera is locked"))
+            original(self)
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert result["message"].endswith(
+            "\ndestroying temporary render node /obj/_mcp_render_cam"
+        ), result
+
     @pytest.mark.parametrize("tool", TOOLS)
     def test_nothing_is_sent_over_a_failed_link(
         self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
