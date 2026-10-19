@@ -152,13 +152,30 @@ class TestATimedOutRunsDiff:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             mock_connection.stall_gate.set()
             worker.thread.join(5)
-        # The diff's event says it came late: the program outlasted its timeout.
-        [event] = [m for m in caplog.messages if "scene diff of /obj" in m]
-        took = float(event.split("program took ")[1].split("s of timeout 1s")[0])
-        assert took > 1
+        # The diff's event says it came late: the program ran its whole timeout.
+        # The record carries the exact duration; the text rounds it to milliseconds.
+        [event] = [r for r in caplog.records if "scene diff of /obj" in r.getMessage()]
+        _operation, _root, took, timeout, *_counts = event.args
+        assert took >= timeout
         assert get_last_scene_diff()["diff"]["added_nodes"] == [
             {"path": "/obj/late", "type": "geo"}
         ]
+
+    def test_a_wait_that_wakes_early_does_not_cut_the_timeout_short(
+        self, mock_connection, stalled_program, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from houdini_mcp.tools import code as code_module
+
+        class EarlyEvent(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(None if timeout is None else timeout / 2)
+
+        monkeypatch.setattr(code_module, "threading", SimpleNamespace(Event=EarlyEvent))
+        _time_out(stalled_program)
+        worker = WORKERS.running()
+        assert worker.running_for_seconds() >= worker.timeout
 
     def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
         self, mock_connection, stalled_program, monkeypatch

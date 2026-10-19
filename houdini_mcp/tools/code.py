@@ -853,7 +853,13 @@ def _execute_with_grant(
         run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
     )
     program_starts.wait()
-    program_ends.wait(timeout)
+    # [LAW:no-ambient-temporal-coupling] The timeout runs on the monotonic clock
+    # the program's duration is read on, from after that clock started, so a
+    # program called timed out has run its whole timeout. Event.wait alone can
+    # keep the wall clock (CPython on macOS) and return before it has.
+    deadline = time.monotonic() + timeout
+    while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
+        pass
 
     # [LAW:one-source-of-truth] The program's own end, set once its undo group
     # has closed, says whether it is still running - not the ledger slot, which
