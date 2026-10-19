@@ -66,7 +66,7 @@ __all__ = [
     "node_at",
     # Output utilities
     "_truncate_output",
-    # Response pagination and bounds (HDMCP-52 / houdini-mcp-2t6)
+    # Response pagination and bounds (houdini-mcp-2t6)
     "PAGE_LIMIT_MAX",
     "PageRequest",
     "parse_page_request",
@@ -384,7 +384,7 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 # =============================================================================
-# Response Pagination and Bounds (HDMCP-52 / houdini-mcp-2t6)
+# Response Pagination and Bounds (houdini-mcp-2t6)
 # =============================================================================
 
 

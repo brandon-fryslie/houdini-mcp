@@ -1,4 +1,4 @@
-# HDMCP-10: Example Workflows - Quick Reference
+# Example Workflows - Quick Reference
 
 ## 📋 Overview
 
@@ -36,24 +36,21 @@ tests/integration/
 
 ### Run Examples
 ```bash
-cd /opt/stacks/houdini-mcp/examples
-
 # Example 1: Build from scratch
-python build_from_scratch.py
+python examples/build_from_scratch.py
 
 # Example 2: Augment existing scene
-python augment_existing_scene.py
+python examples/augment_existing_scene.py
 
 # Example 3: Parameter workflow
-python parameter_workflow.py
+python examples/parameter_workflow.py
 
 # Example 4: Error handling
-python error_handling.py
+python examples/error_handling.py
 ```
 
 ### Run Tests
 ```bash
-cd /opt/stacks/houdini-mcp
 uv run pytest -m integration tests/integration/test_workflow_examples.py
 ```
 
@@ -343,7 +340,7 @@ elif cook_state == "error":
 
 ## 🎉 Conclusion
 
-HDMCP-10 successfully delivers comprehensive examples and documentation for the Houdini MCP Server. All acceptance criteria met, all patterns demonstrated, all error scenarios handled.
+This work delivers comprehensive examples and documentation for the Houdini MCP Server. All acceptance criteria met, all patterns demonstrated, all error scenarios handled.
 
 **Ready for**: Production use ✅  
 **Suitable for**: Humans and AI agents ✅  

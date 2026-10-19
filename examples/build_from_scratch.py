@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HDMCP-10 Example 1: Build from Scratch
+Example 1: Build from Scratch
 ======================================
 
 Demonstrates building a complete SOP network from scratch:
@@ -40,7 +40,7 @@ def main():
     """Build a complete SOP network from scratch."""
 
     print("=" * 70)
-    print("HDMCP-10 Example 1: Build from Scratch")
+    print("Example 1: Build from Scratch")
     print("Building: sphere → xform → color → OUT")
     print("=" * 70)
 

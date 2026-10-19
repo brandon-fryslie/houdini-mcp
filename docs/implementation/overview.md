@@ -1,4 +1,4 @@
-# HDMCP-5: Network Introspection Tools - IMPLEMENTATION COMPLETE ✅
+# Network Introspection Tools - IMPLEMENTATION COMPLETE ✅
 
 ## Summary
 
@@ -181,14 +181,14 @@ def collect_children(node, depth=0):
 
 ## Conclusion
 
-✅ **HDMCP-5 Implementation Complete**
+✅ **Network Introspection Implementation Complete**
 
 All acceptance criteria met. Tools tested and working. Ready for use by agents to introspect Houdini node networks and insert nodes without breaking connection chains.
 
 **Total Code Added:**
 - Production: ~320 lines
 - Tests: ~360 lines
-- Documentation: This file + HDMCP-5_IMPLEMENTATION_SUMMARY.md
+- Documentation: This file + [network-introspection.md](network-introspection.md)
 
 **Test Coverage:** 100% of new functionality tested with unit tests
 

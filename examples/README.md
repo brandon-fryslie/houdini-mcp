@@ -26,7 +26,7 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 
 **Run**:
 ```bash
-python build_from_scratch.py
+python examples/build_from_scratch.py
 ```
 
 **Expected Output**:
@@ -53,7 +53,7 @@ python build_from_scratch.py
 
 **Run**:
 ```bash
-python augment_existing_scene.py
+python examples/augment_existing_scene.py
 ```
 
 **Expected Output**:
@@ -80,7 +80,7 @@ python augment_existing_scene.py
 
 **Run**:
 ```bash
-python parameter_workflow.py
+python examples/parameter_workflow.py
 ```
 
 **Expected Output**:
@@ -111,7 +111,7 @@ python parameter_workflow.py
 
 **Run**:
 ```bash
-python error_handling.py
+python examples/error_handling.py
 ```
 
 **Expected Output**:
@@ -245,7 +245,7 @@ After running these examples:
 
 1. Study the integration tests to see how to test workflows
 2. Review the main README for full tool reference
-3. Check HDMCP implementation documents for advanced patterns
+3. Check the implementation documents in [docs/implementation/](../docs/implementation/) for advanced patterns
 4. Build your own workflows combining these patterns
 
 ## Questions?

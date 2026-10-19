@@ -1,10 +1,10 @@
-"""Integration tests for HDMCP-6 node wiring tools."""
+"""Integration tests for the node wiring tools."""
 
 from tests.conftest import MockHouNode
 
 
 class TestWiringIntegration:
-    """Integration tests for node wiring operations (HDMCP-6)."""
+    """Integration tests for node wiring operations."""
 
     def test_insert_node_in_chain(self, mock_connection):
         """

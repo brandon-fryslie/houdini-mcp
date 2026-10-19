@@ -14,7 +14,7 @@ Thank you for your interest in contributing to Houdini MCP!
 
 ```bash
 # Clone the repository
-git clone https://github.com/oculairmedia/houdini-mcp.git
+git clone https://github.com/brandon-fryslie/houdini-mcp.git
 cd houdini-mcp
 
 # Create .venv and install runtime + dev dependencies from uv.lock

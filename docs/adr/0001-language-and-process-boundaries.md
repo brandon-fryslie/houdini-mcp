@@ -35,9 +35,7 @@ Two facts constrain the decision:
    interpreter. Any non-Python component that tried to reimplement node/geometry
    semantics would be duplicating an API SideFX owns and changes every release.
 2. **The FastMCP gateway is Python.** The MCP tool surface, schemas, error
-   handling, and tests are all Python today (`houdini_mcp/`), and the hosted
-   roadmap (`docs/hosted-service-planning.md`) already assumes a Python
-   FastAPI/`websockets` gateway.
+   handling, and tests are all Python today (`houdini_mcp/`).
 
 The question is therefore **not** "rewrite or not" but "where are the process and
 language boundaries, and under what measured conditions do we add a sidecar?"
@@ -180,7 +178,7 @@ not import from or know about higher layers.
 
 ```
         ┌──────────────────────────────────────────────┐
-  L4    │  MCP clients (Claude, Cursor, Letta agents)  │
+  L4    │  MCP clients (Claude, Cursor)                │
         └───────────────────────┬──────────────────────┘
                                  │ MCP over HTTP/stdio/SSE
         ┌───────────────────────▼──────────────────────┐

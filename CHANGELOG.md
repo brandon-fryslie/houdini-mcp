@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Docker Compose)**: every `docker compose` command, `down` and
+  `logs` included, stops with "required variable HOUDINI_HOST is missing a
+  value" unless `HOUDINI_HOST` is set, in `.env` or the shell
+  (houdini-tuneup-ef3.b06). It used to default to an address on the upstream
+  org's LAN. `.env.example` ships it empty: its `localhost` was the container
+  itself. The service now joins Compose's default network instead of the
+  external `mcp-network`, which a fresh clone does not have, and no longer
+  carries the upstream dashboard's `homepage.*` labels.
+
 - **BREAKING (wire)**: a summary says how much of the result it was written from
   (houdini-laws-spine-cqp.lf0). The summarizer was sent the first 8000
   characters of the result's indented JSON (`serialize_scene`: 10000), cut
@@ -429,6 +438,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the string `"512"` or `"yes"` is refused as the schema says, not coerced.
 
 ### Removed
+
+- The upstream org's internal infrastructure (houdini-tuneup-ef3.b06):
+  AGENTS.md's instructions for its Huly tracker, Letta PM agent, Graphiti and
+  BookStack; the `.letta/`, `.serena/` and `.vibesync-cache/` tool
+  directories; `town/`, two VEX headers nothing used;
+  `docs/hosted-service-planning.md`, upstream's hosted-service plan; README's
+  Letta section; and HDMCP issue codes and Meridian attributions across docs,
+  examples and tests. The repository URLs point at
+  github.com/brandon-fryslie/houdini-mcp.
 
 - `TransactionManager`, `TransactionRecord`, `TransactionConflict` and
   `RECOVERABLE_TOOL_POLICIES` (houdini-transactions-75y): no tool ever called

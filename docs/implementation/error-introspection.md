@@ -1,7 +1,7 @@
-# HDMCP-8: Node Error/Warning Introspection - Implementation Summary
+# Node Error/Warning Introspection - Implementation Summary
 
 ## Overview
-Extended the existing `get_node_info()` function to include optional cook state and error/warning tracking capabilities, following Meridian's recommendation to avoid tool proliferation.
+Extended the existing `get_node_info()` function to include optional cook state and error/warning tracking capabilities, rather than adding a separate tool.
 
 ## Implementation Date
 December 18, 2024
@@ -140,19 +140,6 @@ self.cookState.Uncooked
 - All 83 existing tests still pass (98 total)
 - 100% backward compatibility verified
 
-### 5. Demo Script (`hdmcp8_demo.py`)
-
-**Purpose**: Showcase all features and edge cases
-
-**Demos Included**:
-1. Basic error checking and backward compatibility
-2. Node with cook errors
-3. Node with warnings
-4. Different cook states (dirty/uncooked)
-5. Force cook capability
-6. Combined with parameter introspection
-7. Edge cases (special characters, many errors)
-
 ## Houdini API Integration
 
 ### Cook State Mapping
@@ -226,22 +213,6 @@ tests/test_tools.py:
 Total: 98/98 tests passed (100%)
 ```
 
-### Demo Output
-```bash
-$ python3 hdmcp8_demo.py
-
-DEMO 1: Basic Error Checking
-  ✓ Backward compatibility maintained
-  ✓ Cook info only when requested
-
-DEMO 2-7: All features working
-  ✓ Error detection
-  ✓ Warning detection
-  ✓ Cook states
-  ✓ Force cook
-  ✓ Edge cases
-```
-
 ## Files Modified
 
 | File | Lines Changed | Purpose |
@@ -256,8 +227,6 @@ DEMO 2-7: All features working
 | File | Lines | Purpose |
 |------|-------|---------|
 | `tests/test_node_errors.py` | 294 | Comprehensive test suite |
-| `hdmcp8_demo.py` | 231 | Feature demonstration |
-| `HDMCP-8_IMPLEMENTATION.md` | This file | Documentation |
 
 ## Backward Compatibility
 
@@ -298,9 +267,9 @@ Potential future additions (not implemented):
 
 ## Conclusion
 
-HDMCP-8 successfully implements node error/warning introspection by extending the existing `get_node_info()` tool rather than creating a separate tool. This approach:
+Node error/warning introspection extends the existing `get_node_info()` tool rather than creating a separate tool. This approach:
 
-1. Reduces tool proliferation (as recommended by Meridian)
+1. Reduces tool proliferation
 2. Maintains backward compatibility
 3. Provides comprehensive error tracking
 4. Handles edge cases gracefully

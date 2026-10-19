@@ -9,26 +9,14 @@ services:
     ports:
       - "3055:3055"
     environment:
-      - HOUDINI_HOST=${HOUDINI_HOST:-192.168.50.90}
+      - HOUDINI_HOST=${HOUDINI_HOST:?set HOUDINI_HOST in .env to the address of the machine running Houdini}
       - HOUDINI_PORT=${HOUDINI_PORT:-18811}
       - HOUDINI_RPC_TOKEN=${HOUDINI_RPC_TOKEN:-}
       - MCP_PORT=${MCP_PORT:-3055}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    networks:
-      - mcp-network
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3055/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    labels:
-      - homepage.group=Development Tools
-      - homepage.name=Houdini MCP
-      - homepage.icon=si-docker
-      - homepage.href=http://192.168.50.90:3055
-      - homepage.description=Houdini MCP server
-
-networks:
-  mcp-network:
-    external: true
