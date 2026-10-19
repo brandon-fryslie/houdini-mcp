@@ -343,16 +343,6 @@ class TestRenderQuadViewRenderers:
         if result["status"] == "success":
             assert result["renderer"] == "karma"
 
-    def test_unknown_renderer(self, mock_connection):
-        """Test unknown renderer returns error."""
-        from houdini_mcp.tools import render_quad_view
-
-        result = render_quad_view(renderer="unknown", host="localhost", port=18811)
-        assert result["status"] == "error"
-        # The error message might vary depending on where the mock fails,
-        # but it should contain "Unknown renderer" or other error info
-        assert "message" in result
-
 
 class TestRenderQuadViewOutputFormats:
     """Every view is rendered in the format asked for."""

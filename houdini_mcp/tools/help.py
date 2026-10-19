@@ -4,7 +4,7 @@ This module provides tools for fetching Houdini documentation from
 the SideFX website. It does NOT require a Houdini connection.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from ._common import (
     InvalidInput,
@@ -13,10 +13,31 @@ from ._common import (
     handle_connection_errors,
 )
 
+# [LAW:types-are-the-program] the help types are the parameter's type, so the
+# served schema lists them and the server refuses any other.
+HelpType = Literal[
+    "obj", "sop", "dop", "cop2", "chop", "vop", "lop", "top", "rop", "vex_function", "python_hou"
+]
+
+# Where each help type's pages live under the docs root.
+_HELP_PATHS: dict[HelpType, str] = {
+    "obj": "nodes/obj",
+    "sop": "nodes/sop",
+    "dop": "nodes/dop",
+    "cop2": "nodes/cop2",
+    "chop": "nodes/chop",
+    "vop": "nodes/vop",
+    "lop": "nodes/lop",
+    "top": "nodes/top",
+    "rop": "nodes/out",  # ROPs are under /out/
+    "vex_function": "vex/functions",
+    "python_hou": "hom/hou",
+}
+
 
 @handle_connection_errors("get_houdini_help")
 def get_houdini_help(
-    help_type: str,
+    help_type: HelpType,
     item_name: str,
     timeout: int = 10,
 ) -> dict[str, Any]:
@@ -72,31 +93,7 @@ def get_houdini_help(
             "Required packages not installed. Run: pip install requests beautifulsoup4"
         ) from e
 
-    base_url = "https://www.sidefx.com/docs/houdini/"
-
-    # Map help types to URL paths
-    url_mapping = {
-        "obj": f"nodes/obj/{item_name}.html",
-        "sop": f"nodes/sop/{item_name}.html",
-        "dop": f"nodes/dop/{item_name}.html",
-        "cop2": f"nodes/cop2/{item_name}.html",
-        "chop": f"nodes/chop/{item_name}.html",
-        "vop": f"nodes/vop/{item_name}.html",
-        "lop": f"nodes/lop/{item_name}.html",
-        "top": f"nodes/top/{item_name}.html",
-        "rop": f"nodes/out/{item_name}.html",  # ROPs are under /out/
-        "vex_function": f"vex/functions/{item_name}.html",
-        "python_hou": f"hom/hou/{item_name}.html",
-    }
-
-    if help_type not in url_mapping:
-        raise InvalidInput(
-            f"Unsupported help type: {help_type}. "
-            f"Supported types: {', '.join(sorted(url_mapping.keys()))}",
-            help_type=help_type,
-        )
-
-    full_url = base_url + url_mapping[help_type]
+    full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{item_name}.html"
 
     try:
         response = requests.get(full_url, timeout=timeout)

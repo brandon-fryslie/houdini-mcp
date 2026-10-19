@@ -5,9 +5,10 @@ import inspect
 import logging
 import os
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.server import Transport
 from fastmcp.tools import Tool, ToolResult
 from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
@@ -158,7 +159,7 @@ def delivered_result(name: str) -> str:
     return delivery.read_result(name)
 
 
-def serve(transport: str = "http", port: int = 3055) -> None:
+def serve(transport: Transport = "http", port: int = 3055) -> None:
     """Run the shared MCP server on a transport, leaving process logging alone.
 
     Entry point for hosts that already own logging - the Houdini plugin runs
@@ -166,20 +167,15 @@ def serve(transport: str = "http", port: int = 3055) -> None:
     """
     logger.info(f"Houdini connection target: {describe_target(**TARGET)}")
 
-    # Cast transport to literal type for FastMCP
-    transport_literal: Literal["stdio", "http", "sse", "streamable-http"] = "http"
-    if transport in ("stdio", "http", "sse", "streamable-http"):
-        transport_literal = transport  # type: ignore
-
-    if transport_literal == "stdio":
+    if transport == "stdio":
         logger.info("Starting Houdini MCP Server on stdio")
-        mcp.run(transport=transport_literal, show_banner=False)
+        mcp.run(transport=transport, show_banner=False)
     else:
-        logger.info(f"Starting Houdini MCP Server on {transport_literal}://0.0.0.0:{port}")
-        mcp.run(transport=transport_literal, host="0.0.0.0", port=port)
+        logger.info(f"Starting Houdini MCP Server on {transport}://0.0.0.0:{port}")
+        mcp.run(transport=transport, host="0.0.0.0", port=port)
 
 
-def run_server(transport: str = "http", port: int = 3055) -> None:
+def run_server(transport: Transport = "http", port: int = 3055) -> None:
     """CLI entry point: configure this process's logging, then serve.
 
     [LAW:effects-at-boundaries] ``logging.basicConfig`` reconfigures the root

@@ -27,10 +27,10 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict
 
 from ._common import ensure_connected, handle_connection_errors
-from .failure import InvalidInput, OperationFailed
+from .failure import OperationFailed
 from .reads import Unread, is_unread, read, reraise_transport_failure, unread
 
 logger = logging.getLogger("houdini_mcp.tools.cache")
@@ -326,9 +326,14 @@ def get_cache_stats() -> dict[str, Any]:
     }
 
 
+# [LAW:types-are-the-program] the actions are the parameter's type, so the
+# served schema lists them and the server refuses any other.
+CacheAction = Literal["stats", "invalidate", "warmup"]
+
+
 @handle_connection_errors("manage_cache")
 def manage_cache(
-    action: str = "stats", host: str = "localhost", port: int = 18811
+    action: CacheAction = "stats", host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
     """
     Manage the Houdini MCP cache system.
@@ -356,35 +361,29 @@ def manage_cache(
         manage_cache("invalidate")  # Clear caches
         manage_cache("warmup")  # Pre-populate caches
     """
-    if action == "stats":
-        return {
-            "status": "success",
-            "action": "stats",
-            "caches": get_cache_stats(),
-        }
-
-    elif action == "invalidate":
-        invalidate_all_caches()
-        return {
-            "status": "success",
-            "action": "invalidate",
-            "message": "All caches invalidated. Data will be refreshed on next access.",
-        }
-
-    elif action == "warmup":
-        start = time.time()
-        hou = ensure_connected(host, port)
-        node_type_cache.lookup(hou)
-        elapsed_ms = (time.time() - start) * 1000
-        return {
-            "status": "success",
-            "action": "warmup",
-            "message": "Caches warmed up successfully",
-            "warmup_time_ms": round(elapsed_ms, 1),
-            "caches": get_cache_stats(),
-        }
-
-    else:
-        raise InvalidInput(
-            f"Unknown action: {action}. Valid actions: stats, invalidate, warmup", action=action
-        )
+    match action:
+        case "stats":
+            return {
+                "status": "success",
+                "action": "stats",
+                "caches": get_cache_stats(),
+            }
+        case "invalidate":
+            invalidate_all_caches()
+            return {
+                "status": "success",
+                "action": "invalidate",
+                "message": "All caches invalidated. Data will be refreshed on next access.",
+            }
+        case "warmup":
+            start = time.time()
+            hou = ensure_connected(host, port)
+            node_type_cache.lookup(hou)
+            elapsed_ms = (time.time() - start) * 1000
+            return {
+                "status": "success",
+                "action": "warmup",
+                "message": "Caches warmed up successfully",
+                "warmup_time_ms": round(elapsed_ms, 1),
+                "caches": get_cache_stats(),
+            }

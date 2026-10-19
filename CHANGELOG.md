@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Closed-domain parameters publish their legal values**
+  (houdini-laws-etg.4id): `renderer`, `output_format` and `karma_engine` on
+  the render tools, `manage_cache`'s `action`, and `get_houdini_help`'s
+  `help_type` are enums in the served schema, and the server refuses any
+  other value before the tool runs. Matching is exact: `"OpenGL"` was
+  accepted before and is refused now. An unknown `MCP_TRANSPORT` stops
+  `python -m houdini_mcp` with the legal transports named, instead of
+  serving http.
+
 - **A result's text is a dense shorthand of its JSON**
   (houdini-laws-spine-cqp.kx6): a list of objects names its keys once and
   gives each object one line of values, and a tree's rows indent under their

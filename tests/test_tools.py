@@ -2346,16 +2346,6 @@ class TestReorderInputs:
 class TestGetHoudiniHelp:
     """Tests for get_houdini_help web scraping function."""
 
-    def test_get_houdini_help_unsupported_type(self):
-        """Test error for unsupported help type."""
-        from houdini_mcp.tools import get_houdini_help
-
-        result = get_houdini_help("invalid_type", "box")
-
-        assert result["status"] == "error"
-        assert "Unsupported help type" in result["message"]
-        assert "sop" in result["message"]  # Should list valid types
-
     @patch("requests.get")
     def test_get_houdini_help_network_error(self, mock_get):
         """Test handling of network connection errors."""
@@ -2541,32 +2531,21 @@ class TestGetHoudiniHelp:
         assert param["options"][1]["name"] == "Pack"
 
     @patch("requests.get")
-    def test_get_houdini_help_url_mapping(self, mock_get):
-        """Test that URL mapping covers all documented types."""
+    def test_get_houdini_help_fetches_the_page_of_its_type(self, mock_get):
+        """Each help type reads its own section of the docs; ROPs live under /out/."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_get.return_value = mock_response
-
-        # Just verify the function doesn't error on valid types
-        valid_types = [
-            "sop",
-            "obj",
-            "dop",
-            "cop2",
-            "chop",
-            "vop",
-            "lop",
-            "top",
-            "rop",
-            "vex_function",
-            "python_hou",
-        ]
-
-        for help_type in valid_types:
-            result = get_houdini_help(help_type, "test_item")
-            assert "Unsupported help type" not in result.get("message", "")
+        mock_get.return_value = MagicMock(status_code=404)
+        for help_type, section in (
+            ("sop", "nodes/sop"),
+            ("rop", "nodes/out"),
+            ("vex_function", "vex/functions"),
+            ("python_hou", "hom/hou"),
+        ):
+            get_houdini_help(help_type, "test_item")
+            assert mock_get.call_args.args[0] == (
+                f"https://www.sidefx.com/docs/houdini/{section}/test_item.html"
+            )
 
 
 class TestMaterialTools:
