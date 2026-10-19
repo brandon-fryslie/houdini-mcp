@@ -2580,6 +2580,29 @@ class TestGetHoudiniHelp:
         assert len(result["inputs"]) == 1
 
     @patch("requests.get")
+    def test_get_houdini_help_hou_class_title(self, mock_get):
+        """A hou page's name starts in a supertitle span, which the title keeps."""
+        from houdini_mcp.tools import get_houdini_help
+
+        # The h1 as www.sidefx.com/docs/houdini/hom/hou/Node.html serves it
+        mock_html = """
+        <html>
+        <body>
+            <h1 class="title">
+        <span class="supertitle">hou.</span>Node
+
+                <span class="subtitle">class</span>
+        </h1>
+        </body>
+        </html>
+        """
+        mock_get.return_value = MagicMock(status_code=200, text=mock_html)
+
+        result = get_houdini_help("python_hou", "Node")
+
+        assert result["title"] == "hou.Node - class"
+
+    @patch("requests.get")
     def test_get_houdini_help_vex_function(self, mock_get):
         """Test parsing of VEX function documentation."""
         from houdini_mcp.tools import get_houdini_help

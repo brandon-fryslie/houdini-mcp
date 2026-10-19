@@ -36,8 +36,8 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
 ## Prerequisites
 
-1. **Houdini 22** - macOS on Apple Silicon is the primary platform; on
-   [Windows and Linux](#windows-and-linux) only the paths differ.
+1. **Houdini 22** - macOS on Apple Silicon is the primary platform;
+   the [Windows and Linux](#windows-and-linux) section gives those platforms' paths.
 
 2. **Houdini with RPC enabled** - Start Houdini's RPC server:
    - In Houdini: `Windows > Python Shell`, then run:
@@ -46,9 +46,17 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
      hrpyc.start_server(port=18811)
      ```
-   - Or put those two lines in
+   - Or, with the [plugin](#houdini-plugin) installed, start its listener from
      `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
-     runs in every graphical session once its UI is up
+     runs in every graphical session once its UI is up:
+     ```python
+     from houdini_mcp_plugin import start_hrpyc_server
+
+     start_hrpyc_server()
+     ```
+     It listens on `127.0.0.1` only, unless you set the variables in
+     [docs/remote-listener.md](docs/remote-listener.md); `hrpyc.start_server`
+     listens on every interface with no authentication.
 
 3. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
 
@@ -183,7 +191,9 @@ From your clone of this repository:
 
 ### Windows and Linux
 
-The steps above are the same on Windows and Linux, with your platform's paths.
+The steps above work on Windows and Linux with your platform's paths; on
+Windows, copy the plugin with your shell's own commands in place of `mkdir -p`
+and `cp`.
 Houdini's preferences directory, which holds `packages` and `python3.13libs`, is
 `%USERPROFILE%\Documents\houdini22.0` on Windows and `~/houdini22.0` on Linux,
 in place of macOS's `~/Library/Preferences/houdini/22.0`. On Windows the client

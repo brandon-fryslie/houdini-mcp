@@ -106,12 +106,13 @@ def get_houdini_help(
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Extract title
+        # Extract title. On hou pages the h1 opens with a "hou." supertitle span,
+        # so the name is all of the h1's text once the subtitle span is taken out.
         h1 = soup.find("h1", class_="title")
         if h1:
-            title_text = next(h1.stripped_strings, "")
             subtitle = h1.find("span", class_="subtitle")
-            subtitle_text = subtitle.get_text(strip=True) if subtitle else ""
+            subtitle_text = subtitle.extract().get_text(strip=True) if subtitle else ""
+            title_text = h1.get_text(strip=True)
             title = f"{title_text} - {subtitle_text}" if subtitle_text else title_text
         else:
             title = item_name
