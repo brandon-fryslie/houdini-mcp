@@ -112,8 +112,9 @@ def _open_rpyc(token: str | None, host: str, port: int, sync_timeout: float) -> 
 def describe_target(host: str, port: int) -> str:
     """Name the Houdini a connection to ``host:port`` reaches.
 
-    [LAW:one-source-of-truth] the one spelling of where: two requests name the
-    same Houdini exactly when their names are equal.
+    [LAW:one-source-of-truth] the one spelling of where. A request matches the live
+    link by this name alone, so ``localhost`` and ``127.0.0.1`` are different
+    Houdinis here even when one listener answers both.
     """
     return f"{host}:{port}"
 

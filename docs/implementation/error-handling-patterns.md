@@ -154,7 +154,7 @@ Houdini together do not reconnect in lockstep, even once they are all at the cap
 
 Returns the `hou` of the Houdini `host:port` names, reconnecting when the link is
 gone. Connection state has one owner, `HoudiniConnection`: the target in use and at
-most one open `Link` (target, host, port, connection, `hou`), written only under its
+most one open `Link` (host, port, connection, `hou`), written only under its
 lock, so concurrent tool calls that find the link gone share one reconnect. A live
 link to a *different* Houdini is not an answer: the call raises
 `HoudiniTargetMismatch` naming both, and the link it did not ask for stands.
