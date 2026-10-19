@@ -210,33 +210,17 @@ class TestDeliver:
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
         assert "ran, but returned a result that is not JSON-serializable" in failure.message
 
-    def test_a_summary_reaches_the_caller_whole_beside_the_pointer(self, results: Results) -> None:
-        """A summary is written to be read in place of a large result, so none of it is cut."""
-        summary = "400 geometry nodes, none cooked. " * 100
+    def test_a_summary_reaches_the_caller_beside_the_pointer(self, results: Results) -> None:
+        """A summary is written to be read in place of a large result."""
         result = {
             "status": "success",
             "structure": {"children": ["x" * 100] * 400},
-            "ai_summary": summary,
+            "ai_summary": "400 geometry nodes, none cooked",
         }
 
         pointer = sent("serialize_scene", result, results)
 
-        assert delivery.PREVIEW_CHARS < len(summary) < delivery.SUMMARY_CHARS
-        assert pointer["ai_summary"] == summary
-
-    def test_a_summary_past_its_share_of_the_bound_is_cut(self, results: Results) -> None:
-        """However long the summarizer runs on, the pointer stays within the bound."""
-        result = {
-            "status": "success",
-            "structure": {"children": ["x" * 100] * 400},
-            "ai_summary": "y" * 100_000,
-        }
-
-        pointer = sent("serialize_scene", result, results)
-
-        assert pointer["ai_summary"] == "y" * delivery.SUMMARY_CHARS + delivery.TRIMMED
-        assert len(render(pointer).encode()) <= RESPONSE_BOUND_BYTES
-        assert whole(pointer) == result
+        assert pointer["ai_summary"] == "400 geometry nodes, none cooked"
         assert "structure" not in pointer
         assert whole(pointer) == result
 

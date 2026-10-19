@@ -7,7 +7,7 @@ This document clarifies the input/output contracts for Houdini MCP tools and doc
 A result whose text (the shorthand below) is over 16KB is not returned inline,
 and the file holds all of it in the same shorthand. The call returns its
 `status`, a failure's fields, any `ai_summary`, a page's paging fields (a
-summary past 8KB, or any other string past 2KB, cut and marked), and a pointer to the whole
+long string cut to 2KB and marked), and a pointer to the whole
 result: `result_file`, its path on the server's machine; `result_uri`, which
 reads it through the server (`houdini-mcp://results/{name}`) for a client on
 another machine; and `result_bytes`. A `render_viewport` image is usually over
