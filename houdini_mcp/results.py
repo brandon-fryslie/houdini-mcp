@@ -75,7 +75,8 @@ class Kept:
     path: Path
     removed: int
     removed_bytes: int
-    failed: int
+    unremoved: int
+    """Results past the budget the system has refused to remove so far."""
 
 
 class Results:
@@ -87,6 +88,8 @@ class Results:
         self._guard = threading.Lock()
         self._kept: deque[tuple[Path, int]] = deque()
         self._held = 0
+        # Results past the budget the system refused to remove, tried again by each keep.
+        self._unremoved: list[tuple[Path, int]] = []
 
     @classmethod
     def claim(cls, root: Path) -> "Results":
@@ -105,8 +108,12 @@ class Results:
             lock.close()
             raise OSError(f"could not lock {root / owner}.lock for this server")
         directory = root / owner
-        directory.mkdir(mode=0o700)
-        swept = sweep(root, owner)
+        try:
+            directory.mkdir(mode=0o700)
+            swept = sweep(root, owner)
+        except BaseException:
+            lock.close()
+            raise
         logger.info(
             "results kept in %s; removed the results of %d stopped servers", directory, swept
         )
@@ -123,24 +130,19 @@ class Results:
         """
         path = self.directory / f"{tool}-{uuid.uuid4().hex}.txt"
         write_private(path, data)
-        removed = removed_bytes = failed = 0
         with self._guard:
             self._kept.append((path, len(data)))
             self._held += len(data)
+            past, self._unremoved = self._unremoved, []
             while self._held > RESULTS_BUDGET_BYTES and len(self._kept) > 1:
-                oldest, size = self._kept.popleft()
-                self._held -= size
-                try:
-                    oldest.unlink(missing_ok=True)
-                except OSError as e:
-                    logger.warning(
-                        "could not remove %s to keep results within the budget: %s", oldest, e
-                    )
-                    failed += 1
-                    continue
-                removed += 1
-                removed_bytes += size
-        return Kept(path, removed, removed_bytes, failed)
+                oldest = self._kept.popleft()
+                self._held -= oldest[1]
+                past.append(oldest)
+            gone: list[tuple[Path, int]] = []
+            for result in past:
+                (gone if removed(result[0]) else self._unremoved).append(result)
+            unremoved = len(self._unremoved)
+        return Kept(path, len(gone), sum(size for _, size in gone), unremoved)
 
     def read(self, name: str) -> str:
         """The text of a result this server kept, by the name in its ``result_uri``.
@@ -176,6 +178,16 @@ class Results:
         self.close()
 
 
+def removed(path: Path) -> bool:
+    """Whether ``path``, a result past the budget, is gone; False, and said so, if the system refused."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("could not remove %s to keep results within the budget: %s", path, e)
+        return False
+    return True
+
+
 def write_private(path: Path, data: bytes) -> None:
     """``data`` as a new file at ``path`` only its user can read, or nothing at ``path``."""
     with open(path, "xb", opener=lambda file, flags: os.open(file, flags, 0o600)) as out:
@@ -197,14 +209,16 @@ def sweep(root: Path, own: str) -> int:
         if not OWNER_LOCK.fullmatch(lock_path.name) or lock_path.stem == own:
             continue
         directory = root / lock_path.stem
+        # [LAW:no-ambient-temporal-coupling] a server takes its lock before it makes its
+        # directory, so a lock beside no directory may be one starting now: taking it
+        # would refuse that server its own. One beside a directory is its owner's to hold.
+        if not directory.is_dir():
+            continue
         try:
             with open(lock_path, "a+b") as lock:
                 if not taken(lock):
                     continue
-                # A server that stopped between taking its lock and making its
-                # directory leaves only the lock.
-                if directory.is_dir():
-                    shutil.rmtree(directory)
+                shutil.rmtree(directory)
             lock_path.unlink(missing_ok=True)
         except OSError as e:
             logger.warning("could not remove %s, a stopped server's results: %s", directory, e)

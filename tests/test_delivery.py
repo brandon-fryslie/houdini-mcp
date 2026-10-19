@@ -321,7 +321,7 @@ class TestRetention:
         assert read(results.read(name_of(pointers[-1]))) == whole(pointers[-1])
         size = pointers[0]["result_bytes"]
         assert any(
-            f"removed 1 older results, {size} bytes; 0 removals failed" in m
+            f"removed 1 older results, {size} bytes; 0 past the budget not yet removed" in m
             for m in caplog.messages
         )
 
@@ -456,8 +456,50 @@ class TestRetention:
             in caplog.messages
         )
         assert any(
-            "removed 0 older results, 0 bytes; 1 removals failed" in m for m in caplog.messages
+            "removed 0 older results, 0 bytes; 1 past the budget not yet removed" in m
+            for m in caplog.messages
         )
+
+        monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+        sent("render_viewport", large(0.1), results)
+
+        assert held([stuck, newest]) == [False, True]
+
+    def test_a_lock_beside_no_directory_is_left_to_the_server_starting_with_it(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A server opens its lock before it takes it: a sweeper taking it first would refuse it."""
+        root = tmp_path / "root"
+        root.mkdir()
+        starting = root / ("0" * 32 + ".lock")
+        starting.touch()
+        take = store.taken
+        tried: list[str] = []
+
+        def recorded(lock: Any) -> bool:
+            tried.append(lock.name)
+            return take(lock)
+
+        monkeypatch.setattr(store, "taken", recorded)
+        with Results.claim(root):
+            assert str(starting) not in tried
+            assert starting.exists()
+
+    def test_a_claim_that_fails_releases_its_lock(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+
+        def unlistable(root: pathlib.Path, own: str) -> int:
+            raise OSError("too many open files")
+
+        monkeypatch.setattr(store, "sweep", unlistable)
+        with pytest.raises(OSError, match="too many open files"):
+            Results.claim(root)
+
+        [lock_path] = root.glob("*.lock")
+        with open(lock_path, "a+b") as lock:
+            assert store.taken(lock)
 
     def test_a_failed_write_leaves_nothing_and_removes_nothing(
         self, results: Results, monkeypatch: pytest.MonkeyPatch

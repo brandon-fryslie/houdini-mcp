@@ -122,14 +122,14 @@ def stored(
         return failure_response(unwritten, tool)
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s; "
-        "removed %d older results, %d bytes; %d removals failed",
+        "removed %d older results, %d bytes; %d past the budget not yet removed",
         tool,
         size,
         bound,
         kept.path,
         kept.removed,
         kept.removed_bytes,
-        kept.failed,
+        kept.unremoved,
     )
     return {
         **{field: preview(sent[field]) for field in ENVELOPE_FIELDS if field in sent},
