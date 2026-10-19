@@ -96,8 +96,9 @@ def deliver(
 ) -> dict[str, Any]:
     """``result`` as the wire carries it when it fits the bound, else a pointer to the file holding all of it.
 
-    [LAW:one-source-of-truth] What returns is the bytes measured, read back: every
-    rendering of the result - structured content, its text - is of that one value.
+    [LAW:one-source-of-truth] What returns is as the wire carries it - inline, the bytes
+    measured, read back - so every rendering of it, structured content and text, is of
+    one JSON value.
     """
     try:
         text = WIRE.dump_json(result)
@@ -130,8 +131,12 @@ def deliver(
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s", tool, size, bound, path
     )
+    envelope = {field: result[field] for field in ENVELOPE_FIELDS if field in result}
     return {
-        **{field: preview(result[field]) for field in ENVELOPE_FIELDS if field in result},
+        **{
+            field: preview(value)
+            for field, value in WIRE.dump_python(envelope, mode="json").items()
+        },
         "result_file": str(path),
         "result_uri": RESULT_URI.format(name=name),
         "result_bytes": size,

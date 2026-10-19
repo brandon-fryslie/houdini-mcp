@@ -12,7 +12,6 @@ JSON value has exactly one shorthand, and the shorthand gives back that value.
 """
 
 import json
-import re
 from itertools import takewhile
 from typing import Any
 
@@ -26,16 +25,17 @@ object's `sub` list is the rows indented under it, a row ending `;` has no `sub`
 and a value starting `~` is its parent's value in that column with the rest appended; \
 a top row's parent is the object holding the list, when that list is its `sub`. \
 A value in double quotes, [brackets] or {braces} is JSON; true, false, null and numbers \
-are themselves; anything else is a bare string."""
+are themselves; anything else is a bare string. A key in double quotes is JSON too."""
 """How to read the shorthand: told to every client once, at initialize."""
 
 INDENT = " "
 
 # A bare string cannot be mistaken for anything else: not a delimiter in it, not a
-# leading character that opens JSON or names a parent, not a JSON literal.
+# leading character that opens JSON or names a parent, nothing a reader - a model,
+# not a JSON parser - would take for a number, a boolean or null.
 DELIMITERS = frozenset(',;"\\')
 OPENERS = frozenset('~["{')
-JSON_LITERAL = re.compile(r"true|false|null|-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?")
+WORDS = frozenset({"true", "false", "null", "none"})
 
 
 def render(result: dict[str, Any]) -> str:
@@ -54,22 +54,29 @@ def _field(owner: dict[str, Any], key: str, depth: int) -> list[str]:
     if isinstance(value, list) and value:
         if all(isinstance(item, dict) for item in value):
             branch = _branch(value)
+            every = _descendants(value, branch)
             # A row with no cell would be a line of nothing but its indent.
-            if all(row.keys() - {branch} for row in _descendants(value, branch)):
-                return _table(pad, owner, key, branch, depth + 1)
+            if all(row.keys() - {branch} for row in every):
+                return _table(pad, owner, key, branch, every, depth + 1)
         if not any(isinstance(item, (dict, list)) for item in value):
             return [f"{pad}{label}[{len(value)}]: " + ",".join(map(_cell, value))]
     return [f"{pad}{label}: {_cell(value)}"]
 
 
-def _table(pad: str, owner: dict[str, Any], key: str, branch: str | None, depth: int) -> list[str]:
+def _table(
+    pad: str,
+    owner: dict[str, Any],
+    key: str,
+    branch: str | None,
+    every: list[dict[str, Any]],
+    depth: int,
+) -> list[str]:
     """A list of objects as a header naming their keys and a row of values for each.
 
     [LAW:dataflow-not-control-flow] A flat list is a tree with no branch: the same
     rows are written either way, and a branch only adds the rows indented under each.
     """
     rows = owner[key]
-    every = _descendants(rows, branch)
     columns = list(dict.fromkeys(key for row in every for key in row if key != branch))
     header = f"{pad}{_name(key)}[{len(rows)}]{{{','.join(map(_name, columns))}}}"
     header += f"/{_name(branch)}:" if branch else ":"
@@ -158,5 +165,15 @@ def _bare(text: str) -> bool:
         and text.isprintable()
         and text[0] not in OPENERS
         and not DELIMITERS.intersection(text)
-        and not JSON_LITERAL.fullmatch(text)
+        and not _numeric(text)
+        and text.lower() not in WORDS
     )
+
+
+def _numeric(text: str) -> bool:
+    """Whether ``text`` reads as a number: ``.5``, ``01``, ``+1``, ``NaN``, ``Infinity`` all do."""
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True

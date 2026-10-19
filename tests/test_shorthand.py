@@ -262,6 +262,23 @@ class TestTheWire:
         assert sent == {"x": None, "y": None, "s": "NaN"}
         assert read(render(sent)) == sent
 
+    def test_a_pointer_carries_what_the_wire_carries(self) -> None:
+        pointer = deliver(
+            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, bound=8
+        )
+
+        assert pointer["total"] is None
+        assert read(render(pointer)) == pointer
+
+    def test_a_string_a_reader_would_take_for_a_number_or_a_word_is_quoted(self) -> None:
+        looks = [".5", "1.", "01", "+1", "NaN", "Infinity", "True", "None", "NULL"]
+        result = {f"k{i}": text for i, text in enumerate(looks)}
+
+        text = render(result)
+
+        assert text.splitlines() == [f'k{i}: "{t}"' for i, t in enumerate(looks)]
+        assert read(text) == result
+
 
 @pytest.fixture
 async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
