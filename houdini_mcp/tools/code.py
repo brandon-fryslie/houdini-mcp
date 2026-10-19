@@ -40,7 +40,6 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
 import builtins
 import hashlib
 import logging
-import os
 import threading
 import time
 import traceback
@@ -123,20 +122,6 @@ DEFAULT_TIMEOUT = 30
 
 # Named undo group used to wrap execution so a timeout can roll back.
 _UNDO_GROUP_LABEL = "houdini-mcp execute_code"
-
-
-def _bypass_config_enabled() -> bool:
-    """Whether the server is configured to permit safety-rail bypass.
-
-    This is the *configuration* half of the config+request opt-in. It is a
-    separate function so tests and deployments can override it explicitly.
-    """
-    return os.getenv("HOUDINI_MCP_ALLOW_BYPASS", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 @dataclass(frozen=True)
@@ -511,6 +496,8 @@ def execute_code(
     port: int = 18811,
     allow_heavy_geometry: bool = False,
     policy: Policy = DEFAULT_POLICY,
+    *,
+    bypass_config_enabled: bool,
 ) -> dict[str, Any]:
     """
     Execute Python code in Houdini with scene change tracking and safety rails.
@@ -588,7 +575,7 @@ def execute_code(
         policy=policy,
         allow_dangerous=allow_dangerous,
         allow_heavy_geometry=allow_heavy_geometry,
-        bypass_config_enabled=_bypass_config_enabled(),
+        bypass_config_enabled=bypass_config_enabled,
     )
     return _execute_with_grant(
         code,

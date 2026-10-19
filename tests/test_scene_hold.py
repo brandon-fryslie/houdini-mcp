@@ -17,7 +17,7 @@ from fastmcp import Client, FastMCP
 
 from houdini_mcp.server import held, served
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
-from tests.conftest import DEFAULT_TARGET
+from tests.conftest import DEFAULT_SETTINGS, SUMMARIZER
 
 
 class _Gated:
@@ -84,14 +84,18 @@ class TestCallsHoldTheScene:
 
         summarizing, answer = asyncio.Event(), asyncio.Event()
 
-        async def slow_summary(result: dict, summarizer, *, asked: bool) -> dict:
+        async def slow_summary(result: dict, summarize, *, summarizer, asked: bool) -> dict:
             summarizing.set()
             await answer.wait()
             return result
 
         monkeypatch.setattr(geometry, "_read_geometry", lambda *_: {"status": "success"})
         monkeypatch.setattr(geometry, "summarized", slow_summary)
-        summary = asyncio.create_task(held(geometry.get_geo_summary)("/obj/geo1", summarize=True))
+        summary = asyncio.create_task(
+            held(geometry.get_geo_summary)(
+                "/obj/geo1", summarize=True, summarizer=SUMMARIZER, bypass_config_enabled=False
+            )
+        )
         await asyncio.wait_for(summarizing.wait(), 5)
         try:
             write = _named("create_node", lambda: {"status": "success"})
@@ -124,7 +128,11 @@ class TestCallsHoldTheScene:
             return {"status": "success"}
 
         monkeypatch.setattr(geometry, "_read_geometry", stalled_read)
-        summary = asyncio.create_task(held(geometry.get_geo_summary)("/obj/geo1"))
+        summary = asyncio.create_task(
+            held(geometry.get_geo_summary)(
+                "/obj/geo1", summarizer=SUMMARIZER, bypass_config_enabled=False
+            )
+        )
         await _until(reading)
         read = _named("get_scene_info", lambda: {"status": "success"})
         assert await held(read)() == {"status": "success"}
@@ -203,8 +211,8 @@ class TestAClientThatGivesUp:
         late.gate.set()
         gave_up = heard("create_node gave up its place in the queue for the scene")
         mcp = FastMCP("scene-hold")
-        mcp.add_tool(served(holder.tool, DEFAULT_TARGET, results))
-        mcp.add_tool(served(late.tool, DEFAULT_TARGET, results))
+        mcp.add_tool(served(holder.tool, DEFAULT_SETTINGS, results))
+        mcp.add_tool(served(late.tool, DEFAULT_SETTINGS, results))
 
         async with Client(mcp) as client:
             holding = asyncio.create_task(client.call_tool("set_parameter", {}))

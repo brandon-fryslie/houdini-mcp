@@ -43,10 +43,11 @@ def _prepare_stdio_server() -> tuple["Target", "Results", Callable[[], None]]:
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
     from houdini_mcp.results import Results
     from houdini_mcp.server import build_server, serve
-    from houdini_mcp.settings import houdini_target, results_dir
+    from houdini_mcp.settings import results_dir, server_settings
 
-    target = houdini_target(os.environ)
+    settings = server_settings(os.environ)
     root = results_dir(os.environ)
+    target = settings.target
     use_houdini(IN_PROCESS_HOUDINI)
     # [LAW:no-ambient-temporal-coupling] binding opens the link, so the Houdini being
     # served is known from Start - to MCP Status as to the first tool - and a missing
@@ -58,7 +59,7 @@ def _prepare_stdio_server() -> tuple["Target", "Results", Callable[[], None]]:
     # Start too.
     kept = Results.claim(root)
     try:
-        mcp = build_server(target, kept)
+        mcp = build_server(settings, kept)
     except BaseException:
         kept.close()
         raise
@@ -86,7 +87,7 @@ class StdioServer:
 
         Raises:
             AlreadyServing: a server is serving; nothing is started.
-            InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target, or
+            InvalidSetting: a setting holds a value it cannot be, or
                 ``HOUDINI_MCP_RESULTS_DIR`` names a home the user does not have.
             HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
             Exception: binding to this Houdini or building the server failed, or
@@ -150,7 +151,7 @@ def start_server(use_thread: bool = True) -> None:
 
     Raises:
         AlreadyServing: a server is already serving this process's stdin.
-        InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target, or
+        InvalidSetting: a setting holds a value it cannot be, or
             ``HOUDINI_MCP_RESULTS_DIR`` names a home the user does not have.
         HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
         Exception: binding to this Houdini or building the server failed, or a

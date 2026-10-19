@@ -156,7 +156,7 @@ class TestExecuteCode:
         """Test executing empty code returns early."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("", host="localhost", port=18811)
+        result = execute_code("", host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "Empty code" in result["message"]
 
@@ -164,7 +164,9 @@ class TestExecuteCode:
         """Test executing whitespace-only code returns early."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("   \n\t  ", host="localhost", port=18811)
+        result = execute_code(
+            "   \n\t  ", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert "Empty code" in result["message"]
 
@@ -172,7 +174,9 @@ class TestExecuteCode:
         """Test dangerous code is blocked by default."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("hou.exit()", host="localhost", port=18811)
+        result = execute_code(
+            "hou.exit()", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert "Dangerous operations detected" in result["message"]
         assert "dangerous_patterns" in result
@@ -184,10 +188,7 @@ class TestExecuteCode:
         Bypass now requires BOTH the request flag and the server-side config gate
         (HOUDINI_MCP_ALLOW_BYPASS) per the config+request opt-in safety model.
         """
-        import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
-
-        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
 
         # This won't actually call hou.exit() since hou is mocked
         result = execute_code(
@@ -195,6 +196,7 @@ class TestExecuteCode:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         # The code itself is safe, but contains the pattern
         assert result["status"] == "success"
@@ -204,7 +206,10 @@ class TestExecuteCode:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "geo = hou.node('/obj/geo1/out').geometry()", host="localhost", port=18811
+            "geo = hou.node('/obj/geo1/out').geometry()",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         assert "Heavy geometry access detected" in result["message"]
@@ -218,10 +223,7 @@ class TestExecuteCode:
         confirms the override lets the heavy-geometry code path execute, not just
         that the pre-scan is bypassed. Bypass requires the server config gate too.
         """
-        import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
-
-        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
 
         code = (
             "class _FakeSop:\n"
@@ -234,6 +236,7 @@ class TestExecuteCode:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert result["status"] == "success"
         assert "geo-data" in result["stdout"]
@@ -242,7 +245,9 @@ class TestExecuteCode:
         """Test executing simple print statement."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('Hello, Houdini!')", host="localhost", port=18811)
+        result = execute_code(
+            "print('Hello, Houdini!')", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert "Hello, Houdini!" in result["stdout"]
 
@@ -250,7 +255,12 @@ class TestExecuteCode:
         """Test code can access hou module."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print(hou.applicationVersionString())", host="localhost", port=18811)
+        result = execute_code(
+            "print(hou.applicationVersionString())",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
         assert result["status"] == "success"
         assert "20.5.123" in result["stdout"]
 
@@ -258,7 +268,9 @@ class TestExecuteCode:
         """Test handling of syntax errors in code."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("def broken(", host="localhost", port=18811)
+        result = execute_code(
+            "def broken(", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert "traceback" in result
 
@@ -266,7 +278,9 @@ class TestExecuteCode:
         """Test handling of runtime errors."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("x = 1 / 0", host="localhost", port=18811)
+        result = execute_code(
+            "x = 1 / 0", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert "ZeroDivisionError" in result["message"] or "division" in result["traceback"]
 
@@ -274,7 +288,9 @@ class TestExecuteCode:
         """Test handling of name errors."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print(undefined_variable)", host="localhost", port=18811)
+        result = execute_code(
+            "print(undefined_variable)", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert "NameError" in result["message"] or "undefined_variable" in result["traceback"]
 
@@ -286,6 +302,7 @@ class TestExecuteCode:
             "import sys; sys.stderr.write('error message')",
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert "error message" in result["stderr"]
@@ -299,6 +316,7 @@ class TestExecuteCode:
             max_stdout_size=100,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert len(result["stdout"]) <= 100
@@ -313,6 +331,7 @@ class TestExecuteCode:
             max_stderr_size=100,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert len(result["stderr"]) <= 100
@@ -324,7 +343,9 @@ class TestExecuteCode:
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
-            result = execute_code("print('test')", host="localhost", port=18811)
+            result = execute_code(
+                "print('test')", host="localhost", port=18811, bypass_config_enabled=False
+            )
 
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
@@ -339,7 +360,9 @@ class TestExecuteCode:
 x = 1
 """
         # This should detect the pattern even in comments
-        result = execute_code(code, allow_dangerous=True, host="localhost", port=18811)
+        result = execute_code(
+            code, allow_dangerous=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
 
         # If pattern detected, should have warning
         if result.get("dangerous_patterns_executed"):
@@ -358,6 +381,7 @@ class TestExecuteCodeWithDiff:
             capture_diff=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert "scene_changes" in result
@@ -375,6 +399,7 @@ geo = obj.createNode('geo', 'test_geo')
             capture_diff=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         added = result["scene_changes"]["added_nodes"]
@@ -393,10 +418,7 @@ class TestExecuteCodeTimeout:
         # Use a very short timeout with blocking code
         # Note: With mocks, we can't truly test timeout, but we can verify the parameter
         result = execute_code(
-            "print('quick')",
-            timeout=30,
-            host="localhost",
-            port=18811,
+            "print('quick')", timeout=30, host="localhost", port=18811, bypass_config_enabled=False
         )
         # Quick code should succeed
         assert result["status"] == "success"
@@ -427,6 +449,7 @@ class TestExecuteCodeOutputCapture:
                     timeout=10,
                     host="localhost",
                     port=18811,
+                    bypass_config_enabled=False,
                 )
             )
         )
@@ -507,7 +530,9 @@ class TestExecuteCodeOutputCapture:
         from houdini_mcp.tools.workers import WORKERS
 
         streams_before = (sys.stdout, sys.stderr)
-        result = execute_code(stalled_program, timeout=1, host="localhost", port=18811)
+        result = execute_code(
+            stalled_program, timeout=1, host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["audit"]["timed_out"] is True
 
         print("bystander out")
@@ -563,7 +588,7 @@ y = 2
 z = x + y
 print(f"Result: {z}")
 """
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "Result: 3" in result["stdout"]
 
@@ -575,7 +600,7 @@ print(f"Result: {z}")
 import math
 print(math.pi)
 """
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "3.14" in result["stdout"]
 
@@ -589,7 +614,7 @@ def greet(name):
 
 print(greet("Houdini"))
 """
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "Hello, Houdini!" in result["stdout"]
 
@@ -609,7 +634,7 @@ c = Counter()
 print(c.increment())
 print(c.increment())
 """
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "1" in result["stdout"]
         assert "2" in result["stdout"]
@@ -619,7 +644,7 @@ print(c.increment())
         from houdini_mcp.tools import execute_code
 
         code = "print('Hello, 世界! 🌍')"
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "世界" in result["stdout"]
 
@@ -628,7 +653,7 @@ print(c.increment())
         from houdini_mcp.tools import execute_code
 
         code = "print([x**2 for x in range(5)])"
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
         assert "[0, 1, 4, 9, 16]" in result["stdout"]
 
@@ -649,7 +674,7 @@ class TestExecuteCodeImportHou:
 import hou
 print(hou.applicationVersionString())
 """
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
 
         # Should either succeed (if we make it work) or provide actionable hint
         if result["status"] == "error":
@@ -672,7 +697,7 @@ print(hou.applicationVersionString())
         from houdini_mcp.tools import execute_code
 
         code = "from hou import node"
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
 
         if result["status"] == "error":
             assert "hou" in result.get("hint", result["message"]).lower()

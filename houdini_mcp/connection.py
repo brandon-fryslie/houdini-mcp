@@ -155,15 +155,13 @@ class InProcessConnection:
         self.closed = True
 
 
-def _open_rpyc(host: str, port: int, sync_timeout: float) -> Any:
-    logger.info(f"Connecting to Houdini at {host}:{port}")
-    # [LAW:one-source-of-truth] the token handshake, and the reading of its
-    # token, are houdini_mcp_handshake's; this is the MCP server's client side.
-    # A sync request that Houdini never answers (a heavy cook) raises after
-    # ``sync_timeout`` instead of hanging the tool.
-    return handshake.connect(
-        host, port, token=handshake.token_from_env(), sync_request_timeout=sync_timeout
-    )
+def _open_rpyc(token: str | None, host: str, port: int, sync_timeout: float) -> Any:
+    presenting = "with no token" if token is None else "presenting a token"
+    logger.info(f"Connecting to Houdini at {host}:{port}, {presenting}")
+    # [LAW:one-source-of-truth] the token handshake is houdini_mcp_handshake's;
+    # this is the MCP server's client side. A sync request that Houdini never
+    # answers (a heavy cook) raises after ``sync_timeout`` instead of hanging the tool.
+    return handshake.connect(host, port, token=token, sync_request_timeout=sync_timeout)
 
 
 def _open_in_process(host: str, port: int, sync_timeout: float) -> InProcessConnection:
@@ -190,15 +188,39 @@ class HoudiniTarget(NamedTuple):
     transport_failure: Callable[[BaseException], TransportFailure | None]
 
 
-REMOTE_HOUDINI = HoudiniTarget(
-    _open_rpyc,
+def remote_houdini(token: str | None) -> HoudiniTarget:
+    """The Houdini an rpyc listener serves, reached presenting ``token`` (None: no token)."""
+
+    # A closure, not a partial: a partial's repr shows the token wherever the target is.
+    def open_presenting_token(host: str, port: int, sync_timeout: float) -> Any:
+        return _open_rpyc(token, host, port, sync_timeout)
+
+    return HoudiniTarget(
+        open_presenting_token,
+        lambda host, port: f"{host}:{port}",
+        "Make sure Houdini is running with RPC server enabled "
+        "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
+        "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
+        "(a listener that rejects this client's stream looks like one that is not running).",
+        _rpyc_open_is_retryable,
+        _rpyc_transport_failure,
+    )
+
+
+def _open_uninstalled(host: str, port: int, sync_timeout: float) -> Any:
+    raise LookupError("no Houdini is installed for connections to reach")
+
+
+# [LAW:no-silent-failure] what connections reach until an entry point installs a
+# Houdini: none. A server started without choosing one is told so at its first
+# connect, instead of reaching a listener without the token its environment holds.
+NO_HOUDINI = HoudiniTarget(
+    _open_uninstalled,
     lambda host, port: f"{host}:{port}",
-    "Make sure Houdini is running with RPC server enabled "
-    "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
-    "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
-    "(a listener that rejects this client's stream looks like one that is not running).",
-    _rpyc_open_is_retryable,
-    _rpyc_transport_failure,
+    "The entry point that serves installs the Houdini its connections reach with "
+    "use_houdini: remote_houdini(token) for an rpyc listener, IN_PROCESS_HOUDINI inside Houdini.",
+    _never_retry,
+    _no_transport,
 )
 IN_PROCESS_HOUDINI = HoudiniTarget(
     _open_in_process,
@@ -466,7 +488,7 @@ class HoudiniConnection:
 
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
 # not a branch: every connect, ping and diagnostic reads whichever target is installed.
-_houdini = HoudiniConnection(REMOTE_HOUDINI)
+_houdini = HoudiniConnection(NO_HOUDINI)
 
 
 def describe_target(host: str, port: int) -> str:
@@ -476,7 +498,7 @@ def describe_target(host: str, port: int) -> str:
 
 def use_houdini(target: HoudiniTarget) -> None:
     """Make every connection resolve to ``target``: ``IN_PROCESS_HOUDINI`` for the
-    Houdini plugin's stdio server, ``REMOTE_HOUDINI`` for an rpyc listener."""
+    Houdini plugin's stdio server, ``remote_houdini(token)`` for an rpyc listener."""
     _houdini.use(target)
 
 

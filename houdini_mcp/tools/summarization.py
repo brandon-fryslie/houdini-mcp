@@ -4,15 +4,12 @@ This module provides server-side AI summarization that compresses large
 responses into high-signal, actionable summaries. This reduces token usage for
 client AIs while preserving key information.
 
-Summaries come from an OpenAI-compatible chat-completions server. By default
-that is the local omlx server on the tailnet, so summarization works with no
-configuration; ``SUMMARIZATION_BASE_URL``, ``SUMMARIZATION_API_KEY`` and
-``SUMMARIZATION_MODEL`` point it elsewhere.
+Summaries come from the OpenAI-compatible chat-completions server a ``Summarizer``
+names (``houdini_mcp.settings``), which the server binds into every summarizing tool.
 """
 
 import json
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -21,40 +18,10 @@ from typing import Any
 import httpx
 
 from ..reading import RESPONSE_BOUND_BYTES, Reading
+from ..settings import Summarizer
 from ._common import run_in_executor
 
 logger = logging.getLogger("houdini_mcp.summarization")
-
-# Configuration. The SUMMARIZATION_ prefix keeps an OPENAI_* key or URL set for some
-# other tool in the user's shell from redirecting these summaries.
-
-
-def parse_base_url(raw: str) -> httpx.URL:
-    """Read an OpenAI API base such as ``http://host:8000/v1``, or raise ``ValueError``."""
-    try:
-        url = httpx.URL(raw)
-    except httpx.InvalidURL as exc:
-        raise ValueError(f"SUMMARIZATION_BASE_URL is not a URL ({exc}): {raw!r}") from exc
-    if url.scheme not in ("http", "https") or not url.host:
-        raise ValueError(f"SUMMARIZATION_BASE_URL must be an http(s) URL with a host: {raw!r}")
-    # The URL is logged and reported by get_summarization_status, so it holds no secret.
-    if url.userinfo:
-        raise ValueError("SUMMARIZATION_BASE_URL carries credentials; set SUMMARIZATION_API_KEY")
-    return url
-
-
-# [LAW:parse-dont-validate] Parsed at import, so a malformed URL stops the server at
-# startup instead of failing whichever tool first asks for a summary.
-SUMMARIZATION_BASE_URL = parse_base_url(
-    os.getenv("SUMMARIZATION_BASE_URL", "http://100.66.66.66:8000/v1")
-)
-SUMMARIZATION_API_KEY = os.getenv("SUMMARIZATION_API_KEY", "1234")
-# An instruct model with no thinking phase: measured 2026-10-15 on that server at
-# 12-15s per summary including a cold load, where the reasoning models took 56s warm.
-SUMMARIZATION_MODEL = os.getenv(
-    "SUMMARIZATION_MODEL", "mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit"
-)
-SUMMARIZATION_ENABLED = os.getenv("SUMMARIZATION_ENABLED", "true").lower() == "true"
 
 AI_SUMMARY = "ai_summary"
 AI_SUMMARY_ERROR = "ai_summary_error"
@@ -81,11 +48,11 @@ CONNECT_TIMEOUT_SECONDS = 3.0
 # [LAW:effects-at-boundaries] The one place the summarizer's HTTP client is built. Tests
 # replace it with a client over a fake transport, so the request put on the wire is
 # what gets asserted.
-def summarizer_client() -> httpx.AsyncClient:
-    """Build the client the summarizer talks to the completions server through."""
+def summarizer_client(summarizer: Summarizer) -> httpx.AsyncClient:
+    """Build the client ``summarizer`` is talked to through."""
     return httpx.AsyncClient(
-        base_url=SUMMARIZATION_BASE_URL,
-        headers={"Authorization": f"Bearer {SUMMARIZATION_API_KEY}"},
+        base_url=summarizer.base_url,
+        headers={"Authorization": f"Bearer {summarizer.api_key}"},
         timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
     )
 
@@ -129,8 +96,9 @@ def parse_completion(body: Any) -> Completion:
 
 async def summarized(
     result: dict[str, Any],
-    summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+    summarize: Callable[[dict[str, Any], Summarizer], Awaitable[dict[str, Any]]],
     *,
+    summarizer: Summarizer,
     asked: bool,
 ) -> dict[str, Any]:
     """The result with its AI summary when summarization is enabled, the caller asked for
@@ -149,19 +117,19 @@ async def summarized(
     # only past the bound - a result small enough to read gains nothing from one.
     # [LAW:single-enforcer] Every summary is decided here, so SUMMARIZATION_ENABLED=false
     # is a setting the result is left alone under, not a request that fails.
-    summarize = SUMMARIZATION_ENABLED and asked and not reading.fits
+    decided = summarizer.enabled and asked and not reading.fits
     logger.debug(
         "Summarize: %s (enabled=%s, asked=%s, %d bytes, bound %d)",
-        summarize,
-        SUMMARIZATION_ENABLED,
+        decided,
+        summarizer.enabled,
         asked,
         len(reading.encoded),
         RESPONSE_BOUND_BYTES,
     )
-    return await summarizer(result) if summarize else result
+    return await summarize(result, summarizer) if decided else result
 
 
-async def _summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_geometry(geo_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
     """Summarize geometry data for AI consumption.
 
     Extracts key insights from geometry statistics:
@@ -194,10 +162,10 @@ Geometry Data:
 
 Summary:"""
 
-    return _annotate(geo_data, await _complete(prompt))
+    return _annotate(geo_data, await _complete(prompt, summarizer))
 
 
-async def _summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_errors(error_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
     """Summarize error/warning data with triage and prioritization.
 
     Analyzes errors and provides:
@@ -235,10 +203,10 @@ Provide:
 
 Summary:"""
 
-    return _annotate(error_data, await _complete(prompt))
+    return _annotate(error_data, await _complete(prompt, summarizer))
 
 
-async def _summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_scene(scene_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
     """Summarize scene structure for understanding and optimization.
 
     Analyzes scene hierarchy and provides:
@@ -271,7 +239,7 @@ Scene Data:
 
 Summary:"""
 
-    return _annotate(scene_data, await _complete(prompt))
+    return _annotate(scene_data, await _complete(prompt, summarizer))
 
 
 def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, Any]:
@@ -286,36 +254,35 @@ def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, A
     return data
 
 
-async def _complete(prompt: str) -> Summary | NoSummary:
+async def _complete(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
     """Ask the completions server for a summary, and log the one event it makes."""
     started = time.monotonic()
-    outcome = await _request(prompt)
+    outcome = await _request(prompt, summarizer)
     elapsed = time.monotonic() - started
     match outcome:
         case Summary(text):
             logger.info(
-                "Summarized with %s in %.1fs: %d chars", SUMMARIZATION_MODEL, elapsed, len(text)
+                "Summarized with %s in %.1fs: %d chars", summarizer.model, elapsed, len(text)
             )
             return outcome
         case NoSummary(reason):
             # One sentence for the log and the caller: an empty ConnectTimeout message
             # still arrives with the server it could not reach.
             failure = NoSummary(
-                f"{SUMMARIZATION_MODEL} at {SUMMARIZATION_BASE_URL} failed after "
-                f"{elapsed:.1f}s: {reason}"
+                f"{summarizer.model} at {summarizer.base_url} failed after {elapsed:.1f}s: {reason}"
             )
             logger.warning("Summarization by %s", failure.reason)
             return failure
 
 
-async def _request(prompt: str) -> Summary | NoSummary:
+async def _request(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
     """One chat-completions round trip, read as a summary or the reason there is none."""
     try:
-        async with summarizer_client() as client:
+        async with summarizer_client(summarizer) as client:
             response = await client.post(
                 "chat/completions",
                 json={
-                    "model": SUMMARIZATION_MODEL,
+                    "model": summarizer.model,
                     "max_tokens": SUMMARY_TOKENS,
                     "messages": [{"role": "user", "content": prompt}],
                 },
@@ -338,7 +305,7 @@ async def _request(prompt: str) -> Summary | NoSummary:
     return Summary(completion.text)
 
 
-def get_summarization_status() -> dict[str, Any]:
+def get_summarization_status(*, summarizer: Summarizer) -> dict[str, Any]:
     """
     Get AI summarization configuration and status.
 
@@ -354,9 +321,9 @@ def get_summarization_status() -> dict[str, Any]:
         - summary_bytes: The most of a summary that arrives whole beside a result's file
     """
     return {
-        "enabled": SUMMARIZATION_ENABLED,
-        "model": SUMMARIZATION_MODEL,
-        "base_url": str(SUMMARIZATION_BASE_URL),
+        "enabled": summarizer.enabled,
+        "model": summarizer.model,
+        "base_url": summarizer.base_url,
         "response_bound_bytes": RESPONSE_BOUND_BYTES,
         "summary_bytes": SUMMARY_BYTES,
     }

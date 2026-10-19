@@ -16,6 +16,7 @@ import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import main
 from houdini_mcp.settings import InvalidSetting, Port, log_level, results_dir, setting
 from houdini_mcp.tools import link
+from tests.recording_environ import Recording
 
 COMMANDS = {
     "houdini-mcp": [str(pathlib.Path(sys.executable).with_name("houdini-mcp"))],
@@ -23,7 +24,22 @@ COMMANDS = {
 }
 
 # The settings an entry point resolves when it starts the server.
-STARTUP_SETTINGS = ("HOUDINI_HOST", "HOUDINI_PORT", "LOG_LEVEL", "MCP_TRANSPORT", "MCP_PORT")
+STARTUP_SETTINGS = (
+    "HOUDINI_HOST",
+    "HOUDINI_PORT",
+    "HOUDINI_RPC_TOKEN",
+    "HOUDINI_MCP_ALLOW_BYPASS",
+    "LOG_LEVEL",
+    "MCP_TRANSPORT",
+    "MCP_PORT",
+    "SUMMARIZATION_ENABLED",
+    "SUMMARIZATION_BASE_URL",
+    "SUMMARIZATION_API_KEY",
+    "SUMMARIZATION_MODEL",
+)
+# What a server reads of the environment, then: those, and where its results go (each
+# test names its own).
+READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR")
 
 # This process's environment with none of them set, so the developer's shell decides nothing.
 UNSET = {name: value for name, value in os.environ.items() if name not in STARTUP_SETTINGS}
@@ -90,41 +106,28 @@ def test_a_results_root_that_cannot_hold_the_servers_results_stops_it_from_start
 def test_importing_the_server_module_builds_and_reads_nothing() -> None:
     """[LAW:effects-at-boundaries] a module that imports the server gets no server."""
     probe = f"""
-import logging
 import os
 
-read = set()
-
-
-class Recording(dict):
-    def get(self, key, default=None):
-        read.add(key)
-        return super().get(key, default)
-
-    def __getitem__(self, key):
-        read.add(key)
-        return super().__getitem__(key)
-
-    def __contains__(self, key):
-        read.add(key)
-        return super().__contains__(key)
-
+from tests.recording_environ import Recording
 
 os.environ = Recording(os.environ)
 import houdini_mcp.server as server
 from fastmcp import FastMCP
 
 assert not [v for v in vars(server).values() if isinstance(v, FastMCP)], "a server was built"
-assert not read & set({STARTUP_SETTINGS!r}), read & set({STARTUP_SETTINGS!r})
+assert not os.environ.read & set({READ_AT_START!r}), os.environ.read & set({READ_AT_START!r})
 """
-    env = {**UNSET, "HOUDINI_PORT": "not-a-number", "LOG_LEVEL": "loud"}
-    subprocess.run([sys.executable, "-c", probe], env=env, check=True, timeout=60)
+    env = dict.fromkeys(READ_AT_START, "not-a-value") | UNSET
+    # Run from the repo root, where the probe's own import of tests resolves.
+    root = pathlib.Path(__file__).resolve().parents[1]
+    subprocess.run([sys.executable, "-c", probe], env=env, cwd=root, check=True, timeout=60)
 
 
 @pytest.fixture
-def started(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def started(monkeypatch: pytest.MonkeyPatch, reset_connection_state: None) -> dict[str, Any]:
     """What ``main()`` hands its process and transport, with no developer environment;
-    the test sets the environment it starts with."""
+    the test sets the environment it starts with. The Houdini ``main()`` installs is
+    uninstalled afterwards."""
     seen: dict[str, Any] = {}
     monkeypatch.setattr(FastMCP, "run", lambda mcp, **run: seen.update(mcp=mcp, run=run))
     monkeypatch.setattr("logging.basicConfig", lambda **config: seen.update(config=config))
@@ -151,6 +154,50 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     assert payload["target"] == "studio-box:19000"
 
 
+async def test_a_started_server_reads_no_setting_again(
+    monkeypatch: pytest.MonkeyPatch, started: dict[str, Any]
+) -> None:
+    """[LAW:effects-at-boundaries] read once, at start: a tool call reads none, so a
+    setting changed while the server runs changes nothing until it restarts."""
+    main()
+    environ = Recording(os.environ)
+    monkeypatch.setattr(os, "environ", environ)
+    environ.update(HOUDINI_MCP_ALLOW_BYPASS="true", SUMMARIZATION_ENABLED="false")
+
+    async with Client(started["mcp"]) as client:
+        status: Any = (await client.call_tool("get_summarization_status", {})).structured_content
+        refused: Any = (
+            await client.call_tool("execute_code", {"code": "hou.exit()", "allow_dangerous": True})
+        ).structured_content
+
+    assert status["enabled"] is True
+    assert refused["unmet_requirements"] == ["config"]
+    assert not environ.read & set(READ_AT_START), environ.read & set(READ_AT_START)
+
+
+async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
+    monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    presented: list[str | None] = []
+
+    def rejected(host: str, port: int, token: str | None, **_: Any) -> None:
+        presented.append(token)
+        raise conn_module.handshake.HandshakeError("listener rejected the token")
+
+    monkeypatch.setattr(conn_module.handshake, "connect", rejected)
+    monkeypatch.setenv("HOUDINI_RPC_TOKEN", "hunter2")
+    main()
+    monkeypatch.setenv("HOUDINI_RPC_TOKEN", "changed-since")
+
+    with caplog.at_level(logging.INFO, logger="houdini_mcp.connection"):
+        async with Client(started["mcp"]) as client:
+            await client.call_tool("check_connection", {})
+            await client.call_tool("check_connection", {})
+    assert presented == ["hunter2", "hunter2"]
+    connecting = [r.getMessage() for r in caplog.records if "Connecting" in r.getMessage()]
+    assert connecting == ["Connecting to Houdini at localhost:18811, presenting a token"] * 2
+
+
 def test_starting_applies_and_logs_what_it_resolved(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -168,6 +215,11 @@ def test_starting_applies_and_logs_what_it_resolved(
     logged = [r.getMessage() for r in caplog.records]
     assert "Log level: DEBUG" in logged
     assert "Houdini connection target: studio-box:19000" in logged
+    assert (
+        "Summarization: enabled=True, mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit at "
+        "http://100.66.66.66:8000/v1"
+    ) in logged
+    assert "Bypass configuration: enabled=False" in logged
     assert "Starting Houdini MCP Server on http://0.0.0.0:3100" in logged
 
 
@@ -190,6 +242,23 @@ def test_starting_applies_and_logs_what_it_resolved(
             "Value error, Input should be one of CRITICAL, FATAL, ERROR, WARN, WARNING, INFO, "
             "DEBUG, NOTSET",
         ),
+        (
+            "SUMMARIZATION_ENABLED",
+            "maybe",
+            "Input should be a valid boolean, unable to interpret input",
+        ),
+        ("SUMMARIZATION_ENABLED", "", "Input should be a valid boolean, unable to interpret input"),
+        (
+            "SUMMARIZATION_BASE_URL",
+            "ftp://host/v1",
+            "Value error, must be an http(s) URL with a host",
+        ),
+        ("SUMMARIZATION_MODEL", "", "String should have at least 1 character"),
+        (
+            "HOUDINI_MCP_ALLOW_BYPASS",
+            "maybe",
+            "Input should be a valid boolean, unable to interpret input",
+        ),
     ],
 )
 def test_an_illegal_setting_stops_the_server_from_starting(
@@ -205,3 +274,22 @@ def test_an_illegal_setting_stops_the_server_from_starting(
     )
     assert run.returncode == 1
     assert run.stderr.strip().endswith(f"{name}: {told}, got {value!r}"), run.stderr
+
+
+@pytest.mark.parametrize("command", COMMANDS.values(), ids=COMMANDS.keys())
+def test_a_token_too_long_to_present_stops_the_server_without_showing_it(
+    command: list[str],
+) -> None:
+    secret = "s" * 65536
+    run = subprocess.run(
+        command,
+        env={**UNSET, "HOUDINI_RPC_TOKEN": secret},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert run.returncode == 1
+    assert run.stderr.strip().endswith(
+        "HOUDINI_RPC_TOKEN must be at most 65535 bytes of UTF-8, got 65536"
+    ), run.stderr[-500:]
+    assert secret not in run.stderr

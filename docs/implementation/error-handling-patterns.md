@@ -89,7 +89,7 @@ arm; the contract tests do exactly that.
 Only a failure of the link itself is connection loss. `transport_failure(exc)` returns a
 `TransportFailure` proof, or `None`, and the installed `HoudiniTarget` is what decides:
 
-- Over rpyc (`REMOTE_HOUDINI`), the type must be one the channel raises: `EOFError`
+- Over rpyc (`remote_houdini(token)`), the type must be one the channel raises: `EOFError`
   (peer closed, reset, or broken pipe: rpyc's `SocketStream` wraps every socket error
   it meets into `EOFError`, so no `ConnectionError` crosses a live channel), or
   `TimeoutError` (a sync request never answered; rpyc's `AsyncResultTimeout` is that

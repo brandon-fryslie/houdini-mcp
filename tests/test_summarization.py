@@ -5,16 +5,19 @@ asserted is the chat-completions request put on the wire and how each answer the
 server can give is reported.
 """
 
+import dataclasses
 import json
-from collections.abc import Callable
 from typing import Any
 
 import httpx
 import pytest
 
 from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
+from houdini_mcp.settings import InvalidSetting, Summarizer, summarizer
 from houdini_mcp.tools import summarization
-from tests.conftest import summarizer_through
+from tests.conftest import SUMMARIZER, ClientBuilder, summarizer_through
+
+DISABLED = dataclasses.replace(SUMMARIZER, enabled=False)
 
 
 def completion(content: Any = "Test summary", finish_reason: str = "stop") -> dict:
@@ -22,7 +25,7 @@ def completion(content: Any = "Test summary", finish_reason: str = "stop") -> di
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
-        "model": summarization.SUMMARIZATION_MODEL,
+        "model": SUMMARIZER.model,
         "choices": [
             {
                 "index": 0,
@@ -49,35 +52,27 @@ class Wire:
 
 
 @pytest.fixture
-def wire(
-    monkeypatch: pytest.MonkeyPatch, production_summarizer_client: Callable[[], httpx.AsyncClient]
-) -> Wire:
+def wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> Wire:
     """Route the summarizer through a fake transport that answers with a finished completion."""
     wire = Wire()
     monkeypatch.setattr(
         summarization,
         "summarizer_client",
-        lambda: summarizer_through(production_summarizer_client, wire.handle),
+        summarizer_through(production_summarizer_client, wire.handle),
     )
-    monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
     return wire
 
 
 @pytest.fixture
-def no_wire(
-    monkeypatch: pytest.MonkeyPatch, production_summarizer_client: Callable[[], httpx.AsyncClient]
-) -> None:
+def no_wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> None:
     """A summarizer transport that fails the test if anything is sent on it."""
 
     def refuse(request: httpx.Request) -> httpx.Response:
         pytest.fail(f"a summarization request was sent: {request.url}")
 
     monkeypatch.setattr(
-        summarization,
-        "summarizer_client",
-        lambda: summarizer_through(production_summarizer_client, refuse),
+        summarization, "summarizer_client", summarizer_through(production_summarizer_client, refuse)
     )
-    monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
 
 SUMMARIZERS = [
@@ -104,33 +99,44 @@ class TestSummarized:
     def test_the_results_straddle_the_bound(self):
         assert Reading.of(SMALL).fits and not Reading.of(LARGE).fits
 
-    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_false_sends_nothing_however_large(self, no_wire, summarizer):
-        result = await summarization.summarized(dict(LARGE), summarizer, asked=False)
+    @pytest.mark.parametrize("summarize", SUMMARIZERS)
+    async def test_false_sends_nothing_however_large(self, no_wire, summarize):
+        result = await summarization.summarized(
+            dict(LARGE), summarize, summarizer=SUMMARIZER, asked=False
+        )
         assert result == LARGE
 
-    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_true_summarizes_a_result_too_large_to_read_whole(self, wire, summarizer):
-        result = await summarization.summarized(dict(LARGE), summarizer, asked=True)
+    @pytest.mark.parametrize("summarize", SUMMARIZERS)
+    async def test_true_summarizes_a_result_too_large_to_read_whole(self, wire, summarize):
+        result = await summarization.summarized(
+            dict(LARGE), summarize, summarizer=SUMMARIZER, asked=True
+        )
         assert result == {**LARGE, "ai_summary": "Test summary", "_summarized": True}
         assert len(wire.sent) == 1
 
-    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_true_leaves_a_result_at_the_bound_as_is(self, no_wire, summarizer):
+    @pytest.mark.parametrize("summarize", SUMMARIZERS)
+    async def test_true_leaves_a_result_at_the_bound_as_is(self, no_wire, summarize):
         result = at_the_bound()
-        assert await summarization.summarized(dict(result), summarizer, asked=True) == result
+        summarized = summarization.summarized(
+            dict(result), summarize, summarizer=SUMMARIZER, asked=True
+        )
+        assert await summarized == result
 
-    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_disabled_leaves_the_result_as_is(self, no_wire, monkeypatch, summarizer):
+    @pytest.mark.parametrize("summarize", SUMMARIZERS)
+    async def test_disabled_leaves_the_result_as_is(self, no_wire, summarize):
         """A setting, not a failure: no request, no ai_summary_error, no warning."""
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        result = await summarization.summarized(dict(LARGE), summarizer, asked=True)
+        result = await summarization.summarized(
+            dict(LARGE), summarize, summarizer=DISABLED, asked=True
+        )
         assert result == LARGE
 
     async def test_a_result_no_caller_can_read_is_refused_unsummarized(self, no_wire):
         with pytest.raises(Unreadable, match="not JSON-serializable"):
             await summarization.summarized(
-                {"status": "success", "node": object()}, summarization._summarize_scene, asked=True
+                {"status": "success", "node": object()},
+                summarization._summarize_scene,
+                summarizer=SUMMARIZER,
+                asked=True,
             )
 
     @pytest.mark.parametrize(
@@ -143,15 +149,16 @@ class TestSummarized:
         ],
     )
     async def test_logs_the_decision_and_its_inputs(
-        self, no_wire, monkeypatch, caplog, enabled, asked, result, decided
+        self, no_wire, caplog, enabled, asked, result, decided
     ):
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", enabled)
-
-        async def unchanged(data: dict) -> dict:
+        async def unchanged(data: dict, _summarizer: Summarizer) -> dict:
             return data
 
+        configured = dataclasses.replace(SUMMARIZER, enabled=enabled)
         with caplog.at_level("DEBUG", logger="houdini_mcp.summarization"):
-            await summarization.summarized(dict(result), unchanged, asked=asked)
+            await summarization.summarized(
+                dict(result), unchanged, summarizer=configured, asked=asked
+            )
         assert caplog.messages == [
             f"Summarize: {decided} (enabled={enabled}, asked={asked}, "
             f"{len(Reading.of(result).encoded)} bytes, bound {RESPONSE_BOUND_BYTES})"
@@ -161,65 +168,82 @@ class TestSummarized:
 class TestDefaults:
     """With no configuration, summarization is on and aimed at the local completions server."""
 
-    @pytest.fixture
-    def defaults(self, monkeypatch):
-        """The module as it loads with no SUMMARIZATION_* variable set, restored afterwards."""
-        import importlib
-
-        for name in (
-            "SUMMARIZATION_ENABLED",
-            "SUMMARIZATION_BASE_URL",
-            "SUMMARIZATION_API_KEY",
-            "SUMMARIZATION_MODEL",
-        ):
-            monkeypatch.delenv(name, raising=False)
-        yield importlib.reload(summarization)
-        monkeypatch.undo()
-        importlib.reload(summarization)
-
-    def test_enabled_against_the_local_server(self, defaults):
+    def test_enabled_against_the_local_server(self):
         """The out-of-the-box target is the omlx server and its instruct model."""
-        assert defaults.SUMMARIZATION_ENABLED is True
-        assert str(defaults.SUMMARIZATION_BASE_URL) == "http://100.66.66.66:8000/v1"
-        assert defaults.SUMMARIZATION_MODEL == "mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit"
+        assert summarizer({}) == Summarizer(
+            enabled=True,
+            base_url="http://100.66.66.66:8000/v1",
+            api_key="1234",
+            model="mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit",
+        )
 
-    def test_client_authenticates_to_the_local_server(self, defaults):
+    def test_client_authenticates_to_the_local_server(self, production_summarizer_client):
         """The default client carries the server's key as a bearer token."""
-        client = defaults.summarizer_client()
+        client = production_summarizer_client(summarizer({}))
         assert str(client.base_url) == "http://100.66.66.66:8000/v1/"
         assert client.headers["Authorization"] == "Bearer 1234"
-        assert client.timeout.read == defaults.REQUEST_TIMEOUT_SECONDS
-        assert client.timeout.connect == defaults.CONNECT_TIMEOUT_SECONDS
+        assert client.timeout.read == summarization.REQUEST_TIMEOUT_SECONDS
+        assert client.timeout.connect == summarization.CONNECT_TIMEOUT_SECONDS
 
-    def test_anthropic_settings_change_nothing(self, defaults, monkeypatch):
+    def test_a_logged_summarizer_never_carries_its_key(self):
+        assert "sk-secret" not in repr(summarizer({"SUMMARIZATION_API_KEY": "sk-secret"}))
+
+    def test_anthropic_settings_change_nothing(self):
         """An Anthropic key or proxy in the environment does not redirect the summarizer."""
-        import importlib
-
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.setenv("CLAUDE_PROXY_URL", "http://localhost:8082")
-        client = importlib.reload(summarization).summarizer_client()
-
-        assert str(client.base_url) == "http://100.66.66.66:8000/v1/"
-        assert client.headers["Authorization"] == "Bearer 1234"
+        environ = {"ANTHROPIC_API_KEY": "sk-ant-test", "CLAUDE_PROXY_URL": "http://localhost:8082"}
+        assert summarizer(environ) == summarizer({})
 
     @pytest.mark.parametrize(
-        "raw",
+        ("raw", "told"),
         [
-            "http://host:abc/v1",
-            "localhost:8000/v1",
-            "100.66.66.66:8000/v1",
-            "",
-            "ftp://host/v1",
-            "http://user:secret@host/v1",
+            ("http://host:abc/v1", "not a URL"),
+            ("localhost:8000/v1", "must be an http(s) URL with a host"),
+            ("100.66.66.66:8000/v1", "must be an http(s) URL with a host"),
+            ("", "must be an http(s) URL with a host"),
+            ("ftp://host/v1", "must be an http(s) URL with a host"),
         ],
     )
-    def test_malformed_base_url_fails_at_import(self, defaults, monkeypatch, raw):
-        """A base URL that is not a plain http(s) URL with a host stops the module loading."""
-        import importlib
+    def test_a_base_url_that_is_not_a_plain_http_url_is_refused(self, raw, told):
+        """[LAW:no-silent-failure] it names the variable, what is wrong and what it held."""
+        with pytest.raises(InvalidSetting) as refused:
+            summarizer({"SUMMARIZATION_BASE_URL": raw})
+        assert str(refused.value) == f"SUMMARIZATION_BASE_URL: Value error, {told}, got {raw!r}"
 
-        monkeypatch.setenv("SUMMARIZATION_BASE_URL", raw)
-        with pytest.raises(ValueError, match="SUMMARIZATION_BASE_URL"):
-            importlib.reload(summarization)
+    @pytest.mark.parametrize(
+        ("raw", "shown", "told"),
+        [
+            (
+                "http://user:secret@host/v1",
+                "http://***@host/v1",
+                "carries credentials; set SUMMARIZATION_API_KEY",
+            ),
+            ("http://user:secret@host:abc/v1", "http://***@host:abc/v1", "not a URL"),
+            (
+                "user:secret@host:8000/v1",
+                "***@host:8000/v1",
+                "must be an http(s) URL with a host",
+            ),
+            ("http:/user:secret@host/v1", "***@host/v1", "must be an http(s) URL with a host"),
+            ("http://user:se/cret@host/v1", "http://***@host/v1", "not a URL"),
+            ("http://user:secret/@host/v1", "http://***@host/v1", "not a URL"),
+        ],
+    )
+    def test_a_base_url_carrying_credentials_is_refused_with_them_masked(self, raw, shown, told):
+        """The URL is reported and logged, so it may hold no secret, and its refusal shows none."""
+        with pytest.raises(InvalidSetting) as refused:
+            summarizer({"SUMMARIZATION_BASE_URL": raw})
+        assert str(refused.value).startswith(f"SUMMARIZATION_BASE_URL: Value error, {told}")
+        assert str(refused.value).endswith(f", got {shown!r}")
+        assert "secret" not in str(refused.value)
+
+    @pytest.mark.parametrize(("raw", "enabled"), [("yes", True), ("ON", True), ("0", False)])
+    def test_enabled_reads_any_word_for_on_or_off(self, raw, enabled):
+        assert summarizer({"SUMMARIZATION_ENABLED": raw}).enabled is enabled
+
+    @pytest.mark.parametrize("raw", ["maybe", ""])
+    def test_enabled_refuses_a_word_that_is_neither(self, raw):
+        with pytest.raises(InvalidSetting, match=f"^SUMMARIZATION_ENABLED: .*, got {raw!r}$"):
+            summarizer({"SUMMARIZATION_ENABLED": raw})
 
 
 class TestGetSummarizationStatus:
@@ -227,12 +251,12 @@ class TestGetSummarizationStatus:
 
     def test_get_summarization_status_returns_config(self):
         """Status names the server, the model, the bound a summary stands in past, and the summary's size."""
-        status = summarization.get_summarization_status()
+        status = summarization.get_summarization_status(summarizer=DISABLED)
 
         assert status == {
-            "enabled": summarization.SUMMARIZATION_ENABLED,
-            "model": summarization.SUMMARIZATION_MODEL,
-            "base_url": str(summarization.SUMMARIZATION_BASE_URL),
+            "enabled": False,
+            "model": SUMMARIZER.model,
+            "base_url": SUMMARIZER.base_url,
             "response_bound_bytes": RESPONSE_BOUND_BYTES,
             "summary_bytes": summarization.SUMMARY_BYTES,
         }
@@ -243,15 +267,15 @@ class TestComplete:
 
     async def test_sends_a_chat_completions_request(self, wire):
         """The request goes to /v1/chat/completions with the key, model, budget and prompt."""
-        result = await summarization._complete("test prompt")
+        result = await summarization._complete("test prompt", SUMMARIZER)
 
         assert result == summarization.Summary("Test summary")
         [request] = wire.sent
         assert request.method == "POST"
         assert request.url.path == "/v1/chat/completions"
-        assert request.headers["Authorization"] == f"Bearer {summarization.SUMMARIZATION_API_KEY}"
+        assert request.headers["Authorization"] == f"Bearer {SUMMARIZER.api_key}"
         assert json.loads(request.content) == {
-            "model": summarization.SUMMARIZATION_MODEL,
+            "model": SUMMARIZER.model,
             "max_tokens": summarization.SUMMARY_TOKENS,
             "messages": [{"role": "user", "content": "test prompt"}],
         }
@@ -259,9 +283,9 @@ class TestComplete:
     async def test_logs_the_summary_event(self, wire, caplog):
         """A finished summary is logged with the model that wrote it and its size."""
         with caplog.at_level("INFO", logger="houdini_mcp.summarization"):
-            await summarization._complete("test prompt")
+            await summarization._complete("test prompt", SUMMARIZER)
 
-        assert f"Summarized with {summarization.SUMMARIZATION_MODEL} in " in caplog.text
+        assert f"Summarized with {SUMMARIZER.model} in " in caplog.text
         assert "s: 12 chars" in caplog.text
 
     @pytest.mark.parametrize(
@@ -277,7 +301,7 @@ class TestComplete:
         wire.response = httpx.Response(200, json=body)
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt")
+            result = await summarization._complete("test prompt", SUMMARIZER)
 
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.endswith(f"s: no finished summary: {reason} chars")
@@ -292,7 +316,7 @@ class TestComplete:
         )
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt")
+            result = await summarization._complete("test prompt", SUMMARIZER)
 
         assert isinstance(result, summarization.NoSummary)
         assert "s: answered 507: " in result.reason
@@ -317,7 +341,7 @@ class TestComplete:
         wire.response = response
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt")
+            result = await summarization._complete("test prompt", SUMMARIZER)
 
         assert isinstance(result, summarization.NoSummary)
         assert f"s: {logged}" in result.reason
@@ -328,12 +352,9 @@ class TestComplete:
         wire.response = httpx.ConnectTimeout
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarization._complete("test prompt")
+            result = await summarization._complete("test prompt", SUMMARIZER)
 
-        named = (
-            f"{summarization.SUMMARIZATION_MODEL} at "
-            f"{summarization.SUMMARIZATION_BASE_URL} failed after "
-        )
+        named = f"{SUMMARIZER.model} at {SUMMARIZER.base_url} failed after "
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.startswith(named)
         assert f"Summarization by {named}" in caplog.text
@@ -350,7 +371,7 @@ class TestSummarizeGeometry:
             "bounding_box": {"min": [0, 0, 0], "max": [1, 1, 1]},
         }
 
-        result = await summarization._summarize_geometry(geo_data)
+        result = await summarization._summarize_geometry(geo_data, SUMMARIZER)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True
@@ -362,7 +383,7 @@ class TestSummarizeGeometry:
         wire.response = httpx.Response(500, text="Internal error")
         geo_data = {"point_count": 1000}
 
-        result = await summarization._summarize_geometry(geo_data)
+        result = await summarization._summarize_geometry(geo_data, SUMMARIZER)
 
         assert result.keys() == {"point_count", "ai_summary_error"}
         assert result["ai_summary_error"].endswith("s: answered 500: Internal error")
@@ -380,7 +401,7 @@ class TestSummarizeErrors:
             "error_count": 1,
         }
 
-        result = await summarization._summarize_errors(error_data)
+        result = await summarization._summarize_errors(error_data, SUMMARIZER)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True
@@ -400,7 +421,7 @@ class TestSummarizeScene:
             ],
         }
 
-        result = await summarization._summarize_scene(scene_data)
+        result = await summarization._summarize_scene(scene_data, SUMMARIZER)
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True

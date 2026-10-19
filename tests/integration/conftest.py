@@ -13,6 +13,7 @@ import pytest
 
 from houdini_mcp import connection
 from houdini_mcp.settings import Target
+from tests.conftest import DEFAULT_SETTINGS
 from tests.live_houdini import hython_executable, hython_listener, running_listener
 
 HERE = Path(__file__).parent
@@ -32,7 +33,8 @@ def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
     command = hython_listener(hython_executable(os.environ))
     log_path = tmp_path_factory.mktemp("hython") / "hython.log"
     with pytest.MonkeyPatch.context() as mp:
-        # The client presents a token at connect time; the listener started here takes none.
+        # The listener inherits this environment, and would enforce a token in it
+        # against the tests, which present none.
         mp.delenv("HOUDINI_RPC_TOKEN", raising=False)
         with running_listener(command, os.environ, log_path) as target:
             try:
@@ -45,6 +47,12 @@ def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
 def at(houdini: Target) -> dict[str, Any]:
     """The ``host`` and ``port`` arguments every tool call takes, naming this session's Houdini."""
     return asdict(houdini)
+
+
+@pytest.fixture
+def bound(at: dict[str, Any]) -> dict[str, Any]:
+    """Every argument the suite's server binds into a tool, naming this session's Houdini."""
+    return DEFAULT_SETTINGS.bound() | at
 
 
 @pytest.fixture(autouse=True)

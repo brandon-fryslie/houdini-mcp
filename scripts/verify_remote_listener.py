@@ -15,11 +15,11 @@ IMPORTANT:
 Usage:
     RUN_LIVE_REMOTE_CHECK=1 \
     HOUDINI_HOST=127.0.0.1 HOUDINI_PORT=18811 \
-    python scripts/verify_remote_listener.py
+    uv run python scripts/verify_remote_listener.py
 
-Environment:
-    RUN_LIVE_REMOTE_CHECK   must equal "1" to run (safety gate)
-    HOUDINI_HOST            listener host (default 127.0.0.1)
+Environment (read as the MCP server reads it, through houdini_mcp.settings):
+    RUN_LIVE_REMOTE_CHECK   must be on (1/true/yes/on/t/y, any case) to run (safety gate)
+    HOUDINI_HOST            listener host (default localhost)
     HOUDINI_PORT            listener port (default 18811)
     HOUDINI_RPC_TOKEN       optional shared secret (presented before the rpyc stream)
 
@@ -36,18 +36,15 @@ import socket
 import sys
 from pathlib import Path
 
-# Runs as a file, not a module: make the plugin tree's handshake package importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "houdini_plugin" / "python"))
+# Runs as a file, not a module: make houdini_mcp and the plugin tree's handshake
+# package importable.
+_REPO = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(_REPO), str(_REPO / "houdini_plugin" / "python")]
 
+import houdini_mcp_handshake as handshake  # noqa: E402
+from pydantic import TypeAdapter  # noqa: E402
 
-def _enabled() -> bool:
-    return os.getenv("RUN_LIVE_REMOTE_CHECK") == "1"
-
-
-def _target() -> tuple[str, int]:
-    host = os.getenv("HOUDINI_HOST", "127.0.0.1")
-    port = int(os.getenv("HOUDINI_PORT", "18811"))
-    return host, port
+from houdini_mcp.settings import InvalidSetting, houdini_target, rpc_token, setting  # noqa: E402
 
 
 def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
@@ -65,23 +62,12 @@ def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
 RPC_TIMEOUT = 10.0
 
 
-def _rpyc_check(host: str, port: int) -> bool:
+def _rpyc_check(host: str, port: int, token: str | None) -> bool:
     """Connect via rpyc.classic and read the Houdini version (read-only)."""
+    # [LAW:one-source-of-truth] the client side of the token handshake is the
+    # handshake package's, not a copy kept here.
     try:
-        import houdini_mcp_handshake as handshake  # noqa: PLC0415
-    except ImportError as exc:
-        print(
-            f"[verify] rpyc/houdini_mcp_handshake not importable in this environment ({exc}); "
-            "skipping RPC check."
-        )
-        return False
-
-    # [LAW:one-source-of-truth] the client side of the token handshake, and the
-    # reading of HOUDINI_RPC_TOKEN, are the handshake package's, not copies kept here.
-    try:
-        conn = handshake.connect(
-            host, port, token=handshake.token_from_env(), sync_request_timeout=RPC_TIMEOUT
-        )
+        conn = handshake.connect(host, port, token=token, sync_request_timeout=RPC_TIMEOUT)
         hou = conn.modules.hou
         version = hou.applicationVersionString()
         hip = hou.hipFile.path()
@@ -95,14 +81,22 @@ def _rpyc_check(host: str, port: int) -> bool:
 
 
 def main() -> int:
-    if not _enabled():
+    # [LAW:parse-dont-validate] every setting is parsed here, before anything is reached.
+    try:
+        enabled = setting(os.environ, "RUN_LIVE_REMOTE_CHECK", TypeAdapter(bool), "false")
+        target = houdini_target(os.environ)
+        token = rpc_token(os.environ)
+    except InvalidSetting as e:
+        print(f"[verify] Misconfigured: {e}")
+        return 2
+    if not enabled:
         print(
             "[verify] Live remote check is disabled. "
             "Set RUN_LIVE_REMOTE_CHECK=1 to run it explicitly."
         )
         return 2
 
-    host, port = _target()
+    host, port = target.host, target.port
     print(f"[verify] Target listener: {host}:{port}")
 
     if not _tcp_probe(host, port):
@@ -115,7 +109,7 @@ def main() -> int:
 
     print("[verify] TCP reachable.")
 
-    if not _rpyc_check(host, port):
+    if not _rpyc_check(host, port, token):
         print("[verify] FAIL: RPC handshake/version read did not succeed.")
         return 1
 

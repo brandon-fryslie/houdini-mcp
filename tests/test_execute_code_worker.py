@@ -17,6 +17,7 @@ from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, ge
 from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.rendering import render_quad_view, render_viewport
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
+from tests.conftest import SUMMARIZER
 
 
 def _child_names(mock_connection) -> list[str]:
@@ -33,7 +34,14 @@ def _use_event(monkeypatch, event_type) -> None:
 
 
 def _time_out(stalled_program: str, **kwargs):
-    result = execute_code(stalled_program, timeout=1, host="localhost", port=18811, **kwargs)
+    result = execute_code(
+        stalled_program,
+        timeout=1,
+        host="localhost",
+        port=18811,
+        **kwargs,
+        bypass_config_enabled=False,
+    )
     assert result["status"] == "error"
     assert result["audit"]["timed_out"] is True
     return result
@@ -72,7 +80,9 @@ class TestWorkerBlocksMutation:
     async def test_second_program_is_refused_the_same_way(self, mock_connection, stalled_program):
         _time_out(stalled_program)
 
-        result = await held(execute_code)("print('me too')", host="localhost", port=18811)
+        result = await held(execute_code)(
+            "print('me too')", host="localhost", port=18811, bypass_config_enabled=False
+        )
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"
@@ -111,7 +121,13 @@ class TestWorkerBlocksMutation:
         _time_out(stalled_program)
 
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"):
-            result = await held(get_geo_summary)("/obj/geo1", host="localhost", port=18811)
+            result = await held(get_geo_summary)(
+                "/obj/geo1",
+                host="localhost",
+                port=18811,
+                summarizer=SUMMARIZER,
+                bypass_config_enabled=False,
+            )
 
         assert result["status"] == "error"
         assert result["kind"] == "worker_still_running"
@@ -231,7 +247,9 @@ class TestATimedOutRunsDiff:
 class TestWorkerLifetime:
     def test_completed_program_releases_the_slot(self, mock_connection, caplog):
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.workers"):
-            result = execute_code("print('done')", host="localhost", port=18811)
+            result = execute_code(
+                "print('done')", host="localhost", port=18811, bypass_config_enabled=False
+            )
 
         assert result["status"] == "success"
         assert WORKERS.running() is None
@@ -240,7 +258,9 @@ class TestWorkerLifetime:
         assert any(m.startswith("execute_code worker finished") for m in messages)
 
     def test_failing_program_releases_the_slot(self, mock_connection):
-        result = execute_code("raise ValueError('boom')", host="localhost", port=18811)
+        result = execute_code(
+            "raise ValueError('boom')", host="localhost", port=18811, bypass_config_enabled=False
+        )
 
         assert result["status"] == "error"
         assert "boom" in result["message"]

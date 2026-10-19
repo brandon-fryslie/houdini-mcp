@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from ..connection import transport_failure
+from ..settings import Summarizer
 from ._common import (
     ResultLimit,
     ensure_connected,
@@ -30,6 +31,7 @@ async def find_error_nodes(
     summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
+    summarizer: Summarizer,
 ) -> dict[str, Any]:
     """
     Find all nodes with cook errors or warnings in the scene.
@@ -72,7 +74,7 @@ async def find_error_nodes(
     result = await on_the_scene(
         "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
-    return await summarized(result, _summarize_errors, asked=summarize)
+    return await summarized(result, _summarize_errors, summarizer=summarizer, asked=summarize)
 
 
 def _scan_error_nodes(

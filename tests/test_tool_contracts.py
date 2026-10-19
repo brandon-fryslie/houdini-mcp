@@ -39,9 +39,10 @@ from pydantic import ValidationError
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
+from houdini_mcp.settings import Summarizer
 from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import Policy
-from tests.conftest import DEFAULT_TARGET
+from tests.conftest import DEFAULT_SETTINGS
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
 
@@ -115,13 +116,30 @@ class TestServedSchemas:
             for name, prop in tool.input_schema["properties"].items():
                 assert prop.get("description"), f"{tool.name}.{name}"
 
-    def test_no_served_tool_lets_the_caller_choose_the_houdini(
+    def test_no_served_tool_lets_the_caller_choose_the_servers_configuration(
         self, served: dict[str, Tool]
     ) -> None:
-        """Which Houdini a tool reaches is the server's configuration, on every tool."""
+        """Which Houdini a tool reaches, which summarizer it asks and whether bypass is
+        configured are the server's, on every tool."""
+        configured = set(DEFAULT_SETTINGS.bound())
+        assert configured == {"host", "port", "summarizer", "bypass_config_enabled"}
         for tool in served.values():
-            assert not {"host", "port"} & set(tool.input_schema["properties"]), tool.name
+            assert not configured & set(tool.input_schema["properties"]), tool.name
             assert tool.input_schema["additionalProperties"] is False, tool.name
+
+    def test_every_parameter_a_tool_takes_from_the_server_is_one_it_binds(self) -> None:
+        """A keyword-only parameter with no default is configuration the tool takes from
+        the server; one the server does not bind would be published for the caller to choose."""
+        from houdini_mcp.server import SERVED_TOOLS
+
+        configured = set(DEFAULT_SETTINGS.bound())
+        for tool in SERVED_TOOLS:
+            taken = {
+                p.name
+                for p in inspect.signature(tool).parameters.values()
+                if p.kind is p.KEYWORD_ONLY and p.default is p.empty
+            }
+            assert taken <= configured, tool.__name__
 
     def test_serving_a_tool_logs_the_arguments_the_server_binds(
         self, caplog: pytest.LogCaptureFixture, results: Results
@@ -130,11 +148,16 @@ class TestServedSchemas:
         from houdini_mcp.server import served
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
-            served(tools.create_node, DEFAULT_TARGET, results)
-            served(tools.get_houdini_help, DEFAULT_TARGET, results)
+            served(tools.create_node, DEFAULT_SETTINGS, results)
+            served(tools.get_houdini_help, DEFAULT_SETTINGS, results)
+            served(tools.execute_code, DEFAULT_SETTINGS, results)
+            served(tools.get_geo_summary, DEFAULT_SETTINGS, results)
         assert [r.getMessage() for r in caplog.records] == [
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",
+            "serving execute_code with ['bypass_config_enabled', 'host', 'port'] bound by the server",
+            "serving get_geo_summary with "
+            "['bypass_config_enabled', 'host', 'port', 'summarizer'] bound by the server",
         ]
 
     async def test_execute_code_requires_only_the_program(
@@ -681,7 +704,6 @@ class TestServedSummaries:
         import importlib
 
         from houdini_mcp.reading import Reading
-        from houdini_mcp.tools import summarization
 
         narrow = {"status": "success", "text": "x" * 17000}
         wide = {
@@ -697,13 +719,12 @@ class TestServedSummaries:
         returned: list[dict[str, Any]] = []
         asked: list[dict[str, Any]] = []
 
-        async def record(data: dict[str, Any]) -> dict[str, Any]:
+        async def record(data: dict[str, Any], _summarizer: Summarizer) -> dict[str, Any]:
             asked.append(data)
             return {**data, "ai_summary": "summary"}
 
         monkeypatch.setattr(tool, read, lambda *_a, **_k: dict(returned[-1]))
         monkeypatch.setattr(tool, summarizer, record)
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
         async def sent(result: dict[str, Any], **asking: bool) -> dict[str, Any]:
             returned.append(result)
@@ -734,11 +755,8 @@ class TestServedSummaries:
         """Measuring a result for its summary meets what delivery would: the same failure arm."""
         import importlib
 
-        from houdini_mcp.tools import summarization
-
         tool = importlib.import_module(f"houdini_mcp.tools.{module}")
         monkeypatch.setattr(tool, read, lambda *_a, **_k: {"status": "success", "node": object()})
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
         failures = [
             await TestServedFailures.failure_of(client, name, {**arguments, "summarize": asked})
@@ -754,7 +772,7 @@ class TestServedSummaries:
     ) -> None:
         """A call that read no node has no errors to triage, however large its failure."""
         from houdini_mcp.reading import RESPONSE_BOUND_BYTES
-        from houdini_mcp.tools import errors, summarization
+        from houdini_mcp.tools import errors
         from houdini_mcp.tools.failure import OperationFailed
 
         def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
@@ -764,13 +782,12 @@ class TestServedSummaries:
 
         asked: list[dict[str, Any]] = []
 
-        async def record(data: dict[str, Any]) -> dict[str, Any]:
+        async def record(data: dict[str, Any], _summarizer: Summarizer) -> dict[str, Any]:
             asked.append(data)
             return data
 
         monkeypatch.setattr(errors, "_scan_error_nodes", nothing_read)
         monkeypatch.setattr(errors, "_summarize_errors", record)
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
         reply = await client.call_tool("find_error_nodes", {})
         assert reply.structured_content is not None

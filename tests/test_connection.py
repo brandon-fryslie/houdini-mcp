@@ -268,6 +268,27 @@ class TestConnect:
         assert link.name == "192.168.1.100:19999"
 
 
+class TestNoHoudiniInstalled:
+    def test_a_process_that_installs_no_houdini_reaches_none(self) -> None:
+        """[LAW:no-silent-failure] a server whose entry point installed no Houdini is told
+        so at its first connect, instead of reaching a listener presenting no token."""
+        import subprocess
+        import sys
+
+        probe = (
+            "from houdini_mcp import connection\n"
+            "try:\n"
+            "    connection.connect('houdini-box', 18811, max_retries=1)\n"
+            "except connection.HoudiniConnectionError as e:\n"
+            "    print(e)\n"
+        )
+        told = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        ).stdout
+        assert "no Houdini is installed" in told
+        assert "use_houdini" in told
+
+
 class TestIsConnected:
     """Tests for the is_connected function."""
 

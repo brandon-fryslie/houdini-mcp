@@ -4,7 +4,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 from houdini_mcp.tools.failure import FAILURE
-from tests.conftest import MockHouNode, raised_inside_houdini
+from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
 
 
 class TestGetNodeInfoWithErrors:
@@ -281,7 +281,9 @@ class TestFindErrorNodes:
         """Test find_error_nodes with no errors in scene."""
         from houdini_mcp.tools import find_error_nodes
 
-        result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert result["error_nodes"] == []
@@ -297,7 +299,9 @@ class TestFindErrorNodes:
         geo1._errors = ["Missing input"]
         mock_connection.add_node(geo1)
 
-        result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert result["error_count"] == 1
@@ -314,7 +318,11 @@ class TestFindErrorNodes:
         mock_connection.add_node(geo1)
 
         result = await find_error_nodes(
-            root_path="/obj", include_warnings=True, host="localhost", port=18811
+            root_path="/obj",
+            include_warnings=True,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
         )
 
         assert result["status"] == "success"
@@ -331,7 +339,11 @@ class TestFindErrorNodes:
         mock_connection.add_node(geo1)
 
         result = await find_error_nodes(
-            root_path="/obj", include_warnings=False, host="localhost", port=18811
+            root_path="/obj",
+            include_warnings=False,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
         )
 
         assert result["status"] == "success"
@@ -354,7 +366,11 @@ class TestFindErrorNodes:
         mock_connection.add_node(geo2)
 
         result = await find_error_nodes(
-            root_path="/obj", include_warnings=True, host="localhost", port=18811
+            root_path="/obj",
+            include_warnings=True,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
         )
 
         assert result["status"] == "success"
@@ -374,7 +390,7 @@ class TestFindErrorNodes:
             mock_connection.add_node(node)
 
         result = await find_error_nodes(
-            root_path="/obj", max_results=5, host="localhost", port=18811
+            root_path="/obj", max_results=5, host="localhost", port=18811, summarizer=SUMMARIZER
         )
 
         assert result["status"] == "success"
@@ -385,7 +401,9 @@ class TestFindErrorNodes:
         """Test find_error_nodes with non-existent root path."""
         from houdini_mcp.tools import find_error_nodes
 
-        result = await find_error_nodes(root_path="/nonexistent", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/nonexistent", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "error"
         assert "not found" in result["message"].lower()
@@ -401,7 +419,9 @@ class TestFindErrorNodes:
         mock_connection.add_node(geo1)
         mock_connection.add_node(sphere)
 
-        result = await find_error_nodes(root_path="/obj/geo1", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj/geo1", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert [n["path"] for n in result["error_nodes"]] == ["/obj/geo1/sphere1"]
@@ -412,7 +432,7 @@ class TestFindErrorNodes:
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
-            result = await find_error_nodes(host="localhost", port=18811)
+            result = await find_error_nodes(host="localhost", port=18811, summarizer=SUMMARIZER)
 
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
@@ -428,7 +448,9 @@ class TestFindErrorNodes:
             children.append(node)
             mock_connection.add_node(node)
 
-        result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert "total_scanned" in result
@@ -456,7 +478,9 @@ class TestFindErrorNodesUninspected:
         mock_connection.add_node(failing)
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
-            result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+            result = await find_error_nodes(
+                root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+            )
 
         assert result["status"] == "partial"
         [unread] = result["uninspected"]
@@ -474,7 +498,9 @@ class TestFindErrorNodesUninspected:
 
         mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
 
-        result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert (result["status"], result["uninspected"]) == ("success", [])
 
@@ -488,7 +514,9 @@ class TestFindErrorNodesUninspected:
         mock_connection.add_node(deleted)
         deleted.path = MagicMock(side_effect=gone)  # type: ignore[method-assign]
 
-        result = await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+        result = await find_error_nodes(
+            root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "partial"
         [unread] = result["uninspected"]
@@ -505,7 +533,7 @@ class TestFindErrorNodesUninspected:
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
             result = await find_error_nodes(
-                root_path="/obj", max_results=3, host="localhost", port=18811
+                root_path="/obj", max_results=3, host="localhost", port=18811, summarizer=SUMMARIZER
             )
 
         assert result["status"] == "partial"
@@ -522,7 +550,7 @@ class TestFindErrorNodesUninspected:
         mock_connection.add_node(failing)
 
         result = await find_error_nodes(
-            root_path="/obj", max_results=1, host="localhost", port=18811
+            root_path="/obj", max_results=1, host="localhost", port=18811, summarizer=SUMMARIZER
         )
 
         assert (result["status"], result["error_count"]) == ("success", 1)
@@ -536,7 +564,9 @@ class TestFindErrorNodesUninspected:
         mock_connection.add_node(self._unreadable("/obj/broken", unreadable))
 
         result = FAILURE.validate_python(
-            await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+            await find_error_nodes(
+                root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+            )
         )
 
         assert result.kind == "operation_failed"
@@ -552,7 +582,9 @@ class TestFindErrorNodesUninspected:
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
             result = FAILURE.validate_python(
-                await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+                await find_error_nodes(
+                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+                )
             )
 
         assert result.kind == "operation_failed"
@@ -566,7 +598,9 @@ class TestFindErrorNodesUninspected:
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
             result = FAILURE.validate_python(
-                await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+                await find_error_nodes(
+                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+                )
             )
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")
@@ -581,7 +615,9 @@ class TestFindErrorNodesUninspected:
 
         with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
             result = FAILURE.validate_python(
-                await find_error_nodes(root_path="/obj", host="localhost", port=18811)
+                await find_error_nodes(
+                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
+                )
             )
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")

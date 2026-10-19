@@ -17,27 +17,6 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-
-@pytest.fixture
-def allow_bypass_config(monkeypatch):
-    """Enable the server-side bypass configuration gate."""
-    monkeypatch.setenv("HOUDINI_MCP_ALLOW_BYPASS", "true")
-    import houdini_mcp.tools.code as code_mod
-
-    monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
-    yield
-
-
-@pytest.fixture
-def deny_bypass_config(monkeypatch):
-    """Force the server-side bypass configuration gate OFF."""
-    monkeypatch.delenv("HOUDINI_MCP_ALLOW_BYPASS", raising=False)
-    import houdini_mcp.tools.code as code_mod
-
-    monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: False)
-    yield
-
-
 # ---------------------------------------------------------------------------
 # AC1: expanded dangerous-pattern coverage (network / evasion)
 # ---------------------------------------------------------------------------
@@ -145,6 +124,7 @@ class TestPolicyProfiles:
             policy="read-only",
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         assert result["policy"] == "read-only"
@@ -159,6 +139,7 @@ class TestPolicyProfiles:
             policy="read-only",
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert result["policy"] == "read-only"
@@ -180,7 +161,9 @@ class TestPolicyProfiles:
     def test_read_only_blocks_whitespace_mutation_variants(self, mock_connection, code):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(code, policy="read-only", host="localhost", port=18811)
+        result = execute_code(
+            code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
         assert result["audit"]["woke_early"] is None
@@ -191,7 +174,7 @@ class TestPolicyProfiles:
         assert _detect_dangerous_code(parse_code("hou.node('/obj/geo1').parm('tx').eval()")) == []
         assert _detect_dangerous_code(parse_code("eval('1 + 1')"))
 
-    def test_read_only_ignores_bypass_flags(self, mock_connection, allow_bypass_config):
+    def test_read_only_ignores_bypass_flags(self, mock_connection):
         """read-only is the strictest profile: bypass flags cannot escalate it."""
         from houdini_mcp.tools import execute_code
 
@@ -201,6 +184,7 @@ class TestPolicyProfiles:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert result["status"] == "error"
         assert result["policy"] == "read-only"
@@ -211,6 +195,7 @@ class TestPolicyProfiles:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert heavy["status"] == "error"
         assert heavy["audit"]["blocked_reason"] == "heavy_geometry"
@@ -218,30 +203,38 @@ class TestPolicyProfiles:
     def test_normal_is_default_profile(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('hi')", host="localhost", port=18811)
+        result = execute_code(
+            "print('hi')", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert result["policy"] == "normal"
 
     @pytest.mark.parametrize("policy", ["superuser", "privileged"])
-    def test_unknown_policy_rejected(self, mock_connection, allow_bypass_config, policy):
+    def test_unknown_policy_rejected(self, mock_connection, policy):
         """Only read-only and normal exist; anything else fails closed, config or not."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('x')", policy=policy, host="localhost", port=18811)
+        result = execute_code(
+            "print('x')", policy=policy, host="localhost", port=18811, bypass_config_enabled=True
+        )
         assert (result["kind"], result["parameter"]) == ("invalid_input", "policy")
         assert "'read-only' or 'normal'" in result["message"]
 
-    def test_a_string_never_grants_a_capability(self, mock_connection, allow_bypass_config):
+    def test_a_string_never_grants_a_capability(self, mock_connection):
         """[LAW:single-enforcer] a Python caller is refused what the server refuses:
         "yes" is not a boolean, so it cannot switch a bypass on."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('x')", allow_dangerous="yes", host="localhost", port=18811)
+        result = execute_code(
+            "print('x')",
+            allow_dangerous="yes",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=True,
+        )
         assert (result["kind"], result["parameter"]) == ("invalid_input", "allow_dangerous")
 
-    def test_read_only_denies_dangerous_even_with_flag_and_config(
-        self, mock_connection, allow_bypass_config
-    ):
+    def test_read_only_denies_dangerous_even_with_flag_and_config(self, mock_connection):
         """read-only grants nothing to the bypass flags, even when the server would."""
         from houdini_mcp.tools import execute_code
 
@@ -251,6 +244,7 @@ class TestPolicyProfiles:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
@@ -260,9 +254,7 @@ class TestPolicyProfiles:
             "heavy_geometry": False,
         }
 
-    def test_read_only_denial_never_blames_the_config_gate(
-        self, mock_connection, deny_bypass_config
-    ):
+    def test_read_only_denial_never_blames_the_config_gate(self, mock_connection):
         """Under read-only, enabling the config would not help, so the reason must not say so."""
         from houdini_mcp.tools import execute_code
 
@@ -272,12 +264,13 @@ class TestPolicyProfiles:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["audit"]["blocked_reason"] == "heavy_geometry"
         assert "HOUDINI_MCP_ALLOW_BYPASS is disabled" not in result["message"]
         assert "policy='normal'" in result["hint"]
 
-    def test_config_denial_hint_names_the_config(self, mock_connection, deny_bypass_config):
+    def test_config_denial_hint_names_the_config(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
@@ -285,6 +278,7 @@ class TestPolicyProfiles:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["audit"]["blocked_reason"] == "bypass_config_disabled"
         assert result["hint"].startswith("Use get_geo_summary()")
@@ -307,12 +301,15 @@ class TestPolicyProfiles:
     ):
         """Every refusal's hint asks for each input still short of the grant, and no other;
         with none short, the program runs."""
-        import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
 
-        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: config)
         result = execute_code(
-            code, policy=policy, host="localhost", port=18811, **{flag: requested}
+            code,
+            policy=policy,
+            host="localhost",
+            port=18811,
+            **{flag: requested},
+            bypass_config_enabled=config,
         )
         unmet = [
             requirement
@@ -346,7 +343,7 @@ class TestPolicyProfiles:
 
 
 class TestBypassRequiresConfigAndRequest:
-    def test_request_flag_without_config_is_denied(self, mock_connection, deny_bypass_config):
+    def test_request_flag_without_config_is_denied(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
@@ -354,6 +351,7 @@ class TestBypassRequiresConfigAndRequest:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         # Denied because config gate is off, even though request asked to bypass.
@@ -361,14 +359,16 @@ class TestBypassRequiresConfigAndRequest:
         assert result.get("bypass_requested") is True
         assert result.get("bypass_config_enabled") is False
 
-    def test_config_without_request_flag_still_blocks(self, mock_connection, allow_bypass_config):
+    def test_config_without_request_flag_still_blocks(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("hou.exit()", host="localhost", port=18811)
+        result = execute_code(
+            "hou.exit()", host="localhost", port=18811, bypass_config_enabled=True
+        )
         assert result["status"] == "error"
         assert "Dangerous operations detected" in result["message"]
 
-    def test_both_config_and_request_allows(self, mock_connection, allow_bypass_config):
+    def test_both_config_and_request_allows(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
@@ -376,10 +376,11 @@ class TestBypassRequiresConfigAndRequest:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert result["status"] == "success"
 
-    def test_heavy_geometry_bypass_requires_config(self, mock_connection, deny_bypass_config):
+    def test_heavy_geometry_bypass_requires_config(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
@@ -387,15 +388,14 @@ class TestBypassRequiresConfigAndRequest:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         assert "config" in result["message"].lower()
 
 
 class TestTrustedInternalGeometryCapability:
-    def test_public_heavy_geometry_flag_still_requires_config(
-        self, mock_connection, deny_bypass_config
-    ):
+    def test_public_heavy_geometry_flag_still_requires_config(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
@@ -403,13 +403,12 @@ class TestTrustedInternalGeometryCapability:
             allow_heavy_geometry=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "bypass_config_disabled"
 
-    def test_allow_dangerous_does_not_unlock_heavy_geometry(
-        self, mock_connection, allow_bypass_config
-    ):
+    def test_allow_dangerous_does_not_unlock_heavy_geometry(self, mock_connection):
         """Each flag unlocks exactly its own capability."""
         from houdini_mcp.tools import execute_code
 
@@ -418,6 +417,7 @@ class TestTrustedInternalGeometryCapability:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "heavy_geometry"
@@ -427,9 +427,7 @@ class TestTrustedInternalGeometryCapability:
             "heavy_geometry": False,
         }
 
-    def test_trusted_grant_dangerous_hint_names_no_request_input(
-        self, mock_connection, deny_bypass_config
-    ):
+    def test_trusted_grant_dangerous_hint_names_no_request_input(self, mock_connection):
         """No flag or config admits dangerous code to a server-authored program, so the hint names none."""
         from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant
         from houdini_mcp.tools.failure import InvalidInput
@@ -454,9 +452,7 @@ class TestTrustedInternalGeometryCapability:
         assert "allow_dangerous" not in refusal["hint"]
         assert "HOUDINI_MCP_ALLOW_BYPASS" not in refusal["hint"]
 
-    def test_trusted_grant_runs_the_internal_bounded_program(
-        self, mock_connection, deny_bypass_config
-    ):
+    def test_trusted_grant_runs_the_internal_bounded_program(self, mock_connection):
         """The server-authored geometry program enters by the grant door, not a public flag."""
         import inspect
 
@@ -489,7 +485,9 @@ class TestAuditFields:
     def test_audit_present_on_success(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('hi')", host="localhost", port=18811)
+        result = execute_code(
+            "print('hi')", host="localhost", port=18811, bypass_config_enabled=False
+        )
         audit = result["audit"]
         assert audit["policy"] == "normal"
         assert audit["allow_dangerous_requested"] is False
@@ -504,7 +502,7 @@ class TestAuditFields:
         # The permission decision is one value, and the audit reports it.
         assert audit["granted"] == {"mutation": True, "dangerous": False, "heavy_geometry": False}
 
-    def test_audit_records_executed_bypass(self, mock_connection, allow_bypass_config):
+    def test_audit_records_executed_bypass(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         # Names a restricted member without calling it: detected, and harmless to run.
@@ -513,6 +511,7 @@ class TestAuditFields:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=True,
         )
         audit = result["audit"]
         assert result["status"] == "success"
@@ -526,7 +525,13 @@ class TestAuditFields:
         from houdini_mcp.tools import execute_code
 
         with caplog.at_level(logging.WARNING):
-            execute_code("hou.exit()", policy="normal", host="localhost", port=18811)
+            execute_code(
+                "hou.exit()",
+                policy="normal",
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
         [record] = [
             r.message for r in caplog.records if r.message.startswith("execute_code blocked:")
         ]
@@ -534,14 +539,20 @@ class TestAuditFields:
         assert "policy=normal" in record
         assert "hou.exit()" in record
 
-    def test_resolved_grant_is_logged(self, mock_connection, deny_bypass_config, caplog):
+    def test_resolved_grant_is_logged(self, mock_connection, caplog):
         """The debug event carries every input the grant was resolved from and what it granted."""
         import logging
 
         from houdini_mcp.tools import execute_code
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.code"):
-            execute_code("print('x')", allow_dangerous=True, host="localhost", port=18811)
+            execute_code(
+                "print('x')",
+                allow_dangerous=True,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
         [record] = [
             r.message for r in caplog.records if r.message.startswith("execute_code policy=")
         ]
@@ -549,9 +560,7 @@ class TestAuditFields:
         assert "'mutation': True, 'dangerous': False, 'heavy_geometry': False" in record
         assert "config=False requested dangerous=True heavy=False" in record
 
-    def test_approved_bypass_is_logged_without_source(
-        self, mock_connection, allow_bypass_config, caplog
-    ):
+    def test_approved_bypass_is_logged_without_source(self, mock_connection, caplog):
         import logging
 
         from houdini_mcp.tools import execute_code
@@ -564,6 +573,7 @@ class TestAuditFields:
                 allow_dangerous=True,
                 host="localhost",
                 port=18811,
+                bypass_config_enabled=True,
             )
         assert result["status"] == "success"
         records = [
@@ -574,9 +584,7 @@ class TestAuditFields:
         assert result["audit"]["code_sha256"] in records[-1]
         assert "source=request" in records[-1]
 
-    def test_trusted_grant_is_distinguishable_in_audit_and_log(
-        self, mock_connection, deny_bypass_config, caplog
-    ):
+    def test_trusted_grant_is_distinguishable_in_audit_and_log(self, mock_connection, caplog):
         """A server-authored grant never reads as a public bypass that slipped past the config."""
         import logging
 
@@ -607,7 +615,9 @@ class TestAuditFields:
         from houdini_mcp.tools import execute_code
 
         with caplog.at_level(logging.WARNING):
-            result = execute_code("import hou\nhou.exit()", host="localhost", port=18811)
+            result = execute_code(
+                "import hou\nhou.exit()", host="localhost", port=18811, bypass_config_enabled=False
+            )
         assert result["audit"]["blocked_reason"] == "import_hou"
         assert result["audit"]["dangerous_patterns"]
         [record] = [
@@ -629,7 +639,9 @@ class TestTimeoutRollback:
         from houdini_mcp.tools import execute_code
 
         before = mock_connection.undos.performed_undos
-        result = execute_code(stalled_program, timeout=1, host="localhost", port=18811)
+        result = execute_code(
+            stalled_program, timeout=1, host="localhost", port=18811, bypass_config_enabled=False
+        )
 
         assert result["status"] == "error"
         assert result.get("timeout") == 1
@@ -665,7 +677,9 @@ class TestTimeoutRollback:
         monkeypatch.setattr(code_mod, "exec", counting_exec)
         monkeypatch.setattr(mock_connection.undos, "group", broken_group)
 
-        result = code_mod.execute_code("print('once')", host="localhost", port=18811)
+        result = code_mod.execute_code(
+            "print('once')", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert len(calls) == 1
         assert "undo exit failed" in result["message"]
@@ -674,7 +688,9 @@ class TestTimeoutRollback:
         """Successful runs must be wrapped in a named undo group for later rollback."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print('wrapped')", host="localhost", port=18811)
+        result = execute_code(
+            "print('wrapped')", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert mock_connection.undos.closed_groups, "expected a named undo group"
 
@@ -693,6 +709,7 @@ class TestTimeoutRollback:
             allow_dangerous=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "error"
         assert result["audit"]["timed_out"] is True
@@ -719,6 +736,7 @@ class TestCapBoundaries:
             max_stdout_size=50,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert len(result["stdout"]) == 50
@@ -732,6 +750,7 @@ class TestCapBoundaries:
             max_stdout_size=50,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert len(result["stdout"]) == 50
@@ -745,6 +764,7 @@ class TestCapBoundaries:
             max_stderr_size=50,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert len(result["stderr"]) == 50
@@ -764,6 +784,7 @@ class TestCapBoundaries:
                 max_diff_nodes=3,
                 host="localhost",
                 port=18811,
+                bypass_config_enabled=False,
             )
         assert result["status"] == "success"
         assert len(result["scene_changes"]["added_nodes"]) == 3
@@ -787,7 +808,9 @@ class TestBlockedCodeNeverExecutes:
 
         # Patch the builtin exec used inside the module's execution path.
         with patch.object(code_mod, "exec", _tripwire, create=True):
-            result = code_mod.execute_code("hou.exit()", host="localhost", port=18811)
+            result = code_mod.execute_code(
+                "hou.exit()", host="localhost", port=18811, bypass_config_enabled=False
+            )
         assert result["status"] == "error"
         assert sentinel["ran"] is False
 
@@ -806,6 +829,7 @@ class TestBlockedCodeNeverExecutes:
                 policy="read-only",
                 host="localhost",
                 port=18811,
+                bypass_config_enabled=False,
             )
         assert result["status"] == "error"
         assert sentinel["ran"] is False
@@ -844,7 +868,9 @@ class TestReadOnlyIsAnAllowlist:
     def test_unrecognized_scene_operations_are_refused(self, mock_connection, code):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(code, policy="read-only", host="localhost", port=18811)
+        result = execute_code(
+            code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
         assert result["mutation_patterns"]
@@ -887,7 +913,9 @@ class TestReadOnlyIsAnAllowlist:
     def test_indirect_access_is_refused(self, mock_connection, code):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(code, policy="read-only", host="localhost", port=18811)
+        result = execute_code(
+            code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_mutation"
 
@@ -927,6 +955,7 @@ class TestReadOnlyIsAnAllowlist:
             policy="read-only",
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert any("changeNodeType" in p for p in result["mutation_patterns"])
 
@@ -1046,7 +1075,9 @@ class TestSyntaxGate:
             patch.object(code_mod, "exec", _tripwire, create=True),
             caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
         ):
-            result = code_mod.execute_code("def broken(", host="localhost", port=18811)
+            result = code_mod.execute_code(
+                "def broken(", host="localhost", port=18811, bypass_config_enabled=False
+            )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
         assert "line 1" in result["message"]
@@ -1057,7 +1088,13 @@ class TestSyntaxGate:
     def test_unparseable_code_is_refused_under_read_only_too(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("  print(1)", policy="read-only", host="localhost", port=18811)
+        result = execute_code(
+            "  print(1)",
+            policy="read-only",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
 
@@ -1071,7 +1108,7 @@ class TestSyntaxGate:
         gate reports them as a program it cannot read, never as a raised exception."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(code, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "error"
         assert "traceback" not in result or "SyntaxError" in result["traceback"]
         assert result["audit"]["blocked_reason"] == "syntax_error"
@@ -1079,7 +1116,9 @@ class TestSyntaxGate:
     def test_null_byte_is_a_parse_failure_without_a_line(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("print(1)\x00", host="localhost", port=18811)
+        result = execute_code(
+            "print(1)\x00", host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
         assert "None" not in result["message"]

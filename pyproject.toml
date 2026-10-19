@@ -179,6 +179,9 @@ warn_unused_configs = true
 ignore_missing_imports = true
 no_strict_optional = true
 exclude = ["tests/", "build/"]
+# houdini_mcp_handshake ships from the plugin tree; the editable install reaches it
+# through an import hook mypy cannot follow.
+mypy_path = "houdini_plugin/python"
 
 # Bandit security configuration
 [tool.bandit]
