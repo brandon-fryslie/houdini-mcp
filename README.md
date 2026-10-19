@@ -270,11 +270,11 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | Tool | Description |
 |------|-------------|
 | `get_houdini_help` | Get help for node types |
-| `get_summarization_status` | Get summarization config (server, model, thresholds) |
+| `get_summarization_status` | Get summarization config (server, model, the bound a summary stands in past) |
 
-`find_error_nodes`, `get_geo_summary` and `serialize_scene` summarize a result over
-`AUTO_SUMMARIZE_THRESHOLD` estimated tokens by default; `summarize=False` sends nothing
-to the summarizer.
+`find_error_nodes`, `get_geo_summary` and `serialize_scene` summarize a result too large
+to read inline by default, so a result that arrives as a file carries its summary beside
+the pointer; `summarize=False` sends nothing to the summarizer.
 
 ### Infrastructure (`_common.py`, `cache.py`)
 - **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`

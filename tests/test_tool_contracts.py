@@ -527,8 +527,7 @@ class TestServedFailures:
     async def test_a_result_the_server_cannot_serialize_is_the_tools_failure(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Delivery runs after ``get_geo_summary`` returns: a result it cannot
-        serialize is the tool's failure arm, never a protocol error."""
+        """A result the wire cannot carry is the tool's failure arm, never a protocol error."""
         from houdini_mcp.tools import geometry
 
         def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
@@ -538,7 +537,7 @@ class TestServedFailures:
         failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.operation == "get_geo_summary"
-        assert failure.exception == "TypeError"
+        assert failure.exception == "Unreadable"
         assert "not JSON-serializable" in failure.message
 
     async def test_a_large_failure_is_still_one_arm(self, client: Client[Any]) -> None:
@@ -633,6 +632,24 @@ class TestServedFailures:
         assert "hou is mid-shutdown" in failure.message
 
 
+# The tools that summarize: each one's module, the read it summarizes, its summarizer,
+# and the arguments a call needs.
+SUMMARIZING = pytest.mark.parametrize(
+    ("name", "module", "read", "summarizer", "arguments"),
+    [
+        ("find_error_nodes", "errors", "_scan_error_nodes", "_summarize_errors", {}),
+        (
+            "get_geo_summary",
+            "geometry",
+            "_read_geometry",
+            "_summarize_geometry",
+            {"node_path": "/obj/geo1/sphere1"},
+        ),
+        ("serialize_scene", "scene", "_scene_tree", "_summarize_scene", {}),
+    ],
+)
+
+
 class TestServedSummaries:
     """When a served tool asks the summarizer for a summary."""
 
@@ -642,21 +659,8 @@ class TestServedSummaries:
     ) -> None:
         assert served[name].input_schema["properties"]["summarize"]["default"] is True
 
-    @pytest.mark.parametrize(
-        ("name", "module", "read", "summarizer", "arguments"),
-        [
-            ("find_error_nodes", "errors", "_scan_error_nodes", "_summarize_errors", {}),
-            (
-                "get_geo_summary",
-                "geometry",
-                "_read_geometry",
-                "_summarize_geometry",
-                {"node_path": "/obj/geo1/sphere1"},
-            ),
-            ("serialize_scene", "scene", "_scene_tree", "_summarize_scene", {}),
-        ],
-    )
-    async def test_a_large_result_is_summarized_unless_told_not_to(
+    @SUMMARIZING
+    async def test_a_result_is_summarized_exactly_when_it_arrives_as_a_file(
         self,
         client: Client[Any],
         monkeypatch: pytest.MonkeyPatch,
@@ -666,41 +670,97 @@ class TestServedSummaries:
         summarizer: str,
         arguments: dict[str, Any],
     ) -> None:
-        """Size is the reason to summarize, and summarize=False overrides it."""
+        """Too large to read whole is one line: past it a result arrives as a file with
+        its summary beside the pointer, and within it inline with none, whatever its
+        JSON's length. summarize=False sends nothing either way.
+
+        The two results straddle the rule this replaced, an estimated 5000 tokens of
+        JSON (its length / 4): one is under it but too large to read inline, the other
+        over it but read inline.
+        """
+        import importlib
+
+        from houdini_mcp.reading import Reading
+        from houdini_mcp.tools import summarization
+
+        narrow = {"status": "success", "text": "x" * 17000}
+        wide = {
+            "status": "success",
+            "rows": [
+                {"path": f"/obj/geo{i}", "type": "geo", "name": f"geo{i}"} for i in range(500)
+            ],
+        }
+        assert len(json.dumps(narrow)) // 4 < 5000 and not Reading.of(narrow).fits
+        assert len(json.dumps(wide)) // 4 > 5000 and Reading.of(wide).fits
+
+        tool = importlib.import_module(f"houdini_mcp.tools.{module}")
+        returned: list[dict[str, Any]] = []
+        asked: list[dict[str, Any]] = []
+
+        async def record(data: dict[str, Any]) -> dict[str, Any]:
+            asked.append(data)
+            return {**data, "ai_summary": "summary"}
+
+        monkeypatch.setattr(tool, read, lambda *_a, **_k: dict(returned[-1]))
+        monkeypatch.setattr(tool, summarizer, record)
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
+
+        async def sent(result: dict[str, Any], **asking: bool) -> dict[str, Any]:
+            returned.append(result)
+            reply = await client.call_tool(name, {**arguments, **asking})
+            assert reply.structured_content is not None
+            return reply.structured_content
+
+        pointer = await sent(narrow)
+        assert asked == [narrow]
+        assert pointer["ai_summary"] == "summary" and "result_file" in pointer
+        assert await sent(wide) == wide
+        assert asked == [narrow]
+        unsummarized = await sent(narrow, summarize=False)
+        assert asked == [narrow]
+        assert "result_file" in unsummarized and "ai_summary" not in unsummarized
+
+    @SUMMARIZING
+    async def test_a_result_no_caller_can_read_is_the_same_failure_summarized_or_not(
+        self,
+        client: Client[Any],
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        module: str,
+        read: str,
+        summarizer: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """Measuring a result for its summary meets what delivery would: the same failure arm."""
         import importlib
 
         from houdini_mcp.tools import summarization
 
         tool = importlib.import_module(f"houdini_mcp.tools.{module}")
-        asked: list[dict[str, Any]] = []
-
-        async def record(data: dict[str, Any]) -> dict[str, Any]:
-            asked.append(data)
-            return data
-
-        monkeypatch.setattr(tool, read, lambda *_a, **_k: {"status": "success", "read": name})
-        monkeypatch.setattr(tool, summarizer, record)
+        monkeypatch.setattr(tool, read, lambda *_a, **_k: {"status": "success", "node": object()})
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
-        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 10**9)
 
-        await client.call_tool(name, arguments)
-        assert asked == []
-        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
-        await client.call_tool(name, {**arguments, "summarize": False})
-        assert asked == []
-        await client.call_tool(name, arguments)
-        assert asked == [{"status": "success", "read": name}]
+        failures = [
+            await TestServedFailures.failure_of(client, name, {**arguments, "summarize": asked})
+            for asked in (True, False)
+        ]
+
+        assert failures[0] == failures[1]
+        assert (failures[0].kind, failures[0].operation) == ("operation_failed", name)
+        assert "ran, but returned a result that is not JSON-serializable" in failures[0].message
 
     async def test_find_error_nodes_never_summarizes_a_failure(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A call that read no node has no errors to triage, however large the threshold
-        says it is."""
+        """A call that read no node has no errors to triage, however large its failure."""
+        from houdini_mcp.reading import RESPONSE_BOUND_BYTES
         from houdini_mcp.tools import errors, summarization
         from houdini_mcp.tools.failure import OperationFailed
 
         def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
-            raise OperationFailed("Could not list the nodes under /obj")
+            raise OperationFailed(
+                "Could not list the nodes under /obj: " + "x" * RESPONSE_BOUND_BYTES
+            )
 
         asked: list[dict[str, Any]] = []
 
@@ -711,8 +771,9 @@ class TestServedSummaries:
         monkeypatch.setattr(errors, "_scan_error_nodes", nothing_read)
         monkeypatch.setattr(errors, "_summarize_errors", record)
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
-        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
 
-        failure = await TestServedFailures.failure_of(client, "find_error_nodes", {})
-        assert failure.kind == "operation_failed"
+        reply = await client.call_tool("find_error_nodes", {})
+        assert reply.structured_content is not None
+        assert reply.structured_content["kind"] == "operation_failed"
+        assert "result_file" in reply.structured_content
         assert asked == []

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire, configuration)**: a result is summarized exactly when it is
+  too large to read inline, and so arrives as a file
+  (houdini-laws-spine-cqp.a4a). `find_error_nodes`, `get_geo_summary` and
+  `serialize_scene` summarize a result whose shorthand is over the 16KB response
+  bound, and the pointer carries the summary. Before, a summary was written past
+  an estimated 5000 tokens of JSON, so a result could arrive as a file with no
+  summary, or be summarized while it was still read inline.
+  `AUTO_SUMMARIZE_THRESHOLD` is no longer read. `get_summarization_status`
+  serves `response_bound_bytes` in place of `auto_threshold_tokens`. A result
+  the wire cannot carry as JSON fails with `exception: "Unreadable"` (was
+  `"TypeError"`). In the Python API, `RESPONSE_BOUND_BYTES` and `WIRE` live in
+  `houdini_mcp.reading`, and `deliver` no longer takes `bound`.
+
 - **BREAKING (wire)**: `render_viewport` refuses a `look_at` that is neither an
   object nor a SOP inside one (houdini-laws-etg.aeu), as its description always
   said. Before, any other node inside an object, such as a DOP or a VOP, was

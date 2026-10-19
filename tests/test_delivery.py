@@ -21,7 +21,8 @@ from fastmcp import Client, FastMCP
 
 from houdini_mcp import delivery
 from houdini_mcp import results as store
-from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, deliver
+from houdini_mcp.delivery import deliver
+from houdini_mcp.reading import RESPONSE_BOUND_BYTES
 from houdini_mcp.results import RESULTS_BUDGET_BYTES, Results
 from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields

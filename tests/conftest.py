@@ -11,6 +11,7 @@ from collections.abc import Callable, Generator, Sequence
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import rpyc
 import rpyc.utils.server
@@ -831,6 +832,29 @@ def results_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pat
     root = tmp_path / "results-root"
     monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(root))
     return root
+
+
+@pytest.fixture(autouse=True)
+def summarizer_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The summarizer as a test reaches it unless the test routes its own: a server that
+    refuses every connection, so no test sends a request off this machine."""
+    from houdini_mcp.tools import summarization
+
+    production = summarization.summarizer_client
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("tests reach no summarizer", request=request)
+
+    def offline() -> httpx.AsyncClient:
+        real = production()
+        return httpx.AsyncClient(
+            base_url=real.base_url,
+            headers=real.headers,
+            timeout=real.timeout,
+            transport=httpx.MockTransport(refuse),
+        )
+
+    monkeypatch.setattr(summarization, "summarizer_client", offline)
 
 
 @pytest.fixture

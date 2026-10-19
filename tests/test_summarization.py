@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
+from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
 from houdini_mcp.tools import summarization
 
 
@@ -65,27 +66,6 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> Wire:
     return wire
 
 
-class TestEstimateTokens:
-    """Tests for token estimation."""
-
-    def test_estimate_tokens_string(self):
-        """Test token estimation for strings."""
-        text = "a" * 100  # 100 characters
-        assert summarization.estimate_tokens(text) == 25  # 100/4
-
-    def test_estimate_tokens_dict(self):
-        """Test token estimation for dict."""
-        data = {"key": "value" * 10}
-        result = summarization.estimate_tokens(data)
-        assert result > 0
-
-    def test_estimate_tokens_list(self):
-        """Test token estimation for list."""
-        data = [{"x": i} for i in range(100)]
-        result = summarization.estimate_tokens(data)
-        assert result > 100  # Should be more than 100 tokens for 100 items
-
-
 @pytest.fixture
 def no_wire(monkeypatch: pytest.MonkeyPatch) -> None:
     """A summarizer transport that fails the test if anything is sent on it."""
@@ -106,71 +86,76 @@ SUMMARIZERS = [
     summarization._summarize_geometry,
     summarization._summarize_scene,
 ]
-RESULT = {"status": "success", "nodes": ["/obj/geo1/node"] * 50}
+# A result read inline, and one too large to read whole: it arrives as a file.
+SMALL = {"status": "success", "nodes": ["/obj/geo1/node"] * 50}
+LARGE = {"status": "success", "nodes": ["/obj/geo1/node"] * 2000}
 
 
-def threshold_below(monkeypatch: pytest.MonkeyPatch, data: dict, by: int) -> None:
-    """Set AUTO_SUMMARIZE_THRESHOLD ``by`` tokens below the data's estimated size."""
-    tokens = summarization.estimate_tokens(data)
-    monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", tokens - by)
+def at_the_bound() -> dict:
+    """A result whose text is exactly the bound: the largest still read inline."""
+    result = {"status": "success", "text": "x"}
+    result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(Reading.of(result).encoded) + 1)
+    assert len(Reading.of(result).encoded) == RESPONSE_BOUND_BYTES
+    return result
 
 
 class TestSummarized:
-    """summarize is one bool: False is off, True summarizes what is over the threshold."""
+    """summarize is one bool: False is off, True summarizes what is too large to read whole."""
+
+    def test_the_results_straddle_the_bound(self):
+        assert Reading.of(SMALL).fits and not Reading.of(LARGE).fits
 
     @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_false_sends_nothing_however_large(self, no_wire, monkeypatch, summarizer):
-        threshold_below(monkeypatch, RESULT, by=1)
-        result = await summarization.summarized(dict(RESULT), summarizer, asked=False)
-        assert result == RESULT
+    async def test_false_sends_nothing_however_large(self, no_wire, summarizer):
+        result = await summarization.summarized(dict(LARGE), summarizer, asked=False)
+        assert result == LARGE
 
     @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_true_summarizes_past_the_threshold(self, wire, monkeypatch, summarizer):
-        threshold_below(monkeypatch, RESULT, by=1)
-        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
-        assert result == {**RESULT, "ai_summary": "Test summary", "_summarized": True}
+    async def test_true_summarizes_a_result_too_large_to_read_whole(self, wire, summarizer):
+        result = await summarization.summarized(dict(LARGE), summarizer, asked=True)
+        assert result == {**LARGE, "ai_summary": "Test summary", "_summarized": True}
         assert len(wire.sent) == 1
 
     @pytest.mark.parametrize("summarizer", SUMMARIZERS)
-    async def test_true_leaves_a_result_at_the_threshold_as_is(
-        self, no_wire, monkeypatch, summarizer
-    ):
-        threshold_below(monkeypatch, RESULT, by=0)
-        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
-        assert result == RESULT
+    async def test_true_leaves_a_result_at_the_bound_as_is(self, no_wire, summarizer):
+        result = at_the_bound()
+        assert await summarization.summarized(dict(result), summarizer, asked=True) == result
 
     @pytest.mark.parametrize("summarizer", SUMMARIZERS)
     async def test_disabled_leaves_the_result_as_is(self, no_wire, monkeypatch, summarizer):
         """A setting, not a failure: no request, no ai_summary_error, no warning."""
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        threshold_below(monkeypatch, RESULT, by=1)
-        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
-        assert result == RESULT
+        result = await summarization.summarized(dict(LARGE), summarizer, asked=True)
+        assert result == LARGE
+
+    async def test_a_result_no_caller_can_read_is_refused_unsummarized(self, no_wire):
+        with pytest.raises(Unreadable, match="not JSON-serializable"):
+            await summarization.summarized(
+                {"status": "success", "node": object()}, summarization._summarize_scene, asked=True
+            )
 
     @pytest.mark.parametrize(
-        ("enabled", "asked", "by", "decided"),
+        ("enabled", "asked", "result", "decided"),
         [
-            (True, False, 1, False),
-            (True, True, 0, False),
-            (False, True, 1, False),
-            (True, True, 1, True),
+            (True, False, LARGE, False),
+            (True, True, at_the_bound(), False),
+            (False, True, LARGE, False),
+            (True, True, LARGE, True),
         ],
     )
     async def test_logs_the_decision_and_its_inputs(
-        self, no_wire, monkeypatch, caplog, enabled, asked, by, decided
+        self, no_wire, monkeypatch, caplog, enabled, asked, result, decided
     ):
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", enabled)
-        threshold_below(monkeypatch, RESULT, by=by)
-        tokens = summarization.estimate_tokens(RESULT)
 
         async def unchanged(data: dict) -> dict:
             return data
 
         with caplog.at_level("DEBUG", logger="houdini_mcp.summarization"):
-            await summarization.summarized(dict(RESULT), unchanged, asked=asked)
+            await summarization.summarized(dict(result), unchanged, asked=asked)
         assert caplog.messages == [
-            f"Summarize: {decided} (enabled={enabled}, asked={asked}, ~{tokens} tokens, "
-            f"threshold {tokens - by})"
+            f"Summarize: {decided} (enabled={enabled}, asked={asked}, "
+            f"{len(Reading.of(result).encoded)} bytes, bound {RESPONSE_BOUND_BYTES})"
         ]
 
 
@@ -242,14 +227,14 @@ class TestGetSummarizationStatus:
     """Tests for summarization status."""
 
     def test_get_summarization_status_returns_config(self):
-        """Status names the server, the model, and the thresholds."""
+        """Status names the server, the model, the bound a summary stands in past, and the summary's size."""
         status = summarization.get_summarization_status()
 
         assert status == {
             "enabled": summarization.SUMMARIZATION_ENABLED,
             "model": summarization.SUMMARIZATION_MODEL,
             "base_url": str(summarization.SUMMARIZATION_BASE_URL),
-            "auto_threshold_tokens": summarization.AUTO_SUMMARIZE_THRESHOLD,
+            "response_bound_bytes": RESPONSE_BOUND_BYTES,
             "target_summary_tokens": summarization.TARGET_SUMMARY_TOKENS,
         }
 

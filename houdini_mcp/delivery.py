@@ -2,7 +2,7 @@
 
 [LAW:single-enforcer] The one place the response-size bound holds. ``server.served``
 routes every tool's result through ``deliver``; no tool caps, truncates, or opts out.
-The bound measures what a model reads: the result's shorthand text.
+The bound, and the measure of a result against it, are ``reading``'s.
 
 A result over the bound is written whole to a file, and the caller gets its path, a
 URI that reads it through this server (for a caller on another machine than the
@@ -11,24 +11,19 @@ parseable failure arm - and the AI summary written to stand in for it, when the
 tool made one. ``results`` keeps the file, and says for how long.
 """
 
-import json
 import logging
 from typing import Any
 
 from fastmcp.tools import ToolResult
-from pydantic import TypeAdapter
-from pydantic_core import PydanticSerializationError
 
 from . import shorthand
+from .reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
 from .results import RETENTION, Results
 from .tools._common import PAGING_FIELDS
 from .tools.failure import FAILURE_FIELDS, OperationFailed, failure_response
 from .tools.summarization import SUMMARY_FIELDS
 
 logger = logging.getLogger("houdini_mcp.delivery")
-
-RESPONSE_BOUND_BYTES = 16 * 1024
-"""The largest result text, in UTF-8 bytes of its shorthand, that a caller reads inline."""
 
 RESULT_URI = "houdini-mcp://results/{name}"
 
@@ -44,11 +39,6 @@ fields, a long string cut and marked; read the file for everything else. \
 Read it soon: {RETENTION}."""
 """What every client is told at initialize about how a result reaches it."""
 
-
-# [LAW:one-source-of-truth] The serializer FastMCP puts a result's structured content
-# on the wire with, so the value rendered, measured against the bound, and written to
-# the file is the result as structured content carries it.
-WIRE = TypeAdapter(Any)
 
 # [LAW:one-source-of-truth] The fields a failure cannot lose and still parse are the
 # ones that say how any call ended; a success keeps its "status" by the same rule.
@@ -70,35 +60,24 @@ def preview(value: Any) -> Any:
     return value
 
 
-def deliver(
-    tool: str,
-    result: dict[str, Any],
-    results: Results,
-    *,
-    bound: int = RESPONSE_BOUND_BYTES,
-) -> ToolResult:
-    """``result`` as the caller receives it: inline when its shorthand fits the bound,
-    else a pointer to the file ``results`` keeps holding all of it.
+def deliver(tool: str, result: dict[str, Any], results: Results) -> ToolResult:
+    """``result`` as the caller receives it: inline when it fits the bound, else a
+    pointer to the file ``results`` keeps holding all of it.
 
     [LAW:one-source-of-truth] Everything sent is one JSON value - the result as the
     wire carries it, read back - with its shorthand as the text: the bytes measured,
     written, and read are the text a model reads.
     """
     try:
-        sent: dict[str, Any] = json.loads(WIRE.dump_json(result))
-    except PydanticSerializationError as e:
+        reading = Reading.of(result)
+    except Unreadable as e:
         # [LAW:single-enforcer] a result no caller can read is the tool's bug, and
         # failure_response is where every exception becomes the caller's failure arm.
-        unserializable = TypeError(
-            f"{tool} ran, but returned a result that is not JSON-serializable: {e}"
-        )
-        return reply(failure_response(unserializable, tool))
-    text = shorthand.render(sent)
-    encoded = text.encode("utf-8")
-    if len(encoded) <= bound:
-        logger.debug("delivered %s inline: %d bytes", tool, len(encoded))
-        return ToolResult(content=text, structured_content=sent)
-    return reply(stored(tool, sent, encoded, bound, results))
+        return reply(failure_response(e, tool))
+    if reading.fits:
+        logger.debug("delivered %s inline: %d bytes", tool, len(reading.encoded))
+        return ToolResult(content=reading.text, structured_content=reading.sent)
+    return reply(stored(tool, reading, results))
 
 
 def reply(sent: dict[str, Any]) -> ToolResult:
@@ -106,13 +85,11 @@ def reply(sent: dict[str, Any]) -> ToolResult:
     return ToolResult(content=shorthand.render(sent), structured_content=sent)
 
 
-def stored(
-    tool: str, sent: dict[str, Any], encoded: bytes, bound: int, results: Results
-) -> dict[str, Any]:
-    """The pointer to ``encoded`` written whole to a file, or the failure that says it could not be."""
-    size = len(encoded)
+def stored(tool: str, reading: Reading, results: Results) -> dict[str, Any]:
+    """The pointer to ``reading``'s text written whole to a file, or the failure that says it could not be."""
+    size = len(reading.encoded)
     try:
-        kept = results.keep(tool, encoded)
+        kept = results.keep(tool, reading.encoded)
     except OSError as e:
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
@@ -125,14 +102,18 @@ def stored(
         "removed %d older results, %d bytes; %d past the budget not yet removed",
         tool,
         size,
-        bound,
+        RESPONSE_BOUND_BYTES,
         kept.path,
         kept.removed,
         kept.removed_bytes,
         kept.unremoved,
     )
     return {
-        **{field: preview(sent[field]) for field in ENVELOPE_FIELDS if field in sent},
+        **{
+            field: preview(reading.sent[field])
+            for field in ENVELOPE_FIELDS
+            if field in reading.sent
+        },
         "result_file": str(kept.path),
         "result_uri": RESULT_URI.format(name=kept.path.name),
         "result_bytes": size,
