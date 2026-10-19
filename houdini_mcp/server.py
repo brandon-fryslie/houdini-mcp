@@ -165,17 +165,6 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
     return mcp
 
 
-def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None:
-    """Serve ``mcp`` on a transport, leaving process logging to the caller."""
-
-    if transport == "stdio":
-        logger.info("Starting Houdini MCP Server on stdio")
-        mcp.run(transport=transport, show_banner=False)
-    else:
-        logger.info(f"Starting Houdini MCP Server on {transport}://0.0.0.0:{port}")
-        mcp.run(transport=transport, host="0.0.0.0", port=port)
-
-
 def run_server(
     settings: ServerSettings, results: Results, transport: Transport, port: int, log_level: int
 ) -> None:
@@ -190,4 +179,10 @@ def run_server(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
-    serve(build_server(settings, results), transport, port)
+    mcp = build_server(settings, results)
+    if transport == "stdio":
+        logger.info("Starting Houdini MCP Server on stdio")
+        mcp.run(transport=transport, show_banner=False)
+    else:
+        logger.info(f"Starting Houdini MCP Server on {transport}://0.0.0.0:{port}")
+        mcp.run(transport=transport, host="0.0.0.0", port=port)

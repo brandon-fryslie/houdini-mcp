@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only `open` and `remedy`: `describe`, `open_is_retryable` and
   `transport_failure` are gone, because naming a Houdini (`describe_target`, which
   is `host:port`), classifying connection loss (`transport_failure()`) and
-  retrying an open no longer vary by target. README no longer has Houdini's Python
+  retrying an open no longer vary by target. `houdini_mcp.server` loses `serve()`,
+  which let the plugin serve without configuring process logging; `run_server()`
+  is the one function that serves. README no longer has Houdini's Python
   install the server: `hython -m pip install .` served only the plugin's stdio
   server, since the listener imports nothing from `houdini_mcp`.
 

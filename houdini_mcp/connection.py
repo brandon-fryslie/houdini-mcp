@@ -166,12 +166,11 @@ class Link:
 
     [LAW:types-are-the-program] ``conn`` and ``hou`` are installed together, after the
     link proved it reaches Houdini, so no holder can see one without the other.
-    ``target``, ``host`` and ``port`` are what the link was opened to: a request is
+    ``host`` and ``port`` are what the link was opened to: a request is
     checked against the Houdini actually reached, and diagnostics name that one.
     Identity is the instance: a reconnect is a new ``Link``.
     """
 
-    target: HoudiniTarget
     host: str
     port: int
     conn: Any
@@ -237,7 +236,7 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    return Link(target, host, port, conn, hou)
+    return Link(host, port, conn, hou)
 
 
 def _open_link_with_retries(
@@ -542,8 +541,9 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     # [LAW:single-enforcer] opening, proving and naming an unreached Houdini are the
     # connect path's, one attempt, so the probe reaches Houdini exactly when a tool's
     # connect would and fails in the same words.
+    target = _houdini.target
     link = _open_link_with_retries(
-        _houdini.target,
+        target,
         host,
         port,
         max_retries=1,
@@ -562,7 +562,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
         if transport_failure(e) is None:
             raise
         raise HoudiniConnectionError(
-            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {link.target.remedy}",
+            f"No Houdini answered at {link.name}: {type(e).__name__}: {e}. {target.remedy}",
             target=link.name,
         ) from e
     finally:

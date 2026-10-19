@@ -67,6 +67,8 @@ needs the plugin installed either way.
 
 **Step 2: Configure your MCP client**
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and clone
+this repository with `git clone https://github.com/brandon-fryslie/houdini-mcp.git`.
 The client runs the server with `uv`; replace `/path/to/houdini-mcp` with the
 path to your clone:
 
@@ -81,6 +83,9 @@ path to your clone:
   }
 }
 ```
+
+A GUI client such as Claude Desktop may start with a `PATH` that lacks `uv`; if
+so, set `command` to the absolute path that `which uv` prints.
 
 To reach a listener on another host or port, or one that enforces a token, add
 `HOUDINI_HOST`, `HOUDINI_PORT` or `HOUDINI_RPC_TOKEN` to `env`, as described under

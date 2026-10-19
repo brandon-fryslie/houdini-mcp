@@ -19,6 +19,7 @@ from houdini_mcp.connection import (
     get_connection_info,
     is_connected,
     ping,
+    remote_houdini,
     transport_failure,
 )
 from tests.conftest import MockHouModule, MockRpycConnection, raised_inside_houdini
@@ -90,6 +91,7 @@ class TestConnect:
 
         assert mock_rpyc.connect.call_count == 1
         assert "Non-retryable" in str(exc_info.value)
+        assert remote_houdini(None).remedy in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, HandshakeError)
 
     def test_a_link_that_fails_validation_is_closed_and_not_installed(
@@ -181,6 +183,7 @@ class TestConnect:
 
         assert "Failed to connect" in str(exc_info.value)
         assert "after 2 attempts" in str(exc_info.value)
+        assert remote_houdini(None).remedy in str(exc_info.value)
 
     def test_connect_rejects_fewer_than_one_attempt(self, reset_connection_state):
         """Zero attempts is refused outright, never reported as an unreachable Houdini."""
@@ -626,6 +629,7 @@ class TestPing:
                 ping("localhost", 18811)
 
         assert raised.value.target == "localhost:18811"
+        assert remote_houdini(None).remedy in str(raised.value)
         assert isinstance(raised.value.__cause__, EOFError)
         assert mock_conn.closed is True
 
