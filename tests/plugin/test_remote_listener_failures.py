@@ -161,7 +161,7 @@ class TestSecurityEnforcement:
         message = result["message"]
         assert "refusing to bind non-loopback host '0.0.0.0'" in message
         assert f"Nothing was changed: hrpyc listener is running on 127.0.0.1:{port}." in message
-        assert f"Refusing to start listener: {message}" in caplog.text
+        assert f"Refusing to {ask.__name__} listener: {message}" in caplog.text
         assert result["running"] is True
         assert len(fake_hrpyc.servers) == 1
         assert fake_hrpyc.servers[0].active is True
