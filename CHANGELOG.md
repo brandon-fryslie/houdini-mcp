@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   characters of the result's indented JSON (`serialize_scene`: 10000), cut
   mid-string, and neither it nor the caller was told the rest was left out.
   Now every summary is written from the first 8KB of the result's shorthand,
-  the text its file holds, which covers about four times as much of a result.
+  the text its file holds, which holds two to three times as much of a result.
   The request says how much of the whole that is, and `summarized_bytes`,
   beside `ai_summary`, says how many bytes from the file's start the summary
   covers. `_summarized` is gone: `ai_summary` already says a result was
