@@ -326,7 +326,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing serving. The policy now refuses it before anything is stopped, and
   the error names the listener still serving. `start()` checks the policy
   first too: a refused config beside a running listener is that error, not
-  `already_running`.
+  `already_running`. A refusal no longer carries the refused `host` and
+  `port`, which read as a live bind beside `running: true`; its reason names
+  the host.
 
 - **A note on a Houdini exception no longer replaces it**
   (houdini-transactions-75y): rpyc copies a Houdini exception's `add_note` onto

@@ -155,6 +155,9 @@ class TestSecurityEnforcement:
         with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
             result = ask(listener, ListenerConfig(host="0.0.0.0", port=0))
 
+        # No host field beside running reads as the refused exposure, and a
+        # reload that stopped nothing carries no stop result.
+        assert set(result) == {"status", "error_type", "running", "message", "security"}
         assert result["status"] == "error"
         assert result["error_type"] == "security"
         assert result["security"]["allowed"] is False

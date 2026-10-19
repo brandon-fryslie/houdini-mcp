@@ -271,8 +271,8 @@ class SecurityPolicy:
 
 
 # [LAW:parse-dont-validate] the stamp a policy carries once the policy gate
-# (RemoteListener._admitted) has admitted it: only a stamped policy reaches a
-# bind, so a refused one cannot be bound by a caller that skipped the gate.
+# (RemoteListener._admitted) has admitted it. Only a stamped policy reaches a
+# bind: a caller that skips the gate fails the type check CI runs on this package.
 AdmittedPolicy = NewType("AdmittedPolicy", SecurityPolicy)
 
 
@@ -555,9 +555,8 @@ class RemoteListener:
         with self._lock:
             held = self._running
             standing = None if held is None else held.report()
-        # The host a refusal reports is the one refused; the message names the
-        # listener left as it was, so the refusal is never read as the exposure
-        # it refused.
+        # ``running`` is the listener left as it was, and the message names it; the
+        # refused host is only in the reason, so no field reads as the exposure refused.
         message = (
             policy.reason
             if standing is None
@@ -570,8 +569,6 @@ class RemoteListener:
             "status": "error",
             "error_type": "security",
             "running": standing is not None and standing["running"],
-            "host": config.host,
-            "port": config.port,
             "message": message,
             "security": policy.as_dict(),
         }
@@ -743,10 +740,11 @@ class RemoteListener:
     def reload(self, config: ListenerConfig, *, raise_on_policy: bool = False) -> dict[str, Any]:
         """Stop (if running) and start again with *config*. Idempotent restart.
 
-        The result is ``start()``'s, carrying ``stop()``'s under ``"stop"``: a
-        server that failed to close is reported, not replaced by the fresh start.
-        A config the policy refuses is refused as start() refuses it, before
-        anything is stopped: the running listener keeps serving.
+        For a config the policy admits, the result is ``start()``'s, carrying
+        ``stop()``'s under ``"stop"``: a server that failed to close is reported,
+        not replaced by the fresh start. A config it refuses is refused as start()
+        refuses it, before anything is stopped, so the result has no ``"stop"``
+        and the running listener keeps serving.
         """
         return self._admitted("reload", config, raise_on_policy, self._restart)
 
