@@ -234,7 +234,7 @@ class TestGetSummarizationStatus:
             "model": summarization.SUMMARIZATION_MODEL,
             "base_url": str(summarization.SUMMARIZATION_BASE_URL),
             "response_bound_bytes": RESPONSE_BOUND_BYTES,
-            "target_summary_tokens": summarization.TARGET_SUMMARY_TOKENS,
+            "summary_bytes": summarization.SUMMARY_BYTES,
         }
 
 
@@ -252,7 +252,7 @@ class TestComplete:
         assert request.headers["Authorization"] == f"Bearer {summarization.SUMMARIZATION_API_KEY}"
         assert json.loads(request.content) == {
             "model": summarization.SUMMARIZATION_MODEL,
-            "max_tokens": summarization.TARGET_SUMMARY_TOKENS * 2,
+            "max_tokens": summarization.SUMMARY_BYTES // 8,
             "messages": [{"role": "user", "content": "test prompt"}],
         }
 

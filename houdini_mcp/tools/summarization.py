@@ -56,14 +56,20 @@ SUMMARIZATION_MODEL = os.getenv(
 )
 SUMMARIZATION_ENABLED = os.getenv("SUMMARIZATION_ENABLED", "true").lower() == "true"
 
-# Target summary size
-TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
-
 AI_SUMMARY = "ai_summary"
 AI_SUMMARY_ERROR = "ai_summary_error"
 SUMMARIZED = "_summarized"
 SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, SUMMARIZED, AI_SUMMARY_ERROR})
 """The fields a summarized result carries: the summary, or why there is none."""
+
+SUMMARY_BYTES = RESPONSE_BOUND_BYTES // 2
+"""The most of a summary a pointer carries whole: the UTF-8 bytes of its line in the shorthand."""
+
+# [LAW:one-source-of-truth] The model writes within the room a pointer keeps for its
+# summary. A markdown triage summary measured 3.5 shorthand bytes a Qwen3 token
+# (2026-10-19), so at 8 a token a finished summary fits with room to spare.
+SUMMARY_TOKENS = SUMMARY_BYTES // 8
+"""The completion budget a summary is written in."""
 
 # Room for a cold model load (about 7.5s) plus a full-length summary.
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -310,7 +316,7 @@ async def _request(prompt: str) -> Summary | NoSummary:
                 "chat/completions",
                 json={
                     "model": SUMMARIZATION_MODEL,
-                    "max_tokens": TARGET_SUMMARY_TOKENS * 2,  # Allow some buffer
+                    "max_tokens": SUMMARY_TOKENS,
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
@@ -345,12 +351,12 @@ def get_summarization_status() -> dict[str, Any]:
         - base_url: The chat-completions server (OpenAI API base, ending in /v1)
         - response_bound_bytes: A result whose text is larger arrives as a file, and
           is summarized; a tool called with summarize=False is never summarized
-        - target_summary_tokens: Target size for generated summaries
+        - summary_bytes: The most of a summary that arrives whole beside a result's file
     """
     return {
         "enabled": SUMMARIZATION_ENABLED,
         "model": SUMMARIZATION_MODEL,
         "base_url": str(SUMMARIZATION_BASE_URL),
         "response_bound_bytes": RESPONSE_BOUND_BYTES,
-        "target_summary_tokens": TARGET_SUMMARY_TOKENS,
+        "summary_bytes": SUMMARY_BYTES,
     }

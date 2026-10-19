@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire, configuration)**: a large result's pointer fits the 16KB
+  bound whatever its strings hold, and carries its summary whole
+  (houdini-laws-spine-cqp.9ss). The bound counts bytes of shorthand, where a
+  newline is written `\n` and `é` takes two bytes, but each string was cut at
+  2048 characters, so a pointer could pass the bound and a summary over 2048
+  characters arrived cut. An `ai_summary` now keeps 8KB of the bound, and the
+  summarizer's budget, 1024 tokens, is set from the same 8KB. The pointer's
+  other strings share what is left, each cut to one length. `TARGET_SUMMARY_TOKENS`
+  is no longer read, and `get_summarization_status` serves `summary_bytes`
+  in place of `target_summary_tokens`.
+
 - **BREAKING (wire, configuration)**: a result is summarized exactly when it is
   too large to read inline, and so arrives as a file
   (houdini-laws-spine-cqp.a4a). `find_error_nodes`, `get_geo_summary` and
