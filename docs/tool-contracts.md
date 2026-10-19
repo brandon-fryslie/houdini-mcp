@@ -105,7 +105,7 @@ for that worker is the remedy, with `timeout`, a `warning`,
 
 Until that program ends, every scene-writing tool, another `execute_code`,
 `get_geo_summary` (which reads through a program in the same worker slot), and
-`render_viewport` and `render_quad_view` (which add a camera rig and a ROP for
+`render_viewport` and `render_quad_view` (which add a camera and a ROP for
 the call) return
 `kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
 worker; plain reads,
@@ -147,8 +147,8 @@ render_viewport(camera_path="/obj/cam1")  # Use camera_position or camera_rotati
 # Use resolution as a list
 render_viewport(resolution=[512, 512])
 
-# For camera control, use camera_position and/or camera_rotation
-render_viewport(camera_position=[10.0, 5.0, 15.0], camera_rotation=[-30, 45, 0])
+# For camera control, use camera_position and/or camera_rotation; the rotation aims it
+render_viewport(camera_position=[0.0, 0.0, 10.0], camera_rotation=[0, 0, 0])  # Facing the origin
 
 # Or use look_at to focus on a node
 render_viewport(look_at="/obj/geo1")
@@ -159,7 +159,7 @@ render_viewport(look_at="/obj/geo1")
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `camera_position` | `[float, float, float]` | [x, y, z] world position of the camera | Where `camera_rotation` looks at the center of what is framed, from far enough back to see all of it |
-| `camera_rotation` | `[float, float, float]` | [rx, ry, rz] world rotation of the camera in degrees, turned about X, then Y, then Z | [-30, 45, 0] |
+| `camera_rotation` | `[float, float, float]` | [rx, ry, rz] world rotation of the camera in degrees, turned about X, then Y, then Z. It alone sets where the camera looks, wherever the camera stands: [0, 0, 0] looks down -Z | [-30, 45, 0] |
 | `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, or a node outside any object, is an error | None |
 | `resolution` | `[int, int]`, each 64–4096 | [width, height] in pixels | [512, 512] |
 | `renderer` | enum | Exactly "opengl" or "karma" | "opengl" |

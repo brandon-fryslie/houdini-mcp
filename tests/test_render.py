@@ -1018,6 +1018,7 @@ class TestRenderFraming:
                     "camera_t": camera.parmTuple("t").eval(),
                     "camera_r": camera.parmTuple("r").eval(),
                     "camera_inputs": camera.inputs(),
+                    "camera_orders": (camera.parm("rOrd").eval(), camera.parm("xOrd").eval()),
                     "camera_res": (camera.parm("resx").eval(), camera.parm("resy").eval()),
                     "projection": camera.parm("projection").eval(),
                     "orthowidth": camera.parm("orthowidth").eval(),
@@ -1040,7 +1041,7 @@ class TestRenderFraming:
         assert result["bounding_box"] == self.BOX
         for frame in frames:
             assert _looks_at(frame, (5.0, 0.0, 0.0))
-            assert math.dist(frame["camera_t"], (5.0, 0.0, 0.0)) == self.DISTANCE
+            assert math.dist(frame["camera_t"], (5.0, 0.0, 0.0)) == pytest.approx(self.DISTANCE)
             assert frame["orthowidth"] == self.ORTHO_WIDTH
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -1081,7 +1082,7 @@ class TestRenderFraming:
         assert math.dist(frames[0]["camera_t"], (0.0, 0.0, 0.0)) == pytest.approx(19.4853, abs=1e-3)
         assert frames[0]["orthowidth"] == pytest.approx(12.0)
 
-    def test_quad_view_aims_the_one_rig_at_each_view(self, frames: list[dict[str, Any]]) -> None:
+    def test_quad_view_aims_the_one_camera_at_each_view(self, frames: list[dict[str, Any]]) -> None:
         from houdini_mcp.tools import render_quad_view
 
         result = render_quad_view(host="localhost", port=18811)
@@ -1107,6 +1108,51 @@ class TestRenderFraming:
         assert [f["projection"] for f in frames] == [0, 0, 0, 0]
         assert [v["orthographic"] for v in result["views"]] == [False] * 4
 
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_the_camera_turns_and_moves_in_the_orders_its_pose_is_stated_in(
+        self, frames: list[dict[str, Any]], tool: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A studio's own defaults for a camera's rotate and transform orders do not move
+        it: the render sets the orders camera_position and camera_rotation are stated in."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import _TYPE_DEFAULT_PARAMS
+
+        monkeypatch.setitem(
+            _TYPE_DEFAULT_PARAMS,
+            "cam",
+            {**_TYPE_DEFAULT_PARAMS["cam"], "rOrd": "zxy", "xOrd": "trs"},
+        )
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert {f["camera_orders"] for f in frames} == {("xyz", "srt")}
+
+    def test_each_aim_logs_where_the_camera_stands_and_how_it_is_turned(
+        self, frames: list[dict[str, Any]], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from houdini_mcp.tools import render_quad_view, render_viewport
+
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.rendering"):
+            render_viewport(
+                camera_position=[1.0, 2.0, 3.0],
+                camera_rotation=[20.0, -130.0, 35.0],
+                host="localhost",
+                port=18811,
+            )
+            render_quad_view(host="localhost", port=18811)
+
+        assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("Camera ")] == [
+            "Camera /obj/_mcp_render_cam: t=(1.0, 2.0, 3.0) r=(20.0, -130.0, 35.0)"
+            " orthographic=False",
+            *(
+                f"Camera /obj/_mcp_quad_render_cam: t={f['camera_t']} r={f['camera_r']}"
+                f" orthographic={f['projection'] == 1}"
+                for f in frames[1:]
+            ),
+        ]
+        assert len(frames) == 5
+
     def test_viewport_aims_isometric_when_no_rotation_is_asked_for(
         self, frames: list[dict[str, Any]]
     ) -> None:
@@ -1130,7 +1176,7 @@ class TestRenderFraming:
         assert result["status"] == "success", result
         assert frames[0]["camera_r"] == rotation
         assert _looks_at(frames[0], (5.0, 0.0, 0.0))
-        assert math.dist(frames[0]["camera_t"], (5.0, 0.0, 0.0)) == self.DISTANCE
+        assert math.dist(frames[0]["camera_t"], (5.0, 0.0, 0.0)) == pytest.approx(self.DISTANCE)
         assert frames[0]["projection"] == 1
         assert frames[0]["orthowidth"] == self.ORTHO_WIDTH
 

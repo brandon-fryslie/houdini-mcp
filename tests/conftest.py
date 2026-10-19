@@ -124,6 +124,8 @@ _TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     "cam": {
         "t": [0.0, 0.0, 0.0],
         "r": [0.0, 0.0, 0.0],
+        "rOrd": "xyz",
+        "xOrd": "srt",
         "resx": 1280,
         "resy": 720,
         "projection": 0,

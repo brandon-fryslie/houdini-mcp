@@ -76,7 +76,7 @@ class ToolPolicy:
 
 _READ = ToolPolicy(None, SceneAccess.SHARED)
 # Needs the scene to itself for the call and leaves it as found: a read through a
-# program in the one worker slot, or a render that adds a camera rig and a ROP
+# program in the one worker slot, or a render that adds a camera and a ROP
 # for the call and removes them before returning.
 _HOLDS_SCENE = ToolPolicy(None, SceneAccess.EXCLUSIVE)
 _UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, SceneAccess.EXCLUSIVE)

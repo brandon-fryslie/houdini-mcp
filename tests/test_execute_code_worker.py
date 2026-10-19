@@ -85,7 +85,7 @@ class TestWorkerBlocksMutation:
 
     @pytest.mark.parametrize("render", [render_viewport, render_quad_view])
     async def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render):
-        """A render tool adds a camera rig and a ROP to the scene for the call, so it
+        """A render tool adds a camera and a ROP to the scene for the call, so it
         must not run beside a program still mutating it (TOOL_POLICIES says why)."""
         _time_out(stalled_program)
 

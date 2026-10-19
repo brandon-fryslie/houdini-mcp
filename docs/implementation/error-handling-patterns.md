@@ -209,7 +209,7 @@ When it times out, the program keeps running with its undo group open, and
 ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (see
 `TOOL_POLICIES` in `tools/transactions.py`: the scene writers,
 `get_geo_summary`, which reads through a program in the same worker slot, and
-the render tools, which add a camera rig and a ROP for the call) is refused at
+the render tools, which add a camera and a ROP for the call) is refused at
 the tool boundary:
 
 ```python

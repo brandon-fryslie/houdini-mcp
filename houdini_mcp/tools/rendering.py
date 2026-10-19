@@ -191,9 +191,9 @@ class Framing:
     def viewpoint(self, rotation: Vec3) -> Vec3:
         """Where a camera turned to ``rotation`` stands to look at the center from the distance.
 
-        It backs away along its own +Z. Houdini turns an object about world X,
-        then Y, then Z (rotate order xyz, every new object's default), which
-        carries +Z to the direction below.
+        It backs away along its own +Z. The camera turns about world X, then Y,
+        then Z (rotate order xyz, which _build_camera sets), which carries +Z to
+        the direction below.
         """
         rx, ry, rz = (math.radians(angle) for angle in rotation)
         back = (
@@ -372,11 +372,15 @@ def _prepare(
 def _build_camera(create: Callable[[Any, str, str], Any], prepared: _Prepared, prefix: str) -> Any:
     """A camera of no parent at the prepared resolution.
 
-    [LAW:one-source-of-truth] with nothing above it, the camera's own t and r
-    are its world position and rotation, so the values a caller names are the
-    values the scene holds.
+    [LAW:one-source-of-truth] with nothing above it, turned about X, then Y,
+    then Z, and moved after it turns, the camera's own t and r are its world
+    position and rotation, so the values a caller names are the values the
+    scene holds. The orders are set, not trusted to Houdini's defaults, which a
+    studio can change.
     """
     camera = create(prepared.obj, "cam", f"{prefix}render_cam")
+    camera.parm("rOrd").set("xyz")
+    camera.parm("xOrd").set("srt")
     camera.parm("resx").set(prepared.width)
     camera.parm("resy").set(prepared.height)
     return camera
@@ -392,6 +396,9 @@ def _aim(camera: Any, position: Vec3, rotation: Vec3, orthographic: bool, framin
     camera.parmTuple("r").set(list(rotation))
     camera.parm("projection").set(1 if orthographic else 0)
     camera.parm("orthowidth").set(framing.ortho_width)
+    logger.info(
+        "Camera %s: t=%s r=%s orthographic=%s", camera.path(), position, rotation, orthographic
+    )
 
 
 def _build_rop(
@@ -481,7 +488,8 @@ def render_viewport(
             camera_rotation looks at the center of what is framed, from far enough
             back to see all of it)
         camera_rotation: [rx, ry, rz] world rotation of the camera in degrees, turned
-            about X, then Y, then Z; isometric by default
+            about X, then Y, then Z. It alone sets where the camera looks, wherever the
+            camera stands: [0, 0, 0] looks down -Z. Isometric by default
         look_at: Path of an object or SOP to frame instead of the scene; one with no
             geometry is framed where it stands. An unknown path, or a node outside any
             object, is an error
@@ -504,6 +512,7 @@ def render_viewport(
         render_viewport()  # Auto-frame scene with isometric view
         render_viewport(camera_rotation=[0, 0, 0])  # Front view
         render_viewport(camera_rotation=[-90, 0, 0])  # Top view
+        render_viewport(camera_position=[0, 0, 10], camera_rotation=[0, 0, 0])  # Facing the origin
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
