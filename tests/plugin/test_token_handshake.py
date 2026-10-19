@@ -21,6 +21,7 @@ from houdini_mcp_plugin.listener import ListenerConfig, RemoteListener
 from rpyc.utils.server import ThreadedServer
 
 from houdini_mcp import connection
+from tests.conftest import closing_once_served
 from tests.plugin.conftest import started
 
 TOKEN = "hunter2"
@@ -37,11 +38,9 @@ def _serve(authenticator: handshake.Authenticator | None) -> Iterator[int]:
     server._listen()  # accepting before the thread exists, as the plugin does
     thread = threading.Thread(target=server.start, daemon=True)
     thread.start()
-    try:
+    with closing_once_served(server):
         yield server.port
-    finally:
-        server.close()
-        thread.join(timeout=2)
+    thread.join(timeout=2)
 
 
 @pytest.fixture

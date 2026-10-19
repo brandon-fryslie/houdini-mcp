@@ -1,5 +1,6 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
+import contextlib
 import copy
 import logging
 import threading
@@ -885,8 +886,8 @@ def await_clients_served(server: Server, timeout: float = 5.0) -> None:
     rpyc serves each client on its own thread, which drops the client from
     ``server.clients`` once it has read the client's close. ``server.close()``
     before that closes the socket under the thread's poll, and the thread
-    raises. So a test closes its client, waits here, and only then closes the
-    server.
+    raises. So the server closes only after this returns, the order
+    ``closing_once_served`` keeps for a server the test owns.
 
     [LAW:no-ambient-temporal-coupling] the condition is this server's own
     state, so no other test's server or thread can hold it up.
@@ -897,6 +898,17 @@ def await_clients_served(server: Server, timeout: float = 5.0) -> None:
             f"rpyc server still serving {len(server.clients)} client(s)"
         )
         time.sleep(0.01)
+
+
+@contextlib.contextmanager
+def closing_once_served(server: Server) -> Generator[Server, None, None]:
+    """``contextlib.closing`` for a real rpyc server: on exit, on every path, it
+    closes ``server`` once ``server`` has served every client it accepted."""
+    with contextlib.closing(server):
+        try:
+            yield server
+        finally:
+            await_clients_served(server)
 
 
 class MockEnumValue:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,7 @@ from houdini_mcp.tools.pane_screenshot import (
     pane_type_member,
     pane_type_names,
 )
-from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, await_clients_served
+from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, closing_once_served
 
 MOCK_PANE_TYPES = ["NetworkEditor", "Parm", "SceneViewer"]
 
@@ -40,26 +39,23 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
         logger=logging.getLogger("test_pane_screenshot"),
     )
     server._start_in_thread()
-    # closing(): the server is closed on every path, and only after the wait
-    # has seen it finish serving the client.
-    with contextlib.closing(server):
-        try:
-            with rpyc.classic.connect("127.0.0.1", server.port) as conn:
-                conn.execute(
-                    "class EnumValue: pass\n"
-                    "class paneTabType:\n"
-                    "    NetworkEditor = EnumValue()\n"
-                    "    Parm = EnumValue()\n"
-                    "    thisown = property(lambda self: True)\n"
-                )
-                hou = SimpleNamespace(
-                    EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
-                )
-                assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
-                assert pane_type_member(hou, "ChannelEditr") is None
-                assert pane_type_member(hou, "thisown") is None
-        finally:
-            await_clients_served(server)
+    with (
+        closing_once_served(server),
+        rpyc.classic.connect("127.0.0.1", server.port) as conn,
+    ):
+        conn.execute(
+            "class EnumValue: pass\n"
+            "class paneTabType:\n"
+            "    NetworkEditor = EnumValue()\n"
+            "    Parm = EnumValue()\n"
+            "    thisown = property(lambda self: True)\n"
+        )
+        hou = SimpleNamespace(
+            EnumValue=conn.namespace["EnumValue"], paneTabType=conn.namespace["paneTabType"]
+        )
+        assert pane_type_names(hou) == ["NetworkEditor", "Parm"]
+        assert pane_type_member(hou, "ChannelEditr") is None
+        assert pane_type_member(hou, "thisown") is None
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:
