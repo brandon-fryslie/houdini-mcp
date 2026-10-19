@@ -483,6 +483,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
+  it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
+  because MCP is served at `/mcp`. README and examples/README.md now give
+  `http://localhost:3055/mcp`. The server no longer logs its own pathless
+  `Starting Houdini MCP Server on http://0.0.0.0:3055`; fastmcp's startup line,
+  which names the path, stays.
+
 - **`get_houdini_help` names the class on a hou page** (houdini-tuneup-ef3.avb):
   a `python_hou` title came back as ` - class`, because the parser read only the
   h1's first text node and the name opens with a `hou.` supertitle span. The

@@ -162,7 +162,7 @@ docker compose up -d
 {
   "mcpServers": {
     "houdini": {
-      "url": "http://localhost:3055"
+      "url": "http://localhost:3055/mcp"
     }
   }
 }
@@ -509,7 +509,7 @@ Add to your MCP client configuration:
 {
   "mcpServers": {
     "houdini": {
-      "url": "http://localhost:3055"
+      "url": "http://localhost:3055/mcp"
     }
   }
 }

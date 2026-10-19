@@ -1,4 +1,5 @@
-"""running_listener's lifecycle, driven by stand-in children that speak its readiness protocol."""
+"""running_listener's lifecycle, driven by stand-in children that speak its readiness
+protocol, and the MCP server child that serves under it."""
 
 import logging
 import os
@@ -8,13 +9,15 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
-from houdini_mcp.settings import InvalidSetting, Target
+from houdini_mcp.settings import InvalidSetting
 from tests.live_houdini import (
     SERVE_UNTIL_STDIN_CLOSES,
     Command,
-    HoudiniDidNotStart,
+    ListenerDidNotStart,
+    houdini_mcp_over_http,
     hython_executable,
     running_listener,
     signal_group,
@@ -32,9 +35,12 @@ def stand_in(pid_file: Path, body: str) -> Command:
     ]
 
 
-def group_gone(pid_file: Path) -> bool:
-    """Whether the child's process group has no process left in it, within a few seconds."""
-    pgid = int(pid_file.read_text())
+def recorded_pid(pid_file: Path) -> int:
+    return int(pid_file.read_text())
+
+
+def group_gone(pgid: int) -> bool:
+    """Whether process group ``pgid`` has no process left in it, within a few seconds."""
     stop_at = time.monotonic() + 5
     while time.monotonic() < stop_at:
         if not signal_group(pgid, 0):
@@ -55,10 +61,10 @@ def test_yields_the_reported_port_and_ends_the_whole_group(
 
     with running_listener(
         stand_in(pid_file, REPORTS_THEN_SERVES), os.environ, tmp_path / "log"
-    ) as target:
-        assert target == Target(host="127.0.0.1", port=4242)
+    ) as port:
+        assert port == 4242
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
     ready, stopped = (r.getMessage() for r in caplog.records)
     assert "port=4242 ready in" in ready
     assert "exit=0" in stopped
@@ -67,8 +73,8 @@ def test_yields_the_reported_port_and_ends_the_whole_group(
 def test_a_port_reported_just_before_the_child_exits_is_still_the_report(tmp_path: Path) -> None:
     body = "os.write(fd, b'4242\\n')\n"
 
-    with running_listener(stand_in(tmp_path / "pid", body), os.environ, tmp_path / "log") as target:
-        assert target.port == 4242
+    with running_listener(stand_in(tmp_path / "pid", body), os.environ, tmp_path / "log") as port:
+        assert port == 4242
 
 
 def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:
@@ -80,7 +86,7 @@ def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:
     ):
         raise AssertionError("a failing test")
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
 
 
 def test_a_child_that_does_not_end_when_stdin_closes_is_killed(
@@ -93,7 +99,7 @@ def test_a_child_that_does_not_end_when_stdin_closes_is_killed(
     with running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", grace=0.5):
         pass
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
     assert "exit=-9" in caplog.records[-1].getMessage()
 
 
@@ -125,14 +131,14 @@ def test_a_child_that_reports_no_port_raises_with_what_it_did_and_its_log(
     pid_file = tmp_path / "pid"
 
     with (
-        pytest.raises(HoudiniDidNotStart, match=rf"{raised}(.|\n)*bind"),
+        pytest.raises(ListenerDidNotStart, match=rf"{raised}(.|\n)*bind"),
         running_listener(
             stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=30, grace=0.5
         ),
     ):
         pytest.fail("a child that reported no port was yielded")
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
 
 
 def test_a_child_that_never_reports_raises_at_the_deadline(tmp_path: Path) -> None:
@@ -141,14 +147,14 @@ def test_a_child_that_never_reports_raises_at_the_deadline(tmp_path: Path) -> No
 
     # Long enough for a loaded runner to start Python and print before the deadline.
     with (
-        pytest.raises(HoudiniDidNotStart, match=r"no port within 3s(.|\n)*still starting"),
+        pytest.raises(ListenerDidNotStart, match=r"no port within 3s(.|\n)*still starting"),
         running_listener(
             stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=3, grace=0.5
         ),
     ):
         pytest.fail("a child that reported no port was yielded")
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
 
 
 def test_hython_names_hython_when_it_names_no_executable(tmp_path: Path) -> None:
@@ -189,4 +195,63 @@ def test_the_group_ends_when_the_process_that_started_it_is_killed(tmp_path: Pat
         runner.send_signal(signal.SIGKILL)
         runner.wait()
 
-    assert group_gone(pid_file)
+    assert group_gone(recorded_pid(pid_file))
+
+
+HEALTHY = {"status": "healthy", "service": "houdini-mcp"}
+
+
+def test_the_mcp_server_serves_at_the_port_it_reports_until_the_block_exits(
+    tmp_path: Path,
+) -> None:
+    env = {"HOUDINI_MCP_RESULTS_DIR": str(tmp_path / "results")}
+
+    with running_listener(houdini_mcp_over_http(tmp_path), env, tmp_path / "log") as port:
+        assert httpx.get(f"http://localhost:{port}/health").json() == HEALTHY
+
+    with pytest.raises(httpx.ConnectError):
+        httpx.get(f"http://localhost:{port}/health")
+
+
+# The process that runs the live tests, killed before its server serves: the server must still end.
+_STARTS_THE_SERVER = """\
+import sys
+from pathlib import Path
+from tests.live_houdini import houdini_mcp_over_http, running_listener
+workdir = Path(sys.argv[1])
+env = {"HOUDINI_MCP_RESULTS_DIR": str(workdir / "results")}
+with running_listener(houdini_mcp_over_http(workdir), env, workdir / "log"):
+    print("ready", flush=True)
+    sys.stdin.read()
+"""
+
+
+def child_of(pid: int) -> int:
+    """The one process ``pid`` started, as soon as it exists."""
+    stop_at = time.monotonic() + 10
+    while time.monotonic() < stop_at:
+        found = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
+        if found.stdout:
+            return int(found.stdout)
+        time.sleep(0.01)
+    raise AssertionError(f"pid {pid} started no process within 10s")
+
+
+def test_the_mcp_server_ends_when_the_process_that_started_it_is_killed_before_it_serves(
+    tmp_path: Path,
+) -> None:
+    starter = subprocess.Popen(
+        [sys.executable, "-c", _STARTS_THE_SERVER, str(tmp_path)],
+        cwd=Path(__file__).parents[1],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    try:
+        server = child_of(starter.pid)
+    finally:
+        starter.send_signal(signal.SIGKILL)
+        printed, _ = starter.communicate()
+
+    # The kill lands milliseconds after the spawn; the server takes about a second to serve.
+    assert printed == b"", "the server served before the kill: this test no longer kills it early"
+    assert group_gone(server)
