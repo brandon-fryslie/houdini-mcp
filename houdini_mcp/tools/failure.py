@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import traceback
 from collections.abc import Sequence, Sized
-from typing import Annotated, Any, Literal, NamedTuple, get_args
+from typing import Annotated, Any, Literal, NamedTuple, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -35,6 +35,7 @@ __all__ = [
     "ToolFailure",
     "FAILURE",
     "FAILURE_FIELDS",
+    "CLOSED_FIELDS",
     "FailureKind",
     "Retry",
     "ConnectionUnavailableFailure",
@@ -169,10 +170,18 @@ ToolFailure = Annotated[
     Field(discriminator="kind"),
 ]
 
-FAILURE_FIELDS: frozenset[str] = frozenset(
-    field for arm in get_args(get_args(ToolFailure)[0]) for field in arm.model_fields
-)
+ARMS: tuple[type[_Failure], ...] = get_args(get_args(ToolFailure)[0])
+
+FAILURE_FIELDS: frozenset[str] = frozenset(field for arm in ARMS for field in arm.model_fields)
 """Every field some failure arm declares: what a failure cannot lose and still parse."""
+
+CLOSED_FIELDS: frozenset[str] = frozenset(
+    field
+    for arm in ARMS
+    for field, info in arm.model_fields.items()
+    if get_origin(info.annotation) is Literal
+)
+"""Every failure field whose value is one of a closed set: cut short, it would not parse."""
 
 FAILURE: TypeAdapter[Any] = TypeAdapter(ToolFailure)
 """Parses a response back into exactly one arm, or refuses it. This is the test net."""

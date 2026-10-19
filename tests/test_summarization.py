@@ -252,7 +252,7 @@ class TestComplete:
         assert request.headers["Authorization"] == f"Bearer {summarization.SUMMARIZATION_API_KEY}"
         assert json.loads(request.content) == {
             "model": summarization.SUMMARIZATION_MODEL,
-            "max_tokens": summarization.SUMMARY_BYTES // 8,
+            "max_tokens": summarization.SUMMARY_TOKENS,
             "messages": [{"role": "user", "content": "test prompt"}],
         }
 

@@ -16,9 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2048 characters, so a pointer could pass the bound and a summary over 2048
   characters arrived cut. An `ai_summary` now keeps 8KB of the bound, and the
   summarizer's budget, 1024 tokens, is set from the same 8KB. The pointer's
-  other strings share what is left, each cut to one length. `TARGET_SUMMARY_TOKENS`
-  is no longer read, and `get_summarization_status` serves `summary_bytes`
-  in place of `target_summary_tokens`.
+  other strings share what is left, each cut to one length; a failure's `status`,
+  `kind` and `retry` are never cut. A pointer that cannot fit even then, held
+  past the bound by a field that is not a string, is an `operation_failed`
+  saying the tool ran, with the pointer's `result_file`, `result_uri` and
+  `result_bytes`. `TARGET_SUMMARY_TOKENS` is no longer read, and
+  `get_summarization_status` serves `summary_bytes` in place of
+  `target_summary_tokens`.
 
 - **BREAKING (wire, configuration)**: a result is summarized exactly when it is
   too large to read inline, and so arrives as a file

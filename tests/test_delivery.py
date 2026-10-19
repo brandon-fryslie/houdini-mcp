@@ -28,6 +28,7 @@ from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading
 from houdini_mcp.results import RESULTS_BUDGET_BYTES, Results
 from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
+from houdini_mcp.tools.failure import CLOSED_FIELDS
 from houdini_mcp.tools.summarization import SUMMARY_BYTES
 from tests.shorthand_reader import read
 
@@ -320,7 +321,7 @@ class TestDeliver:
         """The summary is read in place of the file; every other string gives way to it."""
         summary = at_its_limit(unit)
         result = {
-            **dict.fromkeys(delivery.ENVELOPE_FIELDS, unit * 20_000),
+            **dict.fromkeys(delivery.ENVELOPE_FIELDS - CLOSED_FIELDS, unit * 20_000),
             "status": "success",
             "ai_summary": summary,
         }
@@ -349,23 +350,47 @@ class TestDeliver:
             st.text(alphabet='ab é"\n\x01,~[{🜁', max_size=300),
             min_size=1,
         ),
-        # Room for all three at their shortest: a refusal is the test below.
-        st.integers(min_value=200, max_value=1500),
+        # Room past what the strings take at their shortest: a refusal is the test below.
+        st.integers(min_value=0, max_value=1500),
     )
     def test_strings_are_cut_to_the_longest_length_that_fits(
-        self, fields: dict[str, str], room: int
+        self, fields: dict[str, str], spare: int
     ) -> None:
+        shortest = {f: delivery.trimmed(v, delivery.SHORTEST) for f, v in fields.items()}
+        room = len(Reading.of(shortest).encoded) + spare
+
         got = delivery.fitted(fields, set(fields), room)
 
         assert len(Reading.of(got).encoded) <= room
         lengths = {len(v) for v in got.values() if v.endswith(delivery.TRIMMED)}
         assert len(lengths) <= 1
-        longer = {f: delivery.trimmed(v, max(lengths, default=0) + 1) for f, v in fields.items()}
-        assert lengths == set() or len(Reading.of(longer).encoded) > room
+        for length in lengths:
+            longer = {f: delivery.trimmed(v, length + 1) for f, v in fields.items()}
+            assert len(Reading.of(longer).encoded) > room
 
     def test_fields_past_the_room_with_every_string_cut_are_refused(self) -> None:
         with pytest.raises(ValueError, match="past 10 bytes with every string cut"):
             delivery.fitted({"message": "x" * 100}, {"message"}, 10)
+
+    def test_a_pointer_that_cannot_fit_fails_with_where_the_result_is_kept(
+        self, results: Results, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Only strings are cut, so a list under an envelope field can keep any pointer past the bound."""
+        result = {"status": "success", "warning": ["x" * 100] * 200}
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            failure = sent("list_children", result, results)
+
+        parsed = FAILURE.validate_python(failure)
+        assert parsed.kind == "operation_failed"
+        assert parsed.retry == "none"
+        assert parsed.message.startswith("list_children ran, and its ")
+        assert parsed.message.endswith(f"past {RESPONSE_BOUND_BYTES} bytes with every string cut")
+        assert whole(failure) == result
+        assert any(
+            m.startswith("list_children failed (operation_failed): list_children ran")
+            for m in caplog.messages
+        )
 
     def test_a_large_page_keeps_how_to_fetch_the_next_one(self, results: Results) -> None:
         page = {

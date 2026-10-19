@@ -22,7 +22,7 @@ from . import shorthand
 from .reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
 from .results import RETENTION, Results
 from .tools._common import PAGING_FIELDS
-from .tools.failure import FAILURE_FIELDS, OperationFailed, failure_response
+from .tools.failure import CLOSED_FIELDS, FAILURE_FIELDS, OperationFailed, failure_response
 from .tools.summarization import AI_SUMMARY, SUMMARY_BYTES, SUMMARY_FIELDS
 
 logger = logging.getLogger("houdini_mcp.delivery")
@@ -82,7 +82,8 @@ def fitted(fields: dict[str, Any], cut: Collection[str], room: int) -> dict[str,
     longest = max((len(v) for f, v in fields.items() if f in cut and isinstance(v, str)), default=0)
     # A string never takes more than ``length`` characters, and never fewer bytes as
     # ``length`` grows, so the text grows with it and the search finds the longest.
-    lengths = range(SHORTEST, max(longest, SHORTEST) + 1)
+    # Each character takes a byte at least, so no length past ``room`` fits.
+    lengths = range(SHORTEST, max(min(longest, room), SHORTEST) + 1)
     fitting = bisect.bisect_left(lengths, True, key=over)
     if fitting == 0:
         raise ValueError(f"{sorted(fields)} are past {room} bytes with every string cut")
@@ -115,7 +116,7 @@ def reply(sent: dict[str, Any]) -> ToolResult:
 
 
 def stored(tool: str, reading: Reading, results: Results) -> dict[str, Any]:
-    """The pointer to ``reading``'s text written whole to a file, or the failure that says it could not be."""
+    """The pointer to ``reading``'s text written whole to a file, or the failure that says why there is none."""
     size = len(reading.encoded)
     try:
         kept = results.keep(tool, reading.encoded)
@@ -127,22 +128,30 @@ def stored(tool: str, reading: Reading, results: Results) -> dict[str, Any]:
         )
         return failure_response(unwritten, tool)
     envelope = {f: value for f, value in reading.sent.items() if f in ENVELOPE_FIELDS}
+    location = {
+        "result_file": str(kept.path),
+        "result_uri": RESULT_URI.format(name=kept.path.name),
+        "result_bytes": size,
+    }
     # [LAW:one-source-of-truth] A summary is read in place of the file, so it keeps the
-    # room it was written for; every other string shares what the rest leaves.
+    # room it was written for; every other string shares what the rest leaves, but a
+    # failure's closed fields, which would not parse cut.
     summary = fitted(
         {f: v for f, v in envelope.items() if f == AI_SUMMARY}, {AI_SUMMARY}, SUMMARY_BYTES
     )
-    pointer = fitted(
-        {
-            **envelope,
-            **summary,
-            "result_file": str(kept.path),
-            "result_uri": RESULT_URI.format(name=kept.path.name),
-            "result_bytes": size,
-        },
-        ENVELOPE_FIELDS - {AI_SUMMARY},
-        RESPONSE_BOUND_BYTES,
-    )
+    try:
+        pointer = fitted(
+            {**envelope, **summary, **location},
+            ENVELOPE_FIELDS - CLOSED_FIELDS - {AI_SUMMARY},
+            RESPONSE_BOUND_BYTES,
+        )
+    except ValueError as e:
+        # As when it cannot be stored: the caller must learn the tool ran, and here
+        # where its result is kept.
+        unsent = OperationFailed(
+            f"{tool} ran, and its {size}-byte result was kept, but {e}", **location
+        )
+        return failure_response(unsent, tool)
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s; pointer %d bytes, "
         "cut %s; removed %d older results, %d bytes; %d past the budget not yet removed",
