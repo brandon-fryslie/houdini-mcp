@@ -386,18 +386,32 @@ def _build_camera(create: Callable[[Any, str, str], Any], prepared: _Prepared, p
     return camera
 
 
-def _aim(camera: Any, position: Vec3, rotation: Vec3, orthographic: bool, framing: Framing) -> None:
+def _aim(
+    camera: Any,
+    camera_position: Vec3 | None,
+    rotation: Vec3,
+    orthographic: bool,
+    framing: Framing,
+) -> None:
     """Stand the camera at a world position, turned to a world rotation.
 
+    [LAW:single-enforcer] an omitted position is resolved here, for every render,
+    to where the rotation looks at the framed center.
     [LAW:dataflow-not-control-flow] both projections are configured every time;
     the projection parm alone decides which one renders.
     """
+    position = framing.viewpoint(rotation) if camera_position is None else camera_position
     camera.parmTuple("t").set(list(position))
     camera.parmTuple("r").set(list(rotation))
     camera.parm("projection").set(1 if orthographic else 0)
     camera.parm("orthowidth").set(framing.ortho_width)
     logger.info(
-        "Camera %s: t=%s r=%s orthographic=%s", camera.path(), position, rotation, orthographic
+        "Camera %s: t=%s r=%s orthographic=%s camera_position=%s",
+        camera.path(),
+        position,
+        rotation,
+        orthographic,
+        camera_position,
     )
 
 
@@ -506,7 +520,8 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - bounding_box: The world-space box that was framed, when geometry was
+        - bounding_box: The world-space box around what look_at or auto_frame chose,
+          when it has geometry
 
     Examples:
         render_viewport()  # Auto-frame scene with isometric view
@@ -532,12 +547,10 @@ def render_viewport(
         framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
     else:
         framing = Framing(bounds=None)
-    position = framing.viewpoint(camera_rotation) if camera_position is None else camera_position
-
     with _temporary_nodes() as create:
         camera = _build_camera(create, prepared, "_mcp_")
         rop = _build_rop(create, prepared, "_mcp_", camera)
-        _aim(camera, position, camera_rotation, orthographic, framing)
+        _aim(camera, camera_position, camera_rotation, orthographic, framing)
         image = _render_picture(rop, prepared, output_format)
 
     result: dict[str, Any] = {
@@ -625,7 +638,7 @@ def render_quad_view(
         for name, rotation, is_ortho in views:
             view: dict[str, Any] = {"name": name, "rotation": list(rotation)}
             try:
-                _aim(camera, framing.viewpoint(rotation), rotation, is_ortho, framing)
+                _aim(camera, None, rotation, is_ortho, framing)
                 image = _render_picture(rop, prepared, output_format)
             except OperationFailed as e:
                 # A view owns only Houdini's failure to produce its picture, which
