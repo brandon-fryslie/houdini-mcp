@@ -18,14 +18,18 @@ from typing import Any
 
 import pytest
 from fastmcp import Client, FastMCP
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from houdini_mcp import delivery
 from houdini_mcp import results as store
 from houdini_mcp.delivery import deliver
-from houdini_mcp.reading import RESPONSE_BOUND_BYTES
+from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading
 from houdini_mcp.results import RESULTS_BUDGET_BYTES, Results
 from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
+from houdini_mcp.tools.failure import CLOSED_FIELDS
+from houdini_mcp.tools.summarization import SUMMARY_BYTES
 from tests.shorthand_reader import read
 
 
@@ -50,6 +54,22 @@ def whole(pointer: dict[str, Any]) -> dict[str, Any]:
     text = pathlib.Path(pointer["result_file"]).read_text(encoding="utf-8")
     assert len(text.encode("utf-8")) == pointer["result_bytes"]
     return read(text)
+
+
+def at_its_limit(unit: str) -> str:
+    """The longest run of ``unit`` whose line in the shorthand fits the room a pointer keeps for a summary."""
+
+    def line(count: int) -> int:
+        return len(render({"ai_summary": unit * count}).encode())
+
+    count = 1 + (SUMMARY_BYTES - line(1)) // (line(2) - line(1))
+    assert line(count) <= SUMMARY_BYTES < line(count + 1)
+    return unit * count
+
+
+# Every character the shorthand writes in more bytes than one: a quote and a newline
+# are escaped, a control character is \u0001, and é is two bytes of UTF-8.
+COSTLY = '"\n\x01é,' * 5000
 
 
 def sent(tool: str, result: dict[str, Any], results: Results) -> dict[str, Any]:
@@ -266,10 +286,111 @@ class TestDeliver:
 
         pointer = sent("execute_code", failure, results)
 
-        assert len(render(pointer).encode()) <= RESPONSE_BOUND_BYTES
+        assert Reading.of(pointer).fits
         parsed = FAILURE.validate_python(pointer)
-        assert parsed.message == failure["message"][: delivery.PREVIEW_CHARS] + delivery.TRIMMED
+        assert parsed.message.endswith(delivery.TRIMMED)
+        assert failure["message"].startswith(parsed.message.removesuffix(delivery.TRIMMED))
         assert whole(pointer) == failure
+
+    def test_a_failure_with_every_string_long_fits_the_bound(
+        self, results: Results, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        failure = {
+            **dict.fromkeys(delivery.ENVELOPE_FIELDS, COSTLY),
+            "status": "error",
+            "kind": "connection_mismatch",
+            "retry": "none",
+        }
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.delivery"):
+            pointer = sent("connect", failure, results)
+
+        assert Reading.of(pointer).fits
+        parsed = FAILURE.validate_python(pointer)
+        assert parsed.kind == "connection_mismatch"
+        assert COSTLY.startswith(parsed.message.removesuffix(delivery.TRIMMED))
+        assert whole(pointer) == failure
+        cut = sorted(delivery.ENVELOPE_FIELDS - {"status", "kind", "retry"})
+        size = len(Reading.of(pointer).encoded)
+        assert any(f"; pointer {size} bytes, cut {cut}; " in m for m in caplog.messages)
+
+    @pytest.mark.parametrize("unit", ["\n", "é", "\x01"])
+    def test_a_summary_at_its_limit_arrives_whole_beside_long_strings(
+        self, results: Results, unit: str
+    ) -> None:
+        """The summary is read in place of the file; every other string gives way to it."""
+        summary = at_its_limit(unit)
+        result = {
+            **dict.fromkeys(delivery.ENVELOPE_FIELDS - CLOSED_FIELDS, unit * 20_000),
+            "status": "success",
+            "ai_summary": summary,
+        }
+
+        pointer = sent("find_error_nodes", result, results)
+
+        assert Reading.of(pointer).fits
+        assert pointer["ai_summary"] == summary
+        assert whole(pointer) == result
+
+    def test_a_summary_past_its_limit_is_cut_and_whole_in_the_file(self, results: Results) -> None:
+        summary = at_its_limit("\n") + "\n"
+        result = {"status": "success", "structure": ["x" * 100] * 400, "ai_summary": summary}
+
+        pointer = sent("serialize_scene", result, results)
+
+        assert summary.startswith(pointer["ai_summary"].removesuffix(delivery.TRIMMED))
+        assert pointer["ai_summary"].endswith(delivery.TRIMMED)
+        assert len(render({"ai_summary": pointer["ai_summary"]}).encode()) <= SUMMARY_BYTES
+        assert whole(pointer)["ai_summary"] == summary
+
+    @settings(max_examples=300, deadline=None)
+    @given(
+        st.dictionaries(
+            st.sampled_from(["message", "target", "warning"]),
+            st.text(alphabet='ab é"\n\x01,~[{🜁', max_size=300),
+            min_size=1,
+        ),
+        # Room past what the strings take at their shortest: a refusal is the test below.
+        st.integers(min_value=0, max_value=1500),
+    )
+    def test_strings_are_cut_to_the_longest_length_that_fits(
+        self, fields: dict[str, str], spare: int
+    ) -> None:
+        shortest = {f: delivery.trimmed(v, delivery.SHORTEST) for f, v in fields.items()}
+        room = len(Reading.of(shortest).encoded) + spare
+
+        got = delivery.fitted(fields, set(fields), room)
+
+        assert len(Reading.of(got).encoded) <= room
+        lengths = {len(v) for v in got.values() if v.endswith(delivery.TRIMMED)}
+        assert len(lengths) <= 1
+        for length in lengths:
+            longer = {f: delivery.trimmed(v, length + 1) for f, v in fields.items()}
+            assert len(Reading.of(longer).encoded) > room
+
+    def test_fields_past_the_room_with_every_string_cut_are_refused(self) -> None:
+        with pytest.raises(ValueError, match="past 10 bytes with every string cut"):
+            delivery.fitted({"message": "x" * 100}, {"message"}, 10)
+
+    def test_a_pointer_that_cannot_fit_fails_with_where_the_result_is_kept(
+        self, results: Results, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Only strings are cut, so a list under an envelope field can keep any pointer past the bound."""
+        result = {"status": "success", "warning": ["x" * 100] * 200}
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            failure = sent("list_children", result, results)
+
+        parsed = FAILURE.validate_python(failure)
+        assert parsed.kind == "operation_failed"
+        assert parsed.retry == "none"
+        assert parsed.message.startswith("list_children ran, and its ")
+        assert parsed.message.endswith(f"past {RESPONSE_BOUND_BYTES} bytes with every string cut")
+        assert whole(failure) == result
+        assert any(
+            m.startswith("list_children failed (operation_failed): list_children ran")
+            for m in caplog.messages
+        )
 
     def test_a_large_page_keeps_how_to_fetch_the_next_one(self, results: Results) -> None:
         page = {

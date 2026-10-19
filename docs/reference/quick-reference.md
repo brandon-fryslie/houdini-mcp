@@ -248,8 +248,8 @@ if result["status"] == "error":
 - A result whose shorthand text is over 16KB arrives as a pointer: `result_file` (path on the
   server's machine), `result_uri` (`houdini-mcp://results/{name}`, a resource the
   server serves), and `result_bytes`
-- The pointer keeps `status`, a failure's fields, any `ai_summary`, and paging
-  fields (a long string cut to 2KB and marked); the file
+- The pointer keeps `status`, a failure's fields, any `ai_summary` (whole up to
+  8KB), and paging fields (a long string cut to fit and marked); the file
   holds the whole result, in the same shorthand
 - Result files are kept until the same server's newer results fill 64MB; the
   oldest are removed, the newest always kept. A stopped server's results are
