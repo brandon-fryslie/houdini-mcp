@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire, Python API)**: a render's camera rotation has one default
+  and no null spelling (houdini-laws-etg.nhb). `render_viewport` publishes
+  `[-30, 45, 0]` as the `camera_rotation` default in its schema, and an omitted
+  `camera_rotation` renders isometric. `"camera_rotation": null` is now refused
+  like any other value that is not three numbers; omit the argument instead.
+  `camera_position` still takes null, which means the framed position.
+
 - **BREAKING (wire, Python API)**: `summarize` on `find_error_nodes`,
   `get_geo_summary` and `serialize_scene` defaults to `true`, and it is the
   whole rule (houdini-laws-etg.0yy). `true` summarizes a result over
