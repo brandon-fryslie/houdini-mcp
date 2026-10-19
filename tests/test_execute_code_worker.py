@@ -8,7 +8,6 @@ resume. A call meets the ledger where the server runs it (``held``).
 
 import logging
 import threading
-import time
 
 import pytest
 
@@ -146,28 +145,37 @@ class TestWorkerBlocksMutation:
 
 class TestATimedOutRunsDiff:
     def test_appears_once_the_program_ends(self, mock_connection, stalled_program, caplog):
-        program = (
-            "import time\nhou.began = time.monotonic()\n"
-            f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
-        )
+        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
         _time_out(program, capture_diff=True)
         assert get_last_scene_diff()["status"] == "warning"
         worker = WORKERS.running()
-        # [LAW:no-ambient-temporal-coupling] The program is released only once it
-        # has run past its timeout on the event's own clock: the caller's wait
-        # keeps the wall clock on macOS, so its return alone does not promise that.
-        while time.monotonic() <= mock_connection.began + 1:
-            time.sleep(0.001)
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             mock_connection.stall_gate.set()
             worker.thread.join(5)
-        # The diff's event says it came late: the program outlasted its timeout.
+        # The diff's event says it came late: the program ran its whole timeout.
         # The record carries the exact duration; the text rounds it to milliseconds.
         [event] = [r for r in caplog.records if "scene diff of /obj" in r.getMessage()]
-        assert event.args[2] > 1
+        _operation, _root, took, timeout, *_counts = event.args
+        assert took >= timeout
         assert get_last_scene_diff()["diff"]["added_nodes"] == [
             {"path": "/obj/late", "type": "geo"}
         ]
+
+    def test_a_wait_that_wakes_early_does_not_cut_the_timeout_short(
+        self, mock_connection, stalled_program, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from houdini_mcp.tools import code as code_module
+
+        class EarlyEvent(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(None if timeout is None else timeout / 2)
+
+        monkeypatch.setattr(code_module, "threading", SimpleNamespace(Event=EarlyEvent))
+        _time_out(stalled_program)
+        worker = WORKERS.running()
+        assert worker.running_for_seconds() >= worker.timeout
 
     def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
         self, mock_connection, stalled_program, monkeypatch
