@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.conftest import MockHouModule, MockHouNode
+from tests.conftest import HOUDINI_TURNED_MATRIX, MockHouModule, MockHouNode
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -12,7 +12,7 @@ def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
     assert mock_hou.node("/obj/geo1") is geo
     assert mock_hou.node("/obj/geo1/sphere1") is sphere
     assert sphere.parent() is geo
-    assert mock_hou.node("/obj").children() == [geo]
+    assert mock_hou.node("/obj").children() == (geo,)
 
 
 def test_destroyed_subtree_no_longer_resolves(mock_hou: MockHouModule) -> None:
@@ -23,7 +23,7 @@ def test_destroyed_subtree_no_longer_resolves(mock_hou: MockHouModule) -> None:
 
     assert mock_hou.node("/obj/geo1") is None
     assert mock_hou.node("/obj/geo1/sphere1") is None
-    assert mock_hou.node("/obj").children() == []
+    assert mock_hou.node("/obj").children() == ()
 
 
 def test_destroy_cuts_every_wire_to_the_subtree(mock_hou: MockHouModule) -> None:
@@ -129,3 +129,18 @@ def test_attach_refuses_a_node_already_in_a_scene(mock_hou: MockHouModule) -> No
 
     with pytest.raises(ValueError, match="already in '/obj'"):
         other.attach(geo)
+
+
+def test_world_transform_turns_then_moves_as_houdini_does(mock_hou: MockHouModule) -> None:
+    """Rotate about X, then Y, then Z, then translate, in Houdini's row-vector rows."""
+    geo = mock_hou.node("/obj").createNode("geo", "turned")
+    for name, value in zip(
+        ("tx", "ty", "tz", "rx", "ry", "rz"), (10, 3, -4, 20, -130, 35), strict=True
+    ):
+        geo.parm(name).set(float(value))
+
+    rows = geo.worldTransform().asTupleOfTuples()
+
+    assert [list(row) for row in rows] == [
+        pytest.approx(row, abs=1e-9) for row in HOUDINI_TURNED_MATRIX
+    ]
