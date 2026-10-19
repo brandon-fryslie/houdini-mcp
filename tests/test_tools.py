@@ -3390,7 +3390,9 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("reorder_inputs")
-        def echo(order: list[int], flag: bool = False) -> dict:
+        def echo(
+            order: list[int], flag: bool = False, host: str = "localhost", port: int = 18811
+        ) -> dict:
             return {"status": "success", "order": order, "flag": flag}
 
         assert echo((1, 0))["order"] == [1, 0]
