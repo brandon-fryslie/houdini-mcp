@@ -11,6 +11,7 @@ stand in for it, when the tool made one.
 """
 
 import functools
+import json
 import logging
 import os
 import re
@@ -93,7 +94,12 @@ def deliver(
     *,
     bound: int = RESPONSE_BOUND_BYTES,
 ) -> dict[str, Any]:
-    """``result`` itself when it fits the bound, else a pointer to the file holding all of it."""
+    """``result`` as the wire carries it when it fits the bound, else a pointer to the file holding all of it.
+
+    [LAW:one-source-of-truth] What returns is as the wire carries it - inline, the bytes
+    measured, read back - so every rendering of it, structured content and text, is of
+    one JSON value.
+    """
     try:
         text = WIRE.dump_json(result)
     except PydanticSerializationError as e:
@@ -106,7 +112,8 @@ def deliver(
     size = len(text)
     if size <= bound:
         logger.debug("delivered %s inline: %d bytes", tool, size)
-        return result
+        sent: dict[str, Any] = json.loads(text)
+        return sent
 
     name = f"{tool}-{uuid.uuid4().hex}.json"
     try:
@@ -124,8 +131,12 @@ def deliver(
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s", tool, size, bound, path
     )
+    envelope = {field: result[field] for field in ENVELOPE_FIELDS if field in result}
     return {
-        **{field: preview(result[field]) for field in ENVELOPE_FIELDS if field in result},
+        **{
+            field: preview(value)
+            for field, value in WIRE.dump_python(envelope, mode="json").items()
+        },
         "result_file": str(path),
         "result_uri": RESULT_URI.format(name=name),
         "result_bytes": size,

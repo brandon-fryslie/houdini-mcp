@@ -56,7 +56,8 @@ class TestServedResults:
     async def test_every_client_is_told_how_a_large_result_arrives(
         self, client: Client[Any]
     ) -> None:
-        assert client.instructions == delivery.CALLER_GUIDE
+        assert client.instructions is not None
+        assert delivery.CALLER_GUIDE in client.instructions
 
     async def test_a_result_within_the_bound_arrives_inline(self, client: Client[Any]) -> None:
         result = await client.call_tool("serialize_scene", {"root_path": "/obj"})
@@ -154,7 +155,7 @@ class TestDeliver:
         result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(WIRE.dump_json(result)))
         assert len(WIRE.dump_json(result)) == RESPONSE_BOUND_BYTES
 
-        assert deliver("t", result) is result
+        assert deliver("t", result) == result
         assert list(tmp_path.iterdir()) == []
 
     def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
@@ -234,7 +235,7 @@ class TestDeliver:
         small = {"status": "success"}
         large = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
 
-        assert deliver("create_node", small) is small
+        assert deliver("create_node", small) == small
         failure = FAILURE.validate_python(deliver("execute_code", large))
         assert failure.message.startswith("execute_code ran, but its")
 

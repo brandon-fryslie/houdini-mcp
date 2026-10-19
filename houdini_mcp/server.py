@@ -8,12 +8,12 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from fastmcp.tools import Tool
+from fastmcp.tools import Tool, ToolResult
 from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import delivery, tools
+from . import delivery, shorthand, tools
 from .connection import describe_target
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
@@ -30,7 +30,11 @@ HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 # [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
 # refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
 # would coerce them. One switch, so no parameter type has to say so itself.
-mcp = FastMCP("Houdini MCP", instructions=delivery.CALLER_GUIDE, strict_input_validation=True)
+mcp = FastMCP(
+    "Houdini MCP",
+    instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
+    strict_input_validation=True,
+)
 
 
 # Health check endpoint
@@ -120,14 +124,24 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     """The held tool with its result delivered within the response bound."""
 
     # [LAW:single-enforcer] every served tool's result crosses this one boundary.
+    # wraps copies the tool's own return annotation over ToolResult's: that annotation,
+    # the structured content's type, is the output schema the tool publishes.
     @functools.wraps(tool)
-    async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def call(*args: Any, **kwargs: Any) -> ToolResult:
         result = await tool(*args, **kwargs)
         # Serializing and writing a large result is blocking work, kept off the loop.
-        delivered: dict[str, Any] = await run_in_executor(delivery.deliver, tool.__name__, result)
-        return delivered
+        reply: ToolResult = await run_in_executor(reaching_caller, tool.__name__, result)
+        return reply
 
     return call
+
+
+def reaching_caller(tool: str, result: dict[str, Any]) -> ToolResult:
+    """A result as the caller receives it: JSON for programs, its shorthand for a model to read."""
+    sent = delivery.deliver(tool, result)
+    text = shorthand.render(sent)
+    logger.debug("replied to %s with %d characters of shorthand", tool, len(text))
+    return ToolResult(content=text, structured_content=sent)
 
 
 def served(tool: Callable[..., Any]) -> Tool:
