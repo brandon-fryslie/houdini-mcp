@@ -850,9 +850,12 @@ def summarizer_through(
 
 
 @pytest.fixture(autouse=True)
-def summarizer_offline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The summarizer as a test reaches it unless the test routes its own: a server that
-    refuses every connection, so no test sends a request off this machine."""
+def production_summarizer_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], httpx.AsyncClient]:
+    """The summarizer's production client builder, which a test reaches the summarizer
+    through only by routing its own: in its place is a server that refuses every
+    connection, so no test sends a request off this machine."""
     from houdini_mcp.tools import summarization
 
     production = summarization.summarizer_client
@@ -863,6 +866,7 @@ def summarizer_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         summarization, "summarizer_client", lambda: summarizer_through(production, refuse)
     )
+    return production
 
 
 @pytest.fixture

@@ -12,7 +12,6 @@ tool made one. ``results`` keeps the file, and says for how long.
 """
 
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from fastmcp.tools import ToolResult
@@ -29,14 +28,18 @@ logger = logging.getLogger("houdini_mcp.delivery")
 RESULT_URI = "houdini-mcp://results/{name}"
 
 PREVIEW_CHARS = RESPONSE_BOUND_BYTES // 8
-"""The most of any one string the pointer repeats from the result it stands for."""
+"""The most of any one string but the summary that the pointer repeats from the result it stands for."""
+
+SUMMARY_CHARS = RESPONSE_BOUND_BYTES // 2
+"""The most of a summary the pointer carries: more than the summarizer writes at its
+default max_tokens, so the summary read in place of the file arrives whole."""
 
 CALLER_GUIDE = f"""\
 A tool result whose text is larger than {RESPONSE_BOUND_BYTES // 1024}KB arrives as a pointer to a \
 file holding all of it, in the same shorthand: `result_file` (its path on the server's machine), `result_uri` \
 (a resource this server serves, for a client on another machine), and `result_bytes`. \
-The pointer keeps `status`, a failure's fields, any `ai_summary` whole, and a page's \
-paging fields, any other long string cut and marked; read the file for everything else. \
+The pointer keeps `status`, a failure's fields, any `ai_summary`, and a page's paging \
+fields, a long string cut and marked; read the file for everything else. \
 Read it soon: {RETENTION}."""
 """What every client is told at initialize about how a result reaches it."""
 
@@ -44,27 +47,27 @@ Read it soon: {RETENTION}."""
 TRIMMED = " ... [whole in result_file]"
 
 
-def preview(value: Any) -> Any:
-    """``value`` as the pointer repeats it: a string past ``PREVIEW_CHARS`` is cut, and says so.
+def preview(value: Any, chars: int) -> Any:
+    """``value`` as the pointer repeats it: a string past ``chars`` is cut, and says so.
 
-    Nothing is lost: the file holds every field whole. The cut keeps a long failure
-    message from carrying the result's size back into the pointer.
+    Nothing is lost: the file holds every field whole. The cut keeps any one string -
+    a long failure message, a rambling summary - from carrying the pointer past the bound.
     """
-    if isinstance(value, str) and len(value) > PREVIEW_CHARS:
-        return value[:PREVIEW_CHARS] + TRIMMED
+    if isinstance(value, str) and len(value) > chars:
+        return value[:chars] + TRIMMED
     return value
 
 
 # [LAW:one-source-of-truth] The fields a failure cannot lose and still parse are the
 # ones that say how any call ended; a success keeps its "status" by the same rule.
 # A summary exists to be read in place of the result, and a page's fields say how
-# to fetch the next one, so they stay with them, each as the pointer repeats it.
-# The summary is carried whole: its size is the summarizer's to bound (its
-# max_tokens), never the result's, and a cut one sends the caller to the file it
-# was written to replace.
-ENVELOPE: dict[str, Callable[[Any], Any]] = {
-    **dict.fromkeys(FAILURE_FIELDS | SUMMARY_FIELDS | PAGING_FIELDS, preview),
-    AI_SUMMARY: lambda summary: summary,
+# to fetch the next one, so they stay with them - each string up to its share of the
+# bound, and the summary, the one field read in place of the file, the largest share.
+ENVELOPE: dict[str, int] = {
+    **dict.fromkeys(
+        FAILURE_FIELDS | PAGING_FIELDS | (SUMMARY_FIELDS - {AI_SUMMARY}), PREVIEW_CHARS
+    ),
+    AI_SUMMARY: SUMMARY_CHARS,
 }
 
 
@@ -118,8 +121,8 @@ def stored(tool: str, reading: Reading, results: Results) -> dict[str, Any]:
     )
     return {
         **{
-            field: repeated(reading.sent[field])
-            for field, repeated in ENVELOPE.items()
+            field: preview(reading.sent[field], chars)
+            for field, chars in ENVELOPE.items()
             if field in reading.sent
         },
         "result_file": str(kept.path),

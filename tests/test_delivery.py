@@ -221,8 +221,22 @@ class TestDeliver:
 
         pointer = sent("serialize_scene", result, results)
 
-        assert len(summary) > delivery.PREVIEW_CHARS
+        assert delivery.PREVIEW_CHARS < len(summary) < delivery.SUMMARY_CHARS
         assert pointer["ai_summary"] == summary
+
+    def test_a_summary_past_its_share_of_the_bound_is_cut(self, results: Results) -> None:
+        """However long the summarizer runs on, the pointer stays within the bound."""
+        result = {
+            "status": "success",
+            "structure": {"children": ["x" * 100] * 400},
+            "ai_summary": "y" * 100_000,
+        }
+
+        pointer = sent("serialize_scene", result, results)
+
+        assert pointer["ai_summary"] == "y" * delivery.SUMMARY_CHARS + delivery.TRIMMED
+        assert len(render(pointer).encode()) <= RESPONSE_BOUND_BYTES
+        assert whole(pointer) == result
         assert "structure" not in pointer
         assert whole(pointer) == result
 

@@ -6,6 +6,7 @@ server can give is reported.
 """
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -37,7 +38,6 @@ class Wire:
     """The fake far end of the summarizer's transport: every request sent, and one answer."""
 
     def __init__(self) -> None:
-        self.production_client = summarization.summarizer_client
         self.sent: list[httpx.Request] = []
         self.response: httpx.Response | type[Exception] = httpx.Response(200, json=completion())
 
@@ -47,22 +47,26 @@ class Wire:
             raise self.response("boom")
         return self.response
 
-    def client(self) -> httpx.AsyncClient:
-        """The production client, with this wire in place of the network."""
-        return summarizer_through(self.production_client, self.handle)
-
 
 @pytest.fixture
-def wire(monkeypatch: pytest.MonkeyPatch) -> Wire:
+def wire(
+    monkeypatch: pytest.MonkeyPatch, production_summarizer_client: Callable[[], httpx.AsyncClient]
+) -> Wire:
     """Route the summarizer through a fake transport that answers with a finished completion."""
     wire = Wire()
-    monkeypatch.setattr(summarization, "summarizer_client", wire.client)
+    monkeypatch.setattr(
+        summarization,
+        "summarizer_client",
+        lambda: summarizer_through(production_summarizer_client, wire.handle),
+    )
     monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
     return wire
 
 
 @pytest.fixture
-def no_wire(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_wire(
+    monkeypatch: pytest.MonkeyPatch, production_summarizer_client: Callable[[], httpx.AsyncClient]
+) -> None:
     """A summarizer transport that fails the test if anything is sent on it."""
 
     def refuse(request: httpx.Request) -> httpx.Response:
@@ -71,7 +75,7 @@ def no_wire(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         summarization,
         "summarizer_client",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+        lambda: summarizer_through(production_summarizer_client, refuse),
     )
     monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
