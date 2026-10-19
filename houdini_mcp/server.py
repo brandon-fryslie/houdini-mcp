@@ -5,7 +5,6 @@ import functools
 import inspect
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
@@ -176,7 +175,7 @@ def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None
 
 
 def run_server(
-    target: Target, results_root: Path, transport: Transport, port: int, log_level: int
+    target: Target, results: Results, transport: Transport, port: int, log_level: int
 ) -> None:
     """Serve as a process of its own: configure this process's logging, then serve.
 
@@ -189,5 +188,4 @@ def run_server(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
-    with Results.claim(results_root) as results:
-        serve(build_server(target, results), transport, port)
+    serve(build_server(target, results), transport, port)

@@ -485,6 +485,26 @@ class TestRetention:
             assert str(starting) not in tried
             assert starting.exists()
 
+    def test_a_stopped_servers_results_another_sweeper_removed_first_are_counted_quietly(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        root = tmp_path / "root"
+        with Results.claim(root):
+            pass
+
+        def first(directory: Any) -> None:
+            raise FileNotFoundError(directory)
+
+        monkeypatch.setattr(store.shutil, "rmtree", first)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.results"), Results.claim(root):
+            pass
+
+        assert not [m for m in caplog.messages if m.startswith("could not remove")]
+        assert any("removed the results of 1 stopped servers" in m for m in caplog.messages)
+
     def test_a_claim_that_fails_releases_its_lock(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

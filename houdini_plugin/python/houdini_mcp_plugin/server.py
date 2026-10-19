@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from houdini_mcp.results import Results
     from houdini_mcp.settings import Target
 
 logger = logging.getLogger("houdini_mcp_plugin.server")
@@ -36,8 +37,9 @@ class AlreadyServing(RuntimeError):
         )
 
 
-def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
-    """Bind connections to this interpreter's Houdini; return its target and what serves it."""
+def _prepare_stdio_server() -> tuple["Target", "Results", Callable[[], None]]:
+    """Bind connections to this interpreter's Houdini; return its target, the results
+    its server holds, and what serves it."""
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
     from houdini_mcp.results import Results
     from houdini_mcp.server import build_server, serve
@@ -53,19 +55,14 @@ def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
     connect(target.host, target.port)
     # [LAW:no-ambient-temporal-coupling] claimed and built here, not on the serving
     # thread, so results with nowhere to go, or a server that cannot be built, fail
-    # Start too. The results are held until the transport ends, however it ends.
+    # Start too.
     kept = Results.claim(root)
     try:
         mcp = build_server(target, kept)
     except BaseException:
         kept.close()
         raise
-
-    def run() -> None:
-        with kept:
-            serve(mcp=mcp, transport="stdio")
-
-    return target, run
+    return target, kept, lambda: serve(mcp=mcp, transport="stdio")
 
 
 class StdioServer:
@@ -101,14 +98,14 @@ class StdioServer:
                 refused = AlreadyServing()
                 logger.warning(str(refused))
                 raise refused
-            target, run = _prepare_stdio_server()
+            target, results, run = _prepare_stdio_server()
             where = "this thread" if block else "a background thread"
             logger.info(f"Starting MCP server (stdio transport) in {where}")
             self._serving = target
             if not block:
                 thread = threading.Thread(
                     target=self._serve_in_background,
-                    args=(run,),
+                    args=(run, results),
                     name="houdini-mcp-stdio",
                     daemon=True,
                 )
@@ -118,22 +115,24 @@ class StdioServer:
                     # [LAW:no-ambient-temporal-coupling] only a thread that ran clears
                     # itself; one that never started is cleared by the start that failed
                     self._serving = None
+                    results.close()
                     raise
                 return
-        self._serve(run)
+        self._serve(run, results)
 
-    def _serve(self, run: Callable[[], None]) -> None:
-        """Run the transport to its end; state clears however it ends."""
+    def _serve(self, run: Callable[[], None], results: "Results") -> None:
+        """Run the transport to its end; state and the results' hold clear however it ends."""
         try:
-            run()
+            with results:
+                run()
         finally:
             with self._lock:
                 self._serving = None
         logger.info("MCP server stopped: client closed stdin")
 
-    def _serve_in_background(self, run: Callable[[], None]) -> None:
+    def _serve_in_background(self, run: Callable[[], None], results: "Results") -> None:
         try:
-            self._serve(run)
+            self._serve(run, results)
         except Exception:
             # [LAW:no-silent-failure] a thread has no caller; the log is the report
             logger.exception("MCP server failed")

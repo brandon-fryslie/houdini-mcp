@@ -11,6 +11,7 @@ process ends. A starting server removes the directory of every server whose lock
 it can take, so restarts are bounded too, and never a running server's results.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -138,9 +139,14 @@ class Results:
                 oldest = self._kept.popleft()
                 self._held -= oldest[1]
                 past.append(oldest)
-            gone: list[tuple[Path, int]] = []
-            for result in past:
-                (gone if removed(result[0]) else self._unremoved).append(result)
+        # Removed outside the guard: what this call took from the ledger is its own, and
+        # no other delivery waits on its disk.
+        gone: list[tuple[Path, int]] = []
+        refused: list[tuple[Path, int]] = []
+        for result in past:
+            (gone if removed(result[0]) else refused).append(result)
+        with self._guard:
+            self._unremoved.extend(refused)
             unremoved = len(self._unremoved)
         return Kept(path, len(gone), sum(size for _, size in gone), unremoved)
 
@@ -218,7 +224,10 @@ def sweep(root: Path, own: str) -> int:
             with open(lock_path, "a+b") as lock:
                 if not taken(lock):
                     continue
-                shutil.rmtree(directory)
+                # One lock is held at a time, so the only removal another sweeper can
+                # have made is all of it, first: the same end.
+                with contextlib.suppress(FileNotFoundError):
+                    shutil.rmtree(directory)
             lock_path.unlink(missing_ok=True)
         except OSError as e:
             logger.warning("could not remove %s, a stopped server's results: %s", directory, e)

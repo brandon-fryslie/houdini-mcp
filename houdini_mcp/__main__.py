@@ -5,6 +5,7 @@ import os
 from fastmcp.server.server import Transport
 from pydantic import TypeAdapter
 
+from .results import Results
 from .server import run_server
 from .settings import InvalidSetting, Port, houdini_target, log_level, results_dir, setting
 
@@ -19,7 +20,14 @@ def main() -> None:
         level = log_level(os.environ)
     except InvalidSetting as e:
         raise SystemExit(str(e)) from None
-    run_server(target, root, transport, port, level)
+    try:
+        results = Results.claim(root)
+    except OSError as e:
+        raise SystemExit(
+            f"HOUDINI_MCP_RESULTS_DIR: cannot hold this server's results: {e}"
+        ) from None
+    with results:
+        run_server(target, results, transport, port, level)
 
 
 if __name__ == "__main__":

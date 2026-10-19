@@ -75,6 +75,18 @@ def test_a_user_with_no_home_and_no_results_directory_stops_the_server_from_star
         main()
 
 
+def test_a_results_root_that_cannot_hold_the_servers_results_stops_it_from_starting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    (tmp_path / "a-file").write_text("")
+    monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(tmp_path / "a-file" / "results"))
+
+    with pytest.raises(
+        SystemExit, match="HOUDINI_MCP_RESULTS_DIR: cannot hold this server's results: "
+    ):
+        main()
+
+
 def test_importing_the_server_module_builds_and_reads_nothing() -> None:
     """[LAW:effects-at-boundaries] a module that imports the server gets no server."""
     probe = f"""
