@@ -4,19 +4,17 @@
 routes every tool's result through ``deliver``; no tool caps, truncates, or opts out.
 The bound measures what a model reads: the result's shorthand text.
 
-Nothing is ever dropped. A result over the bound is written whole to a file, and the
-caller gets its path, a URI that reads it through this server (for a caller on
-another machine than the server), its size, the fields that say how the call
-ended - so a failure stays a parseable failure arm - and the AI summary written to
-stand in for it, when the tool made one.
+A result over the bound is written whole to a file, and the caller gets its path, a
+URI that reads it through this server (for a caller on another machine than the
+server), its size, the fields that say how the call ended - so a failure stays a
+parseable failure arm - and the AI summary written to stand in for it, when the
+tool made one. The file is kept until newer results fill ``RESULTS_BUDGET_BYTES``.
 """
 
-import functools
 import json
 import logging
 import os
 import re
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -44,25 +42,37 @@ RESULT_NAME = re.compile(r"[a-z0-9_]+-[0-9a-f]{32}\.txt")
 PREVIEW_CHARS = RESPONSE_BOUND_BYTES // 8
 """The most of any one string the pointer repeats from the result it stands for."""
 
+RESULTS_BUDGET_BYTES = 64 * 1024 * 1024
+"""The most result text kept on disk: the newest results that fit together, the newest always."""
+
+# [LAW:one-source-of-truth] The removal rule as every caller is told it: at
+# initialize, and by the read of a result the rule removed.
+RETENTION = (
+    f"a result file is kept until newer results, from any server writing to the same "
+    f"directory, fill {RESULTS_BUDGET_BYTES // 2**20}MB; then it is removed. "
+    f"The newest result is always kept"
+)
+
 CALLER_GUIDE = f"""\
 A tool result whose text is larger than {RESPONSE_BOUND_BYTES // 1024}KB arrives as a pointer to a \
 file holding all of it, in the same shorthand: `result_file` (its path on the server's machine), `result_uri` \
 (a resource this server serves, for a client on another machine), and `result_bytes`. \
 The pointer keeps `status`, a failure's fields, any `ai_summary`, and a page's paging \
-fields, a long string cut and marked; read the file for everything else."""
+fields, a long string cut and marked; read the file for everything else. \
+Read it soon: {RETENTION}."""
 """What every client is told at initialize about how a result reaches it."""
 
 
-@functools.cache
 def results_dir() -> Path:
-    """Where this process writes results too large to return inline, made on first use.
+    """Where results too large to return inline are written.
 
-    By default a directory only this process's user can read: results carry scene
-    contents and program output. The override is for a deployment that must name
-    where they land.
+    By default one directory per user, the same for every server process, so a
+    server's removals bound what earlier ones left too; only its user can read it,
+    since results carry scene contents and program output. The override is for a
+    deployment that must name where they land.
     """
     return Path(
-        os.getenv("HOUDINI_MCP_RESULTS_DIR") or tempfile.mkdtemp(prefix="houdini-mcp-results-")
+        os.getenv("HOUDINI_MCP_RESULTS_DIR") or Path.home() / ".cache" / "houdini-mcp" / "results"
     )
 
 
@@ -133,17 +143,27 @@ def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[
     try:
         directory = results_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # [LAW:no-ambient-temporal-coupling] room is made before the write, so the
+        # file this pointer names is never among those removed to make it.
+        removed = make_room(directory, size)
         path = directory / name
         path.write_bytes(encoded)
     except OSError as e:
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
         unwritten = OperationFailed(
-            f"{tool} ran, but its {size}-byte result could not be written as {name}: {e}"
+            f"{tool} ran, but its {size}-byte result could not be stored as {name}: {e}"
         )
         return failure_response(unwritten, tool)
     logger.info(
-        "delivered %s as a file: %d bytes over the %d-byte bound -> %s", tool, size, bound, path
+        "delivered %s as a file: %d bytes over the %d-byte bound -> %s; "
+        "removed %d older results, %d bytes",
+        tool,
+        size,
+        bound,
+        path,
+        len(removed),
+        sum(removed),
     )
     return {
         **{field: preview(sent[field]) for field in ENVELOPE_FIELDS if field in sent},
@@ -153,8 +173,41 @@ def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[
     }
 
 
+def held(directory: Path) -> list[tuple[int, int, Path]]:
+    """Every result file in ``directory``: when it was written, its size, and where it is."""
+    files = []
+    for entry in os.scandir(directory):
+        if not RESULT_NAME.fullmatch(entry.name):
+            continue
+        try:
+            stat = entry.stat()
+        except FileNotFoundError:
+            # Another server writing here removed it after it was listed: it is
+            # already what removal would have made it.
+            continue
+        files.append((stat.st_mtime_ns, stat.st_size, Path(entry.path)))
+    return files
+
+
+def make_room(directory: Path, incoming: int) -> list[int]:
+    """Remove the oldest results in ``directory`` until the rest and ``incoming`` bytes
+    fit ``RESULTS_BUDGET_BYTES``; the sizes of those removed.
+    """
+    removed = []
+    filled = incoming
+    for _, size, path in sorted(held(directory), reverse=True):
+        filled += size
+        if filled > RESULTS_BUDGET_BYTES:
+            path.unlink(missing_ok=True)
+            removed.append(size)
+    return removed
+
+
 def read_result(name: str) -> str:
     """The text of a result ``deliver`` wrote, by the name in its ``result_uri``."""
     if not RESULT_NAME.fullmatch(name):
         raise ValueError(f"not a delivered result name: {name!r}")
-    return (results_dir() / name).read_text(encoding="utf-8")
+    try:
+        return (results_dir() / name).read_text(encoding="utf-8")
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"result {name} is no longer held: {RETENTION}.") from e

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -21,13 +23,6 @@ from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, deliver, read_result
 from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
 from tests.shorthand_reader import read
-
-
-@pytest.fixture(autouse=True)
-def results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
-    """Where this test's results land, never the server's own directory."""
-    monkeypatch.setattr(delivery, "results_dir", lambda: tmp_path)
-    return tmp_path
 
 
 @pytest.fixture
@@ -77,14 +72,14 @@ class TestServedResults:
         assert "structure" in result.structured_content
 
     async def test_a_large_result_lands_in_the_servers_results_directory(
-        self, client: Client[Any], large_scene: int, tmp_path: pathlib.Path
+        self, client: Client[Any], large_scene: int, results: pathlib.Path
     ) -> None:
         pointer = (
             await client.call_tool("serialize_scene", {"root_path": "/obj"})
         ).structured_content
         assert pointer is not None
 
-        assert pathlib.Path(pointer["result_file"]).parent == tmp_path
+        assert pathlib.Path(pointer["result_file"]).parent == results
 
     async def test_a_large_async_result_arrives_whole_in_a_file(
         self, client: Client[Any], large_scene: int, caplog: pytest.LogCaptureFixture
@@ -143,7 +138,7 @@ class TestServedResults:
 
 
 class TestDeliver:
-    def test_a_large_failure_is_still_a_failure_arm(self, tmp_path: pathlib.Path) -> None:
+    def test_a_large_failure_is_still_a_failure_arm(self) -> None:
         failure = {
             "status": "error",
             "kind": "operation_failed",
@@ -160,16 +155,16 @@ class TestDeliver:
         assert parsed.message == "the walk stopped"
         assert whole(pointer) == failure
 
-    def test_a_result_exactly_at_the_bound_arrives_inline(self, tmp_path: pathlib.Path) -> None:
+    def test_a_result_exactly_at_the_bound_arrives_inline(self, results: pathlib.Path) -> None:
         result = {"status": "success", "text": "x"}
         result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(render(result)) + 1)
         assert len(render(result)) == RESPONSE_BOUND_BYTES
 
         assert sent("t", result) == result
-        assert list(tmp_path.iterdir()) == []
+        assert not results.exists()
 
     def test_the_bound_measures_the_text_a_model_reads_not_the_json(
-        self, tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
+        self, results: pathlib.Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A listing whose JSON is far past the bound reads inline as its shorthand."""
         result = {
@@ -183,11 +178,11 @@ class TestDeliver:
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.delivery"):
             assert sent("list_children", result) == result
 
-        assert list(tmp_path.iterdir()) == []
+        assert not results.exists()
         size = len(render(result).encode("utf-8"))
         assert f"delivered list_children inline: {size} bytes" in caplog.messages
 
-    def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
+    def test_multibyte_text_is_measured_in_bytes(self) -> None:
         result = {"status": "success", "text": "é" * (RESPONSE_BOUND_BYTES // 2)}
 
         pointer = sent("t", result)
@@ -198,20 +193,18 @@ class TestDeliver:
     @pytest.mark.parametrize(
         "name", ["../secret.txt", "sub/result.txt", "t-" + "0" * 32 + ".json", "..", "settings.txt"]
     )
-    def test_a_name_outside_the_results_directory_is_refused(
-        self, name: str, tmp_path: pathlib.Path
-    ) -> None:
+    def test_a_name_outside_the_results_directory_is_refused(self, name: str) -> None:
         with pytest.raises(ValueError, match="not a delivered result name"):
             read_result(name)
 
-    def test_an_unserializable_result_is_the_tools_failure(self, tmp_path: pathlib.Path) -> None:
+    def test_an_unserializable_result_is_the_tools_failure(self) -> None:
         response = sent("t", {"status": "success", "node": object()})
 
         failure = FAILURE.validate_python(response)
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
         assert "ran, but returned a result that is not JSON-serializable" in failure.message
 
-    def test_a_summary_reaches_the_caller_beside_the_pointer(self, tmp_path: pathlib.Path) -> None:
+    def test_a_summary_reaches_the_caller_beside_the_pointer(self) -> None:
         """A summary is written to be read in place of a large result."""
         result = {
             "status": "success",
@@ -238,7 +231,7 @@ class TestDeliver:
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.message.startswith("execute_code ran, but its")
 
-    def test_a_result_is_written_as_the_wire_carries_it(self, tmp_path: pathlib.Path) -> None:
+    def test_a_result_is_written_as_the_wire_carries_it(self) -> None:
         """A non-finite float is null inline, so it is null in the file too."""
         result = {"status": "success", "bounds": [float("inf")], "text": "x" * RESPONSE_BOUND_BYTES}
 
@@ -246,7 +239,7 @@ class TestDeliver:
 
         assert whole(pointer)["bounds"] == [None]
 
-    def test_a_circular_result_is_the_tools_failure(self, tmp_path: pathlib.Path) -> None:
+    def test_a_circular_result_is_the_tools_failure(self) -> None:
         result: dict[str, Any] = {"status": "success"}
         result["self"] = result
 
@@ -306,3 +299,80 @@ class TestDeliver:
         emitted = paging_fields(Page(items=[1, 2], offset=0, total=5))
 
         assert set(emitted) == PAGING_FIELDS
+
+
+def on_disk(results: pathlib.Path) -> int:
+    """The bytes of every result file the directory holds."""
+    return sum(path.stat().st_size for path in results.iterdir() if path.name.endswith(".txt"))
+
+
+def large(share: float) -> dict[str, Any]:
+    """A result whose text is about ``share`` of the results budget."""
+    return {"status": "success", "text": "x" * int(delivery.RESULTS_BUDGET_BYTES * share)}
+
+
+class TestRetention:
+    """Result files stay within the declared budget, newest kept, the rest removed."""
+
+    def test_results_past_the_budget_keep_the_newest_within_it(
+        self, results: pathlib.Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.delivery"):
+            pointers = [sent("render_viewport", large(0.4)) for _ in range(4)]
+
+        assert on_disk(results) <= delivery.RESULTS_BUDGET_BYTES
+        assert [pathlib.Path(p["result_file"]).exists() for p in pointers] == [
+            False,
+            False,
+            True,
+            True,
+        ]
+        newest = pointers[-1]
+        assert read(read_result(newest["result_uri"].rsplit("/", 1)[1])) == whole(newest)
+        assert any(
+            "removed 1 older results, " + str(pointers[0]["result_bytes"]) + " bytes" in message
+            for message in caplog.messages
+        )
+
+    def test_a_result_larger_than_the_budget_is_kept_whole(self, results: pathlib.Path) -> None:
+        older = sent("render_viewport", large(0.4))
+        newest = sent("render_viewport", large(1.1))
+
+        assert not pathlib.Path(older["result_file"]).exists()
+        assert whole(newest)["text"] == large(1.1)["text"]
+
+    def test_results_an_earlier_server_left_count_against_the_budget(
+        self, results: pathlib.Path
+    ) -> None:
+        """A restarted server finds the files the last one wrote, and removes them by the rule."""
+        results.mkdir()
+        earlier = [results / f"render_viewport-{i:032x}.txt" for i in range(3)]
+        for age, path in enumerate(reversed(earlier), start=1):
+            path.write_bytes(b"x" * int(delivery.RESULTS_BUDGET_BYTES * 0.4))
+            os.utime(path, ns=(0, time.time_ns() - age * 10**9))
+
+        newest = sent("render_viewport", large(0.4))
+
+        assert on_disk(results) <= delivery.RESULTS_BUDGET_BYTES
+        assert [path.exists() for path in earlier] == [False, False, True]
+        assert pathlib.Path(newest["result_file"]).exists()
+
+    def test_files_that_are_not_results_are_left_alone(self, results: pathlib.Path) -> None:
+        """A deployment may name a directory that holds other things too."""
+        results.mkdir()
+        theirs = results / "notes.txt"
+        theirs.write_bytes(b"x" * int(delivery.RESULTS_BUDGET_BYTES * 0.8))
+
+        sent("render_viewport", large(0.4))
+
+        assert theirs.exists()
+
+    async def test_reading_a_removed_result_says_it_was_removed(self, client: Client[Any]) -> None:
+        removed = sent("render_viewport", large(0.6))
+        sent("render_viewport", large(0.6))
+
+        with pytest.raises(Exception, match="is no longer held: a result file is kept until"):
+            await client.read_resource(removed["result_uri"])
+
+    def test_every_client_is_told_the_rule(self) -> None:
+        assert delivery.RETENTION in delivery.CALLER_GUIDE

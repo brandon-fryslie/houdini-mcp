@@ -191,7 +191,7 @@ Environment variables:
 | `MCP_PORT` | `3055` | MCP server HTTP port; a value that is not a port stops the server |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server |
 | `LOG_LEVEL` | `INFO` | Logging level: any name Python's `logging` knows (DEBUG, INFO, WARNING or WARN, ERROR, CRITICAL or FATAL, NOTSET), any case; any other value stops the server |
-| `HOUDINI_MCP_RESULTS_DIR` | a new private directory in the system temp, per server process | Where results too large to return inline are written |
+| `HOUDINI_MCP_RESULTS_DIR` | `~/.cache/houdini-mcp/results`, shared by every server the user runs | Where results too large to return inline are written; the newest that fit in 64MB are kept |
 
 ## Tool Categories (43 Tools)
 

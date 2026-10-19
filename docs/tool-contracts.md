@@ -13,6 +13,11 @@ reads it through the server (`houdini-mcp://results/{name}`) for a client on
 another machine; and `result_bytes`. A `render_viewport` image is usually over
 the bound, so its `image_base64` is in the file.
 
+Read the file soon. Result files are kept until newer results, from any server
+writing to the same directory, fill 64MB; then the oldest are removed. The
+newest result is always kept. Reading a removed result's `result_uri` fails
+and says it was removed under this rule.
+
 ## Every Tool: The Text Is a Shorthand of the JSON
 
 A result's structured content is its JSON. Its text content, the part a model

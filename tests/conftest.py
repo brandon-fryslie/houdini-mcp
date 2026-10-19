@@ -3,6 +3,7 @@
 import contextlib
 import copy
 import logging
+import pathlib
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -788,6 +789,14 @@ class MockHouModule:
         if parent is None:
             raise ValueError(f"cannot add {node.path()!r}: no node at {parent_path!r}")
         parent.attach(node)
+
+
+@pytest.fixture(autouse=True)
+def results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Where this test's large results land, never the user's own results directory."""
+    directory = tmp_path / "results"
+    monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(directory))
+    return directory
 
 
 @pytest.fixture(scope="session")
