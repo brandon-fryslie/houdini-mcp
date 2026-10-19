@@ -420,22 +420,3 @@ class TestSummarizeScene:
 
         assert result["ai_summary"] == "Test summary"
         assert result["_summarized"] is True
-
-
-class TestSummarizeRenderSettings:
-    """Tests for render settings summarization."""
-
-    async def test_summarize_render_settings_adds_summary(self, wire):
-        """Test render settings summarization adds ai_summary field."""
-        render_data = {
-            "rop_type": "karma",
-            "settings": {
-                "samples": 64,
-                "resolution": [1920, 1080],
-            },
-        }
-
-        result = await summarization.summarize_render_settings(render_data)
-
-        assert result["ai_summary"] == "Test summary"
-        assert result["_summarized"] is True

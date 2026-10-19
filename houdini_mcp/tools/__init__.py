@@ -57,10 +57,6 @@ from .scene import get_scene_info, load_scene, new_scene, save_scene, serialize_
 from .summarization import (
     estimate_tokens,
     get_summarization_status,
-    summarize_errors,
-    summarize_geometry,
-    summarize_render_settings,
-    summarize_scene,
 )
 from .transactions import (
     TOOL_POLICIES,
@@ -142,10 +138,6 @@ __all__ = [
     "check_connection",
     "ping_houdini",
     # AI Summarization
-    "summarize_geometry",
-    "summarize_errors",
-    "summarize_scene",
-    "summarize_render_settings",
     "get_summarization_status",
     "estimate_tokens",
     # Pane screenshots

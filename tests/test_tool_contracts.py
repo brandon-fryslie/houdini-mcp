@@ -652,6 +652,7 @@ class TestServedSummaries:
         monkeypatch.setattr(errors, "_scan_error_nodes", six_errors)
         monkeypatch.setattr(errors, "summarize_errors", record)
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 10**9)
 
         await client.call_tool("find_error_nodes", {})
         assert asked == []

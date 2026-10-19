@@ -269,41 +269,6 @@ Summary:"""
     return _annotate(scene_data, await _complete(prompt))
 
 
-async def summarize_render_settings(render_data: dict[str, Any]) -> dict[str, Any]:
-    """Summarize render configuration for quality/performance analysis.
-
-    Analyzes render settings and provides:
-    - Quality vs performance tradeoffs
-    - Potential bottlenecks
-    - Optimization suggestions
-    - Comparison to common presets
-
-    Args:
-        render_data: Raw render settings output
-
-    Returns:
-        Original data with 'ai_summary' field
-    """
-    prompt = f"""Analyze these Houdini render settings and provide recommendations.
-
-Evaluate:
-1. Quality settings (samples, ray limits, resolution)
-2. Performance implications
-3. Potential optimizations
-4. Comparison to common render presets
-
-Keep the summary under 150 words. Focus on actionable improvements.
-
-Render Settings:
-```json
-{json.dumps(render_data, indent=2, default=str)[:4000]}
-```
-
-Summary:"""
-
-    return _annotate(render_data, await _complete(prompt))
-
-
 def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, Any]:
     """Attach the summary to the tool result, or the reason there is none."""
     match outcome:
@@ -379,7 +344,8 @@ def get_summarization_status() -> dict[str, Any]:
         - enabled: Whether AI summarization is active
         - model: Model the summaries are requested from
         - base_url: The chat-completions server (OpenAI API base, ending in /v1)
-        - auto_threshold_tokens: Token count that triggers auto-summarization
+        - auto_threshold_tokens: Estimated tokens a result must exceed to be summarized;
+          a tool called with summarize=False is never summarized
         - target_summary_tokens: Target size for generated summaries
     """
     return {
