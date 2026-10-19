@@ -10,10 +10,16 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastmcp import FastMCP
 from rpyc.core import vinegar
 from rpyc.utils.server import Server
 
 from houdini_mcp.connection import _InterpreterModules
+from houdini_mcp.server import build_server
+from houdini_mcp.settings import houdini_target
+
+# The Houdini the houdini-mcp command reaches when the environment names none.
+DEFAULT_TARGET = houdini_target({})
 
 
 def split_path(path: str) -> tuple[str, str]:
@@ -782,6 +788,12 @@ class MockHouModule:
         if parent is None:
             raise ValueError(f"cannot add {node.path()!r}: no node at {parent_path!r}")
         parent.attach(node)
+
+
+@pytest.fixture(scope="session")
+def mcp() -> FastMCP:
+    """The server as an entry point builds it, reaching the default target."""
+    return build_server(DEFAULT_TARGET)
 
 
 @pytest.fixture

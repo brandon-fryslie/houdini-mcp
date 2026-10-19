@@ -43,10 +43,10 @@ else:
             title="Houdini MCP"
         )
     except Exception as e:
-        # binding to this Houdini failed (for example houdini_mcp is not
-        # installed into Houdini's Python); e names the cause.
+        # a setting, binding to this Houdini, or building the server failed
+        # (for example houdini_mcp is not installed into Houdini's Python).
         hou.ui.displayMessage(
-            f"Error starting MCP Server:\n{e}",
+            f"Error starting MCP Server:\n{type(e).__name__}: {e}",
             title="Houdini MCP",
             severity=hou.severityType.Error
         )
@@ -68,13 +68,13 @@ Check the status of the Houdini MCP Server.
 import hou
 
 try:
-    from houdini_mcp_plugin import is_server_running
+    from houdini_mcp_plugin import serving_target
     from houdini_mcp.connection import get_connection_info
-    from houdini_mcp.server import HOUDINI_HOST, HOUDINI_PORT
-    
-    if is_server_running():
-        info = get_connection_info(HOUDINI_HOST, HOUDINI_PORT)
-        
+
+    target = serving_target()
+    if target is not None:
+        info = get_connection_info(target.host, target.port)
+
         status_text = "MCP Server Status: RUNNING (ends when the client closes stdin)\n\n"
         status_text += f"Houdini: {info['target']}\n"
         if info["connected"]:
@@ -85,9 +85,9 @@ try:
     else:
         status_text = "MCP Server Status: STOPPED\n\n"
         status_text += "Click 'Start MCP' to start the server."
-    
+
     hou.ui.displayMessage(status_text, title="Houdini MCP Status")
-    
+
 except Exception as e:
     hou.ui.displayMessage(
         f"Could not read MCP status:\n{type(e).__name__}: {e}",
