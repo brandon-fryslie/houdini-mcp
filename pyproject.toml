@@ -138,9 +138,11 @@ asyncio_mode = "auto"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# The live tests (tests/integration) start a headless Houdini; `pytest -m integration`
+# selects them, since the command line's -m replaces this one.
+addopts = "-v --tb=short -m 'not integration'"
 markers = [
-    "integration: requires a live Houdini hrpyc server",
+    "integration: runs against a headless Houdini the session starts (tests/integration)",
 ]
 
 # Coverage configuration
