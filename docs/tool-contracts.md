@@ -155,11 +155,11 @@ render_viewport(look_at="/obj/geo1")
 | `camera_rotation` | `[float, float, float]` | [rx, ry, rz] degrees | [-30, 45, 0] |
 | `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, or a node outside any object, is an error | None |
 | `resolution` | `[int, int]`, each 64–4096 | [width, height] in pixels | [512, 512] |
-| `renderer` | `str` | "opengl" or "karma" | "opengl" |
-| `output_format` | `str` | "png", "jpg", or "exr" | "png" |
+| `renderer` | enum | Exactly "opengl" or "karma" | "opengl" |
+| `output_format` | enum | Exactly "png", "jpg", or "exr" | "png" |
 | `auto_frame` | `bool` | Auto-frame visible geometry | True |
 | `orthographic` | `bool` | Use orthographic projection | False |
-| `karma_engine` | `str` | "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
+| `karma_engine` | enum | Exactly "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
 
 ### Minimal Valid Examples
 
@@ -192,11 +192,11 @@ Similar to `render_viewport`, but renders 4 canonical views (Front, Left, Top, P
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `resolution` | `[int, int]`, each 64–4096 | [width, height] for each view | [512, 512] |
-| `renderer` | `str` | "opengl" or "karma" | "opengl" |
-| `output_format` | `str` | "png", "jpg", or "exr" | "png" |
+| `renderer` | enum | Exactly "opengl" or "karma" | "opengl" |
+| `output_format` | enum | Exactly "png", "jpg", or "exr" | "png" |
 | `orthographic` | `bool` | Use ortho for Front/Left/Top | True |
 | `include_perspective` | `bool` | Include perspective view | True |
-| `karma_engine` | `str` | "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
+| `karma_engine` | enum | Exactly "cpu" or "gpu"; always checked, used by Karma only | "cpu" |
 
 ### Minimal Valid Examples
 

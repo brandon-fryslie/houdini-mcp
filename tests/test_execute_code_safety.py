@@ -227,14 +227,16 @@ class TestPolicyProfiles:
         from houdini_mcp.tools import execute_code
 
         result = execute_code("print('x')", policy=policy, host="localhost", port=18811)
-        assert result["status"] == "error"
-        assert "policy" in result["message"].lower()
-        assert result["audit"]["blocked_reason"] == "unknown_policy"
-        assert result["audit"]["granted"] == {
-            "mutation": False,
-            "dangerous": False,
-            "heavy_geometry": False,
-        }
+        assert (result["kind"], result["parameter"]) == ("invalid_input", "policy")
+        assert "'read-only' or 'normal'" in result["message"]
+
+    def test_a_string_never_grants_a_capability(self, mock_connection, allow_bypass_config):
+        """[LAW:single-enforcer] a Python caller is refused what the server refuses:
+        "yes" is not a boolean, so it cannot switch a bypass on."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code("print('x')", allow_dangerous="yes", host="localhost", port=18811)
+        assert (result["kind"], result["parameter"]) == ("invalid_input", "allow_dangerous")
 
     def test_read_only_denies_dangerous_even_with_flag_and_config(
         self, mock_connection, allow_bypass_config
@@ -1062,18 +1064,15 @@ class TestSyntaxGate:
         ["1" + "+1" * 100_000, "-" * 100_000 + "1"],
         ids=["recursion-error", "memory-error"],
     )
-    @pytest.mark.parametrize("policy", ["normal", "privileged"])
-    def test_program_too_deep_to_parse_is_a_syntax_refusal(self, mock_connection, code, policy):
+    def test_program_too_deep_to_parse_is_a_syntax_refusal(self, mock_connection, code):
         """The parser gives up with RecursionError or MemoryError on these; the
-        gate reports them as a program it cannot read, under a known policy and
-        under the unknown-policy refusal alike, never as a raised exception."""
+        gate reports them as a program it cannot read, never as a raised exception."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(code, policy=policy, host="localhost", port=18811)
+        result = execute_code(code, host="localhost", port=18811)
         assert result["status"] == "error"
         assert "traceback" not in result or "SyntaxError" in result["traceback"]
-        expected = "syntax_error" if policy == "normal" else "unknown_policy"
-        assert result["audit"]["blocked_reason"] == expected
+        assert result["audit"]["blocked_reason"] == "syntax_error"
 
     def test_null_byte_is_a_parse_failure_without_a_line(self, mock_connection):
         from houdini_mcp.tools import execute_code

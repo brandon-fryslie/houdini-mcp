@@ -27,7 +27,7 @@ import re
 import textwrap
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 import jsonschema
 import pytest
@@ -40,7 +40,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.server import mcp
 from houdini_mcp.tools._common import FAILURE
-from houdini_mcp.tools.code import VALID_POLICIES
+from houdini_mcp.tools.code import Policy
 
 CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.md"
 
@@ -162,9 +162,57 @@ class TestServedSchemas:
     ) -> None:
         """[LAW:parse-dont-validate] a client learns the legal policies from the schema."""
         policy = served["execute_code"].input_schema["properties"]["policy"]
-        assert policy["enum"] == list(VALID_POLICIES)
+        assert policy["enum"] == list(get_args(Policy))
         assert policy["default"] == "normal"
         assert not await accepts(client, served, "execute_code", {"code": "", "policy": "yolo"})
+
+    @pytest.mark.parametrize(
+        ("tool", "parameter", "domain", "required"),
+        [
+            ("render_viewport", "renderer", ["opengl", "karma"], {}),
+            ("render_viewport", "output_format", ["png", "jpg", "exr"], {}),
+            ("render_viewport", "karma_engine", ["cpu", "gpu"], {}),
+            ("render_quad_view", "renderer", ["opengl", "karma"], {}),
+            ("render_quad_view", "output_format", ["png", "jpg", "exr"], {}),
+            ("render_quad_view", "karma_engine", ["cpu", "gpu"], {}),
+            ("manage_cache", "action", ["stats", "invalidate", "warmup"], {}),
+            (
+                "get_houdini_help",
+                "help_type",
+                [
+                    "obj",
+                    "sop",
+                    "dop",
+                    "cop2",
+                    "chop",
+                    "vop",
+                    "lop",
+                    "top",
+                    "rop",
+                    "vex_function",
+                    "python_hou",
+                ],
+                {"item_name": "box"},
+            ),
+        ],
+    )
+    async def test_a_closed_domain_parameter_publishes_and_enforces_its_domain(
+        self,
+        client: Client[Any],
+        served: dict[str, Tool],
+        tool: str,
+        parameter: str,
+        domain: list[str],
+        required: dict[str, Any],
+    ) -> None:
+        """[LAW:parse-dont-validate] a client reads the legal values from the schema,
+        and an illegal value is refused before the tool runs, served or called directly."""
+        assert served[tool].input_schema["properties"][parameter]["enum"] == domain
+        for illegal in ("bogus", domain[0].upper()):
+            assert not await accepts(client, served, tool, {**required, parameter: illegal})
+            refused = getattr(tools, tool)(**{**required, parameter: illegal})
+            assert (refused["kind"], refused["parameter"]) == ("invalid_input", parameter)
+            assert repr(illegal) in refused["message"]
 
     async def test_render_viewport_parameters(
         self, client: Client[Any], served: dict[str, Tool]
@@ -491,12 +539,6 @@ class TestServedFailures:
         )
         assert failure.kind == "operation_failed"
         assert "after" in failure.message
-
-    async def test_an_unknown_cache_action_is_invalid_input(self, client: Client[Any]) -> None:
-        failure = await self.failure_of(client, "manage_cache", {"action": "defrag"})
-        assert (failure.kind, failure.retry) == ("invalid_input", "fix_input")
-        assert failure.operation == "manage_cache"
-        assert failure.action == "defrag"
 
     async def test_a_warmup_that_cannot_reach_houdini_is_connection_unavailable(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch

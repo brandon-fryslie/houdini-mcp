@@ -103,7 +103,12 @@ logger = logging.getLogger("houdini_mcp.tools")
 
 import functools
 import inspect
+import reprlib
+import typing
 from collections.abc import Callable
+
+from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError, to_json
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
@@ -136,9 +141,44 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
     def decorator(func: ToolFn) -> ToolFn:
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
-        # the caller's bug and raises as one, before the boundary opens; only what
-        # the tool itself raises becomes an error response.
+        # the caller's bug and raises as one, before the boundary opens. A value
+        # that does not fit its parameter's type is the caller's input, refused
+        # inside the boundary as invalid_input, as the server refuses it.
         signature = inspect.signature(func)
+        hints = typing.get_type_hints(func, include_extras=True)
+        undeclared = sorted(signature.parameters.keys() - hints.keys())
+        if undeclared:
+            raise TypeError(f"{operation_name} parameters have no declared type: {undeclared}")
+        adapters = {name: TypeAdapter(hints[name]) for name in signature.parameters}
+
+        def parsed(bound: inspect.BoundArguments) -> inspect.BoundArguments:
+            """The call with every argument parsed as its parameter's type.
+
+            [LAW:single-enforcer] the one check of a value against its declared
+            domain, so a body never re-checks what its signature already says.
+            A value is parsed as the JSON it would cross the wire as, strictly, as
+            the server's ``strict_input_validation`` parses it: a tuple is the
+            array it is sent as, and "yes" is not a boolean on either path.
+            """
+            for name, value in bound.arguments.items():
+                try:
+                    wire = to_json(value)
+                except PydanticSerializationError:
+                    raise InvalidInput(
+                        f"{name}: not expressible as JSON, got {reprlib.repr(value)}",
+                        parameter=name,
+                    ) from None
+                try:
+                    bound.arguments[name] = adapters[name].validate_json(wire, strict=True)
+                except ValidationError as e:
+                    told = "; ".join(
+                        f"{'.'.join(map(str, (name, *error['loc'])))}: {error['msg']}"
+                        for error in e.errors()
+                    )
+                    raise InvalidInput(
+                        f"{told}, got {reprlib.repr(value)}", parameter=name
+                    ) from None
+            return bound
 
         # A served tool that finishes its result asynchronously (summarizing it,
         # then capping it) is the same boundary awaited: whatever that finishing
@@ -147,9 +187,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs) -> dict[str, Any]:
-                signature.bind(*args, **kwargs)
+                bound = signature.bind(*args, **kwargs)
                 try:
-                    result: dict[str, Any] = await func(*args, **kwargs)
+                    call = parsed(bound)
+                    result: dict[str, Any] = await func(*call.args, **call.kwargs)
                     return result
                 except Exception as e:
                     return failure_response(e, operation_name)
@@ -158,9 +199,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> dict[str, Any]:
-            signature.bind(*args, **kwargs)
+            bound = signature.bind(*args, **kwargs)
             try:
-                result: dict[str, Any] = func(*args, **kwargs)
+                call = parsed(bound)
+                result: dict[str, Any] = func(*call.args, **call.kwargs)
                 return result
             except Exception as e:
                 return failure_response(e, operation_name)

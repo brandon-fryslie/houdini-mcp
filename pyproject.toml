@@ -73,7 +73,7 @@ Repository = "https://github.com/oculairmedia/houdini-mcp"
 Issues = "https://github.com/oculairmedia/houdini-mcp/issues"
 
 [project.scripts]
-houdini-mcp = "houdini_mcp.server:run_server"
+houdini-mcp = "houdini_mcp.__main__:main"
 
 [tool.setuptools.packages.find]
 # houdini_mcp_handshake is defined once, in the plugin tree (Houdini's path), and

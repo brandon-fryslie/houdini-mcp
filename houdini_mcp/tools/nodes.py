@@ -12,7 +12,7 @@ This module provides tools for managing Houdini nodes:
 import logging
 import time
 from functools import partial
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from ..connection import Link
 from ._common import (
@@ -40,14 +40,7 @@ logger = logging.getLogger("houdini_mcp.tools.nodes")
 # of the node to return, and whether to report (and force) its cook. Every
 # combination means something, so none has to be ignored.
 Detail = Literal["compact", "standard", "full"]
-DETAIL_LEVELS: tuple[str, ...] = get_args(Detail)
 CookInfo = Literal["none", "inspect", "force_cook"]
-COOK_INFO_MODES: tuple[str, ...] = get_args(CookInfo)
-
-
-def _require_choice(name: str, value: str, choices: tuple[str, ...]) -> None:
-    if value not in choices:
-        raise ValueError(f"{name} must be one of {', '.join(choices)}, got {value!r}")
 
 
 @handle_connection_errors("create_node")
@@ -124,11 +117,6 @@ def get_node_info(
         # Minimal info for reduced payload
         get_node_info("/obj/geo1/sphere1", detail="compact")
     """
-    # [LAW:parse-dont-validate] MCP callers are checked by the schema; this is
-    # the one check for Python callers, so an unknown level fails loudly instead
-    # of quietly behaving like another level.
-    _require_choice("detail", detail, DETAIL_LEVELS)
-    _require_choice("cook_info", cook_info, COOK_INFO_MODES)
     hou = ensure_connected(host, port)
 
     node = node_at(hou, node_path)

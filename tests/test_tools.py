@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2346,16 +2347,6 @@ class TestReorderInputs:
 class TestGetHoudiniHelp:
     """Tests for get_houdini_help web scraping function."""
 
-    def test_get_houdini_help_unsupported_type(self):
-        """Test error for unsupported help type."""
-        from houdini_mcp.tools import get_houdini_help
-
-        result = get_houdini_help("invalid_type", "box")
-
-        assert result["status"] == "error"
-        assert "Unsupported help type" in result["message"]
-        assert "sop" in result["message"]  # Should list valid types
-
     @patch("requests.get")
     def test_get_houdini_help_network_error(self, mock_get):
         """Test handling of network connection errors."""
@@ -2541,32 +2532,32 @@ class TestGetHoudiniHelp:
         assert param["options"][1]["name"] == "Pack"
 
     @patch("requests.get")
-    def test_get_houdini_help_url_mapping(self, mock_get):
-        """Test that URL mapping covers all documented types."""
+    def test_get_houdini_help_fetches_the_page_of_its_type(self, mock_get):
+        """Each help type reads its own section of the docs; ROPs live under /out/."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_get.return_value = mock_response
+        mock_get.return_value = MagicMock(status_code=404)
+        for help_type, section in (
+            ("sop", "nodes/sop"),
+            ("rop", "nodes/out"),
+            ("vex_function", "vex/functions"),
+            ("python_hou", "hom/hou"),
+        ):
+            get_houdini_help(help_type, "test_item")
+            assert mock_get.call_args.args[0] == (
+                f"https://www.sidefx.com/docs/houdini/{section}/test_item.html"
+            )
 
-        # Just verify the function doesn't error on valid types
-        valid_types = [
-            "sop",
-            "obj",
-            "dop",
-            "cop2",
-            "chop",
-            "vop",
-            "lop",
-            "top",
-            "rop",
-            "vex_function",
-            "python_hou",
-        ]
+    @patch("requests.get")
+    def test_every_advertised_help_type_has_a_page(self, mock_get):
+        """A help type the schema accepts is one the docs can be fetched for."""
+        from houdini_mcp.tools import get_houdini_help
+        from houdini_mcp.tools.help import HelpType
 
-        for help_type in valid_types:
-            result = get_houdini_help(help_type, "test_item")
-            assert "Unsupported help type" not in result.get("message", "")
+        mock_get.return_value = MagicMock(status_code=404)
+        for help_type in get_args(HelpType):
+            assert get_houdini_help(help_type, "test_item")["kind"] != "operation_failed"
+        assert mock_get.call_count == len(get_args(HelpType))
 
 
 class TestMaterialTools:
@@ -3385,12 +3376,25 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("get_scene_info")
-        def function_with_args(a, b, c=10):
+        def function_with_args(a: int, b: int, c: int = 10) -> dict:
             return {"status": "success", "result": a + b + c}
 
         result = function_with_args(1, 2, c=5)
         assert result["status"] == "success"
         assert result["result"] == 8
+
+    def test_an_argument_is_parsed_as_the_json_it_is_sent_as(self):
+        """A tuple is the array it crosses the wire as; a string is never a boolean."""
+        from houdini_mcp.tools._common import handle_connection_errors
+
+        @handle_connection_errors("reorder_inputs")
+        def echo(order: list[int], flag: bool = False) -> dict:
+            return {"status": "success", "order": order, "flag": flag}
+
+        assert echo((1, 0))["order"] == [1, 0]
+        refused = echo([1], flag="yes")
+        assert (refused["kind"], refused["parameter"]) == ("invalid_input", "flag")
+        assert echo(object())["message"].startswith("order: not expressible as JSON")
 
     def test_decorator_uses_operation_name_in_logs(self):
         """Test decorator uses operation name in error handling."""

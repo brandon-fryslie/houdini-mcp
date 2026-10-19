@@ -632,11 +632,11 @@ class TestEdgeCases:
         mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
 
         bad_detail = get_node_info("/obj/geo1", detail="tiny", host="localhost", port=18811)
-        assert bad_detail["status"] == "error"
-        assert "detail must be one of" in bad_detail["message"]
+        assert (bad_detail["kind"], bad_detail["parameter"]) == ("invalid_input", "detail")
+        assert "'compact', 'standard' or 'full', got 'tiny'" in bad_detail["message"]
         bad_cook = get_node_info("/obj/geo1", cook_info="yes", host="localhost", port=18811)
-        assert bad_cook["status"] == "error"
-        assert "cook_info must be one of" in bad_cook["message"]
+        assert (bad_cook["kind"], bad_cook["parameter"]) == ("invalid_input", "cook_info")
+        assert "got 'yes'" in bad_cook["message"]
 
     def test_cook_state_enum_edge_cases(self, mock_connection):
         """Test handling of unusual cook state values."""

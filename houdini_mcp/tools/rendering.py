@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from ..connection import transport_failure
 from ._common import (
@@ -32,10 +32,17 @@ from .parms import read_present, write_all
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
 
+# [LAW:types-are-the-program] each closed-domain parameter is declared as its
+# domain, so the served schema publishes the legal values and the server refuses
+# any other before a render begins.
+Renderer = Literal["opengl", "karma"]
+KarmaEngine = Literal["cpu", "gpu"]
+ImageFormat = Literal["png", "jpg", "exr"]
+
 # [LAW:one-type-per-behavior] a renderer is the ROP type of its name and the
 # parms that ROP takes its resolution and engine through. The table is the
 # whole difference between renderers; everything else about a render is the same.
-_RENDERERS: dict[str, Callable[[int, int, str], dict[str, Any]]] = {
+_RENDERERS: dict[Renderer, Callable[[int, int, str], dict[str, Any]]] = {
     "opengl": lambda width, height, _engine: {"tres": True, "res1": width, "res2": height},
     "karma": lambda width, height, engine: {
         "resolutionx": width,
@@ -44,7 +51,7 @@ _RENDERERS: dict[str, Callable[[int, int, str], dict[str, Any]]] = {
     },
 }
 # The caller's name for a Karma engine, and the ROP's.
-_KARMA_ENGINES = {"cpu": "cpu", "gpu": "xpu"}
+_KARMA_ENGINES: dict[KarmaEngine, str] = {"cpu": "cpu", "gpu": "xpu"}
 
 # How a camera frames a box: it stands back far enough for the padded box to fill
 # the field of view, never closer than the minimum, and an orthographic view
@@ -312,30 +319,23 @@ class _Prepared:
     out: Any
     width: int
     height: int
-    rop_type: str
+    rop_type: Renderer
     rop_settings: dict[str, Any]
     remote_os: Any
     remote_tempfile: Any
 
 
 def _prepare(
-    resolution: Resolution, renderer: str, karma_engine: str, host: str, port: int
+    resolution: Resolution, renderer: Renderer, karma_engine: KarmaEngine, host: str, port: int
 ) -> _Prepared:
-    """Check every input and resolve every context a render needs, or raise.
+    """Resolve every context a render needs, or raise.
 
-    [LAW:no-ambient-temporal-coupling] a bad input creates nothing: resolution,
-    renderer, engine, both contexts and the link are all settled here, before
-    the first temporary node is made.
+    [LAW:no-ambient-temporal-coupling] a failure creates nothing: both contexts
+    and the link are settled here, before the first temporary node is made.
     """
     hou = ensure_connected(host, port)
     width, height = resolution
     obj = hou.node("/obj")
-    rop_type = renderer.lower()
-    if rop_type not in _RENDERERS:
-        raise InvalidInput(f"Unknown renderer: {renderer}", renderer=renderer)
-    engine = _KARMA_ENGINES.get(karma_engine.lower())
-    if engine is None:
-        raise InvalidInput(f"Unknown karma_engine: {karma_engine}", karma_engine=karma_engine)
     out = hou.node("/out")
     remote_os, remote_tempfile = _get_remote_modules(host, port)
     return _Prepared(
@@ -344,8 +344,8 @@ def _prepare(
         out=out,
         width=width,
         height=height,
-        rop_type=rop_type,
-        rop_settings=_RENDERERS[rop_type](width, height, engine),
+        rop_type=renderer,
+        rop_settings=_RENDERERS[renderer](width, height, _KARMA_ENGINES[karma_engine]),
         remote_os=remote_os,
         remote_tempfile=remote_tempfile,
     )
@@ -411,7 +411,7 @@ def _build_rop(
     return rop
 
 
-def _render_picture(rop: Any, prepared: _Prepared, output_format: str) -> str:
+def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -> str:
     """Render the ROP into a fresh file on Houdini's machine and bring the image back base64-encoded.
 
     The file does not outlive the call. A render that leaves it empty produced
@@ -460,11 +460,11 @@ def render_viewport(
     camera_rotation: Vec3 | None = None,
     look_at: str | None = None,
     resolution: Resolution = DEFAULT_RESOLUTION,
-    renderer: str = "opengl",
-    output_format: str = "png",
+    renderer: Renderer = "opengl",
+    output_format: ImageFormat = "png",
     auto_frame: bool = True,
     orthographic: bool = False,
-    karma_engine: str = "cpu",
+    karma_engine: KarmaEngine = "cpu",
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -544,11 +544,11 @@ def render_viewport(
 @handle_connection_errors("render_quad_view")
 def render_quad_view(
     resolution: Resolution = DEFAULT_RESOLUTION,
-    renderer: str = "opengl",
-    output_format: str = "png",
+    renderer: Renderer = "opengl",
+    output_format: ImageFormat = "png",
     orthographic: bool = True,
     include_perspective: bool = True,
-    karma_engine: str = "cpu",
+    karma_engine: KarmaEngine = "cpu",
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:

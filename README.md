@@ -189,7 +189,7 @@ Environment variables:
 | `HOUDINI_PORT` | `18811` | hrpyc server port |
 | `HOUDINI_RPC_TOKEN` | *(unset)* | Shared secret the Houdini listener enforces; must match the listener's |
 | `MCP_PORT` | `3055` | MCP server HTTP port |
-| `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse) |
+| `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `HOUDINI_MCP_RESULTS_DIR` | a new private directory in the system temp, per server process | Where results too large to return inline are written |
 
