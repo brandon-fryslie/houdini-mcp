@@ -261,8 +261,7 @@ houdini-mcp/
 ├── tests/
 │   └── integration/
 │       └── test_workflow_examples.py  # Integration tests for examples
-├── README.md                          # Updated with comprehensive docs
-└── docs/implementation/examples-docs.md # This file
+└── README.md                          # Updated with comprehensive docs
 ```
 
 ## Example Output

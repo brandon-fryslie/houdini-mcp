@@ -466,11 +466,10 @@ Complete working examples are available in the `examples/` directory:
 Run examples:
 
 ```bash
-cd examples
-python build_from_scratch.py
-python augment_existing_scene.py
-python parameter_workflow.py
-python error_handling.py
+python examples/build_from_scratch.py
+python examples/augment_existing_scene.py
+python examples/parameter_workflow.py
+python examples/error_handling.py
 ```
 
 ## Usage Examples
