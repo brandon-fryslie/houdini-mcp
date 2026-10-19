@@ -13,6 +13,7 @@ import pytest
 
 from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading, Unreadable
 from houdini_mcp.tools import summarization
+from tests.conftest import summarizer_through
 
 
 def completion(content: Any = "Test summary", finish_reason: str = "stop") -> dict:
@@ -48,13 +49,7 @@ class Wire:
 
     def client(self) -> httpx.AsyncClient:
         """The production client, with this wire in place of the network."""
-        real = self.production_client()
-        return httpx.AsyncClient(
-            base_url=real.base_url,
-            headers=real.headers,
-            timeout=real.timeout,
-            transport=httpx.MockTransport(self.handle),
-        )
+        return summarizer_through(self.production_client, self.handle)
 
 
 @pytest.fixture

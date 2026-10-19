@@ -834,6 +834,21 @@ def results_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pat
     return root
 
 
+def summarizer_through(
+    production: Callable[[], httpx.AsyncClient],
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
+    """The client ``production`` builds - its server, key and timeouts - with ``handler``
+    answering in place of the network."""
+    real = production()
+    return httpx.AsyncClient(
+        base_url=real.base_url,
+        headers=real.headers,
+        timeout=real.timeout,
+        transport=httpx.MockTransport(handler),
+    )
+
+
 @pytest.fixture(autouse=True)
 def summarizer_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """The summarizer as a test reaches it unless the test routes its own: a server that
@@ -845,16 +860,9 @@ def summarizer_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("tests reach no summarizer", request=request)
 
-    def offline() -> httpx.AsyncClient:
-        real = production()
-        return httpx.AsyncClient(
-            base_url=real.base_url,
-            headers=real.headers,
-            timeout=real.timeout,
-            transport=httpx.MockTransport(refuse),
-        )
-
-    monkeypatch.setattr(summarization, "summarizer_client", offline)
+    monkeypatch.setattr(
+        summarization, "summarizer_client", lambda: summarizer_through(production, refuse)
+    )
 
 
 @pytest.fixture
