@@ -28,7 +28,9 @@ from houdini_mcp.tools import (
 class TestBuildFromScratch:
     """Test Example 1: Building a complete SOP network from scratch."""
 
-    async def test_build_sphere_xform_color_out_chain(self, at: dict[str, Any]) -> None:
+    async def test_build_sphere_xform_color_out_chain(
+        self, at: dict[str, Any], bound: dict[str, Any]
+    ) -> None:
         """Build and verify: sphere → xform → color → OUT."""
 
         # Create geo container
@@ -83,7 +85,7 @@ class TestBuildFromScratch:
         assert flags["status"] == "success"
 
         # Verify with get_geo_summary
-        summary = await get_geo_summary(out_path, max_sample_points=10, **at)
+        summary = await get_geo_summary(out_path, max_sample_points=10, **bound)
         assert summary["status"] == "success"
         assert summary["cook_state"] == "cooked"
         assert summary["point_count"] > 0
@@ -97,7 +99,9 @@ class TestBuildFromScratch:
 class TestAugmentExistingScene:
     """Test Example 2: Augmenting an existing network by inserting a node."""
 
-    async def test_insert_mountain_between_grid_and_noise(self, at: dict[str, Any]) -> None:
+    async def test_insert_mountain_between_grid_and_noise(
+        self, at: dict[str, Any], bound: dict[str, Any]
+    ) -> None:
         """Insert mountain between grid → noise."""
 
         # Create initial network: grid → noise
@@ -124,7 +128,7 @@ class TestAugmentExistingScene:
         assert noise_child["inputs"][0]["source_node"] == grid_path
 
         # Get geometry BEFORE mountain
-        geo_before = await get_geo_summary(noise_path, max_sample_points=0, **at)
+        geo_before = await get_geo_summary(noise_path, max_sample_points=0, **bound)
         assert geo_before["status"] == "success"
 
         # Create mountain node
@@ -153,7 +157,7 @@ class TestAugmentExistingScene:
         assert noise_info["input_connections"][0]["source_node"] == mountain_path
 
         # Get geometry AFTER mountain
-        geo_after = await get_geo_summary(noise_path, max_sample_points=0, **at)
+        geo_after = await get_geo_summary(noise_path, max_sample_points=0, **bound)
         assert geo_after["status"] == "success"
 
         # Verify geometry changed (mountain should affect bounding box)
@@ -168,7 +172,9 @@ class TestAugmentExistingScene:
 class TestParameterWorkflow:
     """Test Example 3: Parameter schema discovery and intelligent setting."""
 
-    async def test_parameter_schema_discovery_and_setting(self, at: dict[str, Any]) -> None:
+    async def test_parameter_schema_discovery_and_setting(
+        self, at: dict[str, Any], bound: dict[str, Any]
+    ) -> None:
         """Discover parameter schema and set values intelligently."""
 
         # Create sphere
@@ -211,7 +217,7 @@ class TestParameterWorkflow:
         assert abs(node_info["parameters"]["radz"] - 3.0) < 0.001
 
         # Verify geometry reflects parameter change
-        geo_summary = await get_geo_summary(sphere_path, max_sample_points=0, **at)
+        geo_summary = await get_geo_summary(sphere_path, max_sample_points=0, **bound)
         assert geo_summary["status"] == "success"
 
         # Sphere diameter should be ~6.0 (radius 3.0)
@@ -250,7 +256,9 @@ class TestParameterWorkflow:
 class TestErrorHandling:
     """Test Example 4: Error detection, diagnosis, and fixing."""
 
-    async def test_detect_missing_input_error(self, at: dict[str, Any]) -> None:
+    async def test_detect_missing_input_error(
+        self, at: dict[str, Any], bound: dict[str, Any]
+    ) -> None:
         """Detect when a node has no input (where one is expected)."""
 
         geo_result = create_node("geo", "/obj", "test_errors", **at)
@@ -266,7 +274,7 @@ class TestErrorHandling:
         assert "cook_info" in noise_info
 
         # Noise without input cooks to no geometry at all
-        geo = await get_geo_summary(noise_path, max_sample_points=0, **at)
+        geo = await get_geo_summary(noise_path, max_sample_points=0, **bound)
         assert geo["status"] == "error", geo
         assert geo["kind"] == "operation_failed", geo
 
@@ -277,7 +285,7 @@ class TestErrorHandling:
         connect_nodes(grid_path, noise_path, **at)
 
         # Verify fix
-        geo_after = await get_geo_summary(noise_path, max_sample_points=0, **at)
+        geo_after = await get_geo_summary(noise_path, max_sample_points=0, **bound)
         assert geo_after["status"] == "success"
         assert geo_after["point_count"] > 0, "Should have points after connecting input"
 
@@ -328,7 +336,9 @@ class TestErrorHandling:
             or "category" in bad_conn["message"].lower()
         )
 
-    async def test_safe_geometry_access_pattern(self, at: dict[str, Any]) -> None:
+    async def test_safe_geometry_access_pattern(
+        self, at: dict[str, Any], bound: dict[str, Any]
+    ) -> None:
         """Test the safe pattern: check cook state before accessing geometry."""
 
         geo_result = create_node("geo", "/obj", "test_safe_access", **at)
@@ -346,7 +356,7 @@ class TestErrorHandling:
 
         # Step 2: Only access geometry if cooked
         if cook_state == "cooked":
-            geo = await get_geo_summary(box_path, max_sample_points=0, **at)
+            geo = await get_geo_summary(box_path, max_sample_points=0, **bound)
             assert geo["status"] == "success"
             assert geo["point_count"] > 0
         else:
