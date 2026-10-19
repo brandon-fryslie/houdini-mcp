@@ -1,5 +1,6 @@
 """Pytest configuration and fixtures for Houdini MCP tests."""
 
+import contextlib
 import copy
 import logging
 import threading
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from rpyc.core import vinegar
+from rpyc.utils.server import Server
 
 from houdini_mcp.connection import _InterpreterModules
 
@@ -878,17 +880,35 @@ class MockUndoGroupContext:
         return False
 
 
-def await_rpyc_client_threads(timeout: float = 2.0) -> None:
-    """Wait for rpyc's per-client threads to notice the client's close.
+def await_clients_served(server: Server, timeout: float = 5.0) -> None:
+    """Wait until ``server`` has finished serving every client it accepted.
 
-    rpyc serves each client on its own thread and re-raises, after logging,
-    when the server closes that client's socket under a poll. Stopping once
-    those threads have exited is what a clean stop needs, so wait on that.
+    rpyc serves each client on its own thread, which drops the client from
+    ``server.clients`` once it has read the client's close. ``server.close()``
+    before that closes the socket under the thread's poll, and the thread
+    raises. So the server closes only after this returns, the order
+    ``closing_once_served`` keeps for a server the test owns.
+
+    [LAW:no-ambient-temporal-coupling] the condition is this server's own
+    state, so no other test's server or thread can hold it up.
     """
     deadline = time.monotonic() + timeout
-    while any(t.name.startswith("RpycSpawnThread") for t in threading.enumerate()):
-        assert time.monotonic() < deadline, "rpyc client thread did not exit"
+    while server.clients:
+        assert time.monotonic() < deadline, (
+            f"rpyc server still serving {len(server.clients)} client(s)"
+        )
         time.sleep(0.01)
+
+
+@contextlib.contextmanager
+def closing_once_served(server: Server) -> Generator[Server, None, None]:
+    """``contextlib.closing`` for a real rpyc server: on exit, on every path, it
+    closes ``server`` once ``server`` has served every client it accepted."""
+    with contextlib.closing(server):
+        try:
+            yield server
+        finally:
+            await_clients_served(server)
 
 
 class MockEnumValue:
