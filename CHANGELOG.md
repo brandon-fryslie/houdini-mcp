@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of serving http; the `houdini-mcp` command reads both variables, where it
   ignored them before.
 
+- **Replacing the scene backs up its unsaved work first**
+  (houdini-transactions-75y): `new_scene` and `load_scene` save the current
+  scene's unsaved work with Houdini's own backup, into the `backup` folder
+  beside its hip file, before replacing it, and return the backup's path as
+  `checkpoint`. A scene that has never been saved cannot be backed up, so one
+  holding any node is refused until `save_scene(file_path)` saves it. A failed
+  load says where the backup is. `execute_code` takes no backup.
+
 - **A result's text is a dense shorthand of its JSON**
   (houdini-laws-spine-cqp.kx6): a list of objects names its keys once and
   gives each object one line of values, and a tree's rows indent under their
@@ -281,11 +289,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `TransactionManager`, `TransactionRecord`, `TransactionConflict` and
+  `RECOVERABLE_TOOL_POLICIES` (houdini-transactions-75y): no tool ever called
+  them.
+
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
   (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
   `available_types`.
 
 ### Fixed
+
+- **A note on a Houdini exception no longer replaces it**
+  (houdini-transactions-75y): rpyc copies a Houdini exception's `add_note` onto
+  it as a string. So when a render tool's temporary node would not go, the
+  failure came back as `'str' object is not callable` instead of what Houdini
+  raised. It now comes back as Houdini's own failure, with the note.
 
 - **MCP Status shows the Houdini being served from Start** (houdini-laws-etg.58u):
   starting the stdio server opens its in-process link, so the shelf's status
