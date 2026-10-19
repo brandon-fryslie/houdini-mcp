@@ -68,6 +68,10 @@ class Recording(dict):
         read.add(key)
         return super().__getitem__(key)
 
+    def __contains__(self, key):
+        read.add(key)
+        return super().__contains__(key)
+
 
 os.environ = Recording(os.environ)
 import houdini_mcp.server as server

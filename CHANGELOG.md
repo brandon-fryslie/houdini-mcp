@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build_server(target)` returns the server, `serve(target, ...)` and
   `run_server(target, transport, port, log_level)` take the target, and
   `houdini_mcp.settings.houdini_target(os.environ)` resolves it.
-  `houdini_mcp_plugin.serving_target()` names the Houdini the plugin's stdio
-  server reaches.
+  `houdini_mcp_plugin.serving_target()` names the target the plugin's stdio
+  server was started with.
 
 - **BREAKING (wire, Python API)**: closed-domain parameters publish their
   legal values (houdini-laws-etg.4id): `renderer`, `output_format` and

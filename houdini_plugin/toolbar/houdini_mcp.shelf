@@ -43,10 +43,10 @@ else:
             title="Houdini MCP"
         )
     except Exception as e:
-        # binding to this Houdini failed (for example houdini_mcp is not
-        # installed into Houdini's Python); e names the cause.
+        # a setting, binding to this Houdini, or building the server failed
+        # (for example houdini_mcp is not installed into Houdini's Python).
         hou.ui.displayMessage(
-            f"Error starting MCP Server:\n{e}",
+            f"Error starting MCP Server:\n{type(e).__name__}: {e}",
             title="Houdini MCP",
             severity=hou.severityType.Error
         )

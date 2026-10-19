@@ -266,7 +266,7 @@ class TestPluginStartsTheSharedServer:
         assert payload["target"] == "this interpreter"
         assert plugin_server.is_server_running() is False
 
-    def test_mcp_status_reads_the_target_start_resolved(
+    def test_the_serving_target_is_the_one_start_resolved(
         self,
         monkeypatch: pytest.MonkeyPatch,
         plugin_server: Any,

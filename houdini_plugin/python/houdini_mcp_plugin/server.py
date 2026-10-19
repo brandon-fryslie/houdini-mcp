@@ -147,7 +147,7 @@ def start_server(use_thread: bool = True) -> None:
 
 
 def serving_target() -> "Target | None":
-    """The Houdini the stdio server serving this process's stdin reaches, or None when none is."""
+    """The target the stdio server serving this process's stdin was started with, or None."""
     return _stdio.serving()
 
 
