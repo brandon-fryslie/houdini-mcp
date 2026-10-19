@@ -137,7 +137,7 @@ async def serialize_scene(
     include_params: bool = False,
     max_depth: Count = 10,
     *,
-    summarize: bool = False,
+    summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -151,8 +151,9 @@ async def serialize_scene(
         root_path: Root node path to serialize from (default: "/obj")
         include_params: Include parameter values (can be verbose, default: False)
         max_depth: Levels below root_path to descend; deeper nodes are marked truncated (default: 10)
-        summarize: If True, use AI to analyze scene structure (default: False).
-                  Identifies complexity hotspots and optimization opportunities.
+        summarize: Use AI to analyze a scene too large to read whole (default: True).
+                  Identifies complexity hotspots and optimization opportunities. False
+                  sends nothing to the summarizer, whatever the size.
 
     Returns:
         Dict with scene structure, optionally with ai_summary field containing

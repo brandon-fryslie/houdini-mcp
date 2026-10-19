@@ -57,7 +57,6 @@ from .scene import get_scene_info, load_scene, new_scene, save_scene, serialize_
 from .summarization import (
     estimate_tokens,
     get_summarization_status,
-    should_summarize,
     summarize_errors,
     summarize_geometry,
     summarize_render_settings,
@@ -148,7 +147,6 @@ __all__ = [
     "summarize_scene",
     "summarize_render_settings",
     "get_summarization_status",
-    "should_summarize",
     "estimate_tokens",
     # Pane screenshots
     "capture_pane_screenshot",

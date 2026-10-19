@@ -86,30 +86,82 @@ class TestEstimateTokens:
         assert result > 100  # Should be more than 100 tokens for 100 items
 
 
-class TestShouldSummarize:
-    """Tests for summarization decision logic."""
+@pytest.fixture
+def no_wire(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A summarizer transport that fails the test if anything is sent on it."""
 
-    def test_should_summarize_force_true(self):
-        """Test force summarization."""
-        assert summarization.should_summarize({}, force=True) is True
+    def refuse(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"a summarization request was sent: {request.url}")
 
-    def test_should_summarize_small_data(self):
-        """Test small data doesn't get summarized."""
-        small_data = {"count": 10}
-        assert summarization.should_summarize(small_data) is False
+    monkeypatch.setattr(
+        summarization,
+        "summarizer_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+    )
+    monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
-    def test_should_summarize_large_data(self, monkeypatch):
-        """Test large data triggers summarization."""
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
-        # Create data larger than threshold (default 5000 tokens = ~20000 chars)
-        large_data = {"data": "x" * 30000}
-        assert summarization.should_summarize(large_data) is True
 
-    def test_should_summarize_disabled(self, monkeypatch):
-        """Test summarization disabled."""
+SUMMARIZERS = [
+    summarization.summarize_errors,
+    summarization.summarize_geometry,
+    summarization.summarize_scene,
+]
+RESULT = {"status": "success", "nodes": ["/obj/geo1/node"] * 50}
+
+
+def threshold_below(monkeypatch: pytest.MonkeyPatch, data: dict, by: int) -> None:
+    """Set AUTO_SUMMARIZE_THRESHOLD ``by`` tokens below the data's estimated size."""
+    tokens = summarization.estimate_tokens(data)
+    monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", tokens - by)
+
+
+class TestSummarized:
+    """summarize is one bool: False is off, True summarizes what is over the threshold."""
+
+    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
+    async def test_false_sends_nothing_however_large(self, no_wire, monkeypatch, summarizer):
+        threshold_below(monkeypatch, RESULT, by=1)
+        result = await summarization.summarized(dict(RESULT), summarizer, asked=False)
+        assert result == RESULT
+
+    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
+    async def test_true_summarizes_past_the_threshold(self, wire, monkeypatch, summarizer):
+        threshold_below(monkeypatch, RESULT, by=1)
+        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
+        assert result == {**RESULT, "ai_summary": "Test summary", "_summarized": True}
+        assert len(wire.sent) == 1
+
+    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
+    async def test_true_leaves_a_result_at_the_threshold_as_is(
+        self, no_wire, monkeypatch, summarizer
+    ):
+        threshold_below(monkeypatch, RESULT, by=0)
+        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
+        assert result == RESULT
+
+    async def test_disabled_sends_nothing_and_says_why(self, no_wire, monkeypatch):
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        large_data = {"data": "x" * 30000}
-        assert summarization.should_summarize(large_data) is False
+        threshold_below(monkeypatch, RESULT, by=1)
+        result = await summarization.summarized(
+            dict(RESULT), summarization.summarize_errors, asked=True
+        )
+        assert result["ai_summary_error"].endswith(
+            ": summarization is disabled (SUMMARIZATION_ENABLED)"
+        )
+
+    @pytest.mark.parametrize(("asked", "by", "decided"), [(False, 1, False), (True, 0, False)])
+    async def test_logs_the_decision_and_its_inputs(
+        self, no_wire, monkeypatch, caplog, asked, by, decided
+    ):
+        threshold_below(monkeypatch, RESULT, by=by)
+        tokens = summarization.estimate_tokens(RESULT)
+        with caplog.at_level("DEBUG", logger="houdini_mcp.summarization"):
+            await summarization.summarized(
+                dict(RESULT), summarization.summarize_errors, asked=asked
+            )
+        assert caplog.messages == [
+            f"Summarize: {decided} (asked={asked}, ~{tokens} tokens, threshold {tokens - by})"
+        ]
 
 
 class TestDefaults:

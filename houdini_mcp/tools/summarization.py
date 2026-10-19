@@ -130,33 +130,26 @@ def estimate_tokens(data: Any) -> int:
     return len(json.dumps(data, default=str)) // 4
 
 
-def should_summarize(data: Any, force: bool = False) -> bool:
-    """Determine if data should be summarized.
-
-    Args:
-        data: The data to potentially summarize
-        force: Force summarization regardless of size
-
-    Returns:
-        True if summarization should be applied
-    """
-    if force:
-        return True
-
-    if not SUMMARIZATION_ENABLED:
-        return False
-
-    return estimate_tokens(data) > AUTO_SUMMARIZE_THRESHOLD
-
-
 async def summarized(
     result: dict[str, Any],
     summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
     *,
     asked: bool,
 ) -> dict[str, Any]:
-    """The result with its AI summary when the caller asked for one or it is large."""
-    return await summarizer(result) if should_summarize(result, force=asked) else result
+    """The result with its AI summary when the caller asked for one and it is too large
+    to read whole; anything else comes back as is, and nothing leaves the process."""
+    tokens = estimate_tokens(result)
+    # [LAW:no-mode-explosion] summarize is one bool: False is off, and True summarizes
+    # only past the threshold - a result small enough to read gains nothing from one.
+    summarize = asked and tokens > AUTO_SUMMARIZE_THRESHOLD
+    logger.debug(
+        "Summarize: %s (asked=%s, ~%d tokens, threshold %d)",
+        summarize,
+        asked,
+        tokens,
+        AUTO_SUMMARIZE_THRESHOLD,
+    )
+    return await summarizer(result) if summarize else result
 
 
 async def summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
@@ -343,6 +336,8 @@ async def _complete(prompt: str) -> Summary | NoSummary:
 
 async def _request(prompt: str) -> Summary | NoSummary:
     """One chat-completions round trip, read as a summary or the reason there is none."""
+    # [LAW:single-enforcer] The one place SUMMARIZATION_ENABLED is read: no request
+    # leaves while it is off, whoever asks.
     if not SUMMARIZATION_ENABLED:
         return NoSummary("summarization is disabled (SUMMARIZATION_ENABLED)")
     try:

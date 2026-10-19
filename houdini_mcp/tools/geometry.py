@@ -32,7 +32,7 @@ async def get_geo_summary(
     include_attributes: bool = True,
     include_groups: bool = True,
     *,
-    summarize: bool = False,
+    summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -49,8 +49,9 @@ async def get_geo_summary(
                           Set to 0 to skip point sampling.
         include_attributes: Whether to include attribute metadata (default: True)
         include_groups: Whether to include group information (default: True)
-        summarize: If True, use AI to generate a concise summary of the geometry (default: False).
-                  Useful for large/complex geometry to reduce token usage.
+        summarize: Use AI to summarize geometry data too large to read whole
+                  (default: True), to reduce token usage. False sends nothing to the
+                  summarizer, whatever the size.
 
     Returns:
         Dict with comprehensive geometry summary including:
@@ -60,7 +61,7 @@ async def get_geo_summary(
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
-        - ai_summary: (if summarize=True) AI-generated insights about the geometry
+        - ai_summary: (if summarized) AI-generated insights about the geometry
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
@@ -80,8 +81,8 @@ async def get_geo_summary(
         get_geo_summary("/obj/geo1/grid1", max_sample_points=0,
                        include_attributes=False, include_groups=False)
 
-        # Full detail for verification with AI summary
-        get_geo_summary("/obj/geo1/noise1", max_sample_points=200, summarize=True)
+        # Full detail for verification, read whole rather than summarized
+        get_geo_summary("/obj/geo1/noise1", max_sample_points=200, summarize=False)
     """
     result = await on_the_scene(
         "get_geo_summary",

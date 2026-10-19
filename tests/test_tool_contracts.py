@@ -627,11 +627,17 @@ class TestServedFailures:
 class TestServedSummaries:
     """When a served tool asks the summarizer for a summary."""
 
-    async def test_find_error_nodes_summarizes_only_on_request_or_size(
+    @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
+    def test_summarize_is_served_defaulting_to_true(
+        self, served: dict[str, Tool], name: str
+    ) -> None:
+        assert served[name].input_schema["properties"]["summarize"]["default"] is True
+
+    async def test_find_error_nodes_summarizes_a_large_result_unless_told_not_to(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Many errors in a small result are not, alone, a reason to summarize."""
-        from houdini_mcp.tools import errors
+        """Many errors are not, alone, a reason to summarize; size is, unless summarize=False."""
+        from houdini_mcp.tools import errors, summarization
 
         def six_errors(*_a: Any, **_k: Any) -> dict[str, Any]:
             nodes = [{"path": f"/obj/geo1/bad{i}", "errors": ["x"]} for i in range(6)]
@@ -648,7 +654,10 @@ class TestServedSummaries:
 
         await client.call_tool("find_error_nodes", {})
         assert asked == []
-        await client.call_tool("find_error_nodes", {"summarize": True})
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
+        await client.call_tool("find_error_nodes", {"summarize": False})
+        assert asked == []
+        await client.call_tool("find_error_nodes", {})
         assert len(asked) == 1
 
     async def test_find_error_nodes_never_summarizes_a_failure(
@@ -668,7 +677,6 @@ class TestServedSummaries:
 
         monkeypatch.setattr(server.tools, "find_error_nodes", nothing_read)
         monkeypatch.setattr(server.tools, "summarize_errors", record)
-        monkeypatch.setattr(server.tools, "should_summarize", lambda _data: True)
 
         await client.call_tool("find_error_nodes", {"summarize": True})
         assert asked == []

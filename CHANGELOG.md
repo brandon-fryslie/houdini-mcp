@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire, Python API)**: `summarize` on `find_error_nodes`,
+  `get_geo_summary` and `serialize_scene` defaults to `true`, and it is the
+  whole rule (houdini-laws-etg.0yy). `true` summarizes a result over
+  `AUTO_SUMMARIZE_THRESHOLD` and returns anything smaller as is; `false` sends
+  nothing to the summarizer, whatever the size. Before, `false` still
+  summarized a large result and `true` summarized a small one too. With
+  `SUMMARIZATION_ENABLED=false` nothing is sent either, and a large result
+  carries `ai_summary_error` saying summarization is disabled.
+  `should_summarize` is gone from `houdini_mcp.tools`.
+
 - **BREAKING (Python API)**: importing `houdini_mcp.server` builds no server
   and reads none of `HOUDINI_HOST`, `HOUDINI_PORT`, `LOG_LEVEL`, `MCP_TRANSPORT`
   or `MCP_PORT` (houdini-laws-etg.y04). The `houdini-mcp` command and
