@@ -13,7 +13,7 @@ from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import tools
+from . import delivery, tools
 from .connection import describe_target
 from .tools._common import on_the_scene
 from .tools.failure import failure_response
@@ -116,9 +116,20 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
+def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
+    """The held tool with its result delivered within the response bound."""
+
+    # [LAW:single-enforcer] every served tool's result crosses this one boundary.
+    @functools.wraps(tool)
+    async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return delivery.deliver(tool.__name__, await tool(*args, **kwargs))
+
+    return call
+
+
 def served(tool: Callable[..., Any]) -> Tool:
     """The tool as clients see it: its own signature and docs, with the target bound."""
-    declared = Tool.from_function(held(tool))
+    declared = Tool.from_function(delivered(held(tool)))
     bound = {
         name: ArgTransform(hide=True, default=value)
         for name, value in TARGET.items()
@@ -130,6 +141,12 @@ def served(tool: Callable[..., Any]) -> Tool:
 
 for _tool in SERVED_TOOLS:
     mcp.add_tool(served(_tool))
+
+
+@mcp.resource(delivery.RESULT_URI, mime_type="application/json")
+def delivered_result(name: str) -> str:
+    """A tool result too large to return inline, by the name in its ``result_uri``."""
+    return delivery.read_result(name)
 
 
 def serve(transport: str = "http", port: int = 3055) -> None:

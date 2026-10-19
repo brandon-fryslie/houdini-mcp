@@ -54,7 +54,6 @@ from ._common import (
     OperationFailed,
     ProgramStillRunning,
     _truncate_output,
-    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
 )
@@ -599,19 +598,17 @@ def execute_code(
             message=f"Unknown policy {policy!r}. Valid policies: {', '.join(VALID_POLICIES)}.",
             hint=f"Pass policy as one of: {', '.join(VALID_POLICIES)}.",
         )
-    return apply_response_cap(
-        _execute_with_grant(
-            code,
-            grant,
-            operation="execute_code",
-            capture_diff=capture_diff,
-            max_stdout_size=max_stdout_size,
-            max_stderr_size=max_stderr_size,
-            max_diff_nodes=max_diff_nodes,
-            timeout=timeout,
-            host=host,
-            port=port,
-        )
+    return _execute_with_grant(
+        code,
+        grant,
+        operation="execute_code",
+        capture_diff=capture_diff,
+        max_stdout_size=max_stdout_size,
+        max_stderr_size=max_stderr_size,
+        max_diff_nodes=max_diff_nodes,
+        timeout=timeout,
+        host=host,
+        port=port,
     )
 
 

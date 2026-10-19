@@ -21,7 +21,6 @@ from houdini_mcp.tools._common import (
     OperationFailed,
     ProgramStillRunning,
     TimedOut,
-    apply_response_cap,
     handle_connection_errors,
     node_at,
 )
@@ -277,9 +276,3 @@ class TestNodeAt:
             node_at(mock_hou, "/obj/nope", "Parent node")
         assert raised.value.message == "Parent node not found: /obj/nope"
         assert raised.value.fields == {"path": "/obj/nope"}
-
-
-class TestSerializationIsNotTruncation:
-    def test_an_unserializable_result_raises_instead_of_posing_as_truncated(self) -> None:
-        with pytest.raises(TypeError, match="not JSON-serializable"):
-            apply_response_cap({"status": "success", "node": object()})

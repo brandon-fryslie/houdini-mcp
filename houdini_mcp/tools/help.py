@@ -10,7 +10,6 @@ from ._common import (
     InvalidInput,
     OperationFailed,
     TimedOut,
-    _add_response_metadata,
     handle_connection_errors,
 )
 
@@ -248,7 +247,7 @@ def get_houdini_help(
             if len(methods) > 50:
                 result["methods_truncated"] = True
 
-        return _add_response_metadata(result)
+        return result
 
     except requests.exceptions.Timeout as e:
         raise TimedOut(f"Request timed out after {timeout} seconds", url=full_url) from e

@@ -11,8 +11,6 @@ from typing import Any
 
 from ._common import (
     OperationFailed,
-    _add_response_metadata,
-    apply_response_cap,
     handle_connection_errors,
     on_the_scene,
     tool_error,
@@ -95,7 +93,7 @@ async def get_geo_summary(
         host,
         port,
     )
-    return apply_response_cap(await summarized(result, summarize_geometry, asked=summarize))
+    return await summarized(result, summarize_geometry, asked=summarize)
 
 
 def _read_geometry(
@@ -106,7 +104,7 @@ def _read_geometry(
     host: str,
     port: int,
 ) -> dict[str, Any]:
-    """The geometry statistics of the SOP at node_path, with response metadata, uncapped."""
+    """The geometry statistics of the SOP at node_path."""
     # Imported here to avoid circular imports
     from .code import ExecutionGrant, _bypass_config_enabled, _execute_with_grant
 
@@ -269,7 +267,7 @@ print(json.dumps(result))
         raise OperationFailed("No output from geometry analysis")
 
     try:
-        result = json.loads(stdout)
+        result: dict[str, Any] = json.loads(stdout)
     except json.JSONDecodeError as e:
         raise OperationFailed(f"Failed to parse geometry data: {e}", raw_output=stdout[:500]) from e
     # The program names the kind of its own failure (no node there is the
@@ -281,4 +279,4 @@ print(json.dumps(result))
     # event here, as it would be had the server read it
     for where, found in unreads(result):
         log_unread(f"{where} of {node_path}", found)
-    return _add_response_metadata(result, apply_cap=False)
+    return result

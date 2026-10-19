@@ -13,10 +13,6 @@ Usage:
 # Import from extracted modules
 # Import shared utilities from _common (needed by some tests)
 from ._common import (
-    RESPONSE_SIZE_LARGE_THRESHOLD,
-    RESPONSE_SIZE_WARNING_THRESHOLD,
-    _add_response_metadata,
-    _estimate_response_size,
     _truncate_output,
     ensure_connected,
 )
@@ -166,11 +162,7 @@ __all__ = [
     "capture_multiple_panes",
     "render_node_network",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
-    "RESPONSE_SIZE_LARGE_THRESHOLD",
-    "RESPONSE_SIZE_WARNING_THRESHOLD",
-    "_add_response_metadata",
     "_detect_dangerous_code",
-    "_estimate_response_size",
     "_truncate_output",
     "ensure_connected",
 ]
