@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `render_viewport` refuses a `look_at` that is neither an
+  object nor a SOP inside one (houdini-laws-etg.aeu), as its description always
+  said. Before, any other node inside an object, such as a DOP or a VOP, was
+  framed where that object stands.
+
 - **BREAKING (wire)**: `render_viewport` stands its camera at `camera_position`,
   a world position, as its description always said (houdini-laws-etg.d06).
   Before, the value was an offset from the framed center along the rotated
@@ -364,6 +369,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `available_types`.
 
 ### Fixed
+
+- **Framing leaves out geometry with no points** (houdini-laws-etg.aeu): in
+  Houdini 22 the box around geometry with no points is a box of no size at its
+  origin, so an empty object pulled `auto_frame`, `render_quad_view` and the
+  `bounding_box` they report toward that origin. Framing now reads each
+  object's bounds and world transform once and carries the box into the world
+  itself: about 23 round trips over the link per displayed object, where it
+  was about 118.
 
 - **`connect_nodes` refused every node in a live Houdini**
   (houdini-connections-ob5): it answered "Source node not found" for any real

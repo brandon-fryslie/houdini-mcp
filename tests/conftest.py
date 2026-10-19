@@ -7,7 +7,7 @@ import math
 import pathlib
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -1145,9 +1145,6 @@ class MockMatrix4:
     def asTupleOfTuples(self) -> tuple[tuple[float, ...], ...]:
         return self._rows
 
-    def extractTranslates(self) -> tuple[float, ...]:
-        return self._rows[3][:3]
-
 
 class MockVector4:
     """Mock hou.Vector4: four components."""
@@ -1314,14 +1311,15 @@ HOUDINI_TURNED_BOX = (
     (13.214218499522659, 6.686793162298208, -0.9821946154299526),
 )
 
-# Houdini 22's bounds intrinsic of geometry with no points: an inverted box.
-_NO_POINTS_BOUNDS = (1.7014117331926443e38, -1.7014117331926443e38) * 3
+# Houdini 22's bounds intrinsic of geometry with no points is inverted: each min at
+# +this, each max at -this, a box no point has widened.
+_NO_POINTS_EXTENT = 1.7014117331926443e38
 
 
 class MockGeometry:
-    """Mock hou.Geometry object."""
+    """Mock hou.Geometry object, holding ``points`` to begin with."""
 
-    def __init__(self):
+    def __init__(self, points: Sequence[tuple] = ()):
         self._points: list[MockGeoPoint] = []
         self._prims: list[MockGeoPrim] = []
         self._point_attribs: list[MockGeoAttrib] = []
@@ -1330,7 +1328,8 @@ class MockGeometry:
         self._detail_attribs: list[MockGeoAttrib] = []
         self._point_groups: list[MockGeoGroup] = []
         self._prim_groups: list[MockGeoGroup] = []
-        self._bounds: tuple[float, ...] = _NO_POINTS_BOUNDS
+        for position in points:
+            self.addPoint(position)
 
     def points(self) -> list[MockGeoPoint]:
         """Return list of points."""
@@ -1368,8 +1367,14 @@ class MockGeometry:
 
     def intrinsicValue(self, name: str) -> Any:
         """hou.Geometry.intrinsicValue, for the intrinsics this double holds. Houdini
-        gives bounds as (xmin, xmax, ymin, ymax, zmin, zmax)."""
-        return {"bounds": self._bounds}[name]
+        gives bounds as (xmin, xmax, ymin, ymax, zmin, zmax) around the points."""
+        axes = [[point.position()[i] for point in self._points] for i in range(3)]
+        bounds = tuple(
+            end
+            for axis in axes
+            for end in (min(axis, default=_NO_POINTS_EXTENT), max(axis, default=-_NO_POINTS_EXTENT))
+        )
+        return {"bounds": bounds}[name]
 
     def addPoint(self, position: tuple, attribs: dict[str, Any] | None = None) -> MockGeoPoint:
         """Helper to add a point."""
@@ -1418,10 +1423,6 @@ class MockGeometry:
         group = MockGeoGroup(name)
         self._prim_groups.append(group)
         return group
-
-    def setBoundingBox(self, min_vec: tuple, max_vec: tuple) -> None:
-        """Helper: the geometry's points fill the box min_vec..max_vec."""
-        self._bounds = tuple(float(v) for axis in zip(min_vec, max_vec, strict=True) for v in axis)
 
 
 def raised_inside_houdini(exc: BaseException) -> BaseException:

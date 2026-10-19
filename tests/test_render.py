@@ -697,8 +697,8 @@ def test_a_box_is_carried_into_the_world_as_houdini_carries_it() -> None:
     )
 
 
-# The fake scene, served over a real rpyc link: add_geo displays one geo whose box
-# fills -1..1, so every geo framed costs the link what one object does.
+# The fake scene, served over a real rpyc link: add_geo displays one geo whose points
+# span -1..1, so every geo framed costs the link what one object does.
 _SERVED_SCENE = """
 from tests.conftest import MockGeometry, MockHouModule
 
@@ -706,8 +706,7 @@ hou = MockHouModule()
 
 
 def add_geo(name):
-    geometry = MockGeometry()
-    geometry.setBoundingBox((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
+    geometry = MockGeometry([(-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)])
     hou.node("/obj").createNode("geo", name).createNode("box", "box1").setGeometry(geometry)
 """
 
@@ -746,14 +745,12 @@ def test_framing_costs_each_displayed_object_a_fixed_number_of_round_trips() -> 
 
 
 def _geo_with_box(obj: Any, name: str, tx: float, lo: tuple, hi: tuple) -> Any:
-    """A displayed geo at x=tx whose display SOP's geometry fills the box lo..hi (local)."""
+    """A displayed geo at x=tx whose display SOP's points span lo..hi (local)."""
     from tests.conftest import MockGeometry
 
     geo = obj.createNode("geo", name)
     geo.parm("tx").set(tx)
-    geometry = MockGeometry()
-    geometry.setBoundingBox(lo, hi)
-    geo.createNode("box", "box1").setGeometry(geometry)
+    geo.createNode("box", "box1").setGeometry(MockGeometry([lo, hi]))
     return geo
 
 
@@ -1294,14 +1291,16 @@ class TestRenderFraming:
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
         assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
-    @pytest.mark.parametrize("path", ["/out", "/out/stray_box"])
-    def test_look_at_a_node_outside_any_object_is_an_error(
+    @pytest.mark.parametrize("path", ["/out", "/out/stray_box", "/obj/cube_b/solver"])
+    def test_look_at_anything_but_an_object_or_a_sop_in_one_is_an_error(
         self, frames: list[dict[str, Any]], framed_scene: Any, path: str
     ) -> None:
-        """A ROP network, and a SOP that stands in no object, have no place in the world."""
+        """A ROP network, a SOP that stands in no object, and a DOP, even inside an
+        object, are refused rather than framed where some object stands."""
         from houdini_mcp.tools import render_viewport
 
         framed_scene.node("/out").createNode("box", "stray_box")
+        framed_scene.node("/obj/cube_b").createNode("pyrosolver", "solver")
 
         result = render_viewport(look_at=path, host="localhost", port=18811)
 
@@ -1362,10 +1361,8 @@ class TestRenderFraming:
         from houdini_mcp.tools import render_viewport
         from tests.conftest import MockGeometry
 
-        geometry = MockGeometry()
-        geometry.setBoundingBox((-1, -1, -1), (1, 1, 1))
         inner = framed_scene.node("/obj/cube_b").createNode("subnet", "inner")
-        inner.createNode("box", "deep").setGeometry(geometry)
+        inner.createNode("box", "deep").setGeometry(MockGeometry([(-1, -1, -1), (1, 1, 1)]))
 
         result = render_viewport(look_at="/obj/cube_b/inner/deep", host="localhost", port=18811)
 
@@ -1627,7 +1624,7 @@ class TestRenderFraming:
         assert result["bounding_box"] == self.BOX
         assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("Framed ")] == [
             "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1'], "
-            "left out ['/obj/empty/box1', '/obj/broken/file1']: "
+            "left out {'/obj/empty/box1': 'no points', '/obj/broken/file1': 'did not cook'}: "
             "bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) distance=23.382 ortho_width=14.400"
         ]
 
@@ -1646,9 +1643,7 @@ class TestRenderFraming:
             ("tx", "ty", "tz", "rx", "ry", "rz"), (10, 3, -4, 20, -130, 35), strict=True
         ):
             turned.parm(name).set(float(value))
-        geometry = MockGeometry()
-        geometry.setBoundingBox((-1, -2, -3), (1, 2, 3))
-        turned.createNode("box", "box1").setGeometry(geometry)
+        turned.createNode("box", "box1").setGeometry(MockGeometry([(-1, -2, -3), (1, 2, 3)]))
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
@@ -1684,7 +1679,7 @@ class TestRenderFraming:
         messages = [r.getMessage() for r in caplog.records]
         framed = [m for m in messages if m.startswith("Framed ")]
         assert framed == [
-            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1'], left out []: "
+            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1'], left out {}: "
             "bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) distance=23.382 ortho_width=14.400"
         ]
         rop = [m for m in messages if m.startswith("Render ROP ")]

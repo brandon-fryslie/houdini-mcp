@@ -153,9 +153,13 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
 Box = tuple[Vec3, Vec3]
 """An axis-aligned box: its min and max corners."""
 
-Matrix4 = tuple[tuple[float, float, float, float], ...]
-"""A hou.Matrix4's four rows, as asTupleOfTuples() gives them. A point is the row
-vector times the matrix, so rows 0-2 carry x, y and z and row 3 is the translate."""
+_Row = tuple[float, float, float, float]
+Matrix4 = tuple[_Row, _Row, _Row, _Row]
+"""A hou.Matrix4's rows, as asTupleOfTuples() gives them. A point is the row vector
+times the matrix, so rows 0-2 carry x, y and z and row 3 is the translate."""
+
+_Unframed = Literal["did not cook", "no points"]
+"""Why a shape adds nothing to a framing."""
 
 
 @dataclass(frozen=True)
@@ -237,22 +241,23 @@ class _Shape:
     """The object whose world transform carries the geometry into world space."""
 
 
-def _object_of(node: Any) -> Any | None:
-    """The object a node stands in the world as: itself, or the nearest Object ancestor
-    of a SOP; None for a node outside any object, such as a ROP or a LOP's SOP."""
-    while node is not None and node_category(node) != "Object":
-        node = node.parent()
-    return node
+def _look_at(hou: Any, path: str) -> tuple[Any, list[_Shape]]:
+    """What look_at names: the object it stands in the world as, and the shapes it shows.
 
-
-def _shapes(node: Any, anchor: Any) -> list[_Shape]:
-    """What a node puts in the world, and where; ``anchor`` is its ``_object_of``.
-
-    A SOP is its own geometry, placed by its object; an object is what it shows.
+    [LAW:parse-dont-validate] the one place a look_at path is read. An object is
+    what it shows; a SOP is its own geometry, placed by its nearest Object
+    ancestor. Any other node, and a SOP in no object, such as a LOP's, is refused.
     """
-    if node_category(node) == "Sop":
-        return [_Shape(source=node.path(), geometry=node.geometry(), placer=anchor)]
-    return _object_shapes(node)
+    target = node_at(hou, path)
+    kind = node_category(target)
+    if kind == "Object":
+        return target, _object_shapes(target)
+    anchor = target.parent() if kind == "Sop" else None
+    while anchor is not None and node_category(anchor) != "Object":
+        anchor = anchor.parent()
+    if anchor is None:
+        raise InvalidInput(f"look_at must name an object or a SOP: {path}", look_at=path)
+    return anchor, [_Shape(source=target.path(), geometry=target.geometry(), placer=anchor)]
 
 
 def _object_shapes(obj: Any) -> list[_Shape]:
@@ -316,34 +321,40 @@ def _transformed(box: Box, matrix: Matrix4) -> Box:
     )
 
 
-def _world_box(shape: _Shape) -> Box | None:
-    """The world box around a shape's geometry; None when it has nothing to frame.
+def _placement(obj: Any) -> Matrix4:
+    """[LAW:effects-at-boundaries] an object's world transform, read over the link once,
+    as plain numbers."""
+    rows: Matrix4 = obj.worldTransform().asTupleOfTuples()
+    return rows
 
-    [LAW:effects-at-boundaries] the box and the placing matrix cross the link as
-    plain numbers, the matrix only for geometry with points; the corners are
-    computed here.
+
+def _world_box(shape: _Shape) -> Box | _Unframed:
+    """The world box around a shape's geometry, or why it has none.
+
+    The box and the placing matrix cross the link as plain numbers, the matrix
+    only for geometry with points; the corners are computed here.
     """
     if shape.geometry is None:
         # [LAW:no-silent-failure] a SOP that did not cook is named, not just left out
         logger.warning("Not framed: %s has no geometry (its SOP did not cook)", shape.source)
-        return None
+        return "did not cook"
     box = _local_box(shape.geometry)
     if box is None:
-        return None
-    return _transformed(box, shape.placer.worldTransform().asTupleOfTuples())
+        return "no points"
+    return _transformed(box, _placement(shape.placer))
 
 
 def _framing(shapes: Sequence[_Shape]) -> Framing:
     """Frame the shapes together, in world space."""
     placed = [(shape.source, _world_box(shape)) for shape in shapes]
-    boxes = [box for _, box in placed if box is not None]
+    boxes = [box for _, box in placed if not isinstance(box, str)]
     framing = Framing(
         bounds=_enclosing([corner for box in boxes for corner in box]) if boxes else None
     )
     logger.info(
         "Framed %s, left out %s: bounds=%s distance=%.3f ortho_width=%.3f",
-        [source for source, box in placed if box is not None],
-        [source for source, box in placed if box is None],
+        [source for source, box in placed if not isinstance(box, str)],
+        {source: box for source, box in placed if isinstance(box, str)},
         framing.bounds,
         framing.distance,
         framing.ortho_width,
@@ -353,7 +364,7 @@ def _framing(shapes: Sequence[_Shape]) -> Framing:
 
 def _framing_at(obj: Any) -> Framing:
     """Frame an object's world position: a box of no extent, opened to the unframed size."""
-    position = tuple(obj.worldTransform().extractTranslates())
+    position = _placement(obj)[3][:3]
     framing = Framing(bounds=(position, position))
     logger.info("Framed %s at %s: distance=%.3f", obj.path(), position, framing.distance)
     return framing
@@ -540,8 +551,8 @@ def render_viewport(
             about X, then Y, then Z. It alone sets where the camera looks, wherever the
             camera stands: [0, 0, 0] looks down -Z. Isometric by default
         look_at: Path of an object or SOP to frame instead of the scene; one with no
-            geometry is framed where it stands. An unknown path, or a node outside any
-            object, is an error
+            geometry is framed where it stands. An unknown path, any other node, or a
+            SOP outside any object, is an error
         resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -570,11 +581,8 @@ def render_viewport(
 
     # What to frame: the node asked for, else what the viewport shows, else nothing.
     if look_at is not None:
-        target = node_at(prepared.hou, look_at)
-        anchor = _object_of(target)
-        if anchor is None:
-            raise InvalidInput(f"look_at must name an object or a SOP: {look_at}", look_at=look_at)
-        framing = _framing(_shapes(target, anchor))
+        anchor, shapes = _look_at(prepared.hou, look_at)
+        framing = _framing(shapes)
         if framing.bounds is None:
             # A node with nothing to show is framed where it stands.
             framing = _framing_at(anchor)
