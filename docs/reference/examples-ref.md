@@ -36,19 +36,17 @@ tests/integration/
 
 ### Run Examples
 ```bash
-cd examples
-
 # Example 1: Build from scratch
-python build_from_scratch.py
+python examples/build_from_scratch.py
 
 # Example 2: Augment existing scene
-python augment_existing_scene.py
+python examples/augment_existing_scene.py
 
 # Example 3: Parameter workflow
-python parameter_workflow.py
+python examples/parameter_workflow.py
 
 # Example 4: Error handling
-python error_handling.py
+python examples/error_handling.py
 ```
 
 ### Run Tests

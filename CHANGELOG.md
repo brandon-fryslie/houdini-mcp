@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING (Docker Compose)**: `docker compose up` stops with "required
-  variable HOUDINI_HOST is missing a value" unless `HOUDINI_HOST` is set
+- **BREAKING (Docker Compose)**: every `docker compose` command, `down` and
+  `logs` included, stops with "required variable HOUDINI_HOST is missing a
+  value" unless `HOUDINI_HOST` is set, in `.env` or the shell
   (houdini-tuneup-ef3.b06). It used to default to an address on the upstream
-  org's LAN. The service now joins Compose's default network instead of the
+  org's LAN. `.env.example` ships it empty: its `localhost` was the container
+  itself. The service now joins Compose's default network instead of the
   external `mcp-network`, which a fresh clone does not have, and no longer
   carries the upstream dashboard's `homepage.*` labels.
 
