@@ -36,6 +36,8 @@ file holding all of it, in the same shorthand: `result_file` (its path on the se
 The pointer keeps `status`, a failure's fields, any `ai_summary` (whole up to \
 {SUMMARY_BYTES // 1024}KB), and a page's paging fields, a long string cut to fit and marked; \
 read the file for everything else. \
+`summarized_bytes`, beside `ai_summary`, is how many bytes from the file's start the summary was \
+written from; it did not see the rest of the file. \
 Read it soon: {RETENTION}."""
 """What every client is told at initialize about how a result reaches it."""
 

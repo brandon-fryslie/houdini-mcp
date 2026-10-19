@@ -17,7 +17,7 @@ from ._common import (
     on_the_scene,
 )
 from .failure import OperationFailed, Undone, batch_status
-from .summarization import _summarize_errors, summarized
+from .summarization import ERRORS_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
@@ -62,6 +62,7 @@ async def find_error_nodes(
           when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
         - ai_summary: (if summarized) AI-generated triage with prioritized fixes
+        - summarized_bytes: (with ai_summary) how many bytes it covers, from result_file's start
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Examples:
@@ -74,7 +75,7 @@ async def find_error_nodes(
     result = await on_the_scene(
         "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
-    return await summarized(result, _summarize_errors, summarizer=summarizer, asked=summarize)
+    return await summarized(result, ERRORS_BRIEF, summarizer=summarizer, asked=summarize)
 
 
 def _scan_error_nodes(

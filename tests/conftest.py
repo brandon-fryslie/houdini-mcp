@@ -2,6 +2,7 @@
 
 import contextlib
 import copy
+import json
 import logging
 import math
 import pathlib
@@ -871,6 +872,69 @@ def production_summarizer_client(monkeypatch: pytest.MonkeyPatch) -> ClientBuild
 
     monkeypatch.setattr(summarization, "summarizer_client", summarizer_through(production, refuse))
     return production
+
+
+def completion(content: Any = "Test summary", finish_reason: str = "stop") -> dict[str, Any]:
+    """An OpenAI chat-completions response body, shaped as the omlx server sends it."""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": SUMMARIZER.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+class Wire:
+    """The fake far end of the summarizer's transport: every request sent, and one answer."""
+
+    def __init__(self) -> None:
+        self.sent: list[httpx.Request] = []
+        self.response: httpx.Response | type[Exception] = httpx.Response(200, json=completion())
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.sent.append(request)
+        if isinstance(self.response, type):
+            raise self.response("boom")
+        return self.response
+
+    @property
+    def prompts(self) -> list[str]:
+        """The prompt each request asked a summary for."""
+        return [json.loads(request.content)["messages"][0]["content"] for request in self.sent]
+
+
+@pytest.fixture
+def wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> Wire:
+    """Route the summarizer through a fake transport that answers with a finished completion."""
+    from houdini_mcp.tools import summarization
+
+    wire = Wire()
+    monkeypatch.setattr(
+        summarization,
+        "summarizer_client",
+        summarizer_through(production_summarizer_client, wire.handle),
+    )
+    return wire
+
+
+@pytest.fixture
+def no_wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: ClientBuilder) -> None:
+    """A summarizer transport that fails the test if anything is sent on it."""
+    from houdini_mcp.tools import summarization
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"a summarization request was sent: {request.url}")
+
+    monkeypatch.setattr(
+        summarization, "summarizer_client", summarizer_through(production_summarizer_client, refuse)
+    )
 
 
 @pytest.fixture

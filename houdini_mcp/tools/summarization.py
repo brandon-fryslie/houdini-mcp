@@ -8,15 +8,14 @@ Summaries come from the OpenAI-compatible chat-completions server a ``Summarizer
 names (``houdini_mcp.settings``), which the server binds into every summarizing tool.
 """
 
-import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from .. import shorthand
 from ..reading import RESPONSE_BOUND_BYTES, Reading
 from ..settings import Summarizer
 from ._common import run_in_executor
@@ -26,8 +25,17 @@ logger = logging.getLogger("houdini_mcp.summarization")
 AI_SUMMARY = "ai_summary"
 AI_SUMMARY_ERROR = "ai_summary_error"
 SUMMARIZED = "_summarized"
-SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, SUMMARIZED, AI_SUMMARY_ERROR})
-"""The fields a summarized result carries: the summary, or why there is none."""
+SUMMARIZED_BYTES = "summarized_bytes"
+SUMMARY_FIELDS: frozenset[str] = frozenset(
+    {AI_SUMMARY, SUMMARIZED, SUMMARIZED_BYTES, AI_SUMMARY_ERROR}
+)
+"""The fields a summarized result carries: the summary and how much of the result it was
+written from, or why there is none."""
+
+# [LAW:one-source-of-truth] One budget for every summary, which keeps the prompt about
+# the size the summarizer has been answering within REQUEST_TIMEOUT_SECONDS.
+EXCERPT_BYTES = 8 * 1024
+"""The most of a result's text a summary is written from: UTF-8 bytes of its shorthand, from its start."""
 
 SUMMARY_BYTES = RESPONSE_BOUND_BYTES // 2
 """The most of a summary a pointer carries whole: the UTF-8 bytes of its line in the shorthand."""
@@ -58,10 +66,34 @@ def summarizer_client(summarizer: Summarizer) -> httpx.AsyncClient:
 
 
 @dataclass(frozen=True)
-class Summary:
-    """A finished summary."""
+class Excerpt:
+    """The start of a result's text, which its summary is written from.
+
+    [LAW:one-source-of-truth] The text is the shorthand the result's file holds and every
+    caller reads, so how much of it the summary read is a place in that file.
+    """
 
     text: str
+    covered: int
+    """The bytes of the result's text that ``text`` is: its first ones."""
+    total: int
+    """The bytes of the result's whole text."""
+
+    @classmethod
+    def of(cls, reading: Reading) -> "Excerpt":
+        """The first ``EXCERPT_BYTES`` of ``reading``'s text, a character the cut splits left out."""
+        # The bytes are valid UTF-8 cut once, so the only ones that do not decode are a
+        # character split at the cut, and ``covered`` counts the bytes that remain.
+        text = reading.encoded[:EXCERPT_BYTES].decode("utf-8", errors="ignore")
+        return cls(text, len(text.encode("utf-8")), len(reading.encoded))
+
+
+@dataclass(frozen=True)
+class Summary:
+    """A finished summary, written from the first ``covered`` bytes of the result's text."""
+
+    text: str
+    covered: int
 
 
 @dataclass(frozen=True)
@@ -96,14 +128,14 @@ def parse_completion(body: Any) -> Completion:
 
 async def summarized(
     result: dict[str, Any],
-    summarize: Callable[[dict[str, Any], Summarizer], Awaitable[dict[str, Any]]],
+    brief: str,
     *,
     summarizer: Summarizer,
     asked: bool,
 ) -> dict[str, Any]:
-    """The result with its AI summary when summarization is enabled, the caller asked for
-    one, and it is too large to read whole, so it will arrive as a file; anything else
-    comes back as is, and nothing leaves the process.
+    """The result with its AI summary, written to ``brief``, when summarization is enabled,
+    the caller asked for one, and it is too large to read whole, so it will arrive as a
+    file; anything else comes back as is, and nothing leaves the process.
 
     Raises:
         Unreadable: the wire cannot carry ``result`` as JSON.
@@ -126,25 +158,12 @@ async def summarized(
         len(reading.encoded),
         RESPONSE_BOUND_BYTES,
     )
-    return await summarize(result, summarizer) if decided else result
+    return _annotate(result, await _summarize(brief, reading, summarizer)) if decided else result
 
 
-async def _summarize_geometry(geo_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
-    """Summarize geometry data for AI consumption.
-
-    Extracts key insights from geometry statistics:
-    - Topology overview (points, primitives, vertices)
-    - Bounding box analysis
-    - Key attributes
-    - Potential issues or notable characteristics
-
-    Args:
-        geo_data: Raw geometry summary data
-
-    Returns:
-        Original data with 'ai_summary' field added
-    """
-    prompt = f"""Analyze this Houdini geometry data and provide a concise summary for an AI assistant.
+# [LAW:one-type-per-behavior] Every summary is made the same way; a tool's brief is
+# what it asks the summarizer to look for.
+GEOMETRY_BRIEF = """Analyze this Houdini geometry data and provide a concise summary for an AI assistant.
 
 Focus on:
 1. Geometry scale and complexity (point/primitive counts)
@@ -153,34 +172,9 @@ Focus on:
 4. Any potential issues (empty geometry, unusually high counts)
 5. Suggested next steps if relevant
 
-Keep the summary under 200 words. Be technical and precise.
+Keep the summary under 200 words. Be technical and precise."""
 
-Geometry Data:
-```json
-{json.dumps(geo_data, indent=2, default=str)[:8000]}
-```
-
-Summary:"""
-
-    return _annotate(geo_data, await _complete(prompt, summarizer))
-
-
-async def _summarize_errors(error_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
-    """Summarize error/warning data with triage and prioritization.
-
-    Analyzes errors and provides:
-    - Error severity ranking
-    - Common patterns/root causes
-    - Suggested fix order
-    - Quick wins vs complex issues
-
-    Args:
-        error_data: Raw find_error_nodes output
-
-    Returns:
-        Original data with 'ai_summary' and 'prioritized_fixes' fields
-    """
-    prompt = f"""Analyze these Houdini node errors and provide actionable triage.
+ERRORS_BRIEF = """Analyze these Houdini node errors and provide actionable triage.
 
 For each error category:
 1. Identify root cause patterns
@@ -188,40 +182,15 @@ For each error category:
 3. Suggest fix order (quick wins first)
 4. Note any cascading dependencies
 
-Keep the summary under 250 words. Be specific about node paths.
-
-Error Data:
-```json
-{json.dumps(error_data, indent=2, default=str)[:8000]}
-```
-
 Provide:
 1. **Priority Fixes** - Most critical errors to fix first
 2. **Quick Wins** - Easy fixes that might resolve multiple issues
 3. **Root Causes** - Underlying patterns causing errors
 4. **Recommendations** - Specific actions to take
 
-Summary:"""
+Keep the summary under 250 words. Be specific about node paths."""
 
-    return _annotate(error_data, await _complete(prompt, summarizer))
-
-
-async def _summarize_scene(scene_data: dict[str, Any], summarizer: Summarizer) -> dict[str, Any]:
-    """Summarize scene structure for understanding and optimization.
-
-    Analyzes scene hierarchy and provides:
-    - Network organization overview
-    - Complexity hotspots
-    - Optimization opportunities
-    - Recommended cleanup actions
-
-    Args:
-        scene_data: Raw serialize_scene output
-
-    Returns:
-        Original data with 'ai_summary' field
-    """
-    prompt = f"""Analyze this Houdini scene structure and provide insights.
+SCENE_BRIEF = """Analyze this Houdini scene structure and provide insights.
 
 Focus on:
 1. Network organization and hierarchy depth
@@ -230,41 +199,57 @@ Focus on:
 4. Potential optimization opportunities
 5. Scene cleanliness (unused nodes, naming conventions)
 
-Keep the summary under 200 words. Highlight actionable insights.
+Keep the summary under 200 words. Highlight actionable insights."""
 
-Scene Data:
-```json
-{json.dumps(scene_data, indent=2, default=str)[:10000]}
+
+def _prompt(brief: str, excerpt: Excerpt) -> str:
+    """The request for a summary of ``excerpt``, written to ``brief``."""
+    return f"""{brief}
+
+{shorthand.KEY}
+
+The result's text is {excerpt.total} bytes. Below are its first {excerpt.covered}; the rest is not shown, and the last line may be cut short.
+
+```
+{excerpt.text}
 ```
 
-Summary:"""
+Counts the text states, and each list's [N], are for the whole result; a list's rows may run on past the cut. Take a list's size from its [N], not from the rows you see, and say when a list is cut. Do not say the result lacks something because this text does not show it.
 
-    return _annotate(scene_data, await _complete(prompt, summarizer))
+Summary:"""
 
 
 def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, Any]:
     """Attach the summary to the tool result, or the reason there is none."""
     match outcome:
-        case Summary(text):
+        case Summary(text, covered):
             data[AI_SUMMARY] = text
             data[SUMMARIZED] = True
+            data[SUMMARIZED_BYTES] = covered
         case NoSummary(reason):
             # [LAW:no-silent-failure] A summary was attempted; the result says why there is none.
             data[AI_SUMMARY_ERROR] = reason
     return data
 
 
-async def _complete(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
-    """Ask the completions server for a summary, and log the one event it makes."""
+async def _summarize(brief: str, reading: Reading, summarizer: Summarizer) -> Summary | NoSummary:
+    """Ask the completions server for a summary of ``reading`` written to ``brief``, and
+    log the one event it makes."""
+    excerpt = Excerpt.of(reading)
     started = time.monotonic()
-    outcome = await _request(prompt, summarizer)
+    outcome = await _request(_prompt(brief, excerpt), summarizer)
     elapsed = time.monotonic() - started
     match outcome:
-        case Summary(text):
+        case str(text):
             logger.info(
-                "Summarized with %s in %.1fs: %d chars", summarizer.model, elapsed, len(text)
+                "Summarized the first %d of %d bytes with %s in %.1fs: %d chars",
+                excerpt.covered,
+                excerpt.total,
+                summarizer.model,
+                elapsed,
+                len(text),
             )
-            return outcome
+            return Summary(text, excerpt.covered)
         case NoSummary(reason):
             # One sentence for the log and the caller: an empty ConnectTimeout message
             # still arrives with the server it could not reach.
@@ -275,8 +260,8 @@ async def _complete(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
             return failure
 
 
-async def _request(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
-    """One chat-completions round trip, read as a summary or the reason there is none."""
+async def _request(prompt: str, summarizer: Summarizer) -> str | NoSummary:
+    """One chat-completions round trip, read as a finished summary's text or the reason there is none."""
     try:
         async with summarizer_client(summarizer) as client:
             response = await client.post(
@@ -302,7 +287,7 @@ async def _request(prompt: str, summarizer: Summarizer) -> Summary | NoSummary:
             f"no finished summary: finish_reason={completion.finish_reason}, "
             f"{len(completion.text)} chars"
         )
-    return Summary(completion.text)
+    return completion.text
 
 
 def get_summarization_status(*, summarizer: Summarizer) -> dict[str, Any]:

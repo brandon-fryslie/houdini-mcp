@@ -17,7 +17,7 @@ from ._common import (
     tool_error,
 )
 from .reads import UNREAD, format_reason, log_unread, unreads
-from .summarization import _summarize_geometry, summarized
+from .summarization import GEOMETRY_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
@@ -65,6 +65,7 @@ async def get_geo_summary(
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
         - ai_summary: (if summarized) AI-generated insights about the geometry
+        - summarized_bytes: (with ai_summary) how many bytes it covers, from result_file's start
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
@@ -98,7 +99,7 @@ async def get_geo_summary(
         host,
         port,
     )
-    return await summarized(result, _summarize_geometry, summarizer=summarizer, asked=summarize)
+    return await summarized(result, GEOMETRY_BRIEF, summarizer=summarizer, asked=summarize)
 
 
 def _read_geometry(

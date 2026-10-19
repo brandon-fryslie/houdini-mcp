@@ -10,8 +10,10 @@ and the file holds all of it in the same shorthand. The call returns its
 paging fields (a long string cut to fit and marked), and a pointer to the whole
 result: `result_file`, its path on the server's machine; `result_uri`, which
 reads it through the server (`houdini-mcp://results/{name}`) for a client on
-another machine; and `result_bytes`. A `render_viewport` image is usually over
-the bound, so its `image_base64` is in the file.
+another machine; and `result_bytes`. A summary is written from the start of the
+file, and `summarized_bytes`, beside `ai_summary`, says how many bytes of it;
+the rest of the file is what the summary did not see. A `render_viewport`
+image is usually over the bound, so its `image_base64` is in the file.
 
 Read the file soon. A result file is kept until the same server's newer
 results fill 64MB; then the oldest are removed. The newest result is always
