@@ -37,6 +37,13 @@ def at_the_bound() -> dict:
     return result
 
 
+def past_the_bound() -> dict:
+    """The smallest result too large to read whole: one byte past the bound."""
+    result = at_the_bound()
+    result["text"] += "x"
+    return result
+
+
 class TestSummarized:
     """summarize is one bool: False is off, True summarizes what is too large to read whole."""
 
@@ -58,7 +65,6 @@ class TestSummarized:
         assert result == {
             **LARGE,
             "ai_summary": "Test summary",
-            "_summarized": True,
             "summarized_bytes": EXCERPT_BYTES,
         }
         assert len(wire.sent) == 1
@@ -154,6 +160,16 @@ class TestCoverage:
         [prompt] = wire.prompts
         assert covered < len(Reading.of(LARGE).encoded)
         assert f"\n{file[:covered].decode()}\n```" in prompt
+
+    async def test_the_smallest_result_summarized_is_summarized_from_part_of_it(self, wire):
+        """So the request's "the rest is not shown" is true of every summary."""
+        result = past_the_bound()
+
+        summarized = await summarization.summarized(
+            dict(result), summarization.SCENE_BRIEF, summarizer=SUMMARIZER, asked=True
+        )
+
+        assert summarized["summarized_bytes"] < len(Reading.of(result).encoded)
 
     def test_a_character_the_cut_splits_is_left_out(self):
         """The excerpt is whole characters, and covered counts the bytes it is."""
@@ -290,10 +306,10 @@ class TestSummarize:
 
     async def test_sends_a_chat_completions_request(self, wire):
         """The request goes to /v1/chat/completions with the key, model, budget and prompt."""
-        reading = Reading.of(SMALL)
+        reading = Reading.of(LARGE)
         result = await summarization._summarize("Summarize this.", reading, SUMMARIZER)
 
-        assert result == summarization.Summary("Test summary", len(reading.encoded))
+        assert result == summarization.Summary("Test summary", EXCERPT_BYTES)
         [request] = wire.sent
         assert request.method == "POST"
         assert request.url.path == "/v1/chat/completions"
@@ -322,7 +338,7 @@ class TestSummarize:
         wire.response = httpx.Response(200, json=body)
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarize_small()
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.endswith(f"s: no finished summary: {reason} chars")
@@ -337,7 +353,7 @@ class TestSummarize:
         )
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarize_small()
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert "s: answered 507: " in result.reason
@@ -362,7 +378,7 @@ class TestSummarize:
         wire.response = response
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarize_small()
+            result = await summarize_large()
 
         assert isinstance(result, summarization.NoSummary)
         assert f"s: {logged}" in result.reason
@@ -373,13 +389,14 @@ class TestSummarize:
         wire.response = httpx.ConnectTimeout
 
         with caplog.at_level("WARNING", logger="houdini_mcp.summarization"):
-            result = await summarize_small()
+            result = await summarize_large()
 
         named = f"{SUMMARIZER.model} at {SUMMARIZER.base_url} failed after "
         assert isinstance(result, summarization.NoSummary)
         assert result.reason.startswith(named)
-        assert f"Summarization by {named}" in caplog.text
+        read = f"the first {EXCERPT_BYTES} of {len(Reading.of(LARGE).encoded)} bytes"
+        assert f"Summarization of {read} by {named}" in caplog.text
 
 
-async def summarize_small() -> summarization.Summary | summarization.NoSummary:
-    return await summarization._summarize("Summarize this.", Reading.of(SMALL), SUMMARIZER)
+async def summarize_large() -> summarization.Summary | summarization.NoSummary:
+    return await summarization._summarize("Summarize this.", Reading.of(LARGE), SUMMARIZER)

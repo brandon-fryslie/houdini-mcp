@@ -24,16 +24,15 @@ logger = logging.getLogger("houdini_mcp.summarization")
 
 AI_SUMMARY = "ai_summary"
 AI_SUMMARY_ERROR = "ai_summary_error"
-SUMMARIZED = "_summarized"
 SUMMARIZED_BYTES = "summarized_bytes"
-SUMMARY_FIELDS: frozenset[str] = frozenset(
-    {AI_SUMMARY, SUMMARIZED, SUMMARIZED_BYTES, AI_SUMMARY_ERROR}
-)
+SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, SUMMARIZED_BYTES, AI_SUMMARY_ERROR})
 """The fields a summarized result carries: the summary and how much of the result it was
 written from, or why there is none."""
 
-# [LAW:one-source-of-truth] One budget for every summary, which keeps the prompt about
-# the size the summarizer has been answering within REQUEST_TIMEOUT_SECONDS.
+# [LAW:one-source-of-truth] One budget for every summary. Shorthand packs more of a
+# result into each byte than indented JSON, and so more tokens: a geometry prompt
+# measured 7.7k Qwen3 tokens and an error triage 3.1k (2026-10-19), where the
+# 8000-character slices this replaced made 4.1k and 2.5k.
 EXCERPT_BYTES = 8 * 1024
 """The most of a result's text a summary is written from: UTF-8 bytes of its shorthand, from its start."""
 
@@ -224,7 +223,6 @@ def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, A
     match outcome:
         case Summary(text, covered):
             data[AI_SUMMARY] = text
-            data[SUMMARIZED] = True
             data[SUMMARIZED_BYTES] = covered
         case NoSummary(reason):
             # [LAW:no-silent-failure] A summary was attempted; the result says why there is none.
@@ -256,7 +254,12 @@ async def _summarize(brief: str, reading: Reading, summarizer: Summarizer) -> Su
             failure = NoSummary(
                 f"{summarizer.model} at {summarizer.base_url} failed after {elapsed:.1f}s: {reason}"
             )
-            logger.warning("Summarization by %s", failure.reason)
+            logger.warning(
+                "Summarization of the first %d of %d bytes by %s",
+                excerpt.covered,
+                excerpt.total,
+                failure.reason,
+            )
             return failure
 
 

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Wire**: a summary says how much of the result it was written from
+- **BREAKING (wire)**: a summary says how much of the result it was written from
   (houdini-laws-spine-cqp.lf0). The summarizer was sent the first 8000
   characters of the result's indented JSON (`serialize_scene`: 10000), cut
   mid-string, and neither it nor the caller was told the rest was left out.
@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the text its file holds, which covers about four times as much of a result.
   The request says how much of the whole that is, and `summarized_bytes`,
   beside `ai_summary`, says how many bytes from the file's start the summary
-  covers.
+  covers. `_summarized` is gone: `ai_summary` already says a result was
+  summarized. `find_error_nodes` writes its counts and its limit warning ahead
+  of its lists, so a summary written from the result's start has them.
 
 - **BREAKING (configuration, Python API)**: every environment setting is read
   once, when its entry point starts, and a value it cannot be stops that start

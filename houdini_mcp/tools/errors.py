@@ -123,18 +123,6 @@ def _scan_error_nodes(
         if warnings:
             warning_nodes.append({**identity, "warnings": warnings})
 
-    report: dict[str, Any] = {
-        "root_path": root_path,
-        "error_nodes": error_nodes,
-        "error_count": len(error_nodes),
-        "uninspected": uninspected,
-        "total_scanned": total_scanned,
-    }
-
-    if include_warnings:
-        report["warning_nodes"] = warning_nodes
-        report["warning_count"] = len(warning_nodes)
-
     # [LAW:one-source-of-truth] limited is read off what the scan reached, not re-derived
     # from the cap: a scan that ends exactly at max_results was not cut short
     present = 1 + len(descendants)
@@ -145,8 +133,20 @@ def _scan_error_nodes(
         present,
         len(uninspected),
     )
+    # The scan's counts come before its lists, so the start of the result's text - all a
+    # summary is written from (summarization.EXCERPT_BYTES) - says what the scan found.
+    counts: dict[str, Any] = {
+        "root_path": root_path,
+        "total_scanned": total_scanned,
+        "error_count": len(error_nodes),
+    }
+    lists: dict[str, Any] = {"error_nodes": error_nodes, "uninspected": uninspected}
+    if include_warnings:
+        counts["warning_count"] = len(warning_nodes)
+        lists["warning_nodes"] = warning_nodes
     if total_scanned < present:
-        report["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
+        counts["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
+    report = {**counts, **lists}
 
     # [LAW:single-enforcer] success means every node scanned was inspected
     failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]

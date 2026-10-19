@@ -3,7 +3,9 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
+from houdini_mcp.tools.summarization import Excerpt
 from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
 
 
@@ -541,6 +543,33 @@ class TestFindErrorNodesUninspected:
         assert result["total_scanned"] == 4
         assert result["warning"].startswith("Results limited to 3")
         assert "error scan root=/obj scanned=4 present=6 uninspected=3" in caplog.text
+
+    async def test_a_summary_reads_the_scans_counts_ahead_of_its_lists(self, mock_connection):
+        """A summary is written from the start of the result's text, and a long error list
+        does not push the scan's counts and its limit past it."""
+        from houdini_mcp.tools import find_error_nodes
+
+        for i in range(300):
+            node = MockHouNode(path=f"/obj/geo{i}", name=f"geo{i}", node_type="geo")
+            node._errors = [f"Error: unexpected identifier, expecting ';' at line {i}"]
+            mock_connection.add_node(node)
+
+        result = await find_error_nodes(
+            root_path="/obj",
+            max_results=200,
+            include_warnings=True,
+            summarize=False,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+        )
+
+        reading = Reading.of(result)
+        excerpt = Excerpt.of(reading).text
+        assert excerpt.encode() != reading.encoded
+        assert result["warning"].startswith("Results limited to 200")
+        for field in ("total_scanned", "error_count", "warning_count", "warning"):
+            assert f"\n{field}: {result[field]}\n" in excerpt
 
     async def test_a_scan_ending_exactly_at_max_results_is_not_limited(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
