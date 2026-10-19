@@ -1,7 +1,7 @@
 """The response-size bound, as a client of the server observes it.
 
-A result that fits the bound arrives inline and unchanged. A larger one arrives
-as a pointer to a file holding all of it - readable by its path, or through the
+A result whose shorthand text fits the bound arrives inline and unchanged. A larger
+one arrives as a pointer to a file holding all of its text - readable by its path, or through the
 server by its URI - with the fields that say how the call ended. Nothing is cut.
 """
 
@@ -17,9 +17,11 @@ import pytest
 from fastmcp import Client
 
 from houdini_mcp import delivery
-from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, WIRE, deliver, read_result
+from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, deliver, read_result
 from houdini_mcp.server import mcp
+from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
+from tests.shorthand_reader import read
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +51,16 @@ def whole(pointer: dict[str, Any]) -> dict[str, Any]:
     """The full result a pointer's file holds."""
     text = pathlib.Path(pointer["result_file"]).read_text(encoding="utf-8")
     assert len(text.encode("utf-8")) == pointer["result_bytes"]
-    return json.loads(text)
+    return read(text)
+
+
+def sent(tool: str, result: dict[str, Any]) -> dict[str, Any]:
+    """What ``deliver`` sends for ``result``, checked to be its own text's JSON."""
+    reply = deliver(tool, result)
+    assert reply.structured_content is not None
+    [content] = reply.content
+    assert read(content.text) == reply.structured_content  # type: ignore[union-attr]
+    return reply.structured_content
 
 
 class TestServedResults:
@@ -86,7 +97,7 @@ class TestServedResults:
         assert pointer is not None
         assert pointer["status"] == "success"
         assert pointer["result_bytes"] > RESPONSE_BOUND_BYTES
-        assert len(json.dumps(pointer)) < RESPONSE_BOUND_BYTES
+        assert len(render(pointer)) < RESPONSE_BOUND_BYTES
         assert len(whole(pointer)["structure"]["children"]) == large_scene
         assert any(
             f"delivered serialize_scene as a file: {pointer['result_bytes']} bytes" in message
@@ -115,7 +126,7 @@ class TestServedResults:
 
         contents = await client.read_resource(pointer["result_uri"])
 
-        assert json.loads(contents[0].text) == whole(pointer)  # type: ignore[union-attr]
+        assert read(contents[0].text) == whole(pointer)  # type: ignore[union-attr]
 
     async def test_execute_codes_stdout_limit_is_the_one_that_applies(
         self, client: Client[Any]
@@ -143,7 +154,7 @@ class TestDeliver:
             "unwalked": [f"/obj/geo{i}" for i in range(2000)],
         }
 
-        pointer = deliver("find_error_nodes", failure)
+        pointer = sent("find_error_nodes", failure)
 
         parsed = FAILURE.validate_python(pointer)
         assert parsed.kind == "operation_failed"
@@ -151,23 +162,38 @@ class TestDeliver:
         assert whole(pointer) == failure
 
     def test_a_result_exactly_at_the_bound_arrives_inline(self, tmp_path: pathlib.Path) -> None:
-        result = {"status": "success", "text": ""}
-        result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(WIRE.dump_json(result)))
-        assert len(WIRE.dump_json(result)) == RESPONSE_BOUND_BYTES
+        result = {"status": "success", "text": "x"}
+        result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(render(result)) + 1)
+        assert len(render(result)) == RESPONSE_BOUND_BYTES
 
-        assert deliver("t", result) == result
+        assert sent("t", result) == result
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_bound_measures_the_text_a_model_reads_not_the_json(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A listing whose JSON is far past the bound reads inline as its shorthand."""
+        result = {
+            "status": "success",
+            "nodes": [
+                {"path": f"/obj/geo_{i}", "type": "geo", "name": f"geo_{i}"} for i in range(400)
+            ],
+        }
+        assert len(json.dumps(result, separators=(",", ":"))) > RESPONSE_BOUND_BYTES
+
+        assert sent("list_children", result) == result
         assert list(tmp_path.iterdir()) == []
 
     def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
         result = {"status": "success", "text": "é" * (RESPONSE_BOUND_BYTES // 2)}
 
-        pointer = deliver("t", result)
+        pointer = sent("t", result)
 
         assert pointer["result_bytes"] > RESPONSE_BOUND_BYTES
         assert whole(pointer) == result
 
     @pytest.mark.parametrize(
-        "name", ["../secret.json", "sub/result.json", "result.txt", "..", "settings.json"]
+        "name", ["../secret.txt", "sub/result.txt", "t-" + "0" * 32 + ".json", "..", "settings.txt"]
     )
     def test_a_name_outside_the_results_directory_is_refused(
         self, name: str, tmp_path: pathlib.Path
@@ -176,7 +202,7 @@ class TestDeliver:
             read_result(name)
 
     def test_an_unserializable_result_is_the_tools_failure(self, tmp_path: pathlib.Path) -> None:
-        response = deliver("t", {"status": "success", "node": object()})
+        response = sent("t", {"status": "success", "node": object()})
 
         failure = FAILURE.validate_python(response)
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
@@ -190,7 +216,7 @@ class TestDeliver:
             "ai_summary": "400 geometry nodes, none cooked",
         }
 
-        pointer = deliver("serialize_scene", result)
+        pointer = sent("serialize_scene", result)
 
         assert pointer["ai_summary"] == "400 geometry nodes, none cooked"
         assert "structure" not in pointer
@@ -204,7 +230,7 @@ class TestDeliver:
         monkeypatch.setattr(delivery, "results_dir", lambda: blocked)
         result = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
 
-        failure = FAILURE.validate_python(deliver("execute_code", result))
+        failure = FAILURE.validate_python(sent("execute_code", result))
 
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.message.startswith("execute_code ran, but its")
@@ -213,7 +239,7 @@ class TestDeliver:
         """A non-finite float is null inline, so it is null in the file too."""
         result = {"status": "success", "bounds": [float("inf")], "text": "x" * RESPONSE_BOUND_BYTES}
 
-        pointer = deliver("t", result)
+        pointer = sent("t", result)
 
         assert whole(pointer)["bounds"] == [None]
 
@@ -221,7 +247,7 @@ class TestDeliver:
         result: dict[str, Any] = {"status": "success"}
         result["self"] = result
 
-        failure = FAILURE.validate_python(deliver("t", result))
+        failure = FAILURE.validate_python(sent("t", result))
 
         assert "not JSON-serializable" in failure.message
 
@@ -235,8 +261,8 @@ class TestDeliver:
         small = {"status": "success"}
         large = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
 
-        assert deliver("create_node", small) == small
-        failure = FAILURE.validate_python(deliver("execute_code", large))
+        assert sent("create_node", small) == small
+        failure = FAILURE.validate_python(sent("execute_code", large))
         assert failure.message.startswith("execute_code ran, but its")
 
     def test_a_long_failure_message_is_previewed_and_kept_whole_in_the_file(self) -> None:
@@ -249,9 +275,9 @@ class TestDeliver:
             "traceback": "Traceback\n" + "y" * 100_000,
         }
 
-        pointer = deliver("execute_code", failure)
+        pointer = sent("execute_code", failure)
 
-        assert len(WIRE.dump_json(pointer)) <= RESPONSE_BOUND_BYTES
+        assert len(render(pointer).encode()) <= RESPONSE_BOUND_BYTES
         parsed = FAILURE.validate_python(pointer)
         assert parsed.message == failure["message"][: delivery.PREVIEW_CHARS] + delivery.TRIMMED
         assert whole(pointer) == failure
@@ -268,7 +294,7 @@ class TestDeliver:
             "warning": "Returned 1000 of 5000 starting at offset 0. Use cursor=1000",
         }
 
-        pointer = deliver("find_nodes", page)
+        pointer = sent("find_nodes", page)
 
         assert {k: pointer[k] for k in PAGING_FIELDS} == {k: page[k] for k in PAGING_FIELDS}
         assert "nodes" not in pointer

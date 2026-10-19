@@ -31,7 +31,7 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 - **Scene serialization** - Diff scene states before/after operations
 - **Connection management** - Auto-reconnect with exponential backoff + jitter
 - **Error handling** - Consistent error responses with recovery hints
-- **Response optimization** - Result text in a dense shorthand of its JSON, results over 16KB delivered whole as a file, AI summarization
+- **Response optimization** - Result text in a dense shorthand of its JSON, text over 16KB delivered whole as a file, AI summarization
 - **In-memory caching** - Node type cache with TTL for performance
 
 ## Prerequisites

@@ -2,6 +2,7 @@
 
 [LAW:single-enforcer] The one place the response-size bound holds. ``server.served``
 routes every tool's result through ``deliver``; no tool caps, truncates, or opts out.
+The bound measures what a model reads: the result's shorthand text.
 
 Nothing is ever dropped. A result over the bound is written whole to a file, and the
 caller gets its path, a URI that reads it through this server (for a caller on
@@ -20,9 +21,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from fastmcp.tools import ToolResult
 from pydantic import TypeAdapter
 from pydantic_core import PydanticSerializationError
 
+from . import shorthand
 from .tools._common import PAGING_FIELDS
 from .tools.failure import FAILURE_FIELDS, OperationFailed, failure_response
 from .tools.summarization import SUMMARY_FIELDS
@@ -30,20 +33,20 @@ from .tools.summarization import SUMMARY_FIELDS
 logger = logging.getLogger("houdini_mcp.delivery")
 
 RESPONSE_BOUND_BYTES = 16 * 1024
-"""The largest result, serialized, that a caller reads inline."""
+"""The largest result text, in UTF-8 bytes of its shorthand, that a caller reads inline."""
 
 RESULT_URI = "houdini-mcp://results/{name}"
 
 # [LAW:parse-dont-validate] The one shape of name ``deliver`` gives a file, and so
 # the only names the results resource serves.
-RESULT_NAME = re.compile(r"[a-z0-9_]+-[0-9a-f]{32}\.json")
+RESULT_NAME = re.compile(r"[a-z0-9_]+-[0-9a-f]{32}\.txt")
 
 PREVIEW_CHARS = RESPONSE_BOUND_BYTES // 8
 """The most of any one string the pointer repeats from the result it stands for."""
 
 CALLER_GUIDE = f"""\
-A tool result larger than {RESPONSE_BOUND_BYTES // 1024}KB serialized arrives as a pointer to a JSON \
-file holding all of it: `result_file` (its path on the server's machine), `result_uri` \
+A tool result whose text is larger than {RESPONSE_BOUND_BYTES // 1024}KB arrives as a pointer to a \
+file holding all of it, in the same shorthand: `result_file` (its path on the server's machine), `result_uri` \
 (a resource this server serves, for a client on another machine), and `result_bytes`. \
 The pointer keeps `status`, a failure's fields, any `ai_summary`, and a page's paging \
 fields, a long string cut and marked; read the file for everything else."""
@@ -64,8 +67,8 @@ def results_dir() -> Path:
 
 
 # [LAW:one-source-of-truth] The serializer FastMCP puts a result's structured content
-# on the wire with, so the bytes measured against the bound and written to the file
-# are the result as structured content carries it.
+# on the wire with, so the value rendered, measured against the bound, and written to
+# the file is the result as structured content carries it.
 WIRE = TypeAdapter(Any)
 
 # [LAW:one-source-of-truth] The fields a failure cannot lose and still parse are the
@@ -93,34 +96,44 @@ def deliver(
     result: dict[str, Any],
     *,
     bound: int = RESPONSE_BOUND_BYTES,
-) -> dict[str, Any]:
-    """``result`` as the wire carries it when it fits the bound, else a pointer to the file holding all of it.
+) -> ToolResult:
+    """``result`` as the caller receives it: inline when its shorthand fits the bound,
+    else a pointer to the file holding all of it.
 
-    [LAW:one-source-of-truth] What returns is as the wire carries it - inline, the bytes
-    measured, read back - so every rendering of it, structured content and text, is of
-    one JSON value.
+    [LAW:one-source-of-truth] Everything sent is one JSON value - the result as the
+    wire carries it, read back - with its shorthand as the text: the bytes measured,
+    written, and read are the text a model reads.
     """
     try:
-        text = WIRE.dump_json(result)
+        sent: dict[str, Any] = json.loads(WIRE.dump_json(result))
     except PydanticSerializationError as e:
         # [LAW:single-enforcer] a result no caller can read is the tool's bug, and
         # failure_response is where every exception becomes the caller's failure arm.
         unserializable = TypeError(
             f"{tool} ran, but returned a result that is not JSON-serializable: {e}"
         )
-        return failure_response(unserializable, tool)
-    size = len(text)
+        return reply(failure_response(unserializable, tool))
+    text = shorthand.render(sent)
+    size = len(text.encode("utf-8"))
     if size <= bound:
         logger.debug("delivered %s inline: %d bytes", tool, size)
-        sent: dict[str, Any] = json.loads(text)
-        return sent
+        return ToolResult(content=text, structured_content=sent)
+    return reply(stored(tool, sent, text, size, bound))
 
-    name = f"{tool}-{uuid.uuid4().hex}.json"
+
+def reply(sent: dict[str, Any]) -> ToolResult:
+    """A JSON value as the caller receives it: itself for programs, its shorthand for a model."""
+    return ToolResult(content=shorthand.render(sent), structured_content=sent)
+
+
+def stored(tool: str, sent: dict[str, Any], text: str, size: int, bound: int) -> dict[str, Any]:
+    """The pointer to ``text`` written whole to a file, or the failure that says it could not be."""
+    name = f"{tool}-{uuid.uuid4().hex}.txt"
     try:
         directory = results_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = directory / name
-        path.write_bytes(text)
+        path.write_text(text, encoding="utf-8")
     except OSError as e:
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
@@ -131,12 +144,8 @@ def deliver(
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s", tool, size, bound, path
     )
-    envelope = {field: result[field] for field in ENVELOPE_FIELDS if field in result}
     return {
-        **{
-            field: preview(value)
-            for field, value in WIRE.dump_python(envelope, mode="json").items()
-        },
+        **{field: preview(sent[field]) for field in ENVELOPE_FIELDS if field in sent},
         "result_file": str(path),
         "result_uri": RESULT_URI.format(name=name),
         "result_bytes": size,
