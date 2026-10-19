@@ -79,7 +79,7 @@ def _table(
     rows = owner[key]
     columns = list(dict.fromkeys(key for row in every for key in row if key != branch))
     header = f"{pad}{_name(key)}[{len(rows)}]{{{','.join(map(_name, columns))}}}"
-    header += f"/{_name(branch)}:" if branch else ":"
+    header += f"/{_name(branch)}:" if branch is not None else ":"
     # The object holding a tree's top rows is their parent when the list is its branch,
     # as far as its fields written before the list: a reader has those, and only those.
     earlier = takewhile(lambda field: field != key, owner)
@@ -110,7 +110,7 @@ def _descendants(rows: list[dict[str, Any]], branch: str | None) -> list[dict[st
     return [
         each
         for row in rows
-        for each in [row, *_descendants(row.get(branch, []) if branch else [], branch)]
+        for each in [row, *_descendants(row.get(branch, []) if branch is not None else [], branch)]
     ]
 
 
@@ -126,9 +126,9 @@ def _rows(
         cells = [_tree_cell(row, parent, column) for column in columns]
         while cells and cells[-1] == "":
             cells.pop()
-        end = ";" if branch and branch not in row else ""
+        end = ";" if branch is not None and branch not in row else ""
         lines.append(INDENT * depth + ",".join(cells) + end)
-        if branch:
+        if branch is not None:
             lines += _rows(row.get(branch, []), columns, branch, row, depth + 1)
     return lines
 

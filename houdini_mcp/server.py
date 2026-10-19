@@ -124,6 +124,8 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     """The held tool with its result delivered within the response bound."""
 
     # [LAW:single-enforcer] every served tool's result crosses this one boundary.
+    # wraps copies the tool's own return annotation over ToolResult's: that annotation,
+    # the structured content's type, is the output schema the tool publishes.
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> ToolResult:
         result = await tool(*args, **kwargs)

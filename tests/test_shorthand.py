@@ -208,12 +208,14 @@ class TestRoundTrip:
                 "nodes": [{"path": "/obj/a", "nodes": [{"path": "/obj/a/b", "nodes": []}]}],
                 "path": "/obj",
             },
+            {"t": [{"a": 1, "": [{"a": 2, "": []}]}]},
         ],
         ids=[
             "serialized-scene",
             "branch-unlike-the-field",
             "parent-holds-the-tree",
             "parent-field-after-the-tree",
+            "branch-named-empty",
         ],
     )
     def test_a_tree_reads_back_as_itself(self, result: dict[str, Any]) -> None:
