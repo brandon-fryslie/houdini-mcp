@@ -79,24 +79,25 @@ pre-commit run ruff --all-files
 
 ## Testing with Live Houdini
 
-### Start Houdini RPC Server
-
-In Houdini's Python shell:
-
-```python
-import hrpyc
-
-hrpyc.start_server(port=18811)
-```
-
-### Run Integration Tests
+The tests in `tests/integration` run against a real Houdini. One command starts a
+headless `hython` serving this checkout's plugin listener (never an installed
+`houdini_mcp` package's copy) on a free loopback port, runs every live test against
+it, and stops it afterwards, whether the tests pass or fail or the run itself is killed:
 
 ```bash
-HOUDINI_HOST=localhost HOUDINI_PORT=18811 python -c "
-from houdini_mcp.tools import get_scene_info
-print(get_scene_info('localhost', 18811))
-"
+uv run pytest -m integration
 ```
+
+Each test starts from an empty scene. The run exits non-zero when a test fails or
+Houdini does not start; the error carries the end of hython's log.
+
+`HYTHON` names the `hython` to run. It defaults to
+`/Applications/Houdini/Current/Frameworks/Houdini.framework/Versions/Current/Resources/bin/hython`.
+
+Plain `pytest` deselects the live tests, as CI does with `-m 'not integration'`, so
+one live test runs with the marker too:
+`uv run pytest -m integration tests/integration/test_live_houdini.py::test_create_and_delete_node`.
+A test added under `tests/integration` is a live test without being marked.
 
 ## Code Style
 

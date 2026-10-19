@@ -193,7 +193,7 @@ The workflows demonstrated in these examples are also tested in:
 
 Run integration tests:
 ```bash
-pytest tests/integration/test_workflow_examples.py -v
+uv run pytest -m integration tests/integration/test_workflow_examples.py
 ```
 
 ## Tips for Using These Examples

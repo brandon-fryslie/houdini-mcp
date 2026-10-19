@@ -54,7 +54,7 @@ python error_handling.py
 ### Run Tests
 ```bash
 cd /opt/stacks/houdini-mcp
-pytest tests/integration/test_workflow_examples.py -v
+uv run pytest -m integration tests/integration/test_workflow_examples.py
 ```
 
 ## 📚 Example Summaries
