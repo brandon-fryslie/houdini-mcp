@@ -458,6 +458,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
+  now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
+  JSON one, and end with the Windows and Linux paths. The guide's own plugin
+  recipe left out `houdini_mcp_handshake` and `houdini_mcp_search`, so every
+  shelf tool failed to import.
+
 - The upstream org's internal infrastructure (houdini-tuneup-ef3.b06):
   AGENTS.md's instructions for its Huly tracker, Letta PM agent, Graphiti and
   BookStack; the `.letta/`, `.serena/` and `.vibesync-cache/` tool
@@ -476,6 +482,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `available_types`.
 
 ### Fixed
+
+- **`get_houdini_help` names the class on a hou page** (houdini-tuneup-ef3.avb):
+  a `python_hou` title came back as ` - class`, because the parser read only the
+  h1's first text node and the name opens with a `hou.` supertitle span. The
+  title is now the h1's text without its subtitle (`hou.Node - class`), and a
+  versioned Labs node keeps its version (`Labs Align and Distribute 2.0 -
+  geometry node`).
 
 - **Framing leaves out geometry with no points** (houdini-laws-etg.aeu): in
   Houdini 22 the box around geometry with no points is a box of no size at its

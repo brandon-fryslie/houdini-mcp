@@ -287,12 +287,12 @@ if result["status"] == "error":
 Run tests with:
 ```bash
 # Test new tools only
-pytest tests/test_tools.py::TestListChildren -v
-pytest tests/test_tools.py::TestFindNodes -v
-pytest tests/test_tools.py::TestGetNodeInfoExtended -v
+uv run pytest tests/test_tools.py::TestListChildren -v
+uv run pytest tests/test_tools.py::TestFindNodes -v
+uv run pytest tests/test_tools.py::TestGetNodeInfoExtended -v
 
 # Test all
-pytest tests/test_tools.py -v
+uv run pytest tests/test_tools.py -v
 ```
 
 All tests should pass.

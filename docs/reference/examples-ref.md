@@ -2,9 +2,9 @@
 
 ## 📋 Overview
 
-**Status**: ✅ Complete  
-**Files Created**: 6 (4 examples + 1 test file + 1 README)  
-**Lines of Code**: 1,515 total  
+**Status**: ✅ Complete\
+**Files Created**: 6 (4 examples + 1 test file + 1 README)\
+**Lines of Code**: 1,515 total\
 **Integration Tests**: 11 tests, 4 test classes
 
 ## 🎯 Acceptance Criteria
@@ -37,16 +37,16 @@ tests/integration/
 ### Run Examples
 ```bash
 # Example 1: Build from scratch
-python examples/build_from_scratch.py
+uv run python examples/build_from_scratch.py
 
 # Example 2: Augment existing scene
-python examples/augment_existing_scene.py
+uv run python examples/augment_existing_scene.py
 
 # Example 3: Parameter workflow
-python examples/parameter_workflow.py
+uv run python examples/parameter_workflow.py
 
 # Example 4: Error handling
-python examples/error_handling.py
+uv run python examples/error_handling.py
 ```
 
 ### Run Tests
@@ -57,8 +57,8 @@ uv run pytest -m integration tests/integration/test_workflow_examples.py
 ## 📚 Example Summaries
 
 ### 1. Build from Scratch (`build_from_scratch.py`)
-**Network**: sphere → xform → color → OUT  
-**Steps**: 11  
+**Network**: sphere → xform → color → OUT\
+**Steps**: 11\
 **Demonstrates**:
 - Create geo container
 - Create SOP nodes
@@ -75,8 +75,8 @@ uv run pytest -m integration tests/integration/test_workflow_examples.py
 - `get_geo_summary` (1x)
 
 ### 2. Augment Existing Scene (`augment_existing_scene.py`)
-**Network**: grid → noise ⟹ grid → mountain → noise  
-**Steps**: 11  
+**Network**: grid → noise ⟹ grid → mountain → noise\
+**Steps**: 11\
 **Demonstrates**:
 - Discover network with `list_children`
 - Inspect connections with `get_node_info`
@@ -93,8 +93,8 @@ uv run pytest -m integration tests/integration/test_workflow_examples.py
 - `get_geo_summary` (2x)
 
 ### 3. Parameter Workflow (`parameter_workflow.py`)
-**Workflow**: Discover → Set → Verify  
-**Steps**: 5  
+**Workflow**: Discover → Set → Verify\
+**Steps**: 5\
 **Demonstrates**:
 - Discover all parameters
 - Query specific parameter schema
@@ -111,8 +111,8 @@ uv run pytest -m integration tests/integration/test_workflow_examples.py
 - `get_geo_summary` (1x)
 
 ### 4. Error Handling (`error_handling.py`)
-**Scenarios**: 4 (Missing input, Invalid param, Incompatible connection, Safe access)  
-**Steps**: 12  
+**Scenarios**: 4 (Missing input, Invalid param, Incompatible connection, Safe access)\
+**Steps**: 12\
 **Demonstrates**:
 - Detect missing input
 - Invalid parameter type
@@ -342,7 +342,7 @@ elif cook_state == "error":
 
 This work delivers comprehensive examples and documentation for the Houdini MCP Server. All acceptance criteria met, all patterns demonstrated, all error scenarios handled.
 
-**Ready for**: Production use ✅  
-**Suitable for**: Humans and AI agents ✅  
-**Quality**: High ✅  
+**Ready for**: Production use ✅\
+**Suitable for**: Humans and AI agents ✅\
+**Quality**: High ✅\
 **Completeness**: 100% ✅

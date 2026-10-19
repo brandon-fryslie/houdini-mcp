@@ -1,7 +1,7 @@
 # Example Workflows - Implementation Summary
 
-**Status**: ✅ **COMPLETE**  
-**Date**: December 18, 2024  
+**Status**: ✅ **COMPLETE**\
+**Date**: December 18, 2024\
 **Issue**: Example workflows + documentation for Houdini MCP Server
 
 ## Overview
@@ -30,7 +30,7 @@ Created comprehensive examples and documentation demonstrating how to use the Ho
 - Final network visualization
 
 #### ✅ `augment_existing_scene.py`
-**Initial**: grid → noise  
+**Initial**: grid → noise\
 **Final**: grid → mountain → noise
 
 **Demonstrates**:
@@ -337,10 +337,10 @@ Bounding box size change:
 ### Run Examples Manually
 
 ```bash
-python examples/build_from_scratch.py
-python examples/augment_existing_scene.py
-python examples/parameter_workflow.py
-python examples/error_handling.py
+uv run python examples/build_from_scratch.py
+uv run python examples/augment_existing_scene.py
+uv run python examples/parameter_workflow.py
+uv run python examples/error_handling.py
 ```
 
 ### Run Integration Tests
@@ -485,7 +485,7 @@ Users can now:
 
 ---
 
-**Implementation**: Complete ✅  
-**Documentation**: Complete ✅  
-**Testing**: Complete ✅  
+**Implementation**: Complete ✅\
+**Documentation**: Complete ✅\
+**Testing**: Complete ✅\
 **Ready for use**: Yes ✅
