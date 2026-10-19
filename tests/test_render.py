@@ -684,15 +684,73 @@ class TestViewpoint:
         )
 
 
+def test_a_box_is_carried_into_the_world_as_houdini_carries_it() -> None:
+    """The world box around a turned, moved box is Houdini's own box * worldTransform."""
+    from houdini_mcp.tools.rendering import _transformed
+    from tests.conftest import HOUDINI_TURNED_BOX, HOUDINI_TURNED_MATRIX
+
+    lo, hi = _transformed(((-1.0, -2.0, -3.0), (1.0, 2.0, 3.0)), HOUDINI_TURNED_MATRIX)
+
+    assert (lo, hi) == (
+        pytest.approx(HOUDINI_TURNED_BOX[0], abs=1e-9),
+        pytest.approx(HOUDINI_TURNED_BOX[1], abs=1e-9),
+    )
+
+
+# The fake scene, served over a real rpyc link: add_geo displays one geo whose points
+# span -1..1, so every geo framed costs the link what one object does.
+_SERVED_SCENE = """
+from tests.conftest import MockGeometry, MockHouModule
+
+hou = MockHouModule()
+
+
+def add_geo(name):
+    geometry = MockGeometry([(-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)])
+    hou.node("/obj").createNode("geo", name).createNode("box", "box1").setGeometry(geometry)
+"""
+
+
+def _framing_round_trips(displayed: int) -> int:
+    """The synchronous round trips framing ``displayed`` geos makes over the link."""
+    from houdini_mcp.tools.rendering import _displayed_shapes, _framing
+    from tests.conftest import served_connection
+
+    with served_connection(_SERVED_SCENE) as conn:
+        for n in range(displayed):
+            conn.namespace["add_geo"](f"geo{n}")
+        obj = conn.namespace["hou"].node("/obj")
+        sent: list[Any] = []
+        send = conn.sync_request
+
+        def counted(*request: Any) -> Any:
+            sent.append(request[0])
+            return send(*request)
+
+        conn.sync_request = counted
+        framing = _framing(_displayed_shapes(obj))
+        conn.sync_request = send
+    assert framing.bounds == ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
+    return len(sent)
+
+
+def test_framing_costs_each_displayed_object_a_fixed_number_of_round_trips() -> None:
+    """Nine calls an object - display flag, child category and its name, display SOP,
+    its path and geometry, the bounds, the transform and its rows - two round trips
+    each, and one more for each remote object rpyc meets: the object, its category,
+    its display SOP, the geometry and the transform."""
+    one, two, three = (_framing_round_trips(n) for n in (1, 2, 3))
+
+    assert two - one == three - two == 23
+
+
 def _geo_with_box(obj: Any, name: str, tx: float, lo: tuple, hi: tuple) -> Any:
-    """A displayed geo at x=tx whose display SOP's geometry fills the box lo..hi (local)."""
+    """A displayed geo at x=tx whose display SOP's points span lo..hi (local)."""
     from tests.conftest import MockGeometry
 
     geo = obj.createNode("geo", name)
     geo.parm("tx").set(tx)
-    geometry = MockGeometry()
-    geometry.setBoundingBox(lo, hi)
-    geo.createNode("box", "box1").setGeometry(geometry)
+    geo.createNode("box", "box1").setGeometry(MockGeometry([lo, hi]))
     return geo
 
 
@@ -1233,19 +1291,21 @@ class TestRenderFraming:
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
         assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
-    @pytest.mark.parametrize("path", ["/out", "/out/stray_box"])
-    def test_look_at_a_node_outside_any_object_is_an_error(
+    @pytest.mark.parametrize("path", ["/out", "/out/stray_box", "/obj/cube_b/solver"])
+    def test_look_at_anything_but_an_object_or_a_sop_in_one_is_an_error(
         self, frames: list[dict[str, Any]], framed_scene: Any, path: str
     ) -> None:
-        """A ROP network, and a SOP that stands in no object, have no place in the world."""
+        """A ROP network, a SOP that stands in no object, and a DOP, even inside an
+        object, are refused rather than framed where some object stands."""
         from houdini_mcp.tools import render_viewport
 
         framed_scene.node("/out").createNode("box", "stray_box")
+        framed_scene.node("/obj/cube_b").createNode("pyrosolver", "solver")
 
         result = render_viewport(look_at=path, host="localhost", port=18811)
 
         assert result["status"] == "error"
-        assert result["message"] == f"look_at must name an object or a SOP: {path}"
+        assert result["message"] == f"look_at must name an object, or a SOP inside one: {path}"
         assert frames == []
 
     @pytest.mark.parametrize("name", ["user_cam", "bare_geo", "pivot"])
@@ -1301,10 +1361,8 @@ class TestRenderFraming:
         from houdini_mcp.tools import render_viewport
         from tests.conftest import MockGeometry
 
-        geometry = MockGeometry()
-        geometry.setBoundingBox((-1, -1, -1), (1, 1, 1))
         inner = framed_scene.node("/obj/cube_b").createNode("subnet", "inner")
-        inner.createNode("box", "deep").setGeometry(geometry)
+        inner.createNode("box", "deep").setGeometry(MockGeometry([(-1, -1, -1), (1, 1, 1)]))
 
         result = render_viewport(look_at="/obj/cube_b/inner/deep", host="localhost", port=18811)
 
@@ -1533,6 +1591,67 @@ class TestRenderFraming:
         assert result["status"] == "success", result
         assert result["bounding_box"] == self.BOX
 
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_shape_with_nothing_to_frame_is_left_out_unplaced_and_named(
+        self,
+        frames: list[dict[str, Any]],
+        framed_scene: Any,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: str,
+    ) -> None:
+        """Geometry with no points, and a SOP that did not cook, never have their
+        placing transform read; the framing event names them."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockGeometry
+
+        obj = framed_scene.node("/obj")
+        empty = obj.createNode("geo", "empty")
+        empty.createNode("box", "box1").setGeometry(MockGeometry())
+        broken = obj.createNode("geo", "broken")
+        broken.createNode("file", "file1")
+
+        def unread(*_: Any) -> Any:
+            raise AssertionError("the transform of a shape with nothing to frame was read")
+
+        for node in (empty, broken):
+            monkeypatch.setattr(node, "worldTransform", unread)
+
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.rendering"):
+            result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+        assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("Framed ")] == [
+            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1'], "
+            "left out {'/obj/empty/box1': 'no points', '/obj/broken/file1': 'did not cook'}: "
+            "bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) distance=23.382 ortho_width=14.400"
+        ]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_turned_object_off_the_origin_is_framed_as_houdini_places_it(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        import houdini_mcp.tools as tools
+        from tests.conftest import HOUDINI_TURNED_BOX, MockGeometry
+
+        obj = framed_scene.node("/obj")
+        for name in ("cube_a", "cube_b"):
+            obj.node(name).destroy()
+        turned = obj.createNode("geo", "turned")
+        for name, value in zip(
+            ("tx", "ty", "tz", "rx", "ry", "rz"), (10, 3, -4, 20, -130, 35), strict=True
+        ):
+            turned.parm(name).set(float(value))
+        turned.createNode("box", "box1").setGeometry(MockGeometry([(-1, -2, -3), (1, 2, 3)]))
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        lo, hi = HOUDINI_TURNED_BOX
+        assert result["bounding_box"]["min"] == pytest.approx(lo, abs=1e-9)
+        assert result["bounding_box"]["max"] == pytest.approx(hi, abs=1e-9)
+
     def test_a_rop_missing_a_table_parm_fails_naming_it(
         self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1560,7 +1679,7 @@ class TestRenderFraming:
         messages = [r.getMessage() for r in caplog.records]
         framed = [m for m in messages if m.startswith("Framed ")]
         assert framed == [
-            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1']: "
+            "Framed ['/obj/cube_a/box1', '/obj/cube_b/box1'], left out {}: "
             "bounds=((-1.0, -1.0, -1.0), (11.0, 1.0, 1.0)) distance=23.382 ortho_width=14.400"
         ]
         rop = [m for m in messages if m.startswith("Render ROP ")]

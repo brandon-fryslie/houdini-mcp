@@ -5,13 +5,14 @@ and capturing images for AI analysis.
 """
 
 import base64
+import itertools
 import logging
 import math
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ..connection import transport_failure
 from ._common import (
@@ -149,6 +150,18 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
 # =============================================================================
 
 
+Box = tuple[Vec3, Vec3]
+"""An axis-aligned box: its min and max corners."""
+
+_Row = tuple[float, float, float, float]
+Matrix4 = tuple[_Row, _Row, _Row, _Row]
+"""A hou.Matrix4's rows, as asTupleOfTuples() gives them. A point is the row vector
+times the matrix, so rows 0-2 carry x, y and z and row 3 is the translate."""
+
+_Unframed = Literal["did not cook", "no points"]
+"""Why a shape adds nothing to a framing."""
+
+
 @dataclass(frozen=True)
 class Framing:
     """What a render looks at: the world-space box around the framed geometry, or nothing.
@@ -159,7 +172,7 @@ class Framing:
     render tools can frame the same scene differently.
     """
 
-    bounds: tuple[Vec3, Vec3] | None
+    bounds: Box | None
     """World-space min and max of the framed geometry; None when nothing was framed."""
 
     @property
@@ -218,96 +231,132 @@ class Framing:
 
 @dataclass(frozen=True)
 class _Shape:
-    """A geometry and the transform that places it in the world."""
+    """A geometry and the object that places it in the world."""
 
     source: str
     """The path of the node the geometry came from."""
     geometry: Any
     """The hou.Geometry; None when its SOP failed to cook."""
-    transform: Any
-    """The hou.Matrix4 from the geometry's space to world space."""
+    placer: Any
+    """The object whose world transform carries the geometry into world space."""
 
 
-def _object_of(node: Any) -> Any | None:
-    """The object a node stands in the world as: itself, or the nearest Object ancestor
-    of a SOP; None for a node outside any object, such as a ROP or a LOP's SOP."""
-    while node is not None and node_category(node) != "Object":
-        node = node.parent()
-    return node
+def _look_at(hou: Any, path: str) -> tuple[Any, list[_Shape]]:
+    """What look_at names: the object it stands in the world as, and the shapes it shows.
 
-
-def _shapes(node: Any, anchor: Any) -> list[_Shape]:
-    """What a node puts in the world, and where; ``anchor`` is its ``_object_of``.
-
-    [LAW:one-type-per-behavior] the kinds of node that carry geometry, told
-    apart once: a SOP is its own geometry placed by its object; an object is
-    what it displays - a SOP's geometry placed by the object itself, or, for an
-    object whose children are objects, whatever its displayed children place.
-    An object that displays nothing has no shape.
+    [LAW:parse-dont-validate] the one place a look_at path is read. An object is
+    what it shows; a SOP is its own geometry, placed by its nearest Object
+    ancestor. Any other node, and a SOP in no object, such as a LOP's, is refused.
     """
-    if node_category(node) == "Sop":
-        return [
-            _Shape(source=node.path(), geometry=node.geometry(), transform=anchor.worldTransform())
-        ]
-    display = node.displayNode()
-    if display is not None and node_category(display) == "Sop":
-        return [
-            _Shape(
-                source=display.path(), geometry=display.geometry(), transform=node.worldTransform()
-            )
-        ]
-    # A node that is not a network has no child category; one of objects shows them all.
-    contained = node.childTypeCategory()
-    if contained is not None and str(contained.name()) == "Object":
-        return _displayed_shapes(node)
+    target = node_at(hou, path)
+    kind = node_category(target)
+    if kind == "Object":
+        return target, _object_shapes(target)
+    anchor = target.parent() if kind == "Sop" else None
+    while anchor is not None and node_category(anchor) != "Object":
+        anchor = anchor.parent()
+    if anchor is None:
+        raise InvalidInput(
+            f"look_at must name an object, or a SOP inside one: {path}", look_at=path
+        )
+    return anchor, [_Shape(source=target.path(), geometry=target.geometry(), placer=anchor)]
+
+
+def _object_shapes(obj: Any) -> list[_Shape]:
+    """What an object shows, told by what it contains.
+
+    [LAW:one-type-per-behavior] the kinds of object that carry geometry, told
+    apart once, by the category of their children: an object of SOPs shows its
+    display SOP's geometry, placed by the object itself; an object of objects
+    shows whatever its displayed children place. An object that is not a
+    network, or that displays nothing, has no shape.
+    """
+    contained = obj.childTypeCategory()
+    kind = None if contained is None else contained.name()
+    if kind == "Sop":
+        display = obj.displayNode()
+        if display is None:
+            return []
+        return [_Shape(source=display.path(), geometry=display.geometry(), placer=obj)]
+    if kind == "Object":
+        return _displayed_shapes(obj)
     return []
 
 
 def _displayed_shapes(network: Any) -> list[_Shape]:
-    """The shapes of the objects a network shows: display flag on."""
+    """The shapes of the objects a network of objects shows: display flag on."""
     return [
         shape
         for child in network.children()
         if child.isDisplayFlagSet()
-        for shape in _shapes(child, child)
+        for shape in _object_shapes(child)
     ]
 
 
-def _world_corners(hou: Any, shape: _Shape) -> list[Vec3]:
-    """The eight corners of the box around a shape's geometry, in world space.
+def _local_box(geometry: Any) -> Box | None:
+    """The box around a geometry in its own space; None when it has no points.
 
-    Geometry that failed to cook, or that holds no points, has no box and so
-    contributes no corners to a framing.
+    [LAW:parse-dont-validate] Houdini's bounds intrinsic, one read, is
+    (xmin, xmax, ymin, ymax, zmin, zmax), inverted for geometry with no points.
+    Its boundingBox() of such geometry is a valid box of no size at the origin,
+    which would frame a point the geometry does not have.
+    """
+    xmin, xmax, ymin, ymax, zmin, zmax = geometry.intrinsicValue("bounds")
+    lo, hi = (xmin, ymin, zmin), (xmax, ymax, zmax)
+    return (lo, hi) if all(a <= b for a, b in zip(lo, hi, strict=True)) else None
+
+
+def _enclosing(points: Sequence[Vec3]) -> Box:
+    """The smallest box holding every point; there is at least one."""
+    xs, ys, zs = zip(*points, strict=True)
+    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
+
+
+def _transformed(box: Box, matrix: Matrix4) -> Box:
+    """The world box around a local box: its eight corners, each carried by the matrix."""
+    (a, b, c, _), (d, e, f, _), (g, h, i, _), (tx, ty, tz, _) = matrix
+    return _enclosing(
+        [
+            (x * a + y * d + z * g + tx, x * b + y * e + z * h + ty, x * c + y * f + z * i + tz)
+            for x, y, z in itertools.product(*zip(*box, strict=True))
+        ]
+    )
+
+
+def _placement(obj: Any) -> Matrix4:
+    """[LAW:effects-at-boundaries] an object's world transform, read over the link once,
+    as plain numbers."""
+    return cast(Matrix4, obj.worldTransform().asTupleOfTuples())
+
+
+def _world_box(shape: _Shape) -> Box | _Unframed:
+    """The world box around a shape's geometry, or why it has none.
+
+    The box and the placing matrix cross the link as plain numbers, the matrix
+    only for geometry with points; the corners are computed here.
     """
     if shape.geometry is None:
         # [LAW:no-silent-failure] a SOP that did not cook is named, not just left out
         logger.warning("Not framed: %s has no geometry (its SOP did not cook)", shape.source)
-        return []
-    box = shape.geometry.boundingBox()
-    if not box.isValid():
-        return []
-    lo, hi = box.minvec(), box.maxvec()
-    corners: list[Vec3] = []
-    for x in (lo[0], hi[0]):
-        for y in (lo[1], hi[1]):
-            for z in (lo[2], hi[2]):
-                world = hou.Vector4(x, y, z, 1.0) * shape.transform
-                corners.append((world[0], world[1], world[2]))
-    return corners
+        return "did not cook"
+    box = _local_box(shape.geometry)
+    if box is None:
+        return "no points"
+    return _transformed(box, _placement(shape.placer))
 
 
-def _framing(hou: Any, shapes: Sequence[_Shape]) -> Framing:
+def _framing(shapes: Sequence[_Shape]) -> Framing:
     """Frame the shapes together, in world space."""
-    corners = [corner for shape in shapes for corner in _world_corners(hou, shape)]
-    if corners:
-        lo = (min(c[0] for c in corners), min(c[1] for c in corners), min(c[2] for c in corners))
-        hi = (max(c[0] for c in corners), max(c[1] for c in corners), max(c[2] for c in corners))
-        framing = Framing(bounds=(lo, hi))
-    else:
-        framing = Framing(bounds=None)
+    placed = [(shape.source, _world_box(shape)) for shape in shapes]
+    framed = {source: box for source, box in placed if not isinstance(box, str)}
+    left_out = {source: why for source, why in placed if isinstance(why, str)}
+    framing = Framing(
+        bounds=_enclosing([corner for box in framed.values() for corner in box]) if framed else None
+    )
     logger.info(
-        "Framed %s: bounds=%s distance=%.3f ortho_width=%.3f",
-        [shape.source for shape in shapes],
+        "Framed %s, left out %s: bounds=%s distance=%.3f ortho_width=%.3f",
+        list(framed),
+        left_out,
         framing.bounds,
         framing.distance,
         framing.ortho_width,
@@ -317,7 +366,7 @@ def _framing(hou: Any, shapes: Sequence[_Shape]) -> Framing:
 
 def _framing_at(obj: Any) -> Framing:
     """Frame an object's world position: a box of no extent, opened to the unframed size."""
-    position = tuple(obj.worldTransform().extractTranslates())
+    position = _placement(obj)[3][:3]
     framing = Framing(bounds=(position, position))
     logger.info("Framed %s at %s: distance=%.3f", obj.path(), position, framing.distance)
     return framing
@@ -504,8 +553,8 @@ def render_viewport(
             about X, then Y, then Z. It alone sets where the camera looks, wherever the
             camera stands: [0, 0, 0] looks down -Z. Isometric by default
         look_at: Path of an object or SOP to frame instead of the scene; one with no
-            geometry is framed where it stands. An unknown path, or a node outside any
-            object, is an error
+            geometry is framed where it stands. An unknown path, any other node, or a
+            SOP outside any object, is an error
         resolution: [width, height] in pixels
         renderer: Render engine - "opengl" (fast) or "karma" (quality)
         output_format: Image format - "png", "jpg", or "exr"
@@ -534,16 +583,13 @@ def render_viewport(
 
     # What to frame: the node asked for, else what the viewport shows, else nothing.
     if look_at is not None:
-        target = node_at(prepared.hou, look_at)
-        anchor = _object_of(target)
-        if anchor is None:
-            raise InvalidInput(f"look_at must name an object or a SOP: {look_at}", look_at=look_at)
-        framing = _framing(prepared.hou, _shapes(target, anchor))
+        anchor, shapes = _look_at(prepared.hou, look_at)
+        framing = _framing(shapes)
         if framing.bounds is None:
             # A node with nothing to show is framed where it stands.
             framing = _framing_at(anchor)
     elif auto_frame:
-        framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
+        framing = _framing(_displayed_shapes(prepared.obj))
     else:
         framing = Framing(bounds=None)
     with _temporary_nodes() as create:
@@ -628,7 +674,7 @@ def render_quad_view(
     if include_perspective:
         views.append(("perspective", _ISOMETRIC, False))
 
-    framing = _framing(prepared.hou, _displayed_shapes(prepared.obj))
+    framing = _framing(_displayed_shapes(prepared.obj))
     view_results: list[dict[str, Any]] = []
 
     with _temporary_nodes() as create:

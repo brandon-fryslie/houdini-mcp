@@ -185,7 +185,7 @@ class TestExecuteCodeDiff:
     def test_a_capture_of_an_empty_scene_is_still_the_last_diff(
         self, mock_connection: MockHouModule
     ) -> None:
-        assert mock_connection.node("/obj").children() == []
+        assert mock_connection.node("/obj").children() == ()
         execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
         last = get_last_scene_diff()
         assert (last["status"], last["diff"]["has_changes"]) == ("success", False)

@@ -3,10 +3,11 @@
 import contextlib
 import copy
 import logging
+import math
 import pathlib
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -69,6 +70,17 @@ class MockSubnetIndirectInput:
         return MockNetworkItemType.SubnetIndirectInput
 
 
+class MockNodeTypeCategory:
+    """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
+    so rpyc reads it as it reads Houdini's."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
 
@@ -115,8 +127,11 @@ class MockNodeConnection:
         return self._input_index
 
 
+# The translate and rotate components every node carries, all zero.
+_TRANSFORM_PARAMS: dict[str, float] = dict.fromkeys(("tx", "ty", "tz", "rx", "ry", "rz"), 0.0)
+
 # Default parameters a freshly created node of each type carries, beyond the
-# translate every node has. A type absent here has no extras.
+# transform every node has. A type absent here has no extras.
 _TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     "material": {"shop_materialpath1": "", "group1": ""},
     "principledshader": {"basecolor": [1.0, 1.0, 1.0], "rough": 0.3, "metallic": 0.0},
@@ -164,9 +179,7 @@ class MockHouNode:
         # scene exactly when it is in its parent's children, and hou.node() walks it.
         self._children: list[MockHouNode] = []
         self._parent: MockHouNode | None = None
-        self._params: dict[str, Any] = (
-            params if params is not None else {"tx": 0.0, "ty": 0.0, "tz": 0.0}
-        )
+        self._params: dict[str, Any] = params if params is not None else dict(_TRANSFORM_PARAMS)
         self._inputs: list[Any] = []
         # Source output index per connected input, as hou.NodeConnection.outputIndex()
         # reports it. A test that assigns ``_inputs`` directly wires from output 0,
@@ -279,24 +292,22 @@ class MockHouNode:
         mock_type.category.return_value = mock_category
         return mock_type
 
-    def children(self) -> list["MockHouNode"]:
-        return self._children
+    def children(self) -> tuple["MockHouNode", ...]:
+        """The network's children, as hou.Node.children gives them: a tuple, which
+        rpyc carries by value rather than iterating over the link."""
+        return tuple(self._children)
 
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
         return self._indirect_inputs
 
-    def childTypeCategory(self) -> MagicMock | None:
+    def childTypeCategory(self) -> "MockNodeTypeCategory | None":
         """The category of this network's children: SOPs inside a geo, objects under
         /obj, ROPs under /out, any other network's own kind; None for a node that is
         not a network, as hou.Node.childTypeCategory returns."""
         if self._node_type in ("cam", "light", "null"):
             return None
         contained = {"geo": "Sop", "obj": "Object", "out": "Driver"}.get(self._node_type)
-        if contained is None:
-            return self.type().category()
-        category = MagicMock()
-        category.name.return_value = contained
-        return category
+        return MockNodeTypeCategory(contained or self.type().category().name())
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -388,7 +399,7 @@ class MockHouNode:
 
         # [LAW:dataflow-not-control-flow] a type's defaults are data looked up
         # once, not a branch per type.
-        params: dict[str, Any] = {"tx": 0.0, "ty": 0.0, "tz": 0.0}
+        params: dict[str, Any] = dict(_TRANSFORM_PARAMS)
         params.update(copy.deepcopy(_TYPE_DEFAULT_PARAMS.get(node_type, {})))
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type, params=params)
@@ -420,9 +431,22 @@ class MockHouNode:
         return self._display_flag
 
     def worldTransform(self) -> "MockMatrix4":
-        """The node's world transform: its own translate, as hou.ObjNode.worldTransform."""
+        """The node's world transform, as hou.ObjNode.worldTransform: its own rotate,
+        about X, then Y, then Z, then its translate (Houdini's default rOrd xyz and
+        xOrd srt). Parent objects are not composed."""
+        cx, cy, cz, sx, sy, sz = (
+            f(math.radians(self._params[name]))
+            for f in (math.cos, math.sin)
+            for name in ("rx", "ry", "rz")
+        )
+        # Rows of Rx * Ry * Rz: a row vector turns about X first.
         return MockMatrix4(
-            (self._params["tx"], self._params["ty"], self._params["tz"]),
+            (
+                (cy * cz, cy * sz, -sy, 0.0),
+                (sx * sy * cz - cx * sz, sx * sy * sz + cx * cz, sx * cy, 0.0),
+                (cx * sy * cz + sx * sz, cx * sy * sz - sx * cz, cx * cy, 0.0),
+                (self._params["tx"], self._params["ty"], self._params["tz"], 1.0),
+            )
         )
 
     def isRenderFlagSet(self) -> bool:
@@ -960,15 +984,15 @@ def closing_once_served(server: Server) -> Generator[Server, None, None]:
 
 
 @contextlib.contextmanager
-def served_namespace(source: str) -> Generator[Any, None, None]:
-    """The namespace ``source`` defines, run on a real rpyc server and seen through a
-    classic connection: every name a netref, so ``isinstance`` and ``==`` behave as
-    they do against a live Houdini."""
+def served_connection(source: str) -> Generator[Any, None, None]:
+    """A classic connection to a real rpyc server that has run ``source``: every name
+    ``source`` defines is a netref in ``conn.namespace``, so ``isinstance`` and ``==``
+    behave as they do against a live Houdini, and every call costs real round trips."""
     server = rpyc.utils.server.ThreadedServer(
         rpyc.core.SlaveService,
         hostname="127.0.0.1",
         port=0,
-        logger=logging.getLogger("served_namespace"),
+        logger=logging.getLogger("served_connection"),
     )
     server._start_in_thread()
     with (
@@ -976,6 +1000,13 @@ def served_namespace(source: str) -> Generator[Any, None, None]:
         rpyc.classic.connect("127.0.0.1", server.port) as conn,
     ):
         conn.execute(source)
+        yield conn
+
+
+@contextlib.contextmanager
+def served_namespace(source: str) -> Generator[Any, None, None]:
+    """The namespace ``source`` defines, as served_connection serves it."""
+    with served_connection(source) as conn:
         yield conn.namespace
 
 
@@ -1105,31 +1136,24 @@ class MockColor:
 
 
 class MockMatrix4:
-    """Mock hou.Matrix4: a translation, which is all the fake scene's nodes carry."""
+    """Mock hou.Matrix4: four rows in Houdini's row-vector convention, where a point
+    is the row vector times the matrix and row 3 is the translate."""
 
-    def __init__(self, translate: tuple[float, float, float]):
-        self._translate = (float(translate[0]), float(translate[1]), float(translate[2]))
+    def __init__(self, rows: tuple[tuple[float, float, float, float], ...]):
+        self._rows = tuple(tuple(float(v) for v in row) for row in rows)
 
-    def translate(self) -> tuple[float, float, float]:
-        return self._translate
-
-    def extractTranslates(self) -> tuple[float, float, float]:
-        return self._translate
+    def asTupleOfTuples(self) -> tuple[tuple[float, ...], ...]:
+        return self._rows
 
 
 class MockVector4:
-    """Mock hou.Vector4: a homogeneous point, so ``point * matrix`` lands it in world space."""
+    """Mock hou.Vector4: four components."""
 
     def __init__(self, x: float, y: float, z: float, w: float = 1.0):
         self._v = (float(x), float(y), float(z), float(w))
 
     def __getitem__(self, index: int) -> float:
         return self._v[index]
-
-    def __mul__(self, matrix: MockMatrix4) -> "MockVector4":
-        tx, ty, tz = matrix.translate()
-        x, y, z, w = self._v
-        return MockVector4(x + tx * w, y + ty * w, z + tz * w, w)
 
     def __repr__(self) -> str:
         return f"MockVector4{self._v}"
@@ -1273,33 +1297,29 @@ class MockGeoGroup:
         return self._name
 
 
-class MockBoundingBox:
-    """Mock hou.BoundingBox: the box around empty geometry is invalid, as Houdini's is."""
+# An object's worldTransform().asTupleOfTuples() at t=(10, 3, -4), r=(20, -130, 35),
+# as Houdini 22.0.466 reports it.
+HOUDINI_TURNED_MATRIX = (
+    (-0.5265407845183633, -0.3686878264946124, 0.766044443118978, 0.0),
+    (-0.7536055348572497, 0.6194725963584857, -0.2198463103929542, 0.0),
+    (-0.39348888176326546, -0.693053381028875, -0.6040227735550537, 0.0),
+    (10.0, 3.0, -4.0, 1.0),
+)
+# Houdini's own box * matrix for a 2x4x6 box about the origin, carried by that matrix.
+HOUDINI_TURNED_BOX = (
+    (6.785781500477341, -0.6867931622982089, -7.017805384570048),
+    (13.214218499522659, 6.686793162298208, -0.9821946154299526),
+)
 
-    def __init__(self, min_vec: tuple, max_vec: tuple):
-        self._min = list(min_vec)
-        self._max = list(max_vec)
-
-    def isValid(self) -> bool:
-        return all(lo <= hi for lo, hi in zip(self._min, self._max, strict=True))
-
-    def minvec(self) -> tuple:
-        return tuple(self._min)
-
-    def maxvec(self) -> tuple:
-        return tuple(self._max)
-
-    def sizevec(self) -> tuple:
-        return tuple(self._max[i] - self._min[i] for i in range(3))
-
-    def center(self) -> tuple:
-        return tuple((self._max[i] + self._min[i]) / 2.0 for i in range(3))
+# Houdini 22's bounds intrinsic of geometry with no points is inverted: each min at
+# +this, each max at -this, a box no point has widened.
+_NO_POINTS_EXTENT = 1.7014117331926443e38
 
 
 class MockGeometry:
-    """Mock hou.Geometry object."""
+    """Mock hou.Geometry object, holding ``points`` to begin with."""
 
-    def __init__(self):
+    def __init__(self, points: Sequence[tuple] = ()):
         self._points: list[MockGeoPoint] = []
         self._prims: list[MockGeoPrim] = []
         self._point_attribs: list[MockGeoAttrib] = []
@@ -1308,8 +1328,8 @@ class MockGeometry:
         self._detail_attribs: list[MockGeoAttrib] = []
         self._point_groups: list[MockGeoGroup] = []
         self._prim_groups: list[MockGeoGroup] = []
-        inf = float("inf")
-        self._bbox = MockBoundingBox((inf, inf, inf), (-inf, -inf, -inf))
+        for position in points:
+            self.addPoint(position)
 
     def points(self) -> list[MockGeoPoint]:
         """Return list of points."""
@@ -1345,8 +1365,16 @@ class MockGeometry:
     def primGroups(self) -> list[MockGeoGroup]:
         return self._prim_groups
 
-    def boundingBox(self) -> MockBoundingBox:
-        return self._bbox
+    def intrinsicValue(self, name: str) -> Any:
+        """hou.Geometry.intrinsicValue, for the intrinsics this double holds. Houdini
+        gives bounds as (xmin, xmax, ymin, ymax, zmin, zmax) around the points."""
+        axes = [[point.position()[i] for point in self._points] for i in range(3)]
+        bounds = tuple(
+            end
+            for axis in axes
+            for end in (min(axis, default=_NO_POINTS_EXTENT), max(axis, default=-_NO_POINTS_EXTENT))
+        )
+        return {"bounds": bounds}[name]
 
     def addPoint(self, position: tuple, attribs: dict[str, Any] | None = None) -> MockGeoPoint:
         """Helper to add a point."""
@@ -1395,10 +1423,6 @@ class MockGeometry:
         group = MockGeoGroup(name)
         self._prim_groups.append(group)
         return group
-
-    def setBoundingBox(self, min_vec: tuple, max_vec: tuple) -> None:
-        """Helper to set bounding box."""
-        self._bbox = MockBoundingBox(min_vec, max_vec)
 
 
 def raised_inside_houdini(exc: BaseException) -> BaseException:

@@ -160,7 +160,7 @@ render_viewport(look_at="/obj/geo1")
 |-----------|------|-------------|---------|
 | `camera_position` | `[float, float, float]` | [x, y, z] world position of the camera | Where `camera_rotation` looks at the center of what is framed, from far enough back to see all of it |
 | `camera_rotation` | `[float, float, float]` | [rx, ry, rz] world rotation of the camera in degrees, turned about X, then Y, then Z. It alone sets where the camera looks, wherever the camera stands: [0, 0, 0] looks down -Z | [-30, 45, 0] |
-| `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, or a node outside any object, is an error | None |
+| `look_at` | `str` | Path of an object or SOP to frame instead of the scene's; one with no geometry is framed where it stands; an unknown path, any other node, or a SOP outside any object, is an error | None |
 | `resolution` | `[int, int]`, each 64–4096 | [width, height] in pixels | [512, 512] |
 | `renderer` | enum | Exactly "opengl" or "karma" | "opengl" |
 | `output_format` | enum | Exactly "png", "jpg", or "exr" | "png" |
