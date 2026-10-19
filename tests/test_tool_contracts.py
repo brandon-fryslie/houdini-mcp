@@ -123,14 +123,14 @@ class TestServedSchemas:
             assert tool.input_schema["additionalProperties"] is False, tool.name
 
     def test_serving_a_tool_logs_the_arguments_the_server_binds(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, results: pathlib.Path
     ) -> None:
         from houdini_mcp import tools
         from houdini_mcp.server import served
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
-            served(tools.create_node, DEFAULT_TARGET)
-            served(tools.get_houdini_help, DEFAULT_TARGET)
+            served(tools.create_node, DEFAULT_TARGET, results)
+            served(tools.get_houdini_help, DEFAULT_TARGET, results)
         assert [r.getMessage() for r in caplog.records] == [
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",

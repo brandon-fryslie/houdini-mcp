@@ -8,6 +8,7 @@ server starts, never when a module is imported.
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, TypeVar
 
 from pydantic import BeforeValidator, Field, TypeAdapter, ValidationError
@@ -69,3 +70,23 @@ def houdini_target(environ: Mapping[str, str]) -> Target:
 def log_level(environ: Mapping[str, str]) -> int:
     """The logging level ``LOG_LEVEL`` names, in any case."""
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
+
+
+def results_dir(environ: Mapping[str, str]) -> Path:
+    """Where results too large to return inline are written: ``HOUDINI_MCP_RESULTS_DIR``.
+
+    By default one directory per user, the same for every server process, so a
+    server's removals bound what earlier ones left too. The override is for a
+    deployment that must name where they land.
+
+    Raises:
+        InvalidSetting: when none is named and the user has no home directory to hold one.
+    """
+    named = environ.get("HOUDINI_MCP_RESULTS_DIR")
+    if named:
+        return Path(named)
+    try:
+        home = Path.home()
+    except RuntimeError as e:
+        raise InvalidSetting(f"HOUDINI_MCP_RESULTS_DIR: unset, and {e}") from None
+    return home / ".cache" / "houdini-mcp" / "results"

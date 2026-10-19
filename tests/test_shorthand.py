@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import pathlib
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -132,15 +133,19 @@ class TestRoundTrip:
 
 
 class TestTheWire:
-    def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(self) -> None:
-        sent = deliver("t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}).structured_content
+    def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        sent = deliver(
+            "t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}, tmp_path
+        ).structured_content
 
         assert sent == {"x": None, "y": None, "s": "NaN"}
         assert read(render(sent)) == sent
 
-    def test_a_pointer_carries_what_the_wire_carries(self) -> None:
+    def test_a_pointer_carries_what_the_wire_carries(self, tmp_path: pathlib.Path) -> None:
         reply = deliver(
-            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, bound=8
+            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, tmp_path, bound=8
         )
 
         pointer = reply.structured_content

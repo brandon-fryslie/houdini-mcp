@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temporary directory per server process. Each result file is readable by its
   user alone. Reading a `result_uri` whose file is gone fails and names the
   directory it looked in.
+  `HOUDINI_MCP_RESULTS_DIR` is resolved when the server starts, beside the
+  other settings: unset, with no home directory to default into, it stops the
+  server from starting. In the Python API, `build_server`, `deliver` and
+  `read_result` take the results directory, which `settings.results_dir`
+  resolves.
 
 - **BREAKING (wire, Python API)**: `summarize` on `find_error_nodes`,
   `get_geo_summary` and `serialize_scene` defaults to `true`, and it is the

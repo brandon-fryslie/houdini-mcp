@@ -4,6 +4,7 @@ import contextlib
 import copy
 import logging
 import pathlib
+import shutil
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -791,18 +792,24 @@ class MockHouModule:
         parent.attach(node)
 
 
+@pytest.fixture(scope="session")
+def results_directory(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    """Where the test server writes large results, never the user's own results directory."""
+    return tmp_path_factory.mktemp("delivery") / "results"
+
+
 @pytest.fixture(autouse=True)
-def results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
-    """Where this test's large results land, never the user's own results directory."""
-    directory = tmp_path / "results"
-    monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(directory))
-    return directory
+def results(results_directory: pathlib.Path) -> Generator[pathlib.Path, None, None]:
+    """The results directory, holding only what this test wrote."""
+    yield results_directory
+    if results_directory.exists():
+        shutil.rmtree(results_directory)
 
 
 @pytest.fixture(scope="session")
-def mcp() -> FastMCP:
+def mcp(results_directory: pathlib.Path) -> FastMCP:
     """The server as an entry point builds it, reaching the default target."""
-    return build_server(DEFAULT_TARGET)
+    return build_server(DEFAULT_TARGET, results_directory)
 
 
 @pytest.fixture

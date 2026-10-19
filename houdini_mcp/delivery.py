@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -63,19 +64,6 @@ Read it soon: {RETENTION}."""
 """What every client is told at initialize about how a result reaches it."""
 
 
-def results_dir() -> Path:
-    """Where results too large to return inline are written.
-
-    By default one directory per user, the same for every server process, so a
-    server's removals bound what earlier ones left too. Each file is readable by
-    its user alone, since results carry scene contents and program output. The override is for a
-    deployment that must name where they land.
-    """
-    return Path(
-        os.getenv("HOUDINI_MCP_RESULTS_DIR") or Path.home() / ".cache" / "houdini-mcp" / "results"
-    )
-
-
 # [LAW:one-source-of-truth] The serializer FastMCP puts a result's structured content
 # on the wire with, so the value rendered, measured against the bound, and written to
 # the file is the result as structured content carries it.
@@ -104,11 +92,12 @@ def preview(value: Any) -> Any:
 def deliver(
     tool: str,
     result: dict[str, Any],
+    directory: Path,
     *,
     bound: int = RESPONSE_BOUND_BYTES,
 ) -> ToolResult:
     """``result`` as the caller receives it: inline when its shorthand fits the bound,
-    else a pointer to the file holding all of it.
+    else a pointer to the file in ``directory`` holding all of it.
 
     [LAW:one-source-of-truth] Everything sent is one JSON value - the result as the
     wire carries it, read back - with its shorthand as the text: the bytes measured,
@@ -128,7 +117,7 @@ def deliver(
     if len(encoded) <= bound:
         logger.debug("delivered %s inline: %d bytes", tool, len(encoded))
         return ToolResult(content=text, structured_content=sent)
-    return reply(stored(tool, sent, encoded, bound))
+    return reply(stored(tool, sent, encoded, bound, directory))
 
 
 def reply(sent: dict[str, Any]) -> ToolResult:
@@ -136,17 +125,17 @@ def reply(sent: dict[str, Any]) -> ToolResult:
     return ToolResult(content=shorthand.render(sent), structured_content=sent)
 
 
-def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[str, Any]:
+def stored(
+    tool: str, sent: dict[str, Any], encoded: bytes, bound: int, directory: Path
+) -> dict[str, Any]:
     """The pointer to ``encoded`` written whole to a file, or the failure that says it could not be."""
     size = len(encoded)
     name = f"{tool}-{uuid.uuid4().hex}.txt"
+    path = directory / name
     try:
-        directory = results_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = directory / name
         write_private(path, encoded)
-    except (OSError, RuntimeError) as e:
-        # RuntimeError: Path.home() when the user has no home directory.
+    except OSError as e:
         # The tool's work is done and cannot be handed over: the caller must learn
         # it ran, so it does not run it again to get a result that was never lost to it.
         unwritten = OperationFailed(
@@ -156,16 +145,17 @@ def stored(tool: str, sent: dict[str, Any], encoded: bytes, bound: int) -> dict[
     # [LAW:no-ambient-temporal-coupling] room is made after the write, around the file
     # just written: a failed write removes nothing, and the last of several servers
     # writing at once to finish sees all their files and brings them within the budget.
-    removed = make_room(directory, path, size)
+    room = make_room(directory, path)
     logger.info(
         "delivered %s as a file: %d bytes over the %d-byte bound -> %s; "
-        "removed %d older results, %d bytes",
+        "removed %d older results, %d bytes; %d removals failed",
         tool,
         size,
         bound,
         path,
-        len(removed),
-        sum(removed),
+        len(room.removed),
+        sum(room.removed),
+        room.failed,
     )
     return {
         **{field: preview(sent[field]) for field in ENVELOPE_FIELDS if field in sent},
@@ -181,7 +171,11 @@ def write_private(path: Path, data: bytes) -> None:
         with open(path, "xb", opener=lambda file, flags: os.open(file, flags, 0o600)) as out:
             out.write(data)
     except OSError:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as left:
+            # The write's error is the one the caller is told; this one is the operator's.
+            logger.warning("could not remove the partly written %s: %s", path, left)
         raise
 
 
@@ -203,38 +197,51 @@ def held(directory: Path) -> list[tuple[int, int, Path]]:
     return files
 
 
-def make_room(directory: Path, newest: Path, size: int) -> list[int]:
-    """Remove the oldest results in ``directory`` until they fit ``RESULTS_BUDGET_BYTES``
-    beside ``newest``, which is ``size`` bytes and always kept; the sizes of those removed.
+@dataclass(frozen=True)
+class Room:
+    """What making room did: the sizes of the results it removed, and how many removals failed."""
 
-    A result that cannot be removed is left, and said so: the newest is delivered
-    either way, and the next delivery tries again.
+    removed: list[int]
+    failed: int
+
+
+def make_room(directory: Path, newest: Path) -> Room:
+    """Remove the oldest results in ``directory`` until they fit ``RESULTS_BUDGET_BYTES``
+    beside ``newest``, the result just written.
+
+    Neither ``newest`` nor any result written at or after it is removed: those are
+    still being handed to their callers, by this server or another writing here,
+    and each writer makes room around its own. A result that cannot be removed is
+    left, and said so: the newest is delivered either way, and the next delivery
+    tries again.
     """
-    removed: list[int] = []
     try:
-        older = [file for file in held(directory) if file[2] != newest]
+        written = newest.stat().st_mtime_ns
+        files = sorted(held(directory), reverse=True)
     except OSError as e:
         logger.warning("could not list %s to keep its results within the budget: %s", directory, e)
-        return removed
-    filled = size
-    for _, bytes_held, path in sorted(older, reverse=True):
-        filled += bytes_held
-        if filled <= RESULTS_BUDGET_BYTES:
+        return Room(removed=[], failed=1)
+    removed: list[int] = []
+    failed = 0
+    filled = 0
+    for mtime, size, path in files:
+        filled += size
+        if filled <= RESULTS_BUDGET_BYTES or mtime >= written:
             continue
         try:
             path.unlink(missing_ok=True)
         except OSError as e:
             logger.warning("could not remove %s to keep results within the budget: %s", path, e)
+            failed += 1
             continue
-        removed.append(bytes_held)
-    return removed
+        removed.append(size)
+    return Room(removed, failed)
 
 
-def read_result(name: str) -> str:
-    """The text of a result ``deliver`` wrote, by the name in its ``result_uri``."""
+def read_result(name: str, directory: Path) -> str:
+    """The text of a result ``deliver`` wrote to ``directory``, by the name in its ``result_uri``."""
     if not RESULT_NAME.fullmatch(name):
         raise ValueError(f"not a delivered result name: {name!r}")
-    directory = results_dir()
     try:
         return (directory / name).read_text(encoding="utf-8")
     except FileNotFoundError as e:

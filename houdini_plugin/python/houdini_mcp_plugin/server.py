@@ -40,9 +40,10 @@ def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
     """Bind connections to this interpreter's Houdini; return its target and what serves it."""
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
     from houdini_mcp.server import build_server, serve
-    from houdini_mcp.settings import houdini_target
+    from houdini_mcp.settings import houdini_target, results_dir
 
     target = houdini_target(os.environ)
+    results = results_dir(os.environ)
     use_houdini(IN_PROCESS_HOUDINI)
     # [LAW:no-ambient-temporal-coupling] binding opens the link, so the Houdini being
     # served is known from Start - to MCP Status as to the first tool - and a missing
@@ -51,7 +52,7 @@ def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
     connect(target.host, target.port)
     # [LAW:no-ambient-temporal-coupling] built here, not on the serving thread, so a
     # server that cannot be built fails Start too.
-    mcp = build_server(target)
+    mcp = build_server(target, results)
     return target, lambda: serve(mcp=mcp, transport="stdio")
 
 
@@ -76,7 +77,8 @@ class StdioServer:
 
         Raises:
             AlreadyServing: a server is serving; nothing is started.
-            InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
+            InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target, or no
+                ``HOUDINI_MCP_RESULTS_DIR`` is named and the user has no home directory.
             HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
             Exception: binding to this Houdini or building the server failed, or
                 (blocking only) the transport failed; the caller is the one
@@ -137,7 +139,8 @@ def start_server(use_thread: bool = True) -> None:
 
     Raises:
         AlreadyServing: a server is already serving this process's stdin.
-        InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
+        InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target, or no
+            ``HOUDINI_MCP_RESULTS_DIR`` is named and the user has no home directory.
         HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
         Exception: binding to this Houdini or building the server failed, or a
             blocking serve failed. Nothing is left running; the caller (shelf
