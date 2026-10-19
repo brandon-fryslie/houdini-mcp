@@ -152,12 +152,12 @@ class TestATimedOutRunsDiff:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             mock_connection.stall_gate.set()
             worker.thread.join(5)
-        # The diff's event says it came late: the program ran its whole timeout.
-        # It can end under a millisecond past the timeout, which the event's
-        # millisecond reading shows as exactly 1.000, so the bound is inclusive.
-        [event] = [m for m in caplog.messages if "scene diff of /obj" in m]
-        took = float(event.split("program took ")[1].split("s of timeout 1s")[0])
-        assert took >= 1
+        # The diff's event says it came late: the program outlasted its timeout.
+        # Its text rounds the duration to milliseconds, so a program that ended
+        # just past 1s reads 1.000 there; the record carries the exact duration.
+        [event] = [r for r in caplog.records if "scene diff of /obj" in r.getMessage()]
+        took = event.args[2]
+        assert took > 1
         assert get_last_scene_diff()["diff"]["added_nodes"] == [
             {"path": "/obj/late", "type": "geo"}
         ]
