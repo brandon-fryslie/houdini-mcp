@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 
 from . import delivery, shorthand, tools
 from .connection import describe_target
+from .results import Results
 from .settings import Target
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
@@ -104,8 +105,8 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
-def delivered(tool: Callable[..., Any], results: Path) -> Callable[..., Any]:
-    """The held tool with its result delivered within the response bound, a large one to ``results``."""
+def delivered(tool: Callable[..., Any], results: Results) -> Callable[..., Any]:
+    """The held tool with its result delivered within the response bound, a large one kept by ``results``."""
 
     # [LAW:single-enforcer] every served tool's result crosses this one boundary.
     # wraps copies the tool's own return annotation over ToolResult's: that annotation,
@@ -120,7 +121,7 @@ def delivered(tool: Callable[..., Any], results: Path) -> Callable[..., Any]:
     return call
 
 
-def served(tool: Callable[..., Any], target: Target, results: Path) -> Tool:
+def served(tool: Callable[..., Any], target: Target, results: Results) -> Tool:
     """The tool as clients see it: its own signature and docs, with the target bound."""
     declared = Tool.from_function(delivered(held(tool), results))
     bound = {
@@ -132,8 +133,8 @@ def served(tool: Callable[..., Any], target: Target, results: Path) -> Tool:
     return Tool.from_tool(declared, transform_args=bound)
 
 
-def build_server(target: Target, results: Path) -> FastMCP:
-    """The MCP server, every tool of which reaches ``target``, and writes a large result to ``results``.
+def build_server(target: Target, results: Results) -> FastMCP:
+    """The MCP server, every tool of which reaches ``target``, and whose large results ``results`` keeps.
 
     [LAW:effects-at-boundaries] built by whoever starts it, from the target that
     entry point resolved, so importing this module builds nothing.
@@ -152,7 +153,7 @@ def build_server(target: Target, results: Path) -> FastMCP:
 
     def delivered_result(name: str) -> str:
         """A tool result too large to return inline, by the name in its ``result_uri``."""
-        return delivery.read_result(name, results)
+        return results.read(name)
 
     mcp.resource(delivery.RESULT_URI, mime_type="text/plain")(delivered_result)
     logger.info(f"Houdini connection target: {describe_target(target.host, target.port)}")
@@ -175,7 +176,7 @@ def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None
 
 
 def run_server(
-    target: Target, results: Path, transport: Transport, port: int, log_level: int
+    target: Target, results_root: Path, transport: Transport, port: int, log_level: int
 ) -> None:
     """Serve as a process of its own: configure this process's logging, then serve.
 
@@ -188,4 +189,5 @@ def run_server(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
-    serve(build_server(target, results), transport, port)
+    with Results.claim(results_root) as results:
+        serve(build_server(target, results), transport, port)

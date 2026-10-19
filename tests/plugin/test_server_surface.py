@@ -6,7 +6,6 @@ forbids rpyc outright so any attempt to reach a remote Houdini fails the test.
 
 from __future__ import annotations
 
-import pathlib
 import subprocess
 import sys
 import threading
@@ -332,7 +331,7 @@ class TestPluginStartsTheSharedServer:
         """A background Start reports the failure itself; its thread has no caller."""
         import houdini_mcp.server as shared_server
 
-        def unbuildable(_target: Target, _results: pathlib.Path) -> FastMCP:
+        def unbuildable(_target: Target, _results: object) -> FastMCP:
             raise KeyError("an_unclassified_tool")
 
         monkeypatch.setattr(shared_server, "build_server", unbuildable)

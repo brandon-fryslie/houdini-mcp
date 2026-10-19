@@ -73,20 +73,14 @@ def log_level(environ: Mapping[str, str]) -> int:
 
 
 def results_dir(environ: Mapping[str, str]) -> Path:
-    """Where results too large to return inline are written: ``HOUDINI_MCP_RESULTS_DIR``.
-
-    By default one directory per user, the same for every server process, so a
-    server's removals bound what earlier ones left too. The override is for a
-    deployment that must name where they land.
+    """The root ``HOUDINI_MCP_RESULTS_DIR`` names for results too large to return
+    inline, as an absolute path: by default, under the user's own cache.
 
     Raises:
-        InvalidSetting: when none is named and the user has no home directory to hold one.
+        InvalidSetting: it names a home directory the user does not have.
     """
-    named = environ.get("HOUDINI_MCP_RESULTS_DIR")
-    if named:
-        return Path(named)
+    named = environ.get("HOUDINI_MCP_RESULTS_DIR") or "~/.cache/houdini-mcp/results"
     try:
-        home = Path.home()
+        return Path(named).expanduser().absolute()
     except RuntimeError as e:
-        raise InvalidSetting(f"HOUDINI_MCP_RESULTS_DIR: unset, and {e}") from None
-    return home / ".cache" / "houdini-mcp" / "results"
+        raise InvalidSetting(f"HOUDINI_MCP_RESULTS_DIR: {e}, got {named!r}") from None

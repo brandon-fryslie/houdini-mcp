@@ -17,19 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `camera_position` still takes null, which means the framed position.
 
 - **BREAKING (wire)**: result files are removed (houdini-laws-spine-cqp.cwa).
-  A result too large to return inline is kept until newer results, from any
-  server writing to the same directory, fill 64MB; then the oldest are
-  removed, and the newest is always kept. Before, no result file was ever
-  removed. `HOUDINI_MCP_RESULTS_DIR` defaults to `~/.cache/houdini-mcp/results`,
-  one directory shared by every server the user runs, instead of a new
-  temporary directory per server process. Each result file is readable by its
-  user alone. Reading a `result_uri` whose file is gone fails and names the
-  directory it looked in.
-  `HOUDINI_MCP_RESULTS_DIR` is resolved when the server starts, beside the
-  other settings: unset, with no home directory to default into, it stops the
-  server from starting. In the Python API, `build_server`, `deliver` and
-  `read_result` take the results directory, which `settings.results_dir`
-  resolves.
+  Each running server keeps the results too large to return inline in a
+  directory of its own under `HOUDINI_MCP_RESULTS_DIR`, which defaults to
+  `~/.cache/houdini-mcp/results` instead of a new temporary directory per
+  process. A result file is kept until the same server's newer results fill
+  64MB; then the oldest are removed, the newest always kept, and none before
+  its pointer has been returned. A stopped server's results are removed when
+  another server starts under the same root. Before, no result file was ever
+  removed. Each result file is readable by its user alone. Reading a
+  `result_uri` the server no longer holds fails and gives the rule.
+  `HOUDINI_MCP_RESULTS_DIR` is resolved when the server starts, `~` expanded
+  and made absolute, and a root that cannot hold the server's directory stops
+  it from starting. In the Python API, `build_server` and `deliver` take the
+  `Results` a server holds (`houdini_mcp.results`), and `read_result` is
+  `Results.read`.
 
 - **BREAKING (wire, Python API)**: `summarize` on `find_error_nodes`,
   `get_geo_summary` and `serialize_scene` defaults to `true`, and it is the

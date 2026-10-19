@@ -38,6 +38,7 @@ from pydantic import ValidationError
 
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
+from houdini_mcp.results import Results
 from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import Policy
 from tests.conftest import DEFAULT_TARGET
@@ -123,7 +124,7 @@ class TestServedSchemas:
             assert tool.input_schema["additionalProperties"] is False, tool.name
 
     def test_serving_a_tool_logs_the_arguments_the_server_binds(
-        self, caplog: pytest.LogCaptureFixture, results: pathlib.Path
+        self, caplog: pytest.LogCaptureFixture, results: Results
     ) -> None:
         from houdini_mcp import tools
         from houdini_mcp.server import served

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import pathlib
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +17,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from houdini_mcp.delivery import deliver
+from houdini_mcp.results import Results
 from houdini_mcp.shorthand import KEY, render
 from tests.shorthand_reader import read
 
@@ -134,18 +134,18 @@ class TestRoundTrip:
 
 class TestTheWire:
     def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(
-        self, tmp_path: pathlib.Path
+        self, results: Results
     ) -> None:
         sent = deliver(
-            "t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}, tmp_path
+            "t", {"x": float("nan"), "y": float("inf"), "s": "NaN"}, results
         ).structured_content
 
         assert sent == {"x": None, "y": None, "s": "NaN"}
         assert read(render(sent)) == sent
 
-    def test_a_pointer_carries_what_the_wire_carries(self, tmp_path: pathlib.Path) -> None:
+    def test_a_pointer_carries_what_the_wire_carries(self, results: Results) -> None:
         reply = deliver(
-            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, tmp_path, bound=8
+            "t", {"status": "success", "total": float("nan"), "data": "x" * 64}, results, bound=8
         )
 
         pointer = reply.structured_content

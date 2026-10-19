@@ -50,8 +50,15 @@ def test_a_port_that_is_not_one_is_refused(port: str) -> None:
         setting({"MCP_PORT": port}, "MCP_PORT", TypeAdapter(Port), "3055")
 
 
-def test_results_land_where_named_or_in_the_users_own_directory() -> None:
+def test_results_land_where_named_or_in_the_users_own_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Resolved once at start, so a later chdir moves no result."""
+    monkeypatch.chdir(tmp_path)
+
     assert results_dir({"HOUDINI_MCP_RESULTS_DIR": "/srv/results"}) == pathlib.Path("/srv/results")
+    assert results_dir({"HOUDINI_MCP_RESULTS_DIR": "results"}) == tmp_path / "results"
+    assert results_dir({"HOUDINI_MCP_RESULTS_DIR": "~/r"}) == pathlib.Path.home() / "r"
     assert results_dir({}) == pathlib.Path.home() / ".cache" / "houdini-mcp" / "results"
 
 
@@ -59,15 +66,11 @@ def test_a_user_with_no_home_and_no_results_directory_stops_the_server_from_star
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Before any tool runs, not after one ran and its result had nowhere to go."""
-
-    def homeless() -> pathlib.Path:
-        raise RuntimeError("Could not determine home directory.")
-
     monkeypatch.delenv("HOUDINI_MCP_RESULTS_DIR", raising=False)
-    monkeypatch.setattr(pathlib.Path, "home", homeless)
+    monkeypatch.setattr(os.path, "expanduser", lambda path: path)
 
     with pytest.raises(
-        SystemExit, match="HOUDINI_MCP_RESULTS_DIR: unset, and Could not determine home directory"
+        SystemExit, match="HOUDINI_MCP_RESULTS_DIR: Could not determine home directory"
     ):
         main()
 

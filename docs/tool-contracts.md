@@ -13,10 +13,12 @@ reads it through the server (`houdini-mcp://results/{name}`) for a client on
 another machine; and `result_bytes`. A `render_viewport` image is usually over
 the bound, so its `image_base64` is in the file.
 
-Read the file soon. Result files are kept until newer results, from any server
-writing to the same directory, fill 64MB; then the oldest are removed. The
-newest result is always kept. Reading a `result_uri` whose file is gone fails,
-names the directory it looked in, and gives this rule.
+Read the file soon. A result file is kept until the same server's newer
+results fill 64MB; then the oldest are removed. The newest result is always
+kept, and none is removed before its pointer has been returned. A server's
+results are removed after it stops, when another server starts under the same
+`HOUDINI_MCP_RESULTS_DIR`. Reading a `result_uri` the server no longer holds
+fails and gives this rule.
 
 ## Every Tool: The Text Is a Shorthand of the JSON
 

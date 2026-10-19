@@ -4,7 +4,6 @@ import contextlib
 import copy
 import logging
 import pathlib
-import shutil
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -17,6 +16,7 @@ from rpyc.core import vinegar
 from rpyc.utils.server import Server
 
 from houdini_mcp.connection import _InterpreterModules
+from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import houdini_target
 
@@ -792,24 +792,32 @@ class MockHouModule:
         parent.attach(node)
 
 
-@pytest.fixture(scope="session")
-def results_directory(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
-    """Where the test server writes large results, never the user's own results directory."""
-    return tmp_path_factory.mktemp("delivery") / "results"
-
-
 @pytest.fixture(autouse=True)
-def results(results_directory: pathlib.Path) -> Generator[pathlib.Path, None, None]:
-    """The results directory, holding only what this test wrote."""
-    yield results_directory
-    if results_directory.exists():
-        shutil.rmtree(results_directory)
+def results_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Where a server this test starts keeps its results, never the user's own cache."""
+    root = tmp_path / "results-root"
+    monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(root))
+    return root
+
+
+@pytest.fixture
+def results(tmp_path: pathlib.Path) -> Generator[Results, None, None]:
+    """A results directory of this test's own, as a running server holds one."""
+    with Results.claim(tmp_path / "results") as results:
+        yield results
 
 
 @pytest.fixture(scope="session")
-def mcp(results_directory: pathlib.Path) -> FastMCP:
+def server_results(tmp_path_factory: pytest.TempPathFactory) -> Generator[Results, None, None]:
+    """The results the test server keeps."""
+    with Results.claim(tmp_path_factory.mktemp("served")) as results:
+        yield results
+
+
+@pytest.fixture(scope="session")
+def mcp(server_results: Results) -> FastMCP:
     """The server as an entry point builds it, reaching the default target."""
-    return build_server(DEFAULT_TARGET, results_directory)
+    return build_server(DEFAULT_TARGET, server_results)
 
 
 @pytest.fixture
