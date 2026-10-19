@@ -8,6 +8,7 @@ resume. A call meets the ledger where the server runs it (``held``).
 
 import logging
 import threading
+import time
 
 import pytest
 
@@ -145,19 +146,25 @@ class TestWorkerBlocksMutation:
 
 class TestATimedOutRunsDiff:
     def test_appears_once_the_program_ends(self, mock_connection, stalled_program, caplog):
-        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
+        program = (
+            "import time\nhou.began = time.monotonic()\n"
+            f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
+        )
         _time_out(program, capture_diff=True)
         assert get_last_scene_diff()["status"] == "warning"
         worker = WORKERS.running()
+        # [LAW:no-ambient-temporal-coupling] The program is released only once it
+        # has run past its timeout on the event's own clock: the caller's wait
+        # keeps the wall clock on macOS, so its return alone does not promise that.
+        while time.monotonic() <= mock_connection.began + 1:
+            time.sleep(0.001)
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             mock_connection.stall_gate.set()
             worker.thread.join(5)
         # The diff's event says it came late: the program outlasted its timeout.
-        # Its text rounds the duration to milliseconds, so a program that ended
-        # just past 1s reads 1.000 there; the record carries the exact duration.
+        # The record carries the exact duration; the text rounds it to milliseconds.
         [event] = [r for r in caplog.records if "scene diff of /obj" in r.getMessage()]
-        took = event.args[2]
-        assert took > 1
+        assert event.args[2] > 1
         assert get_last_scene_diff()["diff"]["added_nodes"] == [
             {"path": "/obj/late", "type": "geo"}
         ]
