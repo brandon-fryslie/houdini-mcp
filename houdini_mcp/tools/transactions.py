@@ -26,7 +26,7 @@ class TransactionPolicy(StrEnum):
     """What recovering from a tool's lasting effect takes."""
 
     UNDOABLE = "undoable"
-    """Houdini's undo can reverse it."""
+    """Houdini's undo can reverse it, one edit at a time in a graphical session."""
     CHECKPOINT_REQUIRED = "checkpoint_required"
     """The call replaces the scene, so the scene's unsaved work is backed up first."""
     PROGRAM_UNDO_GROUP = "program_undo_group"

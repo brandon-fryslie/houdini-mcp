@@ -187,7 +187,8 @@ class TestBackedUpFirst:
         )
 
     def test_execute_code_backs_nothing_up(self, mock_connection):
-        """A program edits the scene in its own undo group; it never replaces the scene."""
+        """The boundary backs up only for a tool that replaces the scene; a program is
+        not one, whatever it calls."""
         mock_connection.hipFile.hasUnsavedChanges.return_value = True
 
         result = execute_code("print('hi')", host="localhost", port=18811)
