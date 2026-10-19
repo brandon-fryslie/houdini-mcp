@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AUTO_SUMMARIZE_THRESHOLD` and returns anything smaller as is; `false` sends
   nothing to the summarizer, whatever the size. Before, `false` still
   summarized a large result and `true` summarized a small one too. With
-  `SUMMARIZATION_ENABLED=false` nothing is sent either, and a large result
-  carries `ai_summary_error` saying summarization is disabled.
+  `SUMMARIZATION_ENABLED=false` nothing is sent either, and every result comes
+  back as is: no `ai_summary_error`, no warning logged.
   `should_summarize` is gone from `houdini_mcp.tools`.
 
 - **BREAKING (Python API)**: importing `houdini_mcp.server` builds no server

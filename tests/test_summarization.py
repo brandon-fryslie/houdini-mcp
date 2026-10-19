@@ -139,28 +139,38 @@ class TestSummarized:
         result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
         assert result == RESULT
 
-    async def test_disabled_sends_nothing_and_says_why(self, no_wire, monkeypatch):
+    @pytest.mark.parametrize("summarizer", SUMMARIZERS)
+    async def test_disabled_leaves_the_result_as_is(self, no_wire, monkeypatch, summarizer):
+        """A setting, not a failure: no request, no ai_summary_error, no warning."""
         monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
         threshold_below(monkeypatch, RESULT, by=1)
-        result = await summarization.summarized(
-            dict(RESULT), summarization.summarize_errors, asked=True
-        )
-        assert result["ai_summary_error"].endswith(
-            ": summarization is disabled (SUMMARIZATION_ENABLED)"
-        )
+        result = await summarization.summarized(dict(RESULT), summarizer, asked=True)
+        assert result == RESULT
 
-    @pytest.mark.parametrize(("asked", "by", "decided"), [(False, 1, False), (True, 0, False)])
+    @pytest.mark.parametrize(
+        ("enabled", "asked", "by", "decided"),
+        [
+            (True, False, 1, False),
+            (True, True, 0, False),
+            (False, True, 1, False),
+            (True, True, 1, True),
+        ],
+    )
     async def test_logs_the_decision_and_its_inputs(
-        self, no_wire, monkeypatch, caplog, asked, by, decided
+        self, no_wire, monkeypatch, caplog, enabled, asked, by, decided
     ):
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", enabled)
         threshold_below(monkeypatch, RESULT, by=by)
         tokens = summarization.estimate_tokens(RESULT)
+
+        async def unchanged(data: dict) -> dict:
+            return data
+
         with caplog.at_level("DEBUG", logger="houdini_mcp.summarization"):
-            await summarization.summarized(
-                dict(RESULT), summarization.summarize_errors, asked=asked
-            )
+            await summarization.summarized(dict(RESULT), unchanged, asked=asked)
         assert caplog.messages == [
-            f"Summarize: {decided} (asked={asked}, ~{tokens} tokens, threshold {tokens - by})"
+            f"Summarize: {decided} (enabled={enabled}, asked={asked}, ~{tokens} tokens, "
+            f"threshold {tokens - by})"
         ]
 
 
@@ -246,14 +256,6 @@ class TestGetSummarizationStatus:
 
 class TestComplete:
     """The chat-completions request the summarizer sends, and how each answer is reported."""
-
-    async def test_disabled_sends_nothing(self, wire, monkeypatch):
-        """Disabled summarization sends nothing and says so."""
-        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", False)
-        result = await summarization._complete("test prompt")
-        assert isinstance(result, summarization.NoSummary)
-        assert result.reason.endswith(": summarization is disabled (SUMMARIZATION_ENABLED)")
-        assert wire.sent == []
 
     async def test_sends_a_chat_completions_request(self, wire):
         """The request goes to /v1/chat/completions with the key, model, budget and prompt."""

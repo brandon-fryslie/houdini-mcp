@@ -651,6 +651,7 @@ class TestServedSummaries:
 
         monkeypatch.setattr(errors, "_scan_error_nodes", six_errors)
         monkeypatch.setattr(errors, "summarize_errors", record)
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
 
         await client.call_tool("find_error_nodes", {})
         assert asked == []
@@ -663,11 +664,13 @@ class TestServedSummaries:
     async def test_find_error_nodes_never_summarizes_a_failure(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A call that read no node has no errors to triage, asked or not."""
-        import houdini_mcp.server as server
+        """A call that read no node has no errors to triage, however large the threshold
+        says it is."""
+        from houdini_mcp.tools import errors, summarization
+        from houdini_mcp.tools.failure import OperationFailed
 
         def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
-            return {"status": "error", "kind": "operation_failed", "uninspected": [{}]}
+            raise OperationFailed("Could not list the nodes under /obj")
 
         asked: list[dict[str, Any]] = []
 
@@ -675,8 +678,11 @@ class TestServedSummaries:
             asked.append(data)
             return data
 
-        monkeypatch.setattr(server.tools, "find_error_nodes", nothing_read)
-        monkeypatch.setattr(server.tools, "summarize_errors", record)
+        monkeypatch.setattr(errors, "_scan_error_nodes", nothing_read)
+        monkeypatch.setattr(errors, "summarize_errors", record)
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
 
-        await client.call_tool("find_error_nodes", {"summarize": True})
+        failure = await TestServedFailures.failure_of(client, "find_error_nodes", {})
+        assert failure.kind == "operation_failed"
         assert asked == []

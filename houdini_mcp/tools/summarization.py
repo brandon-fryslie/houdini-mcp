@@ -136,15 +136,19 @@ async def summarized(
     *,
     asked: bool,
 ) -> dict[str, Any]:
-    """The result with its AI summary when the caller asked for one and it is too large
-    to read whole; anything else comes back as is, and nothing leaves the process."""
+    """The result with its AI summary when summarization is enabled, the caller asked for
+    one, and it is too large to read whole; anything else comes back as is, and nothing
+    leaves the process."""
     tokens = estimate_tokens(result)
     # [LAW:no-mode-explosion] summarize is one bool: False is off, and True summarizes
     # only past the threshold - a result small enough to read gains nothing from one.
-    summarize = asked and tokens > AUTO_SUMMARIZE_THRESHOLD
+    # [LAW:single-enforcer] Every summary is decided here, so SUMMARIZATION_ENABLED=false
+    # is a setting the result is left alone under, not a request that fails.
+    summarize = SUMMARIZATION_ENABLED and asked and tokens > AUTO_SUMMARIZE_THRESHOLD
     logger.debug(
-        "Summarize: %s (asked=%s, ~%d tokens, threshold %d)",
+        "Summarize: %s (enabled=%s, asked=%s, ~%d tokens, threshold %d)",
         summarize,
+        SUMMARIZATION_ENABLED,
         asked,
         tokens,
         AUTO_SUMMARIZE_THRESHOLD,
@@ -336,10 +340,6 @@ async def _complete(prompt: str) -> Summary | NoSummary:
 
 async def _request(prompt: str) -> Summary | NoSummary:
     """One chat-completions round trip, read as a summary or the reason there is none."""
-    # [LAW:single-enforcer] The one place SUMMARIZATION_ENABLED is read: no request
-    # leaves while it is off, whoever asks.
-    if not SUMMARIZATION_ENABLED:
-        return NoSummary("summarization is disabled (SUMMARIZATION_ENABLED)")
     try:
         async with summarizer_client() as client:
             response = await client.post(
