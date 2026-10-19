@@ -155,7 +155,7 @@ class TestDeliver:
         result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(WIRE.dump_json(result)))
         assert len(WIRE.dump_json(result)) == RESPONSE_BOUND_BYTES
 
-        assert deliver("t", result) is result
+        assert deliver("t", result) == result
         assert list(tmp_path.iterdir()) == []
 
     def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
@@ -235,7 +235,7 @@ class TestDeliver:
         small = {"status": "success"}
         large = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
 
-        assert deliver("create_node", small) is small
+        assert deliver("create_node", small) == small
         failure = FAILURE.validate_python(deliver("execute_code", large))
         assert failure.message.startswith("execute_code ran, but its")
 

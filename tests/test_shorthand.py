@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from fastmcp import Client
 
+from houdini_mcp.delivery import deliver
 from houdini_mcp.server import mcp
 from houdini_mcp.shorthand import KEY, render
 
@@ -203,8 +204,17 @@ class TestRoundTrip:
                 "path": "/obj",
                 "nodes": [{"path": "/obj/a", "nodes": [{"path": "/obj/a/b", "nodes": []}]}],
             },
+            {
+                "nodes": [{"path": "/obj/a", "nodes": [{"path": "/obj/a/b", "nodes": []}]}],
+                "path": "/obj",
+            },
         ],
-        ids=["serialized-scene", "branch-unlike-the-field", "parent-holds-the-tree"],
+        ids=[
+            "serialized-scene",
+            "branch-unlike-the-field",
+            "parent-holds-the-tree",
+            "parent-field-after-the-tree",
+        ],
     )
     def test_a_tree_reads_back_as_itself(self, result: dict[str, Any]) -> None:
         assert read(render(result)) == result
@@ -216,6 +226,41 @@ class TestRoundTrip:
         }
 
         assert render(tree).splitlines()[1:] == ["children[1]{path}/children:", " ~/a", "  ~/b"]
+
+    def test_a_tree_branches_on_the_list_its_rows_nest_not_another_list_of_objects(
+        self,
+    ) -> None:
+        listing = {
+            "nodes": [
+                {
+                    "path": "/obj/a",
+                    "inputs": [{"path": "/obj/x", "index": 0}],
+                    "errors": [{"severity": "error"}],
+                    "nodes": [{"path": "/obj/a/b", "inputs": [], "nodes": []}],
+                }
+            ]
+        }
+
+        text = render(listing)
+
+        assert text.splitlines()[0] == "nodes[1]{path,inputs,errors}/nodes:"
+        assert read(text) == listing
+
+    def test_no_row_is_a_line_of_only_its_indent(self) -> None:
+        result = {"rows": [{}, {}], "tree": [{"kids": [{"kids": []}]}]}
+
+        text = render(result)
+
+        assert all(line.strip() for line in text.splitlines()), text
+        assert read(text) == result
+
+
+class TestTheWire:
+    def test_a_value_json_cannot_carry_reads_as_the_null_the_wire_sends(self) -> None:
+        sent = deliver("t", {"x": float("nan"), "y": float("inf"), "s": "NaN"})
+
+        assert sent == {"x": None, "y": None, "s": "NaN"}
+        assert read(render(sent)) == sent
 
 
 @pytest.fixture

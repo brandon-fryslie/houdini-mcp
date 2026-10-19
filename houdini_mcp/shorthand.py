@@ -13,9 +13,8 @@ JSON value has exactly one shorthand, and the shorthand gives back that value.
 
 import json
 import re
+from itertools import takewhile
 from typing import Any
-
-from pydantic_core import to_jsonable_python
 
 KEY = """\
 A tool result's text is a shorthand of its JSON (the structured content holds the JSON \
@@ -24,7 +23,8 @@ itself). `key: value` per field; a nested object's fields are indented under `ke
 those keys, one indented row of comma-separated values each; an empty cell is a key \
 the object lacks, and trailing ones are left off. `key[N]{x,y,z}/sub:` is a tree: each \
 object's `sub` list is the rows indented under it, a row ending `;` has no `sub` at all, \
-and a value starting `~` is its parent's value in that column with the rest appended. \
+and a value starting `~` is its parent's value in that column with the rest appended; \
+a top row's parent is the object holding the list, when that list is its `sub`. \
 A value in double quotes, [brackets] or {braces} is JSON; true, false, null and numbers \
 are themselves; anything else is a bare string."""
 """How to read the shorthand: told to every client once, at initialize."""
@@ -38,9 +38,9 @@ OPENERS = frozenset('~["{')
 JSON_LITERAL = re.compile(r"true|false|null|-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?")
 
 
-def render(result: Any) -> str:
-    """The shorthand of ``result``, an object, as JSON carries it."""
-    return "\n".join(_object(to_jsonable_python(result), 0))
+def render(result: dict[str, Any]) -> str:
+    """The shorthand of ``result``, a JSON object."""
+    return "\n".join(_object(result, 0))
 
 
 def _object(obj: dict[str, Any], depth: int) -> list[str]:
@@ -53,33 +53,37 @@ def _field(owner: dict[str, Any], key: str, depth: int) -> list[str]:
         return [f"{pad}{label}:", *_object(value, depth + 1)]
     if isinstance(value, list) and value:
         if all(isinstance(item, dict) for item in value):
-            return _table(pad, owner, key, depth + 1)
+            branch = _branch(value)
+            # A row with no cell would be a line of nothing but its indent.
+            if all(row.keys() - {branch} for row in _descendants(value, branch)):
+                return _table(pad, owner, key, branch, depth + 1)
         if not any(isinstance(item, (dict, list)) for item in value):
             return [f"{pad}{label}[{len(value)}]: " + ",".join(map(_cell, value))]
     return [f"{pad}{label}: {_cell(value)}"]
 
 
-def _table(pad: str, owner: dict[str, Any], key: str, depth: int) -> list[str]:
+def _table(pad: str, owner: dict[str, Any], key: str, branch: str | None, depth: int) -> list[str]:
     """A list of objects as a header naming their keys and a row of values for each.
 
     [LAW:dataflow-not-control-flow] A flat list is a tree with no branch: the same
     rows are written either way, and a branch only adds the rows indented under each.
     """
     rows = owner[key]
-    branch = _branch(rows)
     every = _descendants(rows, branch)
     columns = list(dict.fromkeys(key for row in every for key in row if key != branch))
     header = f"{pad}{_name(key)}[{len(rows)}]{{{','.join(map(_name, columns))}}}"
     header += f"/{_name(branch)}:" if branch else ":"
-    # The object holding a tree's top rows is their parent when the list is its branch.
-    parent = owner if key == branch else {}
+    # The object holding a tree's top rows is their parent when the list is its branch,
+    # as far as its fields written before the list: a reader has those, and only those.
+    earlier = takewhile(lambda field: field != key, owner)
+    parent = {field: owner[field] for field in earlier} if key == branch else {}
     return [header, *_rows(rows, columns, branch, parent, depth)]
 
 
 def _branch(rows: list[dict[str, Any]]) -> str | None:
-    """The first key that nests these rows into a tree, if any row has rows under it."""
+    """The first key that nests these rows into a tree: the rows under it have it too."""
     for key in dict.fromkeys(key for row in rows for key in row):
-        if _nests(rows, key) and any(row.get(key) for row in rows):
+        if _nests(rows, key) and any(key in under for row in rows for under in row.get(key, [])):
             return key
     return None
 

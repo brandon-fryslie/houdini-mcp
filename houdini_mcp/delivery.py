@@ -11,6 +11,7 @@ stand in for it, when the tool made one.
 """
 
 import functools
+import json
 import logging
 import os
 import re
@@ -93,7 +94,11 @@ def deliver(
     *,
     bound: int = RESPONSE_BOUND_BYTES,
 ) -> dict[str, Any]:
-    """``result`` itself when it fits the bound, else a pointer to the file holding all of it."""
+    """``result`` as the wire carries it when it fits the bound, else a pointer to the file holding all of it.
+
+    [LAW:one-source-of-truth] What returns is the bytes measured, read back: every
+    rendering of the result - structured content, its text - is of that one value.
+    """
     try:
         text = WIRE.dump_json(result)
     except PydanticSerializationError as e:
@@ -106,7 +111,8 @@ def deliver(
     size = len(text)
     if size <= bound:
         logger.debug("delivered %s inline: %d bytes", tool, size)
-        return result
+        sent: dict[str, Any] = json.loads(text)
+        return sent
 
     name = f"{tool}-{uuid.uuid4().hex}.json"
     try:
