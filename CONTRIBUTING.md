@@ -94,7 +94,9 @@ Houdini does not start; the error carries the end of hython's log.
 `HYTHON` names the `hython` to run. It defaults to
 `/Applications/Houdini/Current/Frameworks/Houdini.framework/Versions/Current/Resources/bin/hython`.
 
-Plain `pytest` deselects the live tests, as CI does with `-m 'not integration'`.
+Plain `pytest` deselects the live tests, as CI does with `-m 'not integration'`, so
+one live test runs with the marker too:
+`uv run pytest -m integration tests/integration/test_live_houdini.py::test_create_and_delete_node`.
 A test added under `tests/integration` is a live test without being marked.
 
 ## Code Style

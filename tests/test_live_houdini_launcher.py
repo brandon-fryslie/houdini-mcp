@@ -12,6 +12,7 @@ import pytest
 
 from houdini_mcp.settings import InvalidSetting, Target
 from tests.live_houdini import (
+    SERVE_UNTIL_STDIN_CLOSES,
     Command,
     HoudiniDidNotStart,
     hython_executable,
@@ -44,10 +45,8 @@ def group_gone(pid_file: Path) -> bool:
     return False
 
 
-# Serves until its stdin closes, as the hython child does.
-REPORTS_THEN_SERVES = (
-    "subprocess.Popen(['sleep', '600'])\nos.write(fd, b'4242\\n')\nos.close(fd)\nsys.stdin.read()\n"
-)
+REPORTS = "subprocess.Popen(['sleep', '600'])\nos.write(fd, b'4242\\n')\nos.close(fd)\n"
+REPORTS_THEN_SERVES = REPORTS + SERVE_UNTIL_STDIN_CLOSES
 
 
 def test_yields_the_reported_port_and_ends_the_whole_group(
@@ -64,7 +63,7 @@ def test_yields_the_reported_port_and_ends_the_whole_group(
     assert group_gone(pid_file)
     ready, stopped = (r.getMessage() for r in caplog.records)
     assert "port=4242 ready in" in ready
-    assert "exit=-15" in stopped
+    assert "exit=0" in stopped
 
 
 def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:
@@ -79,12 +78,12 @@ def test_the_group_ends_when_the_block_raises(tmp_path: Path) -> None:
     assert group_gone(pid_file)
 
 
-def test_a_child_that_ignores_term_is_killed(
+def test_a_child_that_does_not_end_when_stdin_closes_is_killed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     pid_file = tmp_path / "pid"
     caplog.set_level(logging.INFO, logger="tests.live_houdini")
-    body = "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" + REPORTS_THEN_SERVES
+    body = REPORTS + "time.sleep(600)\n"
 
     with running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", grace=0.5):
         pass
@@ -122,7 +121,9 @@ def test_a_child_that_reports_no_port_raises_with_what_it_did_and_its_log(
 
     with (
         pytest.raises(HoudiniDidNotStart, match=rf"{raised}(.|\n)*bind"),
-        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=30),
+        running_listener(
+            stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=30, grace=0.5
+        ),
     ):
         pytest.fail("a child that reported no port was yielded")
 
@@ -136,7 +137,9 @@ def test_a_child_that_never_reports_raises_at_the_deadline(tmp_path: Path) -> No
     # Long enough for a loaded runner to start Python and print before the deadline.
     with (
         pytest.raises(HoudiniDidNotStart, match=r"no port within 3s(.|\n)*still starting"),
-        running_listener(stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=3),
+        running_listener(
+            stand_in(pid_file, body), os.environ, tmp_path / "log", deadline=3, grace=0.5
+        ),
     ):
         pytest.fail("a child that reported no port was yielded")
 
@@ -167,24 +170,18 @@ with running_listener(stand_in(Path(sys.argv[1]), REPORTS_THEN_SERVES), os.envir
 """
 
 
-def test_the_child_ends_when_the_process_that_started_it_is_killed(tmp_path: Path) -> None:
+def test_the_group_ends_when_the_process_that_started_it_is_killed(tmp_path: Path) -> None:
     pid_file = tmp_path / "pid"
     runner = subprocess.Popen(
         [sys.executable, "-c", _STARTS_THEN_HANGS, str(pid_file), str(tmp_path / "log")],
+        cwd=Path(__file__).parents[1],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
     )
-    assert runner.stdout is not None and runner.stdout.readline() == b"ready\n"
+    try:
+        assert runner.stdout is not None and runner.stdout.readline() == b"ready\n"
+    finally:
+        runner.send_signal(signal.SIGKILL)
+        runner.wait()
 
-    runner.send_signal(signal.SIGKILL)
-    runner.wait()
-
-    child = int(pid_file.read_text())
-    stop_at = time.monotonic() + 5
-    while time.monotonic() < stop_at:
-        try:
-            os.kill(child, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.05)
-    pytest.fail(f"listener pid={child} outlived the process that started it")
+    assert group_gone(pid_file)

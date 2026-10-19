@@ -45,7 +45,14 @@ if started["status"] != "success":
     sys.exit(f"listener did not start: {{started}}")
 os.write({fd}, b"%d\\n" % started["bound_port"])
 os.close({fd})
+"""
+
+# Every child's last act, once stdin closes: end what it started, then exit on its own.
+SERVE_UNTIL_STDIN_CLOSES = """\
+import os, signal, sys
 sys.stdin.buffer.read()
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+os.killpg(0, signal.SIGTERM)
 """
 
 # The command that starts a listener, given the readiness pipe's write end.
@@ -76,7 +83,8 @@ def hython_executable(environ: Mapping[str, str]) -> Path:
 
 def hython_listener(hython: Path) -> Command:
     """The command that runs this checkout's plugin listener in a headless ``hython``."""
-    return lambda fd: [str(hython), "-c", _SERVE_LISTENER.format(fd=fd, plugin=str(PLUGIN_PYTHON))]
+    script = _SERVE_LISTENER + SERVE_UNTIL_STDIN_CLOSES
+    return lambda fd: [str(hython), "-c", script.format(fd=fd, plugin=str(PLUGIN_PYTHON))]
 
 
 def _log_tail(log_path: Path, lines: int = 40) -> str:
@@ -93,9 +101,11 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
         HoudiniDidNotStart: with the log tail, when the child reported something
             other than a port line, exited first, or the deadline passed.
     """
+    poller = select.poll()
+    poller.register(ready, select.POLLIN)
     stop_at = time.monotonic() + deadline
     while (left := stop_at - time.monotonic()) > 0:
-        readable, _, _ = select.select([ready], [], [], min(left, 0.25))
+        readable = poller.poll(min(left, 0.25) * 1000)
         # One write far under PIPE_BUF arrives whole: a line, or EOF.
         sent = os.read(ready, 64) if readable else b""
         if report := re.fullmatch(rb"(\d+)\n", sent):
@@ -124,12 +134,12 @@ def _signal_group(pgid: int, sig: signal.Signals) -> None:
 
 
 def _stop(child: subprocess.Popen[bytes], grace: float) -> None:
-    """End the child's whole process group: TERM, ``grace`` seconds for the child,
-    then KILL for whatever outlived it, so nothing the child started is left running.
+    """Close the child's stdin, its cue to end what it started and exit; after
+    ``grace`` seconds, KILL whatever in its process group outlived that.
 
     The logged exit is the child's own: -9 when it outlived ``grace``.
     """
-    _signal_group(child.pid, signal.SIGTERM)
+    child.stdin.close()
     with contextlib.suppress(subprocess.TimeoutExpired):
         child.wait(grace)
     _signal_group(child.pid, signal.SIGKILL)
