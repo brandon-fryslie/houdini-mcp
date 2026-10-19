@@ -627,38 +627,71 @@ class TestServedFailures:
 class TestServedSummaries:
     """When a served tool asks the summarizer for a summary."""
 
-    async def test_find_error_nodes_summarizes_only_on_request_or_size(
-        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
+    def test_summarize_is_served_defaulting_to_true(
+        self, served: dict[str, Tool], name: str
     ) -> None:
-        """Many errors in a small result are not, alone, a reason to summarize."""
-        from houdini_mcp.tools import errors
+        assert served[name].input_schema["properties"]["summarize"]["default"] is True
 
-        def six_errors(*_a: Any, **_k: Any) -> dict[str, Any]:
-            nodes = [{"path": f"/obj/geo1/bad{i}", "errors": ["x"]} for i in range(6)]
-            return {"status": "success", "error_nodes": nodes, "error_count": 6}
+    @pytest.mark.parametrize(
+        ("name", "module", "read", "summarizer", "arguments"),
+        [
+            ("find_error_nodes", "errors", "_scan_error_nodes", "_summarize_errors", {}),
+            (
+                "get_geo_summary",
+                "geometry",
+                "_read_geometry",
+                "_summarize_geometry",
+                {"node_path": "/obj/geo1/sphere1"},
+            ),
+            ("serialize_scene", "scene", "_scene_tree", "_summarize_scene", {}),
+        ],
+    )
+    async def test_a_large_result_is_summarized_unless_told_not_to(
+        self,
+        client: Client[Any],
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        module: str,
+        read: str,
+        summarizer: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """Size is the reason to summarize, and summarize=False overrides it."""
+        import importlib
 
+        from houdini_mcp.tools import summarization
+
+        tool = importlib.import_module(f"houdini_mcp.tools.{module}")
         asked: list[dict[str, Any]] = []
 
         async def record(data: dict[str, Any]) -> dict[str, Any]:
             asked.append(data)
             return data
 
-        monkeypatch.setattr(errors, "_scan_error_nodes", six_errors)
-        monkeypatch.setattr(errors, "summarize_errors", record)
+        monkeypatch.setattr(tool, read, lambda *_a, **_k: {"status": "success", "read": name})
+        monkeypatch.setattr(tool, summarizer, record)
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 10**9)
 
-        await client.call_tool("find_error_nodes", {})
+        await client.call_tool(name, arguments)
         assert asked == []
-        await client.call_tool("find_error_nodes", {"summarize": True})
-        assert len(asked) == 1
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
+        await client.call_tool(name, {**arguments, "summarize": False})
+        assert asked == []
+        await client.call_tool(name, arguments)
+        assert asked == [{"status": "success", "read": name}]
 
     async def test_find_error_nodes_never_summarizes_a_failure(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A call that read no node has no errors to triage, asked or not."""
-        import houdini_mcp.server as server
+        """A call that read no node has no errors to triage, however large the threshold
+        says it is."""
+        from houdini_mcp.tools import errors, summarization
+        from houdini_mcp.tools.failure import OperationFailed
 
         def nothing_read(*_a: Any, **_k: Any) -> dict[str, Any]:
-            return {"status": "error", "kind": "operation_failed", "uninspected": [{}]}
+            raise OperationFailed("Could not list the nodes under /obj")
 
         asked: list[dict[str, Any]] = []
 
@@ -666,9 +699,11 @@ class TestServedSummaries:
             asked.append(data)
             return data
 
-        monkeypatch.setattr(server.tools, "find_error_nodes", nothing_read)
-        monkeypatch.setattr(server.tools, "summarize_errors", record)
-        monkeypatch.setattr(server.tools, "should_summarize", lambda _data: True)
+        monkeypatch.setattr(errors, "_scan_error_nodes", nothing_read)
+        monkeypatch.setattr(errors, "_summarize_errors", record)
+        monkeypatch.setattr(summarization, "SUMMARIZATION_ENABLED", True)
+        monkeypatch.setattr(summarization, "AUTO_SUMMARIZE_THRESHOLD", 0)
 
-        await client.call_tool("find_error_nodes", {"summarize": True})
+        failure = await TestServedFailures.failure_of(client, "find_error_nodes", {})
+        assert failure.kind == "operation_failed"
         assert asked == []

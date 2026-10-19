@@ -130,36 +130,33 @@ def estimate_tokens(data: Any) -> int:
     return len(json.dumps(data, default=str)) // 4
 
 
-def should_summarize(data: Any, force: bool = False) -> bool:
-    """Determine if data should be summarized.
-
-    Args:
-        data: The data to potentially summarize
-        force: Force summarization regardless of size
-
-    Returns:
-        True if summarization should be applied
-    """
-    if force:
-        return True
-
-    if not SUMMARIZATION_ENABLED:
-        return False
-
-    return estimate_tokens(data) > AUTO_SUMMARIZE_THRESHOLD
-
-
 async def summarized(
     result: dict[str, Any],
     summarizer: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
     *,
     asked: bool,
 ) -> dict[str, Any]:
-    """The result with its AI summary when the caller asked for one or it is large."""
-    return await summarizer(result) if should_summarize(result, force=asked) else result
+    """The result with its AI summary when summarization is enabled, the caller asked for
+    one, and it is too large to read whole; anything else comes back as is, and nothing
+    leaves the process."""
+    tokens = estimate_tokens(result)
+    # [LAW:no-mode-explosion] summarize is one bool: False is off, and True summarizes
+    # only past the threshold - a result small enough to read gains nothing from one.
+    # [LAW:single-enforcer] Every summary is decided here, so SUMMARIZATION_ENABLED=false
+    # is a setting the result is left alone under, not a request that fails.
+    summarize = SUMMARIZATION_ENABLED and asked and tokens > AUTO_SUMMARIZE_THRESHOLD
+    logger.debug(
+        "Summarize: %s (enabled=%s, asked=%s, ~%d tokens, threshold %d)",
+        summarize,
+        SUMMARIZATION_ENABLED,
+        asked,
+        tokens,
+        AUTO_SUMMARIZE_THRESHOLD,
+    )
+    return await summarizer(result) if summarize else result
 
 
-async def summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_geometry(geo_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize geometry data for AI consumption.
 
     Extracts key insights from geometry statistics:
@@ -195,7 +192,7 @@ Summary:"""
     return _annotate(geo_data, await _complete(prompt))
 
 
-async def summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_errors(error_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize error/warning data with triage and prioritization.
 
     Analyzes errors and provides:
@@ -236,7 +233,7 @@ Summary:"""
     return _annotate(error_data, await _complete(prompt))
 
 
-async def summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
+async def _summarize_scene(scene_data: dict[str, Any]) -> dict[str, Any]:
     """Summarize scene structure for understanding and optimization.
 
     Analyzes scene hierarchy and provides:
@@ -270,41 +267,6 @@ Scene Data:
 Summary:"""
 
     return _annotate(scene_data, await _complete(prompt))
-
-
-async def summarize_render_settings(render_data: dict[str, Any]) -> dict[str, Any]:
-    """Summarize render configuration for quality/performance analysis.
-
-    Analyzes render settings and provides:
-    - Quality vs performance tradeoffs
-    - Potential bottlenecks
-    - Optimization suggestions
-    - Comparison to common presets
-
-    Args:
-        render_data: Raw render settings output
-
-    Returns:
-        Original data with 'ai_summary' field
-    """
-    prompt = f"""Analyze these Houdini render settings and provide recommendations.
-
-Evaluate:
-1. Quality settings (samples, ray limits, resolution)
-2. Performance implications
-3. Potential optimizations
-4. Comparison to common render presets
-
-Keep the summary under 150 words. Focus on actionable improvements.
-
-Render Settings:
-```json
-{json.dumps(render_data, indent=2, default=str)[:4000]}
-```
-
-Summary:"""
-
-    return _annotate(render_data, await _complete(prompt))
 
 
 def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, Any]:
@@ -343,8 +305,6 @@ async def _complete(prompt: str) -> Summary | NoSummary:
 
 async def _request(prompt: str) -> Summary | NoSummary:
     """One chat-completions round trip, read as a summary or the reason there is none."""
-    if not SUMMARIZATION_ENABLED:
-        return NoSummary("summarization is disabled (SUMMARIZATION_ENABLED)")
     try:
         async with summarizer_client() as client:
             response = await client.post(
@@ -384,7 +344,8 @@ def get_summarization_status() -> dict[str, Any]:
         - enabled: Whether AI summarization is active
         - model: Model the summaries are requested from
         - base_url: The chat-completions server (OpenAI API base, ending in /v1)
-        - auto_threshold_tokens: Token count that triggers auto-summarization
+        - auto_threshold_tokens: Estimated tokens a result must exceed to be summarized;
+          a tool called with summarize=False is never summarized
         - target_summary_tokens: Target size for generated summaries
     """
     return {

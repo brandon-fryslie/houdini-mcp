@@ -16,7 +16,7 @@ from ._common import (
     on_the_scene,
 )
 from .failure import OperationFailed, Undone, batch_status
-from .summarization import summarize_errors, summarized
+from .summarization import _summarize_errors, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
@@ -27,7 +27,7 @@ async def find_error_nodes(
     include_warnings: bool = True,
     max_results: ResultLimit = 100,
     *,
-    summarize: bool = False,
+    summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -43,8 +43,9 @@ async def find_error_nodes(
         include_warnings: Whether to include nodes with warnings (default: True)
         max_results: Maximum number of nodes to list, error, warning and uninspected
             together (default: 100)
-        summarize: If True, use AI to triage and prioritize errors (default: False).
-                  Provides actionable fix order and identifies root causes.
+        summarize: Use AI to triage and prioritize a result too large to read whole
+                  (default: True). Provides actionable fix order and identifies root
+                  causes. False sends nothing to the summarizer, whatever the size.
 
     Returns:
         Dict with error/warning nodes including:
@@ -58,20 +59,20 @@ async def find_error_nodes(
           {path, kind, reason}; their errors are not in error_count. path is null
           when Houdini would not give it (a node deleted mid-scan)
         - total_scanned: Number of nodes scanned, inspected or not
-        - ai_summary: (if summarize=True) AI-generated triage with prioritized fixes
+        - ai_summary: (if summarized) AI-generated triage with prioritized fixes
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Examples:
         find_error_nodes()  # Find all errors in scene
         find_error_nodes("/obj/geo1")  # Find errors within a specific network
         find_error_nodes(include_warnings=False)  # Only errors, no warnings
-        find_error_nodes(summarize=True)  # Get AI triage of errors
+        find_error_nodes(summarize=False)  # Keep the scan off the summarizer
     """
     # A scan that inspected nothing raises, so a failure is never summarized.
     result = await on_the_scene(
         "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
-    return await summarized(result, summarize_errors, asked=summarize)
+    return await summarized(result, _summarize_errors, asked=summarize)
 
 
 def _scan_error_nodes(

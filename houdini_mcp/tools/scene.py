@@ -22,7 +22,7 @@ from ._common import (
 from .cache import invalidate_all_caches
 from .parms import evaluated
 from .snapshot import scene_snapshot
-from .summarization import summarize_scene, summarized
+from .summarization import _summarize_scene, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
@@ -137,7 +137,7 @@ async def serialize_scene(
     include_params: bool = False,
     max_depth: Count = 10,
     *,
-    summarize: bool = False,
+    summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -151,8 +151,9 @@ async def serialize_scene(
         root_path: Root node path to serialize from (default: "/obj")
         include_params: Include parameter values (can be verbose, default: False)
         max_depth: Levels below root_path to descend; deeper nodes are marked truncated (default: 10)
-        summarize: If True, use AI to analyze scene structure (default: False).
-                  Identifies complexity hotspots and optimization opportunities.
+        summarize: Use AI to analyze a scene too large to read whole (default: True).
+                  Identifies complexity hotspots and optimization opportunities. False
+                  sends nothing to the summarizer, whatever the size.
 
     Returns:
         Dict with scene structure, optionally with ai_summary field containing
@@ -162,7 +163,7 @@ async def serialize_scene(
     result = await on_the_scene(
         "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
     )
-    return await summarized(result, summarize_scene, asked=summarize)
+    return await summarized(result, _summarize_scene, asked=summarize)
 
 
 def _scene_tree(
