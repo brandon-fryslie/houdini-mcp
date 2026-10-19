@@ -52,12 +52,16 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
      `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
      runs in every graphical session once its UI is up:
      ```python
+     import hou
      from houdini_mcp_plugin import start_hrpyc_server
 
-     start_hrpyc_server()
+     result = start_hrpyc_server()
+     if result["status"] == "error":
+         hou.ui.displayMessage(result["message"], severity=hou.severityType.Error)
      ```
      It listens on `127.0.0.1` only, unless you set the variables in
-     [docs/remote-listener.md](docs/remote-listener.md).
+     [docs/remote-listener.md](docs/remote-listener.md). A listener that cannot
+     start, such as a second Houdini finding the port taken, says why in a dialog.
 
 3. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
 
