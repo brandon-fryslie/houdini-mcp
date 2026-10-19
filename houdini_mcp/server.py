@@ -1,6 +1,5 @@
 """Houdini MCP Server - Main server entry point."""
 
-import dataclasses
 import functools
 import inspect
 import logging
@@ -17,7 +16,7 @@ from starlette.responses import JSONResponse
 from . import delivery, shorthand, tools
 from .connection import describe_target
 from .results import Results
-from .settings import Target
+from .settings import ServerSettings
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES
@@ -120,22 +119,24 @@ def delivered(tool: Callable[..., Any], results: Results) -> Callable[..., Any]:
     return call
 
 
-def served(tool: Callable[..., Any], target: Target, results: Results) -> Tool:
-    """The tool as clients see it: its own signature and docs, with the target bound."""
+def served(tool: Callable[..., Any], settings: ServerSettings, results: Results) -> Tool:
+    """The tool as clients see it: its own signature and docs, with the server's settings bound."""
     declared = Tool.from_function(delivered(held(tool), results))
+    # [LAW:single-enforcer] the one way configuration reaches a tool: as a parameter
+    # the caller cannot see or pass, so a tool reads no environment of its own.
     bound = {
         name: ArgTransform(hide=True, default=value)
-        for name, value in dataclasses.asdict(target).items()
+        for name, value in settings.bound().items()
         if name in declared.parameters["properties"]
     }
     logger.debug("serving %s with %s bound by the server", declared.name, sorted(bound))
     return Tool.from_tool(declared, transform_args=bound)
 
 
-def build_server(target: Target, results: Results) -> FastMCP:
-    """The MCP server, every tool of which reaches ``target``, and whose large results ``results`` keeps.
+def build_server(settings: ServerSettings, results: Results) -> FastMCP:
+    """The MCP server, every tool of which runs under ``settings``, and whose large results ``results`` keeps.
 
-    [LAW:effects-at-boundaries] built by whoever starts it, from the target that
+    [LAW:effects-at-boundaries] built by whoever starts it, from the settings that
     entry point resolved, so importing this module builds nothing.
     """
     # [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
@@ -148,14 +149,19 @@ def build_server(target: Target, results: Results) -> FastMCP:
     )
     mcp.custom_route("/health", methods=["GET"])(health_check)
     for tool in SERVED_TOOLS:
-        mcp.add_tool(served(tool, target, results))
+        mcp.add_tool(served(tool, settings, results))
 
     def delivered_result(name: str) -> str:
         """A tool result too large to return inline, by the name in its ``result_uri``."""
         return results.read(name)
 
     mcp.resource(delivery.RESULT_URI, mime_type="text/plain")(delivered_result)
+    target, summarizer = settings.target, settings.summarizer
     logger.info(f"Houdini connection target: {describe_target(target.host, target.port)}")
+    logger.info(
+        f"Summarization: enabled={summarizer.enabled}, {summarizer.model} at {summarizer.base_url}"
+    )
+    logger.info(f"Bypass configuration: enabled={settings.bypass_config_enabled}")
     return mcp
 
 
@@ -175,7 +181,7 @@ def serve(mcp: FastMCP, transport: Transport = "http", port: int = 3055) -> None
 
 
 def run_server(
-    target: Target, results: Results, transport: Transport, port: int, log_level: int
+    settings: ServerSettings, results: Results, transport: Transport, port: int, log_level: int
 ) -> None:
     """Serve as a process of its own: configure this process's logging, then serve.
 
@@ -188,4 +194,4 @@ def run_server(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
-    serve(build_server(target, results), transport, port)
+    serve(build_server(settings, results), transport, port)

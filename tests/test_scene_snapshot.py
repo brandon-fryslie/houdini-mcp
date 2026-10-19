@@ -16,7 +16,7 @@ from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
-from tests.conftest import MockHouModule, MockHouNode
+from tests.conftest import SUMMARIZER, MockHouModule, MockHouNode
 
 # Houdini 22.0.466's answers for /obj holding geo1 (box1, and hid, a hidden
 # null) and an empty geo, recorded verbatim from hython.
@@ -144,6 +144,7 @@ class TestExecuteCodeDiff:
             capture_diff=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["scene_changes"]["added_nodes"] == [
             {"path": "/obj/geo1/ball2", "type": "sphere"}
@@ -163,6 +164,7 @@ class TestExecuteCodeDiff:
             max_diff_nodes=2,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         changes = result["scene_changes"]
         assert (len(changes["added"]), len(changes["added_nodes"]), len(changes["removed"])) == (
@@ -186,7 +188,9 @@ class TestExecuteCodeDiff:
         self, mock_connection: MockHouModule
     ) -> None:
         assert mock_connection.node("/obj").children() == ()
-        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        execute_code(
+            "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
         last = get_last_scene_diff()
         assert (last["status"], last["diff"]["has_changes"]) == ("success", False)
 
@@ -198,7 +202,13 @@ class TestExecuteCodeDiff:
     ) -> None:
         reads = iter([("/obj\n", ""), ("", ""), ("", "Error:  hscript is busy\n")])
         monkeypatch.setattr(mock_connection, "hscript", lambda _command: next(reads))
-        result = execute_code("print('ran')", capture_diff=True, host="localhost", port=18811)
+        result = execute_code(
+            "print('ran')",
+            capture_diff=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
         assert result["status"] == "success"
         assert result["stdout"] == "ran\n"
         assert "scene_changes" not in result
@@ -214,12 +224,16 @@ class TestExecuteCodeDiff:
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _scene(mock_connection)
-        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        execute_code(
+            "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert get_last_scene_diff()["status"] == "success"
         snapshot = mock_connection.hscript
         reads = iter([snapshot, snapshot, lambda _c: ("", "Error:  hscript is busy\n")])
         monkeypatch.setattr(mock_connection, "hscript", lambda command: next(reads)(command))
-        result = execute_code("print(2)", capture_diff=True, host="localhost", port=18811)
+        result = execute_code(
+            "print(2)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert "scene_changes_error" in result
         assert get_last_scene_diff()["status"] == "warning"
 
@@ -256,6 +270,7 @@ class TestADiffIsItsOwnRunsAlone:
                         capture_diff=True,
                         host="localhost",
                         port=18811,
+                        bypass_config_enabled=False,
                     )
                 )
             )
@@ -273,6 +288,7 @@ class TestADiffIsItsOwnRunsAlone:
                 capture_diff=True,
                 host="localhost",
                 port=18811,
+                bypass_config_enabled=False,
             )
         )
 
@@ -300,7 +316,9 @@ class TestADiffIsItsOwnRunsAlone:
     def test_a_run_in_progress_has_no_diff_not_an_earlier_runs(
         self, mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        execute_code(
+            "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert get_last_scene_diff()["status"] == "success"
         a, a_result, release = self._launch_a(monkeypatch)
         assert get_last_scene_diff()["status"] == "warning"
@@ -314,7 +332,9 @@ class TestADiffIsItsOwnRunsAlone:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        execute_code("print(1)", capture_diff=True, host="localhost", port=18811)
+        execute_code(
+            "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
+        )
         assert get_last_scene_diff()["status"] == "success"
         caplog.set_level(logging.WARNING, logger="houdini_mcp.tools.code")
         monkeypatch.setattr(mock_connection, "hscript", lambda _command: ("", "Error:  busy\n"))
@@ -335,6 +355,7 @@ class TestADiffIsItsOwnRunsAlone:
             capture_diff=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert result["message"].startswith(raised.split("(")[0])
@@ -352,6 +373,7 @@ class TestADiffIsItsOwnRunsAlone:
             capture_diff=True,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert "path" in result["scene_changes_error"]["message"]
@@ -377,6 +399,7 @@ class TestADiffIsItsOwnRunsAlone:
             timeout=1,
             host="localhost",
             port=18811,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert result["scene_changes"]["added_nodes"] == [{"path": "/obj/quick", "type": "geo"}]
@@ -390,7 +413,11 @@ class TestADiffIsItsOwnRunsAlone:
             code_module, "scene_snapshot", lambda *args: reads.append("read") or read(*args)
         )
         result = execute_code(
-            "raise ValueError('no')", capture_diff=True, host="localhost", port=18811
+            "raise ValueError('no')",
+            capture_diff=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
         )
         assert (result["status"], len(reads)) == ("error", 1)
         assert get_last_scene_diff()["status"] == "warning"
@@ -411,7 +438,9 @@ class TestSerializeScene:
         self, mock_connection: MockHouModule
     ) -> None:
         _scene(mock_connection)
-        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", False, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         def shape(node: dict[str, Any]) -> tuple[str, str, list[Any]]:
             return (node["path"], node["type"], [shape(c) for c in node["children"]])
@@ -436,7 +465,9 @@ class TestSerializeScene:
         self, mock_connection: MockHouModule
     ) -> None:
         _scene(mock_connection)
-        result = await serialize_scene("/obj", False, 1, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", False, 1, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
         geo1 = result["structure"]["children"][0]
         assert geo1["children"][0] == {"path": "/obj/geo1/box1", "truncated": True}
 
@@ -446,13 +477,17 @@ class TestSerializeScene:
         mock_connection.add_node(
             MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.5})
         )
-        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", True, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
         assert result["structure"]["children"][0]["parameters"] == {"tx": 1.5}
 
     async def test_the_scene_root_is_named_and_typed_by_its_node(
         self, mock_connection: MockHouModule
     ) -> None:
-        result = await serialize_scene("/", False, 0, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/", False, 0, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
         root = mock_connection.node("/")
         assert (result["structure"]["name"], result["structure"]["type"]) == (
             root.name(),
@@ -471,7 +506,9 @@ class TestSerializeScene:
             return snapshot
 
         monkeypatch.setattr(scene_module, "scene_snapshot", snapshot_then_delete)
-        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", True, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
         assert (result["kind"], result["message"]) == (
             "operation_failed",
             "Scene changed while it was read: /obj/cam1 was deleted",

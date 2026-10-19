@@ -9,6 +9,7 @@ import json
 import logging
 from typing import Any
 
+from ..settings import Summarizer
 from ._common import (
     OperationFailed,
     handle_connection_errors,
@@ -35,6 +36,8 @@ async def get_geo_summary(
     summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
+    summarizer: Summarizer,
+    bypass_config_enabled: bool,
 ) -> dict[str, Any]:
     """
     Get geometry statistics and metadata for verification.
@@ -91,10 +94,11 @@ async def get_geo_summary(
         max_sample_points,
         include_attributes,
         include_groups,
+        bypass_config_enabled,
         host,
         port,
     )
-    return await summarized(result, _summarize_geometry, asked=summarize)
+    return await summarized(result, _summarize_geometry, summarizer=summarizer, asked=summarize)
 
 
 def _read_geometry(
@@ -102,12 +106,13 @@ def _read_geometry(
     max_sample_points: int,
     include_attributes: bool,
     include_groups: bool,
+    bypass_config_enabled: bool,
     host: str,
     port: int,
 ) -> dict[str, Any]:
     """The geometry statistics of the SOP at node_path."""
     # Imported here to avoid circular imports
-    from .code import ExecutionGrant, _bypass_config_enabled, _execute_with_grant
+    from .code import ExecutionGrant, _execute_with_grant
 
     # Validate max_sample_points
     if max_sample_points < 0:
@@ -255,7 +260,7 @@ print(json.dumps(result))
     # that the MCP surface cannot request.
     exec_result = _execute_with_grant(
         geo_analysis_code,
-        ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=_bypass_config_enabled()),
+        ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=bypass_config_enabled),
         operation="get_geo_summary",
         max_stdout_size=500000,  # Allow larger output for geo data
         host=host,

@@ -191,7 +191,9 @@ class TestBackedUpFirst:
         not one, whatever it calls."""
         mock_connection.hipFile.hasUnsavedChanges.return_value = True
 
-        result = execute_code("print('hi')", host="localhost", port=18811)
+        result = execute_code(
+            "print('hi')", host="localhost", port=18811, bypass_config_enabled=False
+        )
 
         assert result["status"] == "success"
         mock_connection.hipFile.saveAsBackup.assert_not_called()

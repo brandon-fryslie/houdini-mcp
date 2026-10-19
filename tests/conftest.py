@@ -22,10 +22,12 @@ from rpyc.utils.server import Server
 from houdini_mcp.connection import _InterpreterModules
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
-from houdini_mcp.settings import houdini_target
+from houdini_mcp.settings import Summarizer, server_settings
 
-# The Houdini the houdini-mcp command reaches when the environment names none.
-DEFAULT_TARGET = houdini_target({})
+# What the houdini-mcp command's tools run under when the environment names nothing.
+DEFAULT_SETTINGS = server_settings({})
+# The summarizer they ask: enabled, and aimed at the local completions server.
+SUMMARIZER = DEFAULT_SETTINGS.summarizer
 
 
 def split_path(path: str) -> tuple[str, str]:
@@ -834,25 +836,29 @@ def results_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pat
     return root
 
 
+ClientBuilder = Callable[[Summarizer], httpx.AsyncClient]
+
+
 def summarizer_through(
-    production: Callable[[], httpx.AsyncClient],
-    handler: Callable[[httpx.Request], httpx.Response],
-) -> httpx.AsyncClient:
-    """The client ``production`` builds - its server, key and timeouts - with ``handler``
-    answering in place of the network."""
-    real = production()
-    return httpx.AsyncClient(
-        base_url=real.base_url,
-        headers=real.headers,
-        timeout=real.timeout,
-        transport=httpx.MockTransport(handler),
-    )
+    production: ClientBuilder, handler: Callable[[httpx.Request], httpx.Response]
+) -> ClientBuilder:
+    """The clients ``production`` builds - their server, key and timeouts - with
+    ``handler`` answering in place of the network."""
+
+    def build(summarizer: Summarizer) -> httpx.AsyncClient:
+        real = production(summarizer)
+        return httpx.AsyncClient(
+            base_url=real.base_url,
+            headers=real.headers,
+            timeout=real.timeout,
+            transport=httpx.MockTransport(handler),
+        )
+
+    return build
 
 
 @pytest.fixture(autouse=True)
-def production_summarizer_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Callable[[], httpx.AsyncClient]:
+def production_summarizer_client(monkeypatch: pytest.MonkeyPatch) -> ClientBuilder:
     """The summarizer's production client builder, which a test reaches the summarizer
     through only by routing its own: in its place is a server that refuses every
     connection, so no test sends a request off this machine."""
@@ -863,9 +869,7 @@ def production_summarizer_client(
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("tests reach no summarizer", request=request)
 
-    monkeypatch.setattr(
-        summarization, "summarizer_client", lambda: summarizer_through(production, refuse)
-    )
+    monkeypatch.setattr(summarization, "summarizer_client", summarizer_through(production, refuse))
     return production
 
 
@@ -886,7 +890,7 @@ def server_results(tmp_path_factory: pytest.TempPathFactory) -> Generator[Result
 @pytest.fixture(scope="session")
 def mcp(server_results: Results) -> FastMCP:
     """The server as an entry point builds it, reaching the default target."""
-    return build_server(DEFAULT_TARGET, server_results)
+    return build_server(DEFAULT_SETTINGS, server_results)
 
 
 @pytest.fixture

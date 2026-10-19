@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import SUMMARIZER
+
 
 class TestGetGeoSummary:
     """Tests for the get_geo_summary function."""
@@ -116,7 +118,12 @@ class TestGetGeoSummary:
         }
 
         result = await get_geo_summary(
-            "/obj/geo1/sphere1", max_sample_points=2, host="localhost", port=18811
+            "/obj/geo1/sphere1",
+            max_sample_points=2,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -176,7 +183,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/grid1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/grid1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert result["point_count"] == 0
@@ -209,7 +222,12 @@ class TestGetGeoSummary:
         }
 
         result = await get_geo_summary(
-            "/obj/geo1/large1", max_sample_points=100, host="localhost", port=18811
+            "/obj/geo1/large1",
+            max_sample_points=100,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -239,7 +257,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/noise1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/noise1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert result["cook_state"] == "cooked"
@@ -260,7 +284,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/cam1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/cam1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         # The program said the cook yielded nothing: Houdini's failure, not the path.
         assert result["status"] == "error"
@@ -283,7 +313,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/nonexistent", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/nonexistent",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert (result["kind"], result["retry"]) == ("invalid_input", "fix_input")
@@ -305,7 +341,12 @@ class TestGetGeoSummary:
         }
 
         result = await get_geo_summary(
-            "/obj/geo1/box1", include_attributes=True, host="localhost", port=18811
+            "/obj/geo1/box1",
+            include_attributes=True,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -348,6 +389,8 @@ class TestGetGeoSummary:
             max_sample_points=0,
             host="localhost",
             port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -387,7 +430,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/xform1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/xform1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
 
@@ -438,7 +487,12 @@ class TestGetGeoSummary:
         }
 
         result = await get_geo_summary(
-            "/obj/geo1/mountain1", max_sample_points=3, host="localhost", port=18811
+            "/obj/geo1/mountain1",
+            max_sample_points=3,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -488,7 +542,12 @@ class TestGetGeoSummary:
 
         # Test negative value -> 0 (no sample_points in result)
         result = await get_geo_summary(
-            "/obj/geo1/grid1", max_sample_points=-10, host="localhost", port=18811
+            "/obj/geo1/grid1",
+            max_sample_points=-10,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
         assert "sample_points" not in result
@@ -513,7 +572,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/merge1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/merge1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert len(result["groups"]["point"]) == 3
@@ -540,7 +605,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/poly1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/poly1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert result["primitive_count"] == 4
@@ -555,7 +626,13 @@ class TestGetGeoSummary:
             "Houdini connection lost", target="localhost:18811"
         )
 
-        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/sphere1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_unavailable"
@@ -572,7 +649,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/sphere1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert "No output" in result["message"]
@@ -587,7 +670,13 @@ class TestGetGeoSummary:
             "stderr": "",
         }
 
-        result = await get_geo_summary("/obj/geo1/sphere1", host="localhost", port=18811)
+        result = await get_geo_summary(
+            "/obj/geo1/sphere1",
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]
@@ -641,7 +730,9 @@ class TestTheProgramHoudiniRuns:
             return {"status": "success", "stdout": out.getvalue(), "stderr": ""}
 
         with patch("houdini_mcp.tools.code._execute_with_grant", side_effect=execute):
-            return await get_geo_summary("/obj/geo1/box1", **kwargs)
+            return await get_geo_summary(
+                "/obj/geo1/box1", **kwargs, summarizer=SUMMARIZER, bypass_config_enabled=False
+            )
 
     def _geo(self, **overrides: Any) -> SimpleNamespace:
         point = SimpleNamespace(attribValue=lambda _name: (0.0, 1.0, 2.0))

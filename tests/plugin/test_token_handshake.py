@@ -189,21 +189,22 @@ class TestSharedHandshake:
         assert handshake.exchange(TOKEN) == (b"\x00\x07hunter2", handshake.ACK)
 
 
-class TestTokenFromEnv:
-    def test_unset_and_empty_are_no_token(self, monkeypatch):
-        monkeypatch.delenv(handshake.TOKEN_ENV, raising=False)
-        assert handshake.token_from_env() is None
-        monkeypatch.setenv(handshake.TOKEN_ENV, "")
-        assert handshake.token_from_env() is None
+class TestTokenFrom:
+    def test_unset_and_empty_are_no_token(self):
+        assert handshake.token_from({}) is None
+        assert handshake.token_from({handshake.TOKEN_ENV: ""}) is None
 
-    def test_set_is_the_token(self, monkeypatch):
-        monkeypatch.setenv(handshake.TOKEN_ENV, TOKEN)
-        assert handshake.token_from_env() == TOKEN
+    def test_set_is_the_token(self):
+        assert handshake.token_from({handshake.TOKEN_ENV: TOKEN}) == TOKEN
 
-    def test_too_long_to_frame_is_refused_by_name(self, monkeypatch):
-        monkeypatch.setenv(handshake.TOKEN_ENV, "x" * (handshake.MAX_TOKEN_BYTES + 1))
-        with pytest.raises(ValueError, match=handshake.TOKEN_ENV):
-            handshake.token_from_env()
+    def test_too_long_to_frame_is_refused_by_name_never_by_value(self):
+        too_long = "s" * (handshake.MAX_TOKEN_BYTES + 1)
+        with pytest.raises(ValueError) as refused:
+            handshake.token_from({handshake.TOKEN_ENV: too_long})
+        assert str(refused.value) == (
+            f"{handshake.TOKEN_ENV} must be at most {handshake.MAX_TOKEN_BYTES} bytes of UTF-8, "
+            f"got {len(too_long)}"
+        )
 
     def test_listener_config_reads_through_the_handshake(self, monkeypatch):
         monkeypatch.setenv(handshake.TOKEN_ENV, TOKEN)
@@ -287,7 +288,7 @@ class TestListenerDerivesFromSharedHandshake:
 
 
 class TestMcpServerPresentsToken:
-    def test_connect_presents_the_token_from_the_environment(
+    def test_connect_presents_the_token_its_target_was_installed_with(
         self, reset_connection_state, mock_hou, monkeypatch
     ):
         from tests.conftest import MockRpycConnection
@@ -299,14 +300,13 @@ class TestMcpServerPresentsToken:
             return MockRpycConnection(mock_hou)
 
         monkeypatch.setattr(handshake, "connect", fake_connect)
-        monkeypatch.setenv(handshake.TOKEN_ENV, TOKEN)
+        connection.use_houdini(connection.remote_houdini(TOKEN))
         connection.connect("houdini-box", 18811)
         assert seen == [("houdini-box", 18811, TOKEN)]
 
     def test_no_token_against_tokened_listener_names_the_token(
-        self, reset_connection_state, tokened_server, monkeypatch
+        self, reset_connection_state, tokened_server
     ):
-        monkeypatch.delenv(handshake.TOKEN_ENV, raising=False)
         with pytest.raises(connection.HoudiniConnectionError, match=handshake.TOKEN_ENV):
             connection.connect("127.0.0.1", tokened_server, max_retries=1)
 
@@ -320,7 +320,7 @@ class TestMcpServerPresentsToken:
             raise handshake.HandshakeError("listener rejected the token")
 
         monkeypatch.setattr(handshake, "connect", rejecting_connect)
-        monkeypatch.setenv(handshake.TOKEN_ENV, TOKEN)
+        connection.use_houdini(connection.remote_houdini(TOKEN))
         with pytest.raises(connection.HoudiniConnectionError, match="rejected the token"):
             connection.connect("houdini-box", 18811, max_retries=3, retry_delay=0.01)
         assert attempts == [TOKEN]
@@ -333,7 +333,7 @@ class TestMcpServerPresentsToken:
             raise TimeoutError("listener did not acknowledge the token")
 
         monkeypatch.setattr(handshake, "connect", silent_connect)
-        monkeypatch.setenv(handshake.TOKEN_ENV, TOKEN)
+        connection.use_houdini(connection.remote_houdini(TOKEN))
         with pytest.raises(connection.HoudiniConnectionError, match="did not acknowledge"):
             connection.connect("houdini-box", 18811, max_retries=2, retry_delay=0.01)
         assert attempts == [TOKEN, TOKEN]

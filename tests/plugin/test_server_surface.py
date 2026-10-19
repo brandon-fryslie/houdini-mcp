@@ -285,12 +285,27 @@ class TestPluginStartsTheSharedServer:
         _wait_until_stopped(plugin_server)
         assert plugin_server.serving_target() is None
 
-    def test_a_port_that_is_not_one_fails_start_and_serves_nothing(
-        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("HOUDINI_PORT", "not-a-number"),
+            ("SUMMARIZATION_ENABLED", "maybe"),
+            ("SUMMARIZATION_BASE_URL", "ftp://host/v1"),
+            ("HOUDINI_MCP_ALLOW_BYPASS", "maybe"),
+        ],
+    )
+    def test_an_illegal_setting_fails_start_and_serves_nothing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        plugin_server: Any,
+        held_serve: dict[str, Any],
+        name: str,
+        value: str,
     ) -> None:
-        monkeypatch.setenv("HOUDINI_PORT", "not-a-number")
+        """Raised to the shelf, which shows it: an exit would take Houdini down."""
+        monkeypatch.setenv(name, value)
 
-        with pytest.raises(InvalidSetting, match="HOUDINI_PORT: .*, got 'not-a-number'"):
+        with pytest.raises(InvalidSetting, match=f"^{name}: .*, got '{value}'$"):
             plugin_server.start_server(use_thread=True)
 
         assert plugin_server.is_server_running() is False
@@ -332,7 +347,7 @@ class TestPluginStartsTheSharedServer:
         """A background Start reports the failure itself; its thread has no caller."""
         import houdini_mcp.server as shared_server
 
-        def unbuildable(_target: Target, _results: object) -> FastMCP:
+        def unbuildable(_settings: object, _results: object) -> FastMCP:
             raise KeyError("an_unclassified_tool")
 
         monkeypatch.setattr(shared_server, "build_server", unbuildable)

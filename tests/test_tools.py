@@ -1,6 +1,5 @@
 """Tests for the Houdini MCP tools."""
 
-import asyncio
 import logging
 import sys
 from types import SimpleNamespace
@@ -9,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import MockHouNode, raised_inside_houdini
+from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
 
 
 class TestGetSceneInfo:
@@ -124,7 +123,13 @@ class TestExecuteCode:
         """Test executing code successfully."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("x = 1 + 1", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "x = 1 + 1",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert "stdout" in result
@@ -135,7 +140,11 @@ class TestExecuteCode:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "print('hello world')", host="localhost", port=18811, capture_diff=False
+            "print('hello world')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -146,7 +155,11 @@ class TestExecuteCode:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "raise ValueError('test error')", host="localhost", port=18811, capture_diff=False
+            "raise ValueError('test error')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -157,7 +170,9 @@ class TestExecuteCode:
         """Test executing code with scene diff capture."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("x = 1", host="localhost", port=18811, capture_diff=True)
+        result = execute_code(
+            "x = 1", host="localhost", port=18811, capture_diff=True, bypass_config_enabled=False
+        )
 
         assert result["status"] == "success"
         assert "scene_changes" in result
@@ -166,7 +181,13 @@ class TestExecuteCode:
         """Test executing code with syntax error."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("def broken(", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "def broken(",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert "traceback" in result
@@ -181,6 +202,7 @@ class TestExecuteCode:
             host="localhost",
             port=18811,
             capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -194,6 +216,7 @@ class TestExecuteCode:
             host="localhost",
             port=18811,
             capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -209,7 +232,13 @@ class TestExecuteCodeSafetyRails:
         """Test detection of hou.exit() pattern."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("hou.exit()", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "hou.exit()",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "error"
         assert "Dangerous operations detected" in result["message"]
@@ -223,7 +252,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "import os; os.remove('/tmp/file')", host="localhost", port=18811, capture_diff=False
+            "import os; os.remove('/tmp/file')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -235,7 +268,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "import os; os.unlink('/tmp/file')", host="localhost", port=18811, capture_diff=False
+            "import os; os.unlink('/tmp/file')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -250,6 +287,7 @@ class TestExecuteCodeSafetyRails:
             host="localhost",
             port=18811,
             capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -264,6 +302,7 @@ class TestExecuteCodeSafetyRails:
             host="localhost",
             port=18811,
             capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -274,7 +313,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "import os; os.system('ls')", host="localhost", port=18811, capture_diff=False
+            "import os; os.system('ls')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -285,7 +328,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "f = open('/tmp/file', 'w')", host="localhost", port=18811, capture_diff=False
+            "f = open('/tmp/file', 'w')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -296,7 +343,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "f = open('/tmp/file', 'a')", host="localhost", port=18811, capture_diff=False
+            "f = open('/tmp/file', 'a')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -307,7 +358,11 @@ class TestExecuteCodeSafetyRails:
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "hou.hipFile.clear()", host="localhost", port=18811, capture_diff=False
+            "hou.hipFile.clear()",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "error"
@@ -323,7 +378,9 @@ import subprocess
 os.remove('/tmp/file')
 subprocess.run(['ls'])
         """
-        result = execute_code(code, host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            code, host="localhost", port=18811, capture_diff=False, bypass_config_enabled=False
+        )
 
         assert result["status"] == "error"
         assert len(result["dangerous_patterns"]) >= 2
@@ -337,16 +394,15 @@ node = hou.node('/obj')
 print('Hello')
 x = 1 + 2
         """
-        result = execute_code(safe_code, host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            safe_code, host="localhost", port=18811, capture_diff=False, bypass_config_enabled=False
+        )
 
         assert result["status"] == "success"
 
     def test_allow_dangerous_flag(self, mock_connection, monkeypatch):
         """Test that allow_dangerous=True + config gate allows dangerous code to execute."""
-        import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
-
-        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
 
         # Use a pattern that would be detected but won't actually cause harm in mock
         result = execute_code(
@@ -355,6 +411,7 @@ x = 1 + 2
             port=18811,
             capture_diff=False,
             allow_dangerous=True,
+            bypass_config_enabled=True,
         )
 
         # Should succeed since code is actually safe (just contains pattern in string)
@@ -362,10 +419,7 @@ x = 1 + 2
 
     def test_allow_dangerous_includes_warnings(self, mock_connection, monkeypatch):
         """Test that an approved bypass includes safety warnings in response."""
-        import houdini_mcp.tools.code as code_mod
         from houdini_mcp.tools import execute_code
-
-        monkeypatch.setattr(code_mod, "_bypass_config_enabled", lambda: True)
 
         # Names a restricted member without calling it: detected, and harmless to run.
         result = execute_code(
@@ -374,6 +428,7 @@ x = 1 + 2
             port=18811,
             capture_diff=False,
             allow_dangerous=True,
+            bypass_config_enabled=True,
         )
 
         # Code actually runs (nothing is called), but warnings should be present
@@ -390,7 +445,12 @@ x = 1 + 2
         # Generate output larger than 100 bytes (using small size for test)
         code = "print('x' * 200)"
         result = execute_code(
-            code, host="localhost", port=18811, capture_diff=False, max_stdout_size=100
+            code,
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            max_stdout_size=100,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -404,7 +464,12 @@ x = 1 + 2
 
         code = "import sys; sys.stderr.write('y' * 200)"
         result = execute_code(
-            code, host="localhost", port=18811, capture_diff=False, max_stderr_size=100
+            code,
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            max_stderr_size=100,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -418,7 +483,12 @@ x = 1 + 2
 
         code = "print('hello')"
         result = execute_code(
-            code, host="localhost", port=18811, capture_diff=False, max_stdout_size=100000
+            code,
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            max_stdout_size=100000,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -430,7 +500,13 @@ x = 1 + 2
         from houdini_mcp.tools import execute_code
 
         # Just verify the function works with defaults
-        result = execute_code("print('test')", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "print('test')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
 
@@ -446,6 +522,7 @@ x = 1 + 2
             port=18811,
             capture_diff=True,
             max_diff_nodes=5,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -458,7 +535,12 @@ x = 1 + 2
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "x = 1", host="localhost", port=18811, capture_diff=True, max_diff_nodes=1000
+            "x = 1",
+            host="localhost",
+            port=18811,
+            capture_diff=True,
+            max_diff_nodes=1000,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -471,7 +553,14 @@ x = 1 + 2
         from houdini_mcp.tools import execute_code
 
         # Quick code that should complete before timeout
-        result = execute_code("x = 1", host="localhost", port=18811, capture_diff=False, timeout=10)
+        result = execute_code(
+            "x = 1",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            timeout=10,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
 
@@ -486,7 +575,12 @@ x = 1 + 2
 
         # Just verify normal code completes within reasonable timeout
         result = execute_code(
-            "print('fast')", host="localhost", port=18811, capture_diff=False, timeout=30
+            "print('fast')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            timeout=30,
+            bypass_config_enabled=False,
         )
         assert result["status"] == "success"
 
@@ -496,7 +590,9 @@ x = 1 + 2
         """Test handling of empty code string."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "", host="localhost", port=18811, capture_diff=False, bypass_config_enabled=False
+        )
 
         assert result["status"] == "success"
         assert result["stdout"] == ""
@@ -507,7 +603,13 @@ x = 1 + 2
         """Test handling of whitespace-only code."""
         from houdini_mcp.tools import execute_code
 
-        result = execute_code("   \n\t  ", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "   \n\t  ",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
+        )
 
         assert result["status"] == "success"
         assert "Empty code" in result.get("message", "")
@@ -519,7 +621,11 @@ x = 1 + 2
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "print('Hello 世界 🌍')", host="localhost", port=18811, capture_diff=False
+            "print('Hello 世界 🌍')",
+            host="localhost",
+            port=18811,
+            capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -535,6 +641,7 @@ x = 1 + 2
             host="localhost",
             port=18811,
             capture_diff=False,
+            bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
@@ -547,16 +654,20 @@ x = 1 + 2
         from houdini_mcp.tools import execute_code
 
         # Call with keyword args
-        result = execute_code("x = 1", host="localhost", port=18811)
+        result = execute_code("x = 1", host="localhost", port=18811, bypass_config_enabled=False)
         assert result["status"] == "success"
 
         # With capture_diff=True
-        result = execute_code("x = 1", host="localhost", port=18811, capture_diff=True)
+        result = execute_code(
+            "x = 1", host="localhost", port=18811, capture_diff=True, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert "scene_changes" in result
 
         # With capture_diff=False
-        result = execute_code("x = 1", host="localhost", port=18811, capture_diff=False)
+        result = execute_code(
+            "x = 1", host="localhost", port=18811, capture_diff=False, bypass_config_enabled=False
+        )
         assert result["status"] == "success"
         assert "scene_changes" not in result
 
@@ -959,7 +1070,9 @@ class TestSerializeScene:
         """Test serializing scene successfully."""
         from houdini_mcp.tools import serialize_scene
 
-        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", False, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert result["root"] == "/obj"
@@ -972,7 +1085,9 @@ class TestSerializeScene:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo1)
 
-        result = await serialize_scene("/obj", False, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", False, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert len(result["structure"]["children"]) == 1
@@ -981,7 +1096,9 @@ class TestSerializeScene:
         """Test serializing from non-existent root."""
         from houdini_mcp.tools import serialize_scene
 
-        result = await serialize_scene("/nonexistent", False, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/nonexistent", False, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "error"
         assert "Root node not found" in result["message"]
@@ -993,7 +1110,9 @@ class TestSerializeScene:
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.0})
         mock_connection.add_node(geo1)
 
-        result = await serialize_scene("/obj", True, 10, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", True, 10, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
 
@@ -1008,7 +1127,9 @@ class TestSerializeScene:
         level3 = MockHouNode(path="/obj/level1/level2/level3", name="level3", node_type="null")
         mock_connection.add_node(level3)
 
-        result = await serialize_scene("/obj", False, 1, host="localhost", port=18811)
+        result = await serialize_scene(
+            "/obj", False, 1, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
 
@@ -1765,7 +1886,7 @@ class TestFindErrorNodes:
         error_node._errors = ["Cook error: missing input"]
 
         result = await find_error_nodes(
-            "/obj", include_warnings=False, host="localhost", port=18811
+            "/obj", include_warnings=False, host="localhost", port=18811, summarizer=SUMMARIZER
         )
 
         assert result["status"] == "success"
@@ -1783,7 +1904,9 @@ class TestFindErrorNodes:
         mock_connection.add_node(warn_node)
         warn_node._warnings = ["Parameter 'tx' has expression error"]
 
-        result = await find_error_nodes("/obj", include_warnings=True, host="localhost", port=18811)
+        result = await find_error_nodes(
+            "/obj", include_warnings=True, host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "success"
         assert result["warning_count"] == 1
@@ -1797,7 +1920,7 @@ class TestFindErrorNodes:
         good_node = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(good_node)
 
-        result = await find_error_nodes("/obj", host="localhost", port=18811)
+        result = await find_error_nodes("/obj", host="localhost", port=18811, summarizer=SUMMARIZER)
 
         assert result["status"] == "success"
         assert result["error_count"] == 0
@@ -1807,7 +1930,9 @@ class TestFindErrorNodes:
         """Test error when root not found."""
         from houdini_mcp.tools import find_error_nodes
 
-        result = await find_error_nodes("/nonexistent", host="localhost", port=18811)
+        result = await find_error_nodes(
+            "/nonexistent", host="localhost", port=18811, summarizer=SUMMARIZER
+        )
 
         assert result["status"] == "error"
         assert "Root node not found" in result["message"]
@@ -3191,85 +3316,6 @@ class TestConnectionErrorHandling:
 
 class TestParallelExecution:
     """Tests for parallel execution utilities."""
-
-    @pytest.mark.asyncio
-    async def test_semaphore_gather_basic(self):
-        """Test basic semaphore_gather functionality."""
-        from houdini_mcp.tools._common import semaphore_gather
-
-        async def slow_task(n: int) -> int:
-            await asyncio.sleep(0.01)
-            return n * 2
-
-        results = await semaphore_gather(slow_task(1), slow_task(2), slow_task(3), max_concurrent=2)
-
-        assert results == [2, 4, 6]
-
-    @pytest.mark.asyncio
-    async def test_semaphore_gather_limits_concurrency(self):
-        """Test that semaphore limits concurrent executions."""
-
-        from houdini_mcp.tools._common import semaphore_gather
-
-        concurrent_count = 0
-        max_concurrent_seen = 0
-
-        async def track_concurrent(n: int) -> int:
-            nonlocal concurrent_count, max_concurrent_seen
-            concurrent_count += 1
-            max_concurrent_seen = max(max_concurrent_seen, concurrent_count)
-            await asyncio.sleep(0.05)
-            concurrent_count -= 1
-            return n
-
-        # Run 10 tasks with max 3 concurrent
-        await semaphore_gather(*[track_concurrent(i) for i in range(10)], max_concurrent=3)
-
-        # Should never exceed 3 concurrent
-        assert max_concurrent_seen <= 3
-
-    @pytest.mark.asyncio
-    async def test_semaphore_gather_return_exceptions(self):
-        """Test semaphore_gather with return_exceptions=True."""
-        from houdini_mcp.tools._common import semaphore_gather
-
-        async def maybe_fail(n: int) -> int:
-            if n == 2:
-                raise ValueError("Task 2 failed")
-            return n
-
-        results = await semaphore_gather(
-            maybe_fail(1), maybe_fail(2), maybe_fail(3), return_exceptions=True
-        )
-
-        assert results[0] == 1
-        assert isinstance(results[1], ValueError)
-        assert results[2] == 3
-
-    def test_batch_items_basic(self):
-        """Test basic batch_items functionality."""
-        from houdini_mcp.tools._common import batch_items
-
-        items = [1, 2, 3, 4, 5]
-        batches = batch_items(items, 2)
-
-        assert batches == [[1, 2], [3, 4], [5]]
-
-    def test_batch_items_empty(self):
-        """Test batch_items with empty list."""
-        from houdini_mcp.tools._common import batch_items
-
-        batches = batch_items([], 3)
-        assert batches == []
-
-    def test_batch_items_larger_batch_size(self):
-        """Test batch_items when batch size exceeds list length."""
-        from houdini_mcp.tools._common import batch_items
-
-        items = [1, 2, 3]
-        batches = batch_items(items, 10)
-
-        assert batches == [[1, 2, 3]]
 
     @pytest.mark.asyncio
     async def test_run_in_executor(self):

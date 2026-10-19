@@ -11,6 +11,7 @@ This module provides tools for managing Houdini scenes:
 import logging
 from typing import Any
 
+from ..settings import Summarizer
 from ._common import (
     Count,
     OperationFailed,
@@ -140,6 +141,7 @@ async def serialize_scene(
     summarize: bool = True,
     host: str = "localhost",
     port: int = 18811,
+    summarizer: Summarizer,
 ) -> dict[str, Any]:
     """
     Serialize the scene structure to a dictionary.
@@ -163,7 +165,7 @@ async def serialize_scene(
     result = await on_the_scene(
         "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
     )
-    return await summarized(result, _summarize_scene, asked=summarize)
+    return await summarized(result, _summarize_scene, summarizer=summarizer, asked=summarize)
 
 
 def _scene_tree(

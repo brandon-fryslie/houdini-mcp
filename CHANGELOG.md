@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (configuration, Python API)**: every environment setting is read
+  once, when its entry point starts, and a value it cannot be stops that start
+  with the variable and the value named (houdini-laws-spine-cqp.8pm).
+  `SUMMARIZATION_ENABLED` and `HOUDINI_MCP_ALLOW_BYPASS` take true/yes/on/1 or
+  false/no/off/0 in any case, and anything else, empty included, stops the
+  server: `SUMMARIZATION_ENABLED=yes` used to mean off, as did any
+  `HOUDINI_MCP_ALLOW_BYPASS` outside 1/true/yes/on. A bad `SUMMARIZATION_*`
+  value used to fail the import with a bare `ValueError`, and an empty
+  `SUMMARIZATION_MODEL` is now refused. An over-long `HOUDINI_RPC_TOKEN` stops
+  `houdini-mcp` at start, not at its first connect. A refusal never shows the
+  token, and it masks any credentials in `SUMMARIZATION_BASE_URL`.
+  `HOUDINI_MCP_ALLOW_BYPASS` and the token were read on every call, so a
+  change while the server runs now waits for a restart.
+  `HOUDINI_MCP_SEMAPHORE_LIMIT` is no longer read, and `semaphore_gather` and
+  `batch_items` are gone. In the Python API, `build_server` and `run_server`
+  take a `ServerSettings` (`houdini_mcp.settings.server_settings`) in place of
+  a `Target`, and the server binds each tool's configuration as a keyword-only
+  parameter: `summarizer` on `find_error_nodes`, `get_geo_summary`,
+  `serialize_scene` and `get_summarization_status`, and `bypass_config_enabled`
+  on `execute_code` and `get_geo_summary`. `houdini_mcp_handshake.token_from_env()`
+  is `token_from(environ)`. `scripts/verify_remote_listener.py` reads its
+  settings through `houdini_mcp.settings`, so `HOUDINI_HOST` defaults to
+  `localhost` and `RUN_LIVE_REMOTE_CHECK` takes any word for on.
+
 - **BREAKING (wire, configuration)**: a large result's pointer fits the 16KB
   bound whatever its strings hold, and carries its summary whole
   (houdini-laws-spine-cqp.9ss). The bound counts bytes of shorthand, where a

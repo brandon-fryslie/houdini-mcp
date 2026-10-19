@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
 
-from houdini_mcp_handshake import Authenticator, token_authenticator, token_from_env
+from houdini_mcp_handshake import Authenticator, token_authenticator, token_from
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 # rpyc logs each accepted and finished connection at INFO through the logger the
@@ -236,7 +236,7 @@ class ListenerConfig:
         host = _env_setting("HOUDINI_RPC_BIND_HOST", parse_host, DEFAULT_HOST)
         port = _env_setting("HOUDINI_RPC_BIND_PORT", parse_port, DEFAULT_PORT)
         trusted = _env_setting("HOUDINI_RPC_TRUSTED_NETWORK", parse_flag, False)
-        return cls(host=host, port=port, trusted_network=trusted, token=token_from_env())
+        return cls(host=host, port=port, trusted_network=trusted, token=token_from(os.environ))
 
 
 @dataclass(frozen=True)

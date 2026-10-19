@@ -28,10 +28,9 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 import struct
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -41,7 +40,7 @@ logger = logging.getLogger("houdini_mcp_handshake")
 # or raises ``rpyc.utils.authenticators.AuthenticationError``.
 Authenticator = Callable[[Any], tuple[Any, Any]]
 
-# The environment variable both sides read the shared secret from.
+# The environment variable both sides take the shared secret from.
 TOKEN_ENV = "HOUDINI_RPC_TOKEN"
 
 # The listener's answer to a correct token.
@@ -65,16 +64,18 @@ class HandshakeError(Exception):
     """
 
 
-def token_from_env() -> str | None:
-    """The shared secret the operator configured, or None when unset or empty.
+def token_from(environ: Mapping[str, str]) -> str | None:
+    """The shared secret ``environ`` configures, or None when unset or empty.
 
-    [LAW:parse-dont-validate] the one reader of ``TOKEN_ENV`` on both sides, and
+    [LAW:parse-dont-validate] the one parser of ``TOKEN_ENV`` on both sides, and
     the one place a token too long to frame is refused, at configuration time
-    with a message naming the variable.
+    with a message naming the variable; never the secret itself.
     """
-    token = os.getenv(TOKEN_ENV) or None
-    if token is not None and len(token.encode("utf-8")) > MAX_TOKEN_BYTES:
-        raise ValueError(f"{TOKEN_ENV} must be at most {MAX_TOKEN_BYTES} bytes of UTF-8")
+    token = environ.get(TOKEN_ENV) or None
+    if token is not None and (size := len(token.encode("utf-8"))) > MAX_TOKEN_BYTES:
+        raise ValueError(
+            f"{TOKEN_ENV} must be at most {MAX_TOKEN_BYTES} bytes of UTF-8, got {size}"
+        )
     return token
 
 
@@ -170,8 +171,8 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
     [LAW:no-ambient-temporal-coupling] it is part of the connection from the
     moment the connection exists, not a setting written onto it afterwards.
     """
-    # rpyc is needed only here and in the authenticator, so reading the token
-    # from the environment never requires it.
+    # rpyc is needed only here and in the authenticator, so parsing the token
+    # never requires it.
     from rpyc.core.service import ClassicService  # noqa: PLC0415
     from rpyc.core.stream import SocketStream  # noqa: PLC0415
     from rpyc.utils.factory import connect_stream  # noqa: PLC0415
