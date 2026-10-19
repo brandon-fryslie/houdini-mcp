@@ -46,6 +46,8 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
      hrpyc.start_server(port=18811)
      ```
+     It listens on every interface with no authentication, so anyone who can
+     reach the port can run Python in your Houdini.
    - Or, with the [plugin](#houdini-plugin) installed, start its listener from
      `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
      runs in every graphical session once its UI is up:
@@ -55,8 +57,7 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
      start_hrpyc_server()
      ```
      It listens on `127.0.0.1` only, unless you set the variables in
-     [docs/remote-listener.md](docs/remote-listener.md); `hrpyc.start_server`
-     listens on every interface with no authentication.
+     [docs/remote-listener.md](docs/remote-listener.md).
 
 3. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
 

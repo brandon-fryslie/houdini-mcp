@@ -2579,28 +2579,33 @@ class TestGetHoudiniHelp:
         assert "inputs" in result
         assert len(result["inputs"]) == 1
 
+    @pytest.mark.parametrize(
+        ("h1", "title"),
+        [
+            # www.sidefx.com/docs/houdini/hom/hou/Node.html
+            (
+                '<h1 class="title">\n<span class="supertitle">hou.</span>Node\n\n'
+                '        <span class="subtitle">class</span>\n</h1>',
+                "hou.Node - class",
+            ),
+            # www.sidefx.com/docs/houdini/nodes/sop/labs--align_and_distribute-2.0.html
+            (
+                '<h1 class="title">\n        Labs Align and Distribute\n'
+                '            <span class="version">2.0</span>\n'
+                '<span class="subtitle">geometry node</span>\n</h1>',
+                "Labs Align and Distribute 2.0 - geometry node",
+            ),
+        ],
+        ids=["hou-supertitle", "labs-version"],
+    )
     @patch("requests.get")
-    def test_get_houdini_help_hou_class_title(self, mock_get):
-        """A hou page's name starts in a supertitle span, which the title keeps."""
+    def test_get_houdini_help_title_keeps_the_pages_spacing(self, mock_get, h1, title):
+        """The title is the h1's text without its subtitle, spaced as the page spaces it."""
         from houdini_mcp.tools import get_houdini_help
 
-        # The h1 as www.sidefx.com/docs/houdini/hom/hou/Node.html serves it
-        mock_html = """
-        <html>
-        <body>
-            <h1 class="title">
-        <span class="supertitle">hou.</span>Node
+        mock_get.return_value = MagicMock(status_code=200, text=f"<html><body>{h1}</body></html>")
 
-                <span class="subtitle">class</span>
-        </h1>
-        </body>
-        </html>
-        """
-        mock_get.return_value = MagicMock(status_code=200, text=mock_html)
-
-        result = get_houdini_help("python_hou", "Node")
-
-        assert result["title"] == "hou.Node - class"
+        assert get_houdini_help("sop", "item")["title"] == title
 
     @patch("requests.get")
     def test_get_houdini_help_vex_function(self, mock_get):

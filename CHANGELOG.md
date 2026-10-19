@@ -483,6 +483,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`get_houdini_help` names the class on a hou page** (houdini-tuneup-ef3.avb):
+  a `python_hou` title came back as ` - class`, because the parser read only the
+  h1's first text node and the name opens with a `hou.` supertitle span. The
+  title is now the h1's text without its subtitle (`hou.Node - class`), and a
+  versioned Labs node keeps its version (`Labs Align and Distribute 2.0 -
+  geometry node`).
+
 - **Framing leaves out geometry with no points** (houdini-laws-etg.aeu): in
   Houdini 22 the box around geometry with no points is a box of no size at its
   origin, so an empty object pulled `auto_frame`, `render_quad_view` and the
