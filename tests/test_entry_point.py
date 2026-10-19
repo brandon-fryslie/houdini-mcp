@@ -118,7 +118,9 @@ assert not [v for v in vars(server).values() if isinstance(v, FastMCP)], "a serv
 assert not os.environ.read & set({READ_AT_START!r}), os.environ.read & set({READ_AT_START!r})
 """
     env = dict.fromkeys(READ_AT_START, "not-a-value") | UNSET
-    subprocess.run([sys.executable, "-c", probe], env=env, check=True, timeout=60)
+    # Run from the repo root, where the probe's own import of tests resolves.
+    root = pathlib.Path(__file__).resolve().parents[1]
+    subprocess.run([sys.executable, "-c", probe], env=env, cwd=root, check=True, timeout=60)
 
 
 @pytest.fixture

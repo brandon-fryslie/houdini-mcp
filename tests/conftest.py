@@ -922,18 +922,21 @@ def in_process_houdini(
     yield mock_hou
 
 
-@pytest.fixture
+# Every test's: the Houdini a test reaches is installed by the test process, as an entry
+# point installs it, never left behind by whichever test ran before.
+@pytest.fixture(autouse=True)
 def reset_connection_state() -> Generator[None, None, None]:
-    """No connection to Houdini before the test, and none left behind after it.
+    """No connection to Houdini before the test, which reaches a listener enforcing no
+    token, and none left behind after it: the process's own Houdini is none again.
 
     Goes through the connection module's own API: the owner is the one writer of
     connection state, in tests as in production.
     """
-    from houdini_mcp.connection import REMOTE_HOUDINI, use_houdini
+    from houdini_mcp.connection import NO_HOUDINI, remote_houdini, use_houdini
 
-    use_houdini(REMOTE_HOUDINI)
+    use_houdini(remote_houdini(None))
     yield
-    use_houdini(REMOTE_HOUDINI)
+    use_houdini(NO_HOUDINI)
 
 
 @pytest.fixture

@@ -207,8 +207,21 @@ def remote_houdini(token: str | None) -> HoudiniTarget:
     )
 
 
-# A listener enforcing no token: what connections reach until an entry point installs its own.
-REMOTE_HOUDINI = remote_houdini(None)
+def _open_uninstalled(host: str, port: int, sync_timeout: float) -> Any:
+    raise LookupError("no Houdini is installed for connections to reach")
+
+
+# [LAW:no-silent-failure] what connections reach until an entry point installs a
+# Houdini: none. A server started without choosing one is told so at its first
+# connect, instead of reaching a listener without the token its environment holds.
+NO_HOUDINI = HoudiniTarget(
+    _open_uninstalled,
+    lambda host, port: f"{host}:{port}",
+    "The entry point that serves installs the Houdini its connections reach with "
+    "use_houdini: remote_houdini(token) for an rpyc listener, IN_PROCESS_HOUDINI inside Houdini.",
+    _never_retry,
+    _no_transport,
+)
 IN_PROCESS_HOUDINI = HoudiniTarget(
     _open_in_process,
     lambda _host, _port: "this interpreter",
@@ -475,7 +488,7 @@ class HoudiniConnection:
 
 # [LAW:dataflow-not-control-flow] where Houdini lives is a value the owner holds,
 # not a branch: every connect, ping and diagnostic reads whichever target is installed.
-_houdini = HoudiniConnection(REMOTE_HOUDINI)
+_houdini = HoudiniConnection(NO_HOUDINI)
 
 
 def describe_target(host: str, port: int) -> str:

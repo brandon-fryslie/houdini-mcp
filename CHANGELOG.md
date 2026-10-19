@@ -28,9 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `Target`, and the server binds each tool's configuration as a keyword-only
   parameter: `summarizer` on `find_error_nodes`, `get_geo_summary`,
   `serialize_scene` and `get_summarization_status`, and `bypass_config_enabled`
-  on `execute_code` and `get_geo_summary`. The token is no longer read on connect:
-  a Python caller reaching a listener that enforces one installs
-  `use_houdini(remote_houdini(token))` before serving, as `houdini-mcp` does.
+  on `execute_code` and `get_geo_summary`. The token is no longer read on connect,
+  and connections reach no Houdini until an entry point installs one: a Python
+  caller of `build_server` installs `use_houdini(remote_houdini(token))` first,
+  as `houdini-mcp` does, and one that installs none is told so at its first
+  connect. `REMOTE_HOUDINI` is gone; `remote_houdini(None)` is that target.
   `houdini_mcp_handshake.token_from_env()` is `token_from(environ)`. `scripts/verify_remote_listener.py` reads its
   settings through `houdini_mcp.settings`, so `HOUDINI_HOST` defaults to
   `localhost`, `RUN_LIVE_REMOTE_CHECK` takes those same words for on where it

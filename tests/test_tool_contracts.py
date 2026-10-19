@@ -150,9 +150,14 @@ class TestServedSchemas:
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
             served(tools.create_node, DEFAULT_SETTINGS, results)
             served(tools.get_houdini_help, DEFAULT_SETTINGS, results)
+            served(tools.execute_code, DEFAULT_SETTINGS, results)
+            served(tools.get_geo_summary, DEFAULT_SETTINGS, results)
         assert [r.getMessage() for r in caplog.records] == [
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",
+            "serving execute_code with ['bypass_config_enabled', 'host', 'port'] bound by the server",
+            "serving get_geo_summary with "
+            "['bypass_config_enabled', 'host', 'port', 'summarizer'] bound by the server",
         ]
 
     async def test_execute_code_requires_only_the_program(
