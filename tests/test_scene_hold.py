@@ -16,6 +16,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from houdini_mcp.server import held, served
+from houdini_mcp.settings import Target
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
 
 
@@ -202,8 +203,8 @@ class TestAClientThatGivesUp:
         late.gate.set()
         gave_up = heard("create_node gave up its place in the queue for the scene")
         mcp = FastMCP("scene-hold")
-        mcp.add_tool(served(holder.tool))
-        mcp.add_tool(served(late.tool))
+        mcp.add_tool(served(holder.tool, Target(host="localhost", port=18811)))
+        mcp.add_tool(served(late.tool, Target(host="localhost", port=18811)))
 
         async with Client(mcp) as client:
             holding = asyncio.create_task(client.call_tool("set_parameter", {}))

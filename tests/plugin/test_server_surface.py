@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
 import houdini_mcp.connection as conn_module
 from houdini_mcp.connection import (
@@ -28,6 +28,7 @@ from houdini_mcp.connection import (
     get_connection_info,
     ping,
 )
+from houdini_mcp.settings import InvalidSetting, Target
 
 
 class TestInProcessConnection:
@@ -99,9 +100,9 @@ class TestInProcessConnection:
 class TestStdioServerSurface:
     """Tools called the way a stdio client calls them, served by the shared server."""
 
-    async def test_delete_node_has_the_servers_contract(self, in_process_houdini: Any) -> None:
-        from houdini_mcp.server import mcp
-
+    async def test_delete_node_has_the_servers_contract(
+        self, mcp: FastMCP, in_process_houdini: Any
+    ) -> None:
         in_process_houdini.node("/obj").createNode("geo", "geo1")
 
         async with Client(mcp) as client:
@@ -113,9 +114,9 @@ class TestStdioServerSurface:
         assert "deleted_node" not in payload
         assert in_process_houdini.node("/obj/geo1") is None
 
-    async def test_execute_code_keeps_its_rails(self, in_process_houdini: Any) -> None:
-        from houdini_mcp.server import mcp
-
+    async def test_execute_code_keeps_its_rails(
+        self, mcp: FastMCP, in_process_houdini: Any
+    ) -> None:
         async with Client(mcp) as client:
             result = await client.call_tool("execute_code", {"code": "hou.exit()"})
 
@@ -124,10 +125,8 @@ class TestStdioServerSurface:
         assert "audit" in payload
 
     async def test_every_tool_the_plugin_used_to_define_is_served(
-        self, in_process_houdini: Any
+        self, mcp: FastMCP, in_process_houdini: Any
     ) -> None:
-        from houdini_mcp.server import mcp
-
         async with Client(mcp) as client:
             names = {tool.name for tool in await client.list_tools()}
 
@@ -143,9 +142,10 @@ class TestStdioServerSurface:
             "check_connection",
         } <= names
 
-    async def test_every_served_tool_has_a_policy(self, in_process_houdini: Any) -> None:
+    async def test_every_served_tool_has_a_policy(
+        self, mcp: FastMCP, in_process_houdini: Any
+    ) -> None:
         """TOOL_POLICIES is the map of the served surface: a new tool must be classified."""
-        from houdini_mcp.server import mcp
         from houdini_mcp.tools.transactions import TOOL_POLICIES
 
         async with Client(mcp) as client:
@@ -154,16 +154,15 @@ class TestStdioServerSurface:
         assert names == set(TOOL_POLICIES)
 
     async def test_check_connection_failure_reports_the_target(
-        self, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
+        self, mcp: FastMCP, monkeypatch: pytest.MonkeyPatch, in_process_houdini: Any
     ) -> None:
-        import houdini_mcp.server as shared_server
         from houdini_mcp.tools import link
 
         def refuse(*_a: Any, **_k: Any) -> None:
             raise conn_module.HoudiniConnectionError("no hou here", target="this interpreter")
 
         monkeypatch.setattr(link, "ensure_link", refuse)
-        async with Client(shared_server.mcp) as client:
+        async with Client(mcp) as client:
             payload = (await client.call_tool("check_connection", {})).structured_content
 
         assert payload["status"] == "error"
@@ -250,15 +249,48 @@ class TestPluginStartsTheSharedServer:
 
         runs: list[dict[str, Any]] = []
 
-        def fake_serve(**kwargs: Any) -> None:
-            runs.append({"target": describe_target("localhost", 18811), **kwargs})
+        def fake_serve(target: Target, transport: str) -> None:
+            reached = describe_target(target.host, target.port)
+            runs.append({"target": target, "reaches": reached, "transport": transport})
 
         monkeypatch.setattr(shared_server, "serve", fake_serve)
+        monkeypatch.setenv("HOUDINI_HOST", "studio-box")
+        monkeypatch.setenv("HOUDINI_PORT", "19000")
 
         plugin_server.start_server(use_thread=False)
 
-        assert runs == [{"target": "this interpreter", "transport": "stdio"}]
+        served = Target(host="studio-box", port=19000)
+        assert runs == [{"target": served, "reaches": "this interpreter", "transport": "stdio"}]
         assert plugin_server.is_server_running() is False
+
+    def test_mcp_status_reads_the_target_start_resolved(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        plugin_server: Any,
+        held_serve: dict[str, Any],
+        in_process_houdini: Any,
+    ) -> None:
+        """The environment changing after Start does not move the Houdini being served."""
+        monkeypatch.delenv("HOUDINI_HOST", raising=False)
+        monkeypatch.setenv("HOUDINI_PORT", "19000")
+        plugin_server.start_server(use_thread=True)
+        monkeypatch.setenv("HOUDINI_PORT", "19001")
+
+        assert plugin_server.serving_target() == Target(host="localhost", port=19000)
+        held_serve["stdin"].set()
+        _wait_until_stopped(plugin_server)
+        assert plugin_server.serving_target() is None
+
+    def test_a_port_that_is_not_one_fails_start_and_serves_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plugin_server: Any, held_serve: dict[str, Any]
+    ) -> None:
+        monkeypatch.setenv("HOUDINI_PORT", "not-a-number")
+
+        with pytest.raises(InvalidSetting, match="HOUDINI_PORT: .*, got 'not-a-number'"):
+            plugin_server.start_server(use_thread=True)
+
+        assert plugin_server.is_server_running() is False
+        assert held_serve["runs"] == 0
 
     def test_mcp_status_shows_the_houdini_served_from_start(
         self,

@@ -1,9 +1,9 @@
 """Houdini MCP Server - Main server entry point."""
 
+import dataclasses
 import functools
 import inspect
 import logging
-import os
 from collections.abc import Callable
 from typing import Any
 
@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 
 from . import delivery, shorthand, tools
 from .connection import describe_target
+from .settings import Target
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES
@@ -23,23 +24,7 @@ from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
 
-# Environment configuration
-HOUDINI_HOST = os.getenv("HOUDINI_HOST", "localhost")
-HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 
-# Create FastMCP instance
-# [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
-# refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
-# would coerce them. One switch, so no parameter type has to say so itself.
-mcp = FastMCP(
-    "Houdini MCP",
-    instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
-    strict_input_validation=True,
-)
-
-
-# Health check endpoint
-@mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
     """Health check endpoint for container orchestration."""
     return JSONResponse({"status": "healthy", "service": "houdini-mcp"})
@@ -94,9 +79,6 @@ SERVED_TOOLS: tuple[Callable[..., Any], ...] = (
     tools.render_node_network,
 )
 
-# The Houdini every tool reaches: the server's configuration, never the caller's.
-TARGET: dict[str, Any] = {"host": HOUDINI_HOST, "port": HOUDINI_PORT}
-
 
 def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     """The tool as a client's call runs it, never blocking the server's event loop.
@@ -107,7 +89,7 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     scene released.
     """
     name = tool.__name__
-    TOOL_POLICIES[name]  # an unclassified tool fails here, at import
+    TOOL_POLICIES[name]  # an unclassified tool fails here, when the server is built
     if inspect.iscoroutinefunction(tool):
         return tool
 
@@ -137,35 +119,52 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
-def served(tool: Callable[..., Any]) -> Tool:
+def served(tool: Callable[..., Any], target: Target) -> Tool:
     """The tool as clients see it: its own signature and docs, with the target bound."""
     declared = Tool.from_function(delivered(held(tool)))
     bound = {
         name: ArgTransform(hide=True, default=value)
-        for name, value in TARGET.items()
+        for name, value in dataclasses.asdict(target).items()
         if name in declared.parameters["properties"]
     }
     logger.debug("serving %s with %s bound by the server", declared.name, sorted(bound))
     return Tool.from_tool(declared, transform_args=bound)
 
 
-for _tool in SERVED_TOOLS:
-    mcp.add_tool(served(_tool))
-
-
-@mcp.resource(delivery.RESULT_URI, mime_type="text/plain")
 def delivered_result(name: str) -> str:
     """A tool result too large to return inline, by the name in its ``result_uri``."""
     return delivery.read_result(name)
 
 
-def serve(transport: Transport = "http", port: int = 3055) -> None:
-    """Run the shared MCP server on a transport, leaving process logging alone.
+def build_server(target: Target) -> FastMCP:
+    """The MCP server, every tool of which reaches ``target``.
+
+    [LAW:effects-at-boundaries] built by whoever starts it, from the target that
+    entry point resolved, so importing this module builds nothing.
+    """
+    # [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
+    # refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
+    # would coerce them. One switch, so no parameter type has to say so itself.
+    mcp = FastMCP(
+        "Houdini MCP",
+        instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
+        strict_input_validation=True,
+    )
+    mcp.custom_route("/health", methods=["GET"])(health_check)
+    for tool in SERVED_TOOLS:
+        mcp.add_tool(served(tool, target))
+    mcp.resource(delivery.RESULT_URI, mime_type="text/plain")(delivered_result)
+    return mcp
+
+
+def serve(target: Target, transport: Transport = "http", port: int = 3055) -> None:
+    """Serve tools that reach ``target`` on a transport, leaving process logging alone.
 
     Entry point for hosts that already own logging - the Houdini plugin runs
     this inside Houdini's interpreter.
     """
-    logger.info(f"Houdini connection target: {describe_target(**TARGET)}")
+    mcp = build_server(target)
+    logger.info(f"Houdini connection target: {describe_target(target.host, target.port)}")
 
     if transport == "stdio":
         logger.info("Starting Houdini MCP Server on stdio")
@@ -175,17 +174,16 @@ def serve(transport: Transport = "http", port: int = 3055) -> None:
         mcp.run(transport=transport, host="0.0.0.0", port=port)
 
 
-def run_server(transport: Transport = "http", port: int = 3055) -> None:
+def run_server(target: Target, transport: Transport, port: int, log_level: int) -> None:
     """Serve as a process of its own: configure this process's logging, then serve.
 
     [LAW:effects-at-boundaries] ``logging.basicConfig`` reconfigures the root
     logger of whatever process imports us, so it lives here, at the edge where
     this process is ours, and not at import time.
     """
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
+        level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    logger.info(f"Log level: {log_level}")
-    serve(transport, port)
+    logger.info(f"Log level: {logging.getLevelName(log_level)}")
+    serve(target, transport, port)

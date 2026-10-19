@@ -31,14 +31,14 @@ from typing import Any, get_args
 
 import jsonschema
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from fastmcp.client.client import CallToolResult
 from mcp.types import Tool
 from pydantic import ValidationError
 
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
-from houdini_mcp.server import mcp
+from houdini_mcp.settings import Target
 from houdini_mcp.tools._common import FAILURE
 from houdini_mcp.tools.code import Policy
 
@@ -49,7 +49,7 @@ WRONG_EXAMPLE_MARK = "❌"
 
 
 @pytest.fixture
-async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
     """One session with the server for the whole test, served against a fake Houdini."""
     async with Client(mcp) as client:
         yield client
@@ -129,8 +129,8 @@ class TestServedSchemas:
         from houdini_mcp.server import served
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
-            served(tools.create_node)
-            served(tools.get_houdini_help)
+            served(tools.create_node, Target(host="localhost", port=18811))
+            served(tools.get_houdini_help, Target(host="localhost", port=18811))
         assert [r.getMessage() for r in caplog.records] == [
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",

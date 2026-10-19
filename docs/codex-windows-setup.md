@@ -84,9 +84,9 @@ os.environ["MCP_TRANSPORT"] = "stdio"
 os.environ.setdefault("HOUDINI_HOST", "127.0.0.1")
 os.environ.setdefault("HOUDINI_PORT", "18811")
 
-from houdini_mcp.server import run_server
+from houdini_mcp.__main__ import main
 
-run_server(transport="stdio")
+main()
 ```
 
 Add the server to `%USERPROFILE%\.codex\config.toml`:

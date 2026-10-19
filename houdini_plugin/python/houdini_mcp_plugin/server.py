@@ -16,8 +16,13 @@ the pipe, and this module reports whether a server is serving right now.
 """
 
 import logging
+import os
 import threading
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from houdini_mcp.settings import Target
 
 logger = logging.getLogger("houdini_mcp_plugin.server")
 
@@ -31,41 +36,44 @@ class AlreadyServing(RuntimeError):
         )
 
 
-def _prepare_stdio_server() -> Callable[[], None]:
-    """Bind the shared server to this interpreter's Houdini; return what runs it."""
+def _prepare_stdio_server() -> tuple["Target", Callable[[], None]]:
+    """Bind the shared server to this interpreter's Houdini; return its target and what runs it."""
     from houdini_mcp.connection import IN_PROCESS_HOUDINI, connect, use_houdini
-    from houdini_mcp.server import HOUDINI_HOST, HOUDINI_PORT, serve
+    from houdini_mcp.server import serve
+    from houdini_mcp.settings import houdini_target
 
+    target = houdini_target(os.environ)
     use_houdini(IN_PROCESS_HOUDINI)
     # [LAW:no-ambient-temporal-coupling] binding opens the link, so the Houdini being
     # served is known from Start - to MCP Status as to the first tool - and a missing
     # ``hou`` fails Start instead of a client's first call.
     # [LAW:one-source-of-truth] opened to the host:port the served tools name.
-    connect(HOUDINI_HOST, HOUDINI_PORT)
-    return lambda: serve(transport="stdio")
+    connect(target.host, target.port)
+    return target, lambda: serve(target=target, transport="stdio")
 
 
 class StdioServer:
     """The one owner of the stdio server's lifecycle.
 
-    [LAW:no-ambient-temporal-coupling] The serving thread is the state. It is
-    recorded before any thread starts and cleared by the serving thread itself
+    [LAW:no-ambient-temporal-coupling] The target being served is the state. It
+    is recorded before any thread starts and cleared by the serving thread itself
     when the transport ends, so a second ``start`` is refused from the moment
     the first one is accepted, not from whenever the thread gets scheduled.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._serving: threading.Thread | None = None
+        self._serving: Target | None = None
 
-    def is_serving(self) -> bool:
-        return self._serving is not None
+    def serving(self) -> "Target | None":
+        return self._serving
 
     def start(self, *, block: bool) -> None:
         """Serve stdio on a background thread, or on this thread until EOF.
 
         Raises:
             AlreadyServing: a server is serving; nothing is started.
+            InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
             HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
             Exception: binding to this Houdini failed, or (blocking only) the
                 transport failed; the caller is the one that reports it.
@@ -75,20 +83,19 @@ class StdioServer:
                 refused = AlreadyServing()
                 logger.warning(str(refused))
                 raise refused
-            run = _prepare_stdio_server()
+            target, run = _prepare_stdio_server()
             where = "this thread" if block else "a background thread"
             logger.info(f"Starting MCP server (stdio transport) in {where}")
-            if block:
-                self._serving = threading.current_thread()
-            else:
-                self._serving = threading.Thread(
+            self._serving = target
+            if not block:
+                thread = threading.Thread(
                     target=self._serve_in_background,
                     args=(run,),
                     name="houdini-mcp-stdio",
                     daemon=True,
                 )
                 try:
-                    self._serving.start()
+                    thread.start()
                 except BaseException:
                     # [LAW:no-ambient-temporal-coupling] only a thread that ran clears
                     # itself; one that never started is cleared by the start that failed
@@ -126,6 +133,7 @@ def start_server(use_thread: bool = True) -> None:
 
     Raises:
         AlreadyServing: a server is already serving this process's stdin.
+        InvalidSetting: ``HOUDINI_HOST`` or ``HOUDINI_PORT`` holds no target.
         HoudiniConnectionError: this interpreter's ``hou`` cannot be reached.
         Exception: binding the shared server to this Houdini failed, or a
             blocking serve failed. Nothing is left running; the caller (shelf
@@ -134,6 +142,11 @@ def start_server(use_thread: bool = True) -> None:
     _stdio.start(block=not use_thread)
 
 
+def serving_target() -> "Target | None":
+    """The Houdini the stdio server serving this process's stdin reaches, or None when none is."""
+    return _stdio.serving()
+
+
 def is_server_running() -> bool:
     """Whether a stdio server is serving this process's stdin right now."""
-    return _stdio.is_serving()
+    return serving_target() is not None

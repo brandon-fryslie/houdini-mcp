@@ -14,11 +14,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
 from houdini_mcp import delivery
 from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, deliver, read_result
-from houdini_mcp.server import mcp
 from houdini_mcp.shorthand import render
 from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
 from tests.shorthand_reader import read
@@ -32,7 +31,7 @@ def results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.
 
 
 @pytest.fixture
-async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
     async with Client(mcp) as client:
         yield client
 

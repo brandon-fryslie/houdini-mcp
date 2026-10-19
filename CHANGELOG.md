@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Python API)**: importing `houdini_mcp.server` builds no server
+  and reads no setting (houdini-laws-etg.y04). Every entry point resolves
+  `HOUDINI_HOST`, `HOUDINI_PORT` and `LOG_LEVEL` when it starts, so a value set
+  after import is the one served. A `HOUDINI_PORT` that is not a port, an empty
+  `HOUDINI_HOST`, or an unknown `LOG_LEVEL` stops the `houdini-mcp` command
+  and `python -m houdini_mcp` naming the variable, where before a non-integer
+  port raised at import, `99999` was accepted, and an unknown level ran as
+  INFO; in Houdini, Start MCP shows the same error. `mcp`, `TARGET`,
+  `HOUDINI_HOST` and `HOUDINI_PORT` are gone from `houdini_mcp.server`:
+  `build_server(target)` returns the server, `serve(target, ...)` and
+  `run_server(target, transport, port, log_level)` take the target, and
+  `houdini_mcp.settings.houdini_target(os.environ)` resolves it.
+  `houdini_mcp_plugin.serving_target()` names the Houdini the plugin's stdio
+  server reaches.
+
 - **BREAKING (wire, Python API)**: closed-domain parameters publish their
   legal values (houdini-laws-etg.4id): `renderer`, `output_format` and
   `karma_engine` on the render tools, `manage_cache`'s `action`, and

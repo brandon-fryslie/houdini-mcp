@@ -14,10 +14,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
 from houdini_mcp.delivery import deliver
-from houdini_mcp.server import mcp
 from houdini_mcp.shorthand import KEY, render
 from tests.shorthand_reader import read
 
@@ -162,7 +161,7 @@ class TestTheWire:
 
 
 @pytest.fixture
-async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
+async def client(mcp: FastMCP, in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
     obj = in_process_houdini.node("/obj")
     for i in range(30):
         geo = obj.createNode("geo", f"geo_{i}")

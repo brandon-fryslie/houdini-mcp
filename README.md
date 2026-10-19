@@ -186,11 +186,11 @@ Environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HOUDINI_HOST` | `localhost` | Houdini machine IP/hostname |
-| `HOUDINI_PORT` | `18811` | hrpyc server port |
+| `HOUDINI_PORT` | `18811` | hrpyc server port; a value that is not a port stops the server |
 | `HOUDINI_RPC_TOKEN` | *(unset)* | Shared secret the Houdini listener enforces; must match the listener's |
-| `MCP_PORT` | `3055` | MCP server HTTP port |
+| `MCP_PORT` | `3055` | MCP server HTTP port; a value that is not a port stops the server |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server |
-| `LOG_LEVEL` | `INFO` | Logging level |
+| `LOG_LEVEL` | `INFO` | Logging level (CRITICAL, ERROR, WARNING, INFO, DEBUG, any case); any other value stops the server |
 | `HOUDINI_MCP_RESULTS_DIR` | a new private directory in the system temp, per server process | Where results too large to return inline are written |
 
 ## Tool Categories (43 Tools)

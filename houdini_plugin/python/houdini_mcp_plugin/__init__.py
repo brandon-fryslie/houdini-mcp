@@ -34,12 +34,13 @@ from .remote import (
     start_hrpyc_server,
     stop_hrpyc_server,
 )
-from .server import AlreadyServing, is_server_running, start_server
+from .server import AlreadyServing, is_server_running, serving_target, start_server
 
 __all__ = [
     # stdio mode (MCP server in Houdini)
     "start_server",
     "is_server_running",
+    "serving_target",
     "AlreadyServing",
     # remote mode (hrpyc for external MCP server)
     "start_hrpyc_server",
