@@ -152,22 +152,19 @@ class TestListenerAgainstRealRpyc:
         loopback of their own family, which is also what self_test probes."""
         hrpyc = real_hrpyc()
         listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
-        try:
+        # Unwound in reverse on every path: the server finishes serving every
+        # client it accepted, self_test's probe included, before stop() closes it.
+        with contextlib.ExitStack() as teardown:
+            teardown.callback(listener.stop)
             result = listener.start(ListenerConfig(host=host, port=0, trusted_network=True))
             assert result["status"] == "success", result
+            (server,) = hrpyc.servers
+            teardown.callback(await_clients_served, server)
             port = result["bound_port"]
             assert port != 0
             assert listener.self_test()["reachable"] is True
-            (server,) = hrpyc.servers
-
-            conn = rpyc.classic.connect(probe_host(host), port, ipv6=is_ipv6_host(host))
-            try:
+            with rpyc.classic.connect(probe_host(host), port, ipv6=is_ipv6_host(host)) as conn:
                 assert conn.modules.math.sqrt(16.0) == 4.0
-            finally:
-                conn.close()
-                await_clients_served(server)
-        finally:
-            listener.stop()
 
     def test_stop_releases_the_real_port(self, fake_hou):
         listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
