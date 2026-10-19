@@ -202,9 +202,9 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 |------|-------------|
 | `get_scene_info` | Get current scene info (file, version, nodes) |
 | `serialize_scene` | Serialize scene structure for diffs |
-| `new_scene` | Create empty scene |
+| `new_scene` | Replace the scene with an empty one, backing up unsaved work first |
 | `save_scene` | Save current scene |
-| `load_scene` | Load a .hip file |
+| `load_scene` | Load a .hip file in place of the scene, backing up unsaved work first |
 | `create_node` | Create a new node |
 | `delete_node` | Delete a node by path |
 | `get_node_info` | Get node details, parameters, connections, errors |

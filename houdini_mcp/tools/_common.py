@@ -214,13 +214,11 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             bound = signature.bind(*args, **kwargs)
             try:
                 call = parsed(bound)
-                # The Houdini the call names, its defaults applied, for a recovery
-                # that acts there.
-                target = signature.bind(*call.args, **call.kwargs)
-                target.apply_defaults()
+                # Defaults applied, the call names the Houdini a recovery acts in.
+                call.apply_defaults()
                 with recovering(
                     operation_name,
-                    lambda: ensure_connected(target.arguments["host"], target.arguments["port"]),
+                    lambda: ensure_connected(call.arguments["host"], call.arguments["port"]),
                 ) as recovered:
                     result: dict[str, Any] = func(*call.args, **call.kwargs)
                 return {**result, **recovered}
