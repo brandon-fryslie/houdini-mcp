@@ -31,7 +31,7 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 - **Scene serialization** - Diff scene states before/after operations
 - **Connection management** - Auto-reconnect with exponential backoff + jitter
 - **Error handling** - Consistent error responses with recovery hints
-- **Response optimization** - Size limits, truncation, AI summarization
+- **Response optimization** - Results over 16KB delivered whole as a file, AI summarization
 - **In-memory caching** - Node type cache with TTL for performance
 
 ## Prerequisites
@@ -191,6 +191,7 @@ Environment variables:
 | `MCP_PORT` | `3055` | MCP server HTTP port |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse) |
 | `LOG_LEVEL` | `INFO` | Logging level |
+| `HOUDINI_MCP_RESULTS_DIR` | a new private directory in the system temp, per server process | Where results too large to return inline are written |
 
 ## Tool Categories (43 Tools)
 
@@ -276,7 +277,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 ### Infrastructure (`_common.py`, `cache.py`)
 - **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`
 - **Connection retry**: Exponential backoff with jitter
-- **Response size**: Thresholds, truncation, metadata
+- **Response size**: one bound for every tool, in `houdini_mcp/delivery.py`; a larger result is written whole to a file
 - **Caching**: Node type cache with TTL
 - **Parallel execution**: `semaphore_gather`, `batch_items`
 

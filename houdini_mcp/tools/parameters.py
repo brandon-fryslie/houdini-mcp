@@ -9,7 +9,6 @@ from typing import Any
 
 from ._common import (
     InvalidInput,
-    _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
     node_at,
@@ -155,8 +154,7 @@ def get_parameter_schema(
         "count": len(parameters),
     }
 
-    # Add response size metadata for large responses
-    return _add_response_metadata(result)
+    return result
 
 
 def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any] | None:

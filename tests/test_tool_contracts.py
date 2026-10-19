@@ -470,12 +470,12 @@ class TestServedFailures:
     async def test_a_result_the_server_cannot_serialize_is_the_tools_failure(
         self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The cap runs after ``get_geo_summary`` returns and is awaited under the
-        same boundary: a tool bug there is one arm, never a protocol error."""
+        """Delivery runs after ``get_geo_summary`` returns: a result it cannot
+        serialize is the tool's failure arm, never a protocol error."""
         from houdini_mcp.tools import geometry
 
         def unserializable(*_a: Any, **_k: Any) -> dict[str, Any]:
-            return {"status": "success", "points": {1, 2}}
+            return {"status": "success", "points": object()}
 
         monkeypatch.setattr(geometry, "_read_geometry", unserializable)
         failure = await self.failure_of(client, "get_geo_summary", {"node_path": "/obj/geo1"})

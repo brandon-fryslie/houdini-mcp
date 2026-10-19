@@ -18,7 +18,6 @@ from ..connection import Link
 from ._common import (
     Count,
     OperationFailed,
-    _add_response_metadata,
     ensure_connected,
     ensure_link,
     handle_connection_errors,
@@ -324,8 +323,7 @@ def list_node_types(
 
     result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
 
-    # Add response size metadata for large responses
-    return _add_response_metadata(result)
+    return result
 
 
 @handle_connection_errors("list_children")
@@ -489,8 +487,7 @@ def list_children(
             result.get("warning"), f"Collection limited to {max_nodes} nodes"
         )
 
-    # Add response size metadata for large responses
-    return _add_response_metadata(result)
+    return result
 
 
 def _search_module(link: Link) -> Any:
@@ -581,5 +578,4 @@ def find_nodes(
     if node_type:
         result["node_type_filter"] = node_type
 
-    # Add response size metadata for large responses
-    return _add_response_metadata(result)
+    return result

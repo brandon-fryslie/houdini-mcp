@@ -13,9 +13,9 @@ from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import tools
+from . import delivery, tools
 from .connection import describe_target
-from .tools._common import on_the_scene
+from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES
 from .tools.workers import WorkerStillRunning
@@ -30,7 +30,7 @@ HOUDINI_PORT = int(os.getenv("HOUDINI_PORT", "18811"))
 # [LAW:single-enforcer] the server refuses exactly what the schemas it publishes
 # refuse: "512" is not an integer and "yes" is not a boolean, however pydantic
 # would coerce them. One switch, so no parameter type has to say so itself.
-mcp = FastMCP("Houdini MCP", strict_input_validation=True)
+mcp = FastMCP("Houdini MCP", instructions=delivery.CALLER_GUIDE, strict_input_validation=True)
 
 
 # Health check endpoint
@@ -116,9 +116,23 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     return call
 
 
+def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
+    """The held tool with its result delivered within the response bound."""
+
+    # [LAW:single-enforcer] every served tool's result crosses this one boundary.
+    @functools.wraps(tool)
+    async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = await tool(*args, **kwargs)
+        # Serializing and writing a large result is blocking work, kept off the loop.
+        delivered: dict[str, Any] = await run_in_executor(delivery.deliver, tool.__name__, result)
+        return delivered
+
+    return call
+
+
 def served(tool: Callable[..., Any]) -> Tool:
     """The tool as clients see it: its own signature and docs, with the target bound."""
-    declared = Tool.from_function(held(tool))
+    declared = Tool.from_function(delivered(held(tool)))
     bound = {
         name: ArgTransform(hide=True, default=value)
         for name, value in TARGET.items()
@@ -130,6 +144,12 @@ def served(tool: Callable[..., Any]) -> Tool:
 
 for _tool in SERVED_TOOLS:
     mcp.add_tool(served(_tool))
+
+
+@mcp.resource(delivery.RESULT_URI, mime_type="application/json")
+def delivered_result(name: str) -> str:
+    """A tool result too large to return inline, by the name in its ``result_uri``."""
+    return delivery.read_result(name)
 
 
 def serve(transport: str = "http", port: int = 3055) -> None:

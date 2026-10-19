@@ -10,7 +10,6 @@ from typing import Any
 from ._common import (
     InvalidInput,
     OperationFailed,
-    _add_response_metadata,
     ensure_connected,
     handle_connection_errors,
     node_at,
@@ -309,4 +308,4 @@ def get_material_info(
     ]
     result["parameter_count"] = len(result["parameters"])
 
-    return _add_response_metadata(result)
+    return result

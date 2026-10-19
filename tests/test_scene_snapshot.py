@@ -14,7 +14,6 @@ from houdini_mcp.server import held
 from houdini_mcp.tools import code as code_module
 from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
 from houdini_mcp.tools import scene as scene_module
-from houdini_mcp.tools._common import apply_response_cap
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
 from tests.conftest import MockHouModule, MockHouNode
@@ -397,15 +396,7 @@ class TestADiffIsItsOwnRunsAlone:
         assert get_last_scene_diff()["status"] == "warning"
 
 
-class TestSnapshotFailuresSurviveTheResponseCap:
-    def test_a_diff_failure_outlives_a_large_stdout(self) -> None:
-        failure = {"status": "error", "kind": "operation_failed", "message": "busy"}
-        capped = apply_response_cap(
-            {"status": "success", "stdout": "x" * 30000, "scene_changes_error": failure}
-        )
-        assert capped["_truncated"] is True
-        assert capped["scene_changes_error"] == failure
-
+class TestSnapshotFailures:
     def test_a_type_listing_one_line_short_is_a_changed_scene(self) -> None:
         answers = {**RECORDED}
         answers["optype -N -t /obj/geo1 /obj/empty /obj/geo1/box1 /obj/geo1/hid"] = (

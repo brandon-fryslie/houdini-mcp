@@ -10,8 +10,6 @@ from typing import Any
 from ..connection import transport_failure
 from ._common import (
     ResultLimit,
-    _add_response_metadata,
-    apply_response_cap,
     ensure_connected,
     handle_connection_errors,
     node_at,
@@ -73,7 +71,7 @@ async def find_error_nodes(
     result = await on_the_scene(
         "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
-    return apply_response_cap(await summarized(result, summarize_errors, asked=summarize))
+    return await summarized(result, summarize_errors, asked=summarize)
 
 
 def _scan_error_nodes(
@@ -83,7 +81,7 @@ def _scan_error_nodes(
     host: str,
     port: int,
 ) -> dict[str, Any]:
-    """The nodes under root_path with errors or warnings, with response metadata, uncapped."""
+    """The nodes under root_path with errors or warnings."""
     hou = ensure_connected(host, port)
 
     root = node_at(hou, root_path, "Root node")
@@ -150,7 +148,7 @@ def _scan_error_nodes(
     failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
     inspected = range(total_scanned - len(uninspected))
     status = batch_status("find_error_nodes", inspected, failed, **report)
-    return _add_response_metadata({"status": status, **report}, apply_cap=False)
+    return {"status": status, **report}
 
 
 def _identity(node: Any) -> dict[str, Any]:

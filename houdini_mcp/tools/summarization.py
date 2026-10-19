@@ -58,6 +58,12 @@ AUTO_SUMMARIZE_THRESHOLD = int(os.getenv("AUTO_SUMMARIZE_THRESHOLD", "5000"))
 # Target summary size
 TARGET_SUMMARY_TOKENS = int(os.getenv("TARGET_SUMMARY_TOKENS", "500"))
 
+AI_SUMMARY = "ai_summary"
+AI_SUMMARY_ERROR = "ai_summary_error"
+SUMMARIZED = "_summarized"
+SUMMARY_FIELDS: frozenset[str] = frozenset({AI_SUMMARY, SUMMARIZED, AI_SUMMARY_ERROR})
+"""The fields a summarized result carries: the summary, or why there is none."""
+
 # Room for a cold model load (about 7.5s) plus a full-length summary.
 REQUEST_TIMEOUT_SECONDS = 60.0
 # Reaching the server is quick or it is not there: off the tailnet the SYN is dropped,
@@ -305,11 +311,11 @@ def _annotate(data: dict[str, Any], outcome: Summary | NoSummary) -> dict[str, A
     """Attach the summary to the tool result, or the reason there is none."""
     match outcome:
         case Summary(text):
-            data["ai_summary"] = text
-            data["_summarized"] = True
+            data[AI_SUMMARY] = text
+            data[SUMMARIZED] = True
         case NoSummary(reason):
             # [LAW:no-silent-failure] A summary was attempted; the result says why there is none.
-            data["ai_summary_error"] = reason
+            data[AI_SUMMARY_ERROR] = reason
     return data
 
 
