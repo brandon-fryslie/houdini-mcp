@@ -1,6 +1,5 @@
 """Houdini MCP Server - Main server entry point."""
 
-import asyncio
 import functools
 import inspect
 import logging
@@ -16,7 +15,7 @@ from starlette.responses import JSONResponse
 
 from . import delivery, tools
 from .connection import describe_target
-from .tools._common import on_the_scene
+from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES
 from .tools.workers import WorkerStillRunning
@@ -125,9 +124,8 @@ def delivered(tool: Callable[..., Any]) -> Callable[..., Any]:
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
         result = await tool(*args, **kwargs)
         # Serializing and writing a large result is blocking work, kept off the loop.
-        return await asyncio.to_thread(
-            delivery.deliver, tool.__name__, result, results_dir=delivery.results_dir()
-        )
+        delivered: dict[str, Any] = await run_in_executor(delivery.deliver, tool.__name__, result)
+        return delivered
 
     return call
 
@@ -151,7 +149,7 @@ for _tool in SERVED_TOOLS:
 @mcp.resource(delivery.RESULT_URI, mime_type="application/json")
 def delivered_result(name: str) -> str:
     """A tool result too large to return inline, by the name in its ``result_uri``."""
-    return delivery.read_result(name, results_dir=delivery.results_dir())
+    return delivery.read_result(name)
 
 
 def serve(transport: str = "http", port: int = 3055) -> None:

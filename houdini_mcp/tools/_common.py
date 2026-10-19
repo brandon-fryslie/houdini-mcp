@@ -490,6 +490,12 @@ def join_warnings(*warnings: str | None) -> str:
     return WARNING_SEPARATOR.join(w for w in warnings if w)
 
 
+PAGING_FIELDS: frozenset[str] = frozenset(
+    {"total", "returned", "has_more", "offset", "cursor", "warning"}
+)
+"""Every field ``paging_fields`` emits: what a caller needs to fetch the next page."""
+
+
 def paging_fields(page: Page[Any]) -> dict[str, Any]:
     """The paging response contract every list tool emits."""
     # [LAW:single-enforcer] [LAW:one-source-of-truth] One builder for the contract;

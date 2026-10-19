@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Large results arrive whole, as a file** (houdini-laws-etg.6op): every
   tool's result passes one bound, 16KB serialized. A result over it is written
   whole to a JSON file under `HOUDINI_MCP_RESULTS_DIR`, and the call returns
-  its `status` (and a failure's declared fields, and any `ai_summary`),
-  `result_file`, `result_bytes`, and `result_uri`, which reads the file
-  through the server for a client on another machine. Before, most tools cut
+  its `status` (and a failure's declared fields, any `ai_summary`, and a page's
+  paging fields, each string previewed to 2KB), `result_file`,
+  `result_bytes`, and `result_uri`, which reads the file through the server
+  for a client on another machine. Before, most tools cut
   an oversized result down to a prefix marked `_truncated`, dropping fields
   such as `image_base64`, while `serialize_scene`, renders, screenshots and
   others were not bounded at all. `execute_code`'s `max_stdout_size` now

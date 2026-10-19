@@ -1471,8 +1471,8 @@ class TestListChildren:
         from houdini_mcp.tools import list_children
 
         children = []
-        # Stay below the shared 16KB response cap so this measures compact
-        # representation savings rather than comparing two equally capped JSON blobs.
+        # Stay below the 16KB delivery bound so both payloads arrive inline and this
+        # measures compact representation savings, not two pointers to files.
         for i in range(20):
             node = MockHouNode(path=f"/obj/geo1/node_{i}", name=f"node_{i}", node_type="null")
             node._inputs = [

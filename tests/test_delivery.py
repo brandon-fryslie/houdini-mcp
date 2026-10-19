@@ -19,14 +19,18 @@ from fastmcp import Client
 from houdini_mcp import delivery
 from houdini_mcp.delivery import RESPONSE_BOUND_BYTES, WIRE, deliver, read_result
 from houdini_mcp.server import mcp
-from houdini_mcp.tools._common import FAILURE
+from houdini_mcp.tools._common import FAILURE, PAGING_FIELDS, Page, paging_fields
+
+
+@pytest.fixture(autouse=True)
+def results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Where this test's results land, never the server's own directory."""
+    monkeypatch.setattr(delivery, "results_dir", lambda: tmp_path)
+    return tmp_path
 
 
 @pytest.fixture
-async def client(
-    in_process_houdini: Any, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[Client[Any]]:
-    monkeypatch.setattr(delivery, "results_dir", lambda: tmp_path)
+async def client(in_process_houdini: Any) -> AsyncIterator[Client[Any]]:
     async with Client(mcp) as client:
         yield client
 
@@ -138,7 +142,7 @@ class TestDeliver:
             "unwalked": [f"/obj/geo{i}" for i in range(2000)],
         }
 
-        pointer = deliver("find_error_nodes", failure, results_dir=tmp_path)
+        pointer = deliver("find_error_nodes", failure)
 
         parsed = FAILURE.validate_python(pointer)
         assert parsed.kind == "operation_failed"
@@ -150,26 +154,28 @@ class TestDeliver:
         result["text"] = "x" * (RESPONSE_BOUND_BYTES - len(WIRE.dump_json(result)))
         assert len(WIRE.dump_json(result)) == RESPONSE_BOUND_BYTES
 
-        assert deliver("t", result, results_dir=tmp_path) is result
+        assert deliver("t", result) is result
         assert list(tmp_path.iterdir()) == []
 
     def test_multibyte_text_is_measured_in_bytes(self, tmp_path: pathlib.Path) -> None:
         result = {"status": "success", "text": "é" * (RESPONSE_BOUND_BYTES // 2)}
 
-        pointer = deliver("t", result, results_dir=tmp_path)
+        pointer = deliver("t", result)
 
         assert pointer["result_bytes"] > RESPONSE_BOUND_BYTES
         assert whole(pointer) == result
 
-    @pytest.mark.parametrize("name", ["../secret.json", "sub/result.json", "result.txt", ".."])
+    @pytest.mark.parametrize(
+        "name", ["../secret.json", "sub/result.json", "result.txt", "..", "settings.json"]
+    )
     def test_a_name_outside_the_results_directory_is_refused(
         self, name: str, tmp_path: pathlib.Path
     ) -> None:
         with pytest.raises(ValueError, match="not a delivered result name"):
-            read_result(name, results_dir=tmp_path)
+            read_result(name)
 
     def test_an_unserializable_result_is_the_tools_failure(self, tmp_path: pathlib.Path) -> None:
-        response = deliver("t", {"status": "success", "node": object()}, results_dir=tmp_path)
+        response = deliver("t", {"status": "success", "node": object()})
 
         failure = FAILURE.validate_python(response)
         assert (failure.kind, failure.operation) == ("operation_failed", "t")
@@ -183,20 +189,21 @@ class TestDeliver:
             "ai_summary": "400 geometry nodes, none cooked",
         }
 
-        pointer = deliver("serialize_scene", result, results_dir=tmp_path)
+        pointer = deliver("serialize_scene", result)
 
         assert pointer["ai_summary"] == "400 geometry nodes, none cooked"
         assert "structure" not in pointer
         assert whole(pointer) == result
 
     def test_a_result_that_cannot_be_written_says_the_tool_ran(
-        self, tmp_path: pathlib.Path
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         blocked = tmp_path / "not-a-directory"
         blocked.write_text("")
+        monkeypatch.setattr(delivery, "results_dir", lambda: blocked)
         result = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
 
-        failure = FAILURE.validate_python(deliver("execute_code", result, results_dir=blocked))
+        failure = FAILURE.validate_python(deliver("execute_code", result))
 
         assert (failure.kind, failure.retry) == ("operation_failed", "none")
         assert failure.message.startswith("execute_code ran, but its")
@@ -205,7 +212,7 @@ class TestDeliver:
         """A non-finite float is null inline, so it is null in the file too."""
         result = {"status": "success", "bounds": [float("inf")], "text": "x" * RESPONSE_BOUND_BYTES}
 
-        pointer = deliver("t", result, results_dir=tmp_path)
+        pointer = deliver("t", result)
 
         assert whole(pointer)["bounds"] == [None]
 
@@ -213,6 +220,59 @@ class TestDeliver:
         result: dict[str, Any] = {"status": "success"}
         result["self"] = result
 
-        failure = FAILURE.validate_python(deliver("t", result, results_dir=tmp_path))
+        failure = FAILURE.validate_python(deliver("t", result))
 
         assert "not JSON-serializable" in failure.message
+
+    def test_a_results_directory_that_cannot_be_made_says_the_tool_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def unmakeable() -> pathlib.Path:
+            raise PermissionError("temp is read-only")
+
+        monkeypatch.setattr(delivery, "results_dir", unmakeable)
+        small = {"status": "success"}
+        large = {"status": "success", "stdout": "x" * RESPONSE_BOUND_BYTES}
+
+        assert deliver("create_node", small) is small
+        failure = FAILURE.validate_python(deliver("execute_code", large))
+        assert failure.message.startswith("execute_code ran, but its")
+
+    def test_a_long_failure_message_is_previewed_and_kept_whole_in_the_file(self) -> None:
+        failure = {
+            "status": "error",
+            "kind": "operation_failed",
+            "retry": "none",
+            "operation": "execute_code",
+            "message": "ValueError: " + "x" * 100_000,
+            "traceback": "Traceback\n" + "y" * 100_000,
+        }
+
+        pointer = deliver("execute_code", failure)
+
+        assert len(WIRE.dump_json(pointer)) <= RESPONSE_BOUND_BYTES
+        parsed = FAILURE.validate_python(pointer)
+        assert parsed.message == failure["message"][: delivery.PREVIEW_CHARS] + delivery.TRIMMED
+        assert whole(pointer) == failure
+
+    def test_a_large_page_keeps_how_to_fetch_the_next_one(self) -> None:
+        page = {
+            "status": "success",
+            "nodes": ["/obj/geo_with_a_long_name"] * 1000,
+            "total": 5000,
+            "returned": 1000,
+            "has_more": True,
+            "offset": 0,
+            "cursor": 1000,
+            "warning": "Returned 1000 of 5000 starting at offset 0. Use cursor=1000",
+        }
+
+        pointer = deliver("find_nodes", page)
+
+        assert {k: pointer[k] for k in PAGING_FIELDS} == {k: page[k] for k in PAGING_FIELDS}
+        assert "nodes" not in pointer
+
+    def test_paging_fields_are_every_field_the_paging_contract_emits(self) -> None:
+        emitted = paging_fields(Page(items=[1, 2], offset=0, total=5))
+
+        assert set(emitted) == PAGING_FIELDS
