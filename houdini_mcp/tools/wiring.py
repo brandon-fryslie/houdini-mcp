@@ -13,12 +13,12 @@ from ._common import (
     ensure_connected,
     handle_connection_errors,
     node_at,
+    node_category,
 )
 from .connections import (
     InputConnection,
     input_connections,
     input_span,
-    source_category,
     wire_at,
     wire_source,
 )
@@ -58,12 +58,12 @@ def connect_nodes(
     """
     hou = ensure_connected(host, port)
 
-    # A reported wire's source_node may name a subnet indirect input; it goes back
-    # here as is.
-    src_node = wire_source(hou, src_path)
-    if src_node is None:
+    # A reported wire's source_node may name a subnet indirect input or a dot; it
+    # goes back here as is.
+    src = wire_source(hou, src_path)
+    if src is None:
         raise InvalidInput(
-            f"Source node not found: {src_path} (no node or subnet indirect input there)",
+            f"Source node not found: {src_path} (no node, subnet indirect input or dot there)",
             path=src_path,
         )
 
@@ -72,8 +72,8 @@ def connect_nodes(
     # Validate compatible node types by category name (e.g., "Sop", "Object", "Dop").
     # [LAW:no-silent-failure] a category Houdini cannot report is the boundary's
     # to classify, not a check to skip.
-    src_category = source_category(hou, src_node)
-    dst_category = source_category(hou, dst_node)
+    src_category = src.category
+    dst_category = node_category(dst_node)
     if src_category != dst_category:
         raise InvalidInput(
             f"Incompatible node types: {src_category} -> {dst_category}. "
@@ -90,7 +90,7 @@ def connect_nodes(
             f"to {dst_path}[{dst_input_index}]"
         )
 
-    dst_node.setInput(dst_input_index, src_node, src_output_index)
+    dst_node.setInput(dst_input_index, src.item, src_output_index)
 
     # The wire is reported as Houdini holds it after the write, not as it was asked
     # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]

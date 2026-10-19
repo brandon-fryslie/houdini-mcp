@@ -41,6 +41,8 @@ Successfully implemented 4 new node wiring tools for the Houdini MCP Server.
 **Purpose:** Wire output of source node to input of destination node
 
 **Features:**
+- ✅ The source may be a node, a subnet indirect input or a network dot, classified by
+  Houdini's `networkItemType()` (class identity does not survive rpyc)
 - ✅ Type validation (SOP→SOP, OBJ→OBJ, etc.)
 - ✅ Returns error if incompatible types (e.g., SOP→DOP)
 - ✅ Auto-disconnects existing connection on input

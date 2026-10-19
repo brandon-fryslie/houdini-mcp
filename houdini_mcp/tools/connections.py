@@ -17,9 +17,10 @@ class InputConnection:
     """One wire into a node: which input, from which item, from which of its outputs.
 
     ``source`` is what the wire is drawn from inside this network: a ``hou.Node``,
-    or the ``hou.SubnetIndirectInput`` when the node sits in a subnet and is fed
-    from one of the subnet's inputs. Either is a valid ``setInput`` source, so a
-    wire read here can be put back exactly as it was.
+    a ``hou.NetworkDot`` the wire is routed through, or the
+    ``hou.SubnetIndirectInput`` when the node sits in a subnet and is fed from one
+    of the subnet's inputs. Each is a valid ``setInput`` source, so a wire read
+    here can be put back exactly as it was.
     """
 
     input_index: int
@@ -72,24 +73,39 @@ def input_connections(node: Any) -> list[InputConnection]:
     )
 
 
-def wire_source(hou: Any, path: str) -> Any | None:
-    """What a wire can be drawn from at ``path``: a ``hou.Node`` or a
-    ``hou.SubnetIndirectInput``, the two items ``setInput`` accepts.
+@dataclass(frozen=True)
+class WireSource:
+    """What a wire can be drawn from, resolved: the item ``setInput`` takes, and the
+    node category it belongs to, read once while the item was classified."""
 
-    [LAW:parse-dont-validate] ``hou.item`` also resolves network boxes, sticky
-    notes and dots; none is a source, so they resolve to None here exactly as an
-    empty path does, and nothing downstream re-asks what kind of item it holds.
+    item: Any
+    category: str
+
+
+def wire_source(hou: Any, path: str) -> WireSource | None:
+    """The wire source at ``path``: a ``hou.Node``, a ``hou.SubnetIndirectInput`` or a
+    ``hou.NetworkDot``, the items ``setInput`` accepts; None when ``path`` holds none.
+
+    [LAW:parse-dont-validate] The one place a source path is classified. ``hou.item``
+    also resolves network boxes and sticky notes; neither is a source, so they
+    resolve to None exactly as an empty path does, and nothing downstream re-asks
+    what kind of item it holds. Houdini's own ``networkItemType()`` is the
+    discriminator, never ``isinstance``: over rpyc a netref matches only its exact
+    remote class, and a real item is always a subclass (``hou.SopNode``,
+    ``hou.OpSubnetIndirectInput``), so ``isinstance(item, hou.Node)`` is False for
+    every one of them.
     """
     item = hou.item(path)
-    return item if isinstance(item, (hou.Node, hou.SubnetIndirectInput)) else None
-
-
-def source_category(hou: Any, source: Any) -> str:
-    """The node category a wire source belongs to: a node's own type category, or
-    for a subnet indirect input, the category of the subnet's children it feeds."""
-    if isinstance(source, hou.Node):
-        return node_category(source)
-    return str(source.parent().childTypeCategory().name())
+    if item is None:
+        return None
+    kind = item.networkItemType()
+    if kind == hou.networkItemType.Node:
+        return WireSource(item, node_category(item))
+    if kind in (hou.networkItemType.SubnetIndirectInput, hou.networkItemType.NetworkDot):
+        # An indirect input or a dot passes a wire on inside the network it sits in,
+        # so it takes that network's child category.
+        return WireSource(item, str(item.parent().childTypeCategory().name()))
+    return None
 
 
 def wire_at(connections: list[InputConnection], input_index: int) -> InputConnection | None:

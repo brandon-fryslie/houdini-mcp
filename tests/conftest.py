@@ -11,6 +11,8 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+import rpyc
+import rpyc.utils.server
 from fastmcp import FastMCP
 from rpyc.core import vinegar
 from rpyc.utils.server import Server
@@ -62,6 +64,9 @@ class MockSubnetIndirectInput:
 
     def parent(self) -> "MockHouNode":
         return self._subnet
+
+    def networkItemType(self) -> "MockEnumValue":
+        return MockNetworkItemType.SubnetIndirectInput
 
 
 class MockNodeConnection:
@@ -510,6 +515,9 @@ class MockHouNode:
         """Return the parent node."""
         return self._parent
 
+    def networkItemType(self) -> "MockEnumValue":
+        return MockNetworkItemType.Node
+
     def displayNode(self) -> Optional["MockHouNode"]:
         """The SOP inside this object whose display flag is set, as hou.ObjNode.displayNode:
         None for an object whose children are not SOPs, and for one with no children."""
@@ -626,8 +634,7 @@ class MockHouModule:
         self.Vector3 = MockVector3
         self.Vector4 = MockVector4
         self.Ramp = MockRamp
-        self.Node = MockHouNode
-        self.SubnetIndirectInput = MockSubnetIndirectInput
+        self.networkItemType = MockNetworkItemType
 
         # Undo stack (used by execute_code rollback-on-timeout safety rail)
         self.undos = MockUndos()
@@ -950,6 +957,26 @@ def closing_once_served(server: Server) -> Generator[Server, None, None]:
             await_clients_served(server)
 
 
+@contextlib.contextmanager
+def served_namespace(source: str) -> Generator[Any, None, None]:
+    """The namespace ``source`` defines, run on a real rpyc server and seen through a
+    classic connection: every name a netref, so ``isinstance`` and ``==`` behave as
+    they do against a live Houdini."""
+    server = rpyc.utils.server.ThreadedServer(
+        rpyc.core.SlaveService,
+        hostname="127.0.0.1",
+        port=0,
+        logger=logging.getLogger("served_namespace"),
+    )
+    server._start_in_thread()
+    with (
+        closing_once_served(server),
+        rpyc.classic.connect("127.0.0.1", server.port) as conn,
+    ):
+        conn.execute(source)
+        yield conn.namespace
+
+
 class MockEnumValue:
     """One member of a hou enum: ``hou.paneTabType.NetworkEditor.name()``."""
 
@@ -958,6 +985,16 @@ class MockEnumValue:
 
     def name(self) -> str:
         return self._name
+
+
+class MockNetworkItemType:
+    """``hou.networkItemType``: the kind of a network item, the discriminator tool
+    code classifies by (class identity does not survive rpyc). Only the members
+    tool code reads are here."""
+
+    Node = MockEnumValue("Node")
+    SubnetIndirectInput = MockEnumValue("SubnetIndirectInput")
+    NetworkDot = MockEnumValue("NetworkDot")
 
 
 class MockPaneTabType:
