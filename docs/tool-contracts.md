@@ -288,7 +288,7 @@ if result["status"] == "success":
 
 ### Focusing on Specific Geometry
 
-Use `look_at` to center the camera on a specific node:
+Use `look_at`, without `camera_position`, to center the camera on a specific node:
 
 ```python
 result = render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080])

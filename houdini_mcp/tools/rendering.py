@@ -375,8 +375,8 @@ def _build_camera(create: Callable[[Any, str, str], Any], prepared: _Prepared, p
     [LAW:one-source-of-truth] with nothing above it, turned about X, then Y,
     then Z, and moved after it turns, the camera's own t and r are its world
     position and rotation, so the values a caller names are the values the
-    scene holds. The orders are set, not trusted to Houdini's defaults, which a
-    studio can change.
+    scene holds. The two orders are the ones the tools state the pose in, so
+    they are set here rather than left to the node's defaults.
     """
     camera = create(prepared.obj, "cam", f"{prefix}render_cam")
     camera.parm("rOrd").set("xyz")
@@ -406,8 +406,7 @@ def _aim(
     camera.parm("projection").set(1 if orthographic else 0)
     camera.parm("orthowidth").set(framing.ortho_width)
     logger.info(
-        "Camera %s: t=%s r=%s orthographic=%s camera_position=%s",
-        camera.path(),
+        "Camera t=%s r=%s orthographic=%s camera_position=%s",
         position,
         rotation,
         orthographic,
@@ -520,8 +519,8 @@ def render_viewport(
         - image_base64: Base64-encoded image data
         - format: Image format used
         - resolution: [width, height]
-        - bounding_box: The world-space box around what look_at or auto_frame chose,
-          when it has geometry
+        - bounding_box: The world-space box around what look_at or auto_frame chose: of
+          no size where a look_at with no geometry stands, absent when nothing was chosen
 
     Examples:
         render_viewport()  # Auto-frame scene with isometric view

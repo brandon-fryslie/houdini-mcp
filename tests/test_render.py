@@ -1143,10 +1143,10 @@ class TestRenderFraming:
             render_quad_view(host="localhost", port=18811)
 
         assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("Camera ")] == [
-            "Camera /obj/_mcp_render_cam: t=(1.0, 2.0, 3.0) r=(20.0, -130.0, 35.0)"
+            "Camera t=(1.0, 2.0, 3.0) r=(20.0, -130.0, 35.0)"
             " orthographic=False camera_position=(1.0, 2.0, 3.0)",
             *(
-                f"Camera /obj/_mcp_quad_render_cam: t={f['camera_t']} r={f['camera_r']}"
+                f"Camera t={f['camera_t']} r={f['camera_r']}"
                 f" orthographic={f['projection'] == 1} camera_position=None"
                 for f in frames[1:]
             ),
