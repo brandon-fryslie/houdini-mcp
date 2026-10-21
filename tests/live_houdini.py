@@ -94,14 +94,17 @@ def stdin_closed(timeout):
 
 def serving():
     try:
-        # The timeout bounds how long one request can leave stdin unwatched; an answer
-        # that slow, or none yet, is not a failure, only not serving yet.
+        # The timeout bounds how long one request can leave stdin unwatched. Refused,
+        # reset, or an answer slower than that: not a failure, only not serving yet.
         urllib.request.urlopen(f"http://localhost:{{port}}/health", timeout=1)
     except urllib.error.URLError as e:
-        if isinstance(e.reason, ConnectionRefusedError):
+        reason = e.reason
+        if isinstance(reason, (ConnectionRefusedError, ConnectionResetError, TimeoutError,
+                               socket.timeout)):
             return False
         raise
-    except TimeoutError:
+    except (ConnectionError, TimeoutError, socket.timeout):
+        # A bare reset or timeout is not wrapped in URLError; still not serving yet.
         return False
     return True
 
@@ -253,7 +256,8 @@ def running_listener(
     grace: float = 10.0,
 ) -> Iterator[int]:
     """The port the listener ``command`` starts reports, from when it reports it until
-    the block exits, however it exits.
+    the block exits, however it exits. The port answers on the host the command binds;
+    `hython_listener` binds ``HOUDINI_LISTENER_HOST``, loopback.
 
     [LAW:no-ambient-temporal-coupling] this block is the one owner of the child's
     lifetime: ready is the listener's own report, the stop always runs, and the
