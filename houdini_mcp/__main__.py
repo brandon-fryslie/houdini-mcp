@@ -10,8 +10,8 @@ from .results import Results
 from .server import run_server
 from .settings import (
     InvalidSetting,
-    Port,
     log_level,
+    mcp_port,
     results_dir,
     rpc_token,
     server_settings,
@@ -26,7 +26,7 @@ def main() -> None:
         token = rpc_token(os.environ)
         root = results_dir(os.environ)
         transport = setting(os.environ, "MCP_TRANSPORT", TypeAdapter(Transport), "http")
-        port = setting(os.environ, "MCP_PORT", TypeAdapter(Port), "3055")
+        port = mcp_port(os.environ)
         level = log_level(os.environ)
     except InvalidSetting as e:
         raise SystemExit(str(e)) from None

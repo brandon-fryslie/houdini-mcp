@@ -1,4 +1,5 @@
-"""A headless Houdini the live tests start for themselves, serving the plugin's listener.
+"""The listeners the live tests start for themselves: a headless Houdini serving the
+plugin's listener, and the MCP server over HTTP.
 
 The child speaks over two pipes. It reports the port its listener bound on a
 readiness pipe: one ``"<port>\\n"`` line once the listener is serving, or EOF if
@@ -13,6 +14,7 @@ import re
 import select
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -21,12 +23,14 @@ from typing import Annotated
 
 from pydantic import AfterValidator, FilePath, TypeAdapter
 
-from houdini_mcp.settings import Target, setting
+from houdini_mcp.settings import setting
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HYTHON = "/Applications/Houdini/Current/Frameworks/Houdini.framework/Versions/Current/Resources/bin/hython"
 PLUGIN_PYTHON = Path(__file__).resolve().parents[1] / "houdini_plugin" / "python"
+# The address the hython child's listener binds, and so the host of the Houdini it serves.
+HOUDINI_LISTENER_HOST = "127.0.0.1"
 
 # The child's whole job, given the readiness pipe's write end as {fd}.
 # [LAW:one-source-of-truth] the plugin is this checkout's, first on sys.path, so an
@@ -38,7 +42,7 @@ import os, sys
 sys.path.insert(0, {plugin!r})
 from houdini_mcp_plugin.listener import ListenerConfig, RemoteListener
 listener = RemoteListener()
-started = listener.start(ListenerConfig(host="127.0.0.1", port=0), raise_on_policy=True)
+started = listener.start(ListenerConfig(host={host!r}, port=0), raise_on_policy=True)
 if started["status"] != "success":
     sys.exit(f"listener did not start: {{started}}")
 foreign = {{
@@ -52,12 +56,83 @@ os.write({fd}, b"%d\\n" % started["bound_port"])
 os.close({fd})
 """
 
-# Every child's last act, once stdin closes: end what it started, then exit on its own.
+# The last act of a child whose main thread is free once its listener serves: once
+# stdin closes, end what it started, then exit on its own.
 SERVE_UNTIL_STDIN_CLOSES = """\
 import os, signal, sys
 sys.stdin.buffer.read()
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 os.killpg(0, signal.SIGTERM)
+"""
+
+# The MCP server's whole job, given the readiness pipe's write end as {fd}. The server is
+# this process, serving on its main thread, so whatever ends the process ends the server:
+# the watcher thread ends it once stdin closes, before the report or after it, and when
+# anything of its own fails. It runs from {workdir}, since fastmcp reads a .env from the
+# working directory, and only the run's own environment may configure the server.
+_SERVE_HTTP = """\
+import os
+os.chdir({workdir!r})
+import select, socket, sys, threading, traceback, urllib.error, urllib.request
+
+# The checkout's houdini_mcp is the code under test: first on the import path, so an
+# installed copy (a non-editable install) is not what serves. [LAW:one-source-of-truth]
+sys.path.insert(0, {checkout!r})
+
+with socket.socket() as probe:
+    probe.bind(("", 0))
+    port = probe.getsockname()[1]
+os.environ.update(MCP_TRANSPORT="http", MCP_PORT=str(port))
+
+# The watcher starts before the slow fastmcp import: however long startup takes, the
+# parent closing stdin ends the process from the first instant. [LAW:no-ambient-temporal-coupling]
+def stdin_closed(timeout):
+    # fd 0, not sys.stdin: a thread blocked in a buffered read holds its lock at
+    # interpreter shutdown, which aborts. Readable is EOF, since the parent never writes.
+    return bool(select.select([0], [], [], timeout)[0])
+
+
+def serving():
+    try:
+        # The timeout bounds how long one request can leave stdin unwatched. Refused,
+        # reset, or an answer slower than that: not a failure, only not serving yet.
+        urllib.request.urlopen(f"http://localhost:{{port}}/health", timeout=1)
+    except urllib.error.URLError as e:
+        reason = e.reason
+        if isinstance(reason, (ConnectionRefusedError, ConnectionResetError, TimeoutError,
+                               socket.timeout)):
+            return False
+        raise
+    except (ConnectionError, TimeoutError, socket.timeout):
+        # A bare reset or timeout is not wrapped in URLError; still not serving yet.
+        return False
+    return True
+
+
+def report_then_wait_for_stdin_to_close():
+    while not stdin_closed(0.1):
+        if serving():
+            os.write({fd}, b"%d\\n" % port)
+            os.close({fd})
+            stdin_closed(None)
+            return
+
+
+def end_the_process_when_done():
+    try:
+        report_then_wait_for_stdin_to_close()
+    except BaseException:
+        traceback.print_exc()
+        sys.stderr.flush()
+        os._exit(1)
+    os._exit(0)
+
+
+threading.Thread(target=end_the_process_when_done, daemon=True).start()
+
+from houdini_mcp.__main__ import main
+
+main()
 """
 
 # The command that starts a listener, given the readiness pipe's write end.
@@ -73,7 +148,7 @@ def _executable(path: Path) -> Path:
 Executable = Annotated[FilePath, AfterValidator(_executable)]
 
 
-class HoudiniDidNotStart(RuntimeError):
+class ListenerDidNotStart(RuntimeError):
     """The child exited, or the deadline passed, before its listener reported a port."""
 
 
@@ -89,7 +164,22 @@ def hython_executable(environ: Mapping[str, str]) -> Path:
 def hython_listener(hython: Path) -> Command:
     """The command that runs this checkout's plugin listener in a headless ``hython``."""
     script = _SERVE_LISTENER + SERVE_UNTIL_STDIN_CLOSES
-    return lambda fd: [str(hython), "-c", script.format(fd=fd, plugin=str(PLUGIN_PYTHON))]
+    return lambda fd: [
+        str(hython),
+        "-c",
+        script.format(fd=fd, plugin=str(PLUGIN_PYTHON), host=HOUDINI_LISTENER_HOST),
+    ]
+
+
+def houdini_mcp_over_http(workdir: Path) -> Command:
+    """The command that serves this checkout's ``houdini_mcp`` over HTTP on a free port,
+    from ``workdir``, configured by nothing but the environment it is started with."""
+    checkout = Path(__file__).resolve().parents[1]
+    return lambda fd: [
+        sys.executable,
+        "-c",
+        _SERVE_HTTP.format(fd=fd, workdir=str(workdir), checkout=str(checkout)),
+    ]
 
 
 def _log_tail(log_path: Path, lines: int = 40) -> str:
@@ -103,7 +193,7 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
     the child spawned may still hold the pipe's write end open.
 
     Raises:
-        HoudiniDidNotStart: with the log tail, when the child reported something
+        ListenerDidNotStart: with the log tail, when the child reported something
             other than a port line, exited first, or the deadline passed.
     """
     poller = select.poll()
@@ -118,7 +208,7 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
         if report := re.fullmatch(rb"(\d+)\n", sent):
             return int(report.group(1))
         if sent:
-            raise HoudiniDidNotStart(
+            raise ListenerDidNotStart(
                 f"reported {sent!r}, not a port; log {log_path}:\n{_log_tail(log_path)}"
             )
         # EOF says no port is coming; the child's exit says why, once it lands.
@@ -126,10 +216,10 @@ def _await_port(child: subprocess.Popen[bytes], ready: int, deadline: float, log
             with contextlib.suppress(subprocess.TimeoutExpired):
                 code = child.wait(left)
         if code is not None:
-            raise HoudiniDidNotStart(
+            raise ListenerDidNotStart(
                 f"exited {code} without a port; log {log_path}:\n{_log_tail(log_path)}"
             )
-    raise HoudiniDidNotStart(f"no port within {deadline}s; log {log_path}:\n{_log_tail(log_path)}")
+    raise ListenerDidNotStart(f"no port within {deadline}s; log {log_path}:\n{_log_tail(log_path)}")
 
 
 def signal_group(pgid: int, sig: int) -> bool:
@@ -164,16 +254,17 @@ def running_listener(
     log_path: Path,
     deadline: float = 120.0,
     grace: float = 10.0,
-) -> Iterator[Target]:
-    """The Houdini ``command`` starts, from when its listener reports a port until
-    the block exits, however it exits.
+) -> Iterator[int]:
+    """The port the listener ``command`` starts reports, from when it reports it until
+    the block exits, however it exits. The port answers on the host the command binds;
+    `hython_listener` binds ``HOUDINI_LISTENER_HOST``, loopback.
 
     [LAW:no-ambient-temporal-coupling] this block is the one owner of the child's
     lifetime: ready is the listener's own report, the stop always runs, and the
     child's stdin, whose write end only this process holds, outlives neither.
 
     Raises:
-        HoudiniDidNotStart: the child exited, or ``deadline`` passed, first.
+        ListenerDidNotStart: the child exited, or ``deadline`` passed, first.
     """
     with ExitStack() as fds:
         ready, report = os.pipe()
@@ -204,4 +295,4 @@ def running_listener(
             port,
             time.monotonic() - started,
         )
-        yield Target(host="127.0.0.1", port=port)
+        yield port

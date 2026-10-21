@@ -184,5 +184,4 @@ def run_server(
         logger.info("Starting Houdini MCP Server on stdio")
         mcp.run(transport=transport, show_banner=False)
     else:
-        logger.info(f"Starting Houdini MCP Server on {transport}://0.0.0.0:{port}")
         mcp.run(transport=transport, host="0.0.0.0", port=port)

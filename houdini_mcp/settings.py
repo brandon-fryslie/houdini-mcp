@@ -192,6 +192,11 @@ def log_level(environ: Mapping[str, str]) -> int:
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
 
 
+def mcp_port(environ: Mapping[str, str]) -> int:
+    """The HTTP port ``MCP_PORT`` names for the MCP server, by default 3055."""
+    return setting(environ, "MCP_PORT", TypeAdapter(Port), "3055")
+
+
 def results_dir(environ: Mapping[str, str]) -> Path:
     """The root ``HOUDINI_MCP_RESULTS_DIR`` names for results too large to return
     inline, as an absolute path: by default, under the user's own cache.

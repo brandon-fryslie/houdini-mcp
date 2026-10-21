@@ -5,7 +5,7 @@ This directory contains comprehensive examples demonstrating how to use the Houd
 ## Prerequisites
 
 1. Houdini running with hrpyc server (port 18811)
-2. Houdini MCP Server running (port 3055)
+2. Houdini MCP Server running, serving MCP at `http://localhost:3055/mcp`
 3. [uv](https://docs.astral.sh/uv/getting-started/installation/) and a clone of
    this repository; `uv run` gives the examples the project's environment
 

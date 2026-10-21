@@ -14,7 +14,12 @@ import pytest
 from houdini_mcp import connection
 from houdini_mcp.settings import Target
 from tests.conftest import DEFAULT_SETTINGS
-from tests.live_houdini import hython_executable, hython_listener, running_listener
+from tests.live_houdini import (
+    HOUDINI_LISTENER_HOST,
+    hython_executable,
+    hython_listener,
+    running_listener,
+)
 
 HERE = Path(__file__).parent
 
@@ -36,9 +41,9 @@ def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
         # The listener inherits this environment, and would enforce a token in it
         # against the tests, which present none.
         mp.delenv("HOUDINI_RPC_TOKEN", raising=False)
-        with running_listener(command, os.environ, log_path) as target:
+        with running_listener(command, os.environ, log_path) as port:
             try:
-                yield target
+                yield Target(host=HOUDINI_LISTENER_HOST, port=port)
             finally:
                 connection.disconnect()
 

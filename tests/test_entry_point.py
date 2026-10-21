@@ -224,7 +224,6 @@ def test_starting_applies_and_logs_what_it_resolved(
         "http://100.66.66.66:8000/v1"
     ) in logged
     assert "Bypass configuration: enabled=False" in logged
-    assert "Starting Houdini MCP Server on http://0.0.0.0:3100" in logged
 
 
 @pytest.mark.parametrize("command", COMMANDS.values(), ids=COMMANDS.keys())
