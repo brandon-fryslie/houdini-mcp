@@ -74,14 +74,18 @@ _SERVE_HTTP = """\
 import os
 os.chdir({workdir!r})
 import select, socket, sys, threading, traceback, urllib.error, urllib.request
-from houdini_mcp.__main__ import main
+
+# The checkout's houdini_mcp is the code under test: first on the import path, so an
+# installed copy (a non-editable install) is not what serves. [LAW:one-source-of-truth]
+sys.path.insert(0, {checkout!r})
 
 with socket.socket() as probe:
     probe.bind(("", 0))
     port = probe.getsockname()[1]
 os.environ.update(MCP_TRANSPORT="http", MCP_PORT=str(port))
 
-
+# The watcher starts before the slow fastmcp import: however long startup takes, the
+# parent closing stdin ends the process from the first instant. [LAW:no-ambient-temporal-coupling]
 def stdin_closed(timeout):
     # fd 0, not sys.stdin: a thread blocked in a buffered read holds its lock at
     # interpreter shutdown, which aborts. Readable is EOF, since the parent never writes.
@@ -90,12 +94,15 @@ def stdin_closed(timeout):
 
 def serving():
     try:
-        # The timeout bounds how long one request can leave stdin unwatched.
+        # The timeout bounds how long one request can leave stdin unwatched; an answer
+        # that slow, or none yet, is not a failure, only not serving yet.
         urllib.request.urlopen(f"http://localhost:{{port}}/health", timeout=1)
     except urllib.error.URLError as e:
         if isinstance(e.reason, ConnectionRefusedError):
             return False
         raise
+    except TimeoutError:
+        return False
     return True
 
 
@@ -119,6 +126,9 @@ def end_the_process_when_done():
 
 
 threading.Thread(target=end_the_process_when_done, daemon=True).start()
+
+from houdini_mcp.__main__ import main
+
 main()
 """
 
@@ -159,9 +169,14 @@ def hython_listener(hython: Path) -> Command:
 
 
 def houdini_mcp_over_http(workdir: Path) -> Command:
-    """The command that serves this environment's ``houdini_mcp`` over HTTP on a free port,
+    """The command that serves this checkout's ``houdini_mcp`` over HTTP on a free port,
     from ``workdir``, configured by nothing but the environment it is started with."""
-    return lambda fd: [sys.executable, "-c", _SERVE_HTTP.format(fd=fd, workdir=str(workdir))]
+    checkout = Path(__file__).resolve().parents[1]
+    return lambda fd: [
+        sys.executable,
+        "-c",
+        _SERVE_HTTP.format(fd=fd, workdir=str(workdir), checkout=str(checkout)),
+    ]
 
 
 def _log_tail(log_path: Path, lines: int = 40) -> str:
