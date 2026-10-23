@@ -803,7 +803,7 @@ def list_render_nodes(
                 "path": node.path(),
                 "name": node.name(),
                 "type": node_type,
-                "bypassed": node.isBypassed() if hasattr(node, "isBypassed") else False,
+                "bypassed": node.isBypassed(),
             }
 
             # Output path lives under a different name per ROP type

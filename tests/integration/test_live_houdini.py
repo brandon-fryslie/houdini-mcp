@@ -131,6 +131,16 @@ def test_a_flag_a_nodes_class_does_not_have_reads_null(at: dict[str, Any]) -> No
     assert flags(box) == (True, True)
 
 
+def test_list_render_nodes_reads_each_rops_bypass_flag(at: dict[str, Any]) -> None:
+    rop = tools.create_node("opengl", "/out", "mcp_it_rop", **at)["node_path"]
+    with using(**at) as link:
+        link.hou.node(rop).bypass(True)
+
+    listed = tools.list_render_nodes(**at)["render_nodes"]
+
+    assert [r["bypassed"] for r in listed if r["path"] == rop] == [True]
+
+
 def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str, Any]) -> None:
     """A forced cook counts, for a manager and for a displayed SOP alike: compared with
     the count before it, so a viewer that already cooked the box changes nothing."""

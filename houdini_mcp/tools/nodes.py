@@ -206,8 +206,9 @@ def _standard_record(node: Any) -> dict[str, Any]:
 def _flag(node: Any, method: str) -> bool | None:
     """The flag ``method`` reads, or None when the node's class has no such flag.
 
-    On Houdini 22 a SOP has a display and a render flag; an object, DOP or LOP has
-    only a display flag; a network such as /obj, a ROP or a VOP has neither.
+    Which flags a node has follows its class: on Houdini 22, for example, a SOP has
+    a display and a render flag, an object only a display flag, and a network such
+    as /obj neither.
     """
     # [LAW:no-silent-failure] looked up, then called: an AttributeError Houdini raises
     # while reading the flag is a refused read, not a flag the node lacks
