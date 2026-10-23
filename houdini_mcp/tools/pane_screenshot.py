@@ -95,14 +95,22 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
 
     def frame_network(pane: Any) -> None:
         # Houdini's network-editor home (h.pane.wsheet.home), over every item in the network shown.
-        link.conn.modules["nodegraphview"].frameItems(pane, pane.pwd().allItems(), immediate=True)
+        network = pane.pwd()
+        items = network.allItems()
+        link.conn.modules["nodegraphview"].frameItems(pane, items, immediate=True)
+        logger.info("Framed %d items of %s", len(items), network.path())
 
     def frame_shown_viewports(pane: Any) -> None:
         # The grab takes every viewport the layout shows, and only those. A
-        # viewport whose view drives its camera would move that camera node,
-        # so a capture refuses rather than edit the scene.
+        # viewport locked to the camera it looks through (an OBJ node or a USD
+        # prim) would have that camera moved, so a capture refuses rather than
+        # edit the scene.
         shown = [viewport for viewport in pane.viewports() if viewport.isVisible()]
-        driven = [viewport.camera().path() for viewport in shown if _view_drives_camera(viewport)]
+        driven = [
+            path
+            for viewport in shown
+            if (path := viewport.cameraPath()) and viewport.isCameraLockedToView()
+        ]
         if driven:
             raise OperationFailed(
                 f"framing would move camera {', '.join(driven)}, whose viewport is locked "
@@ -111,6 +119,7 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
             )
         for viewport in shown:
             viewport.frameAll()
+        logger.info("Framed viewports %s", [viewport.name() for viewport in shown])
 
     hou = link.hou
     framers: dict[Any, Callable[[Any], None]] = {
@@ -128,15 +137,9 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
     return framer
 
 
-def _view_drives_camera(viewport: Any) -> bool:
-    """Whether moving ``viewport``'s view writes the camera it looks through."""
-    return viewport.camera() is not None and (
-        viewport.isCameraLockedToView() or viewport.isViewExportedToCameraContinuously()
-    )
-
-
 def _as_shown(pane: Any) -> None:
     """Leaves the pane's view as the user left it."""
+    logger.info("Left %s as shown", pane.name())
 
 
 def _capture_pane_to_bytes(
@@ -222,7 +225,6 @@ def _capture_pane_to_bytes(
         raise OperationFailed(
             f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
         ) from e
-    logger.info("Capturing %s pane %s", pane_type_name, "framed" if fit_contents else "as shown")
 
     # Capture screen region
     pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)

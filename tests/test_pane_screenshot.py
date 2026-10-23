@@ -356,13 +356,15 @@ def _qt_grabbing(events: list[object]) -> tuple[MagicMock, MagicMock]:
 
 
 def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
-    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+    monkeypatch: pytest.MonkeyPatch,
+    mock_connection: MockHouModule,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A network editor is framed as Houdini's own home frames it, over every item
     in the network it shows, at once, so the grab sees the framed view."""
     events: list[object] = []
     editor = MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
-    network = SimpleNamespace(allItems=lambda: ("geo1", "dot1"))
+    network = SimpleNamespace(path=lambda: "/obj", allItems=lambda: ("geo1", "dot1"))
     editor.pwd = lambda: network  # type: ignore[attr-defined]
     mock_connection.ui.curDesktop().paneTabs().append(editor)
     monkeypatch.setitem(
@@ -374,14 +376,18 @@ def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
     )
     QtWidgets, QtCore = _qt_grabbing(events)
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+    with (
+        caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(QtWidgets, QtCore, object()),
+        ),
     ):
         result = capture_pane_screenshot("NetworkEditor", fit_contents=True)
 
     assert result["status"] == "success", result
     assert events == [("frameItems", editor, ("geo1", "dot1"), {"immediate": True}), "grab"]
+    assert "Framed 2 items of /obj" in caplog.messages
 
 
 def test_render_node_network_frames_the_network_it_navigated_to(
@@ -393,7 +399,9 @@ def test_render_node_network_frames_the_network_it_navigated_to(
     editor = MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
     shown: dict[str, str] = {}
     editor.cd = lambda path: shown.update(path=path)  # type: ignore[attr-defined]
-    editor.pwd = lambda: SimpleNamespace(allItems=lambda: (f"items of {shown['path']}",))  # type: ignore[attr-defined]
+    editor.pwd = lambda: SimpleNamespace(  # type: ignore[attr-defined]
+        path=lambda: shown["path"], allItems=lambda: (f"items of {shown['path']}",)
+    )
     mock_connection.ui.curDesktop().paneTabs().append(editor)
     monkeypatch.setitem(
         sys.modules,
@@ -422,10 +430,10 @@ def _viewport(
 ) -> SimpleNamespace:
     """A GeometryViewport that records its frameAll in ``events``."""
     return SimpleNamespace(
+        name=lambda: name,
         isVisible=lambda: visible,
-        camera=lambda: None if camera is None else SimpleNamespace(path=lambda: camera),
+        cameraPath=lambda: camera or "",
         isCameraLockedToView=lambda: locked,
-        isViewExportedToCameraContinuously=lambda: False,
         frameAll=lambda: events.append(("frameAll", name)),  # type: ignore[func-returns-value]
     )
 
@@ -456,7 +464,7 @@ def test_fit_contents_frames_every_viewport_a_scene_viewer_shows(
 
     assert result["status"] == "success", result
     assert events == [("frameAll", "persp"), ("frameAll", "top"), "grab"]
-    assert "Capturing SceneViewer pane framed" in caplog.messages
+    assert "Framed viewports ['persp', 'top']" in caplog.messages
 
 
 def test_fit_contents_on_a_pane_houdini_cannot_frame_is_refused_naming_those_it_can(
@@ -511,13 +519,14 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
 def test_fit_contents_refuses_a_viewport_whose_view_moves_its_camera(
     mock_connection: MockHouModule,
 ) -> None:
-    """Framing a view locked to its camera would edit the camera node, so the
-    capture refuses before framing any viewport."""
+    """Framing a view locked to the camera it looks through (here a USD prim)
+    would edit that camera, so the capture refuses before framing any viewport;
+    a lock with no camera looked through moves nothing."""
     events: list[object] = []
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
     viewer.viewports = lambda: (  # type: ignore[attr-defined]
-        _viewport(events, "persp"),
-        _viewport(events, "top", camera="/obj/cam1", locked=True),
+        _viewport(events, "persp", locked=True),
+        _viewport(events, "top", camera="/cameras/camera1", locked=True),
     )
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
     QtWidgets, QtCore = _qt_grabbing(events)
@@ -529,7 +538,7 @@ def test_fit_contents_refuses_a_viewport_whose_view_moves_its_camera(
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
-    assert result["cameras"] == ["/obj/cam1"]
+    assert result["cameras"] == ["/cameras/camera1"]
     assert events == []
 
 
@@ -555,7 +564,7 @@ def test_a_capture_refused_before_the_grab_leaves_the_view_unframed(
 
 
 def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
-    mock_connection: MockHouModule,
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A pane Houdini cannot frame is still captured when no fit is asked for."""
     events: list[object] = []
@@ -564,11 +573,15 @@ def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
     )
     QtWidgets, QtCore = _qt_grabbing(events)
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+    with (
+        caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(QtWidgets, QtCore, object()),
+        ),
     ):
         result = capture_pane_screenshot("Parm")
 
     assert result["status"] == "success", result
     assert events == ["grab"]
+    assert "Left panetab1 as shown" in caplog.messages
