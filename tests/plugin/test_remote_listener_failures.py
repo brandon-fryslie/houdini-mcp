@@ -130,6 +130,92 @@ class TestBindFailure:
 
 
 # ---------------------------------------------------------------------------
+# A reload whose admitted config fails to start
+# ---------------------------------------------------------------------------
+
+# The config serving before each reload below, and the one each reload asks for:
+# different hosts, so which one serves afterwards is read off the report.
+_BEFORE = ListenerConfig(host="localhost", port=0)
+_AFTER = ListenerConfig(host="127.0.0.1", port=0)
+
+
+def _servers_fail(hrpyc: FakeHrpycModule, error: Exception, host: str | None) -> None:
+    """Make *hrpyc* raise *error* building a server on *host*, or on any host when None."""
+    build = hrpyc.ThreadedServer
+
+    def threaded_server(*args, **kwargs):
+        if host is None or kwargs["hostname"] == host:
+            raise error
+        return build(*args, **kwargs)
+
+    hrpyc.ThreadedServer = threaded_server
+
+
+class TestFailedReload:
+    @pytest.mark.parametrize(
+        ("error", "error_type"),
+        [
+            (OSError(errno.EADDRINUSE, "Address already in use"), "bind"),
+            (RuntimeError("hrpyc server broke"), "start"),
+        ],
+    )
+    def test_the_listener_serving_before_serves_again(
+        self, error, error_type, fake_hrpyc, fake_hou, caplog
+    ):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        started(listener.start(_BEFORE))
+        _servers_fail(fake_hrpyc, error, _AFTER.host)
+
+        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
+            result = listener.reload(_AFTER)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == error_type
+        assert result["attempt"]["error_type"] == error_type
+        assert result["stop"]["status"] == "success"
+        # Serving again, on the config it served before, and the report says where.
+        assert result["running"] is True
+        assert listener.is_running() is True
+        status = listener.status()
+        assert (status["host"], status["port"]) == (_BEFORE.host, _BEFORE.port)
+        assert str(error) in result["message"]
+        assert f"started on {status['host']}:{status['bound_port']}" in result["message"]
+        assert ("WARNING", result["message"]) in [
+            (r.levelname, r.getMessage()) for r in caplog.records
+        ]
+
+    def test_nothing_serves_when_the_config_before_fails_too(self, fake_hrpyc, fake_hou, caplog):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        endpoint = started(listener.start(_BEFORE))["bound_port"]
+        _servers_fail(fake_hrpyc, RuntimeError("hrpyc server broke"), None)
+
+        with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
+            result = listener.reload(_AFTER)
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "start"
+        assert result["running"] is False
+        assert listener.is_running() is False
+        assert "Nothing is serving" in result["message"]
+        assert f"{_BEFORE.host}:{endpoint}" in result["message"]
+        # Both causes: the reload's and the restart's, which here are the same error.
+        assert result["message"].count("hrpyc server broke") == 2
+        assert ("ERROR", result["message"]) in [
+            (r.levelname, r.getMessage()) for r in caplog.records
+        ]
+
+    def test_a_reload_to_the_same_port_that_starts_serves_on_it(self, fake_hrpyc, fake_hou):
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        port = started(listener.start(_AFTER))["bound_port"]
+
+        result = started(listener.reload(ListenerConfig(host=_AFTER.host, port=port)))
+
+        assert result["bound_port"] == port
+        assert "attempt" not in result
+        assert listener.is_running() is True
+
+
+# ---------------------------------------------------------------------------
 # Security enforcement at start() and reload()
 # ---------------------------------------------------------------------------
 

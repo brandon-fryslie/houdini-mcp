@@ -69,7 +69,11 @@ If neither is set, `Start Remote` returns a security error and **no listener is
 created** — there is no code path that silently binds `0.0.0.0` without auth.
 A refused config changes nothing: `reload_hrpyc_server()` checks the new config
 before it stops anything, so the running listener keeps serving, and the error
-says where.
+says where. A config that is admitted but fails to start (its port is taken,
+say) leaves the listener that was serving before serving again on its old
+config; the error says why the reload failed and where the listener serves, or,
+if the old config cannot start again either, that nothing is serving and why.
+Its clients are disconnected by the stop either way.
 
 ### Limitations (read this)
 

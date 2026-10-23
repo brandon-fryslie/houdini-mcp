@@ -77,7 +77,9 @@ def reload_hrpyc_server(port: int | None = None) -> dict:
     """Restart the hrpyc listener with current environment configuration.
 
     A config the security policy refuses stops nothing: the result is the
-    refusal, and the running listener keeps serving.
+    refusal, and the running listener keeps serving. A config that is admitted
+    but fails to start puts the listener that was serving back: the result is
+    an error saying why, and ``running`` says whether anything serves now.
 
     Raises:
         ValueError: a listener variable is set to something it cannot mean

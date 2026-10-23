@@ -583,6 +583,41 @@ class RunningListener:
 _NOT_RUNNING = "hrpyc listener is not running; start it."
 
 
+def _failed_reload(
+    cfg: ListenerConfig,
+    before: RunningListener,
+    attempt: dict[str, Any],
+    restore: dict[str, Any],
+    stopped: dict[str, Any],
+) -> dict[str, Any]:
+    """The result of a reload whose *cfg* failed to start after *before* was stopped.
+
+    It is an error whatever the restart of *before* did: ``error_type`` and the
+    message lead with why *cfg* failed, and ``running`` and the rest of the
+    message say what serves now, read from *restore*, the restart's own result.
+    """
+    failed = f"Reload to {cfg.host}:{cfg.port} failed: {attempt['message']}"
+    if restore["running"]:
+        message = (
+            f"{failed} The listener that was serving before was started again: {restore['message']}"
+        )
+        logger.warning("%s", message)
+    else:
+        message = (
+            f"{failed} Nothing is serving: the listener that was serving before, on "
+            f"{before.endpoint}, did not start again: {restore['message']}"
+        )
+        logger.error("%s", message)
+    return {
+        **restore,
+        "status": "error",
+        "error_type": attempt["error_type"],
+        "message": message,
+        "attempt": attempt,
+        "stop": stopped,
+    }
+
+
 class RemoteListener:
     """Manages a single hrpyc ``ThreadedServer`` with a safe, testable API.
 
@@ -848,16 +883,33 @@ class RemoteListener:
 
         For a config the policy admits, the result is ``start()``'s, carrying
         ``stop()``'s under ``"stop"``: a server that failed to close is reported,
-        not replaced by the fresh start. A config it refuses is refused as start()
-        refuses it, before anything is stopped, so the result has no ``"stop"``
-        and the running listener keeps serving.
+        not replaced by the fresh start. When *config* fails to start and a
+        listener was serving before, that listener's config is started again;
+        the result is then an error whose ``running`` and message say what
+        serves now, with the failed start under ``"attempt"`` (see
+        :func:`_failed_reload`). A config the policy refuses is refused as
+        start() refuses it, before anything is stopped, so the result has no
+        ``"stop"`` and the running listener keeps serving.
         """
         return self._admitted("reload", config, raise_on_policy, self._restart)
 
     def _restart(self, cfg: ListenerConfig, policy: AdmittedPolicy) -> dict[str, Any]:
+        # Stop before start, always: rpyc binds when the server is built, so a
+        # reload that keeps its port cannot bind the new server first.
         with self._lock:
+            held = self._running
+            # What a failed start puts back: the listener serving now, if one is.
+            before = held if held is not None and held.serving else None
             stopped = self.stop()
-            return {**self._start(cfg, policy), "stop": stopped}
+            attempt = self._start(cfg, policy)
+            # [LAW:one-source-of-truth] whether the new config serves is the held
+            # record's to say; with nothing serving before, a reload is a start.
+            if self._running is not None or before is None:
+                return {**attempt, "stop": stopped}
+            # The record carries the policy that admitted its config, so the
+            # restart passes the one gate's stamp on, not a second check.
+            restore = self._start(before.config, before.policy)
+            return _failed_reload(cfg, before, attempt, restore, stopped)
 
     # -- introspection --------------------------------------------------------
 
