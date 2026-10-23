@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The listener's self-test gives a macOS firewall command (houdini-tuneup-ef3.ll5).
+  The macOS Application Firewall admits programs, not ports, so the command
+  allows the executable that owns the listener's socket, as `socketfilterfw
+  --add` and `--unblockapp`. The self-test reports that executable as
+  `executable`, read from the running process. The binary that runs a graphical
+  Houdini depends on its launcher, so no fixed name would be right.
 - **BREAKING (HTTP, Docker Compose, Python API)**: the HTTP server answers only
   this machine by default, and refuses a request that calls it by a name it does
   not admit (houdini-tuneup-ef3.9q8). It used to listen on every interface and

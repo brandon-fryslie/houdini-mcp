@@ -6,6 +6,8 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 from __future__ import annotations
 
 import logging
+import os
+import shlex
 import socket
 import sys
 import threading
@@ -17,6 +19,7 @@ from houdini_mcp_plugin.listener import (
     ListenerConfig,
     RemoteListener,
     SecurityError,
+    firewall_guidance,
 )
 from rpyc.utils.authenticators import AuthenticationError
 
@@ -304,8 +307,27 @@ class TestSelfTestAndStatus:
         started(listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True)))
         report = listener.self_test()
         assert report["loopback_only"] is False
-        # Firewall guidance still present (port must be open).
+        # Firewall guidance still present (the firewall must let clients through).
         assert report["guidance"]
+
+    def test_self_test_names_the_executable_that_owns_the_socket(self, fake_hrpyc, fake_hou):
+        """macOS's firewall admits programs, so the report names this process's binary."""
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
+        report = listener.self_test()
+
+        executable = os.path.realpath(sys.executable)
+        assert report["executable"] == executable
+        (macos,) = (g for g in report["guidance"] if g.startswith("macOS:"))
+        assert f"--add {shlex.quote(executable)}" in macos
+
+    def test_macos_guidance_allows_the_executable_whatever_its_path_holds(self):
+        app = (
+            "/Applications/Houdini/Houdini22.0.466/Houdini FX 22.0.466.app/Contents/MacOS/houdinifx"
+        )
+        (macos,) = (g for g in firewall_guidance("0.0.0.0", 18811, app) if g.startswith("macOS:"))
+        fw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
+        assert macos == f"macOS:          {fw} --add '{app}' && {fw} --unblockapp '{app}'"
 
     def test_self_test_when_stopped_reports_unreachable(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)

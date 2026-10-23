@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import socket
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -397,10 +399,20 @@ def _serve(server: HrpycServer) -> None:
         logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
-def firewall_guidance(host: str, port: int) -> list[str]:
-    """Return human-readable firewall / connectivity guidance."""
+def firewall_guidance(host: str, port: int, executable: str) -> list[str]:
+    """Return human-readable firewall / connectivity guidance.
+
+    ``executable`` is the program that owns the listener's socket. The macOS
+    Application Firewall admits programs, not ports, and which binary runs a
+    graphical Houdini depends on the launcher (bin/houdinifx starts
+    MacOS/houdinifx, bin/houdini starts MacOS/houdini), so only the running
+    process can name it.
+    """
+    socketfilterfw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
+    quoted = shlex.quote(executable)
     guidance = [
-        f"Ensure inbound TCP port {port} is allowed through the OS firewall.",
+        f"Ensure the OS firewall lets inbound TCP port {port} reach this process ({executable}).",
+        f"macOS:          {socketfilterfw} --add {quoted} && {socketfilterfw} --unblockapp {quoted}",
         f"Linux (ufw):    sudo ufw allow {port}/tcp",
         f"Linux (nft):    add rule inet filter input tcp dport {port} accept",
         f"Windows:        New-NetFirewallRule -DisplayName 'Houdini hrpyc' "
@@ -776,6 +788,7 @@ class RemoteListener:
         - reachability of the bound endpoint,
         - whether the listener is stale (held but no longer serving),
         - Houdini / plugin / protocol versions,
+        - the executable that owns the socket,
         - loopback-only warning + firewall guidance,
         - the actual bound endpoints.
         """
@@ -799,6 +812,11 @@ class RemoteListener:
             held.config.host, held.bound_port, timeout=1.0
         )
 
+        # The listener serves from inside this process, so this process's binary
+        # is the one owning the socket; realpath drops the launcher's
+        # bin/../.. segments and the Versions/Current symlink, leaving the path
+        # lsof names.
+        executable = os.path.realpath(sys.executable)
         warnings: list[str] = []
         if held.policy.loopback_only:
             warnings.append(
@@ -851,5 +869,6 @@ class RemoteListener:
             "plugin_version": plugin_version,
             "protocol": "rpyc/hrpyc SlaveService (classic)",
             "warnings": warnings,
-            "guidance": firewall_guidance(held.config.host, held.bound_port),
+            "executable": executable,
+            "guidance": firewall_guidance(held.config.host, held.bound_port, executable),
         }
