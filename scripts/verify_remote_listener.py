@@ -103,7 +103,8 @@ def main() -> int:
         print("[verify] FAIL: listener is not reachable at the TCP level.")
         print(
             "[verify] Guidance: confirm the listener is bound to a routable "
-            "address (not loopback-only) and that the firewall allows the port."
+            "address (not loopback-only) and that the firewall lets it through: "
+            "Remote Self-Test in Houdini gives the command for that OS."
         )
         return 1
 

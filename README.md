@@ -393,7 +393,7 @@ tests that run against a live Houdini.
 
 ### Connection refused
 - Verify Houdini is running with hrpyc server started
-- Check firewall allows port 18811
+- Run **Remote Self-Test** in Houdini for this OS's firewall command (on macOS it allows the Houdini executable, not the port)
 - Verify HOUDINI_HOST is correct
 
 ### Tools time out while `ping_houdini` answers

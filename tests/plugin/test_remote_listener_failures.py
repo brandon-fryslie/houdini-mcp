@@ -6,7 +6,9 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import subprocess
 import sys
 import threading
 
@@ -17,6 +19,8 @@ from houdini_mcp_plugin.listener import (
     ListenerConfig,
     RemoteListener,
     SecurityError,
+    firewall_guidance,
+    own_executable,
 )
 from rpyc.utils.authenticators import AuthenticationError
 
@@ -304,8 +308,64 @@ class TestSelfTestAndStatus:
         started(listener.start(ListenerConfig(host="0.0.0.0", port=0, trusted_network=True)))
         report = listener.self_test()
         assert report["loopback_only"] is False
-        # Firewall guidance still present (port must be open).
+        # Firewall guidance still present (the firewall must let clients through).
         assert report["guidance"]
+
+    def test_self_test_reports_and_allows_the_process_executable(
+        self, fake_hrpyc, fake_hou, monkeypatch
+    ):
+        """The report's guidance is this host's, for this process's binary."""
+        app = "/Applications/Houdini FX.app/Contents/MacOS/houdini"
+        monkeypatch.setattr(listener_module, "own_executable", lambda: app)
+        listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
+        started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
+        report = listener.self_test()
+
+        assert report["executable"] == app
+        assert report["guidance"] == firewall_guidance(
+            "127.0.0.1", report["bound_port"], app, sys.platform
+        )
+
+    def test_own_executable_is_the_os_answer_not_what_python_was_told(self, tmp_path):
+        """PYTHONEXECUTABLE rewrites sys.executable, not the program the OS runs.
+
+        The child runs this interpreter's program, so the OS names the same
+        image in both, whatever sys.executable says - a framework or venv stub
+        included, whose image is not realpath(sys.executable).
+        """
+        decoy = str(tmp_path / "decoy")
+        named = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from houdini_mcp_plugin.listener import own_executable; "
+                "import sys; print(sys.executable); print(own_executable())",
+            ],
+            env={**os.environ, "PYTHONEXECUTABLE": decoy, "PYTHONPATH": os.pathsep.join(sys.path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+
+        assert named == [decoy, own_executable()]
+
+    def test_macos_guidance_allows_the_executable_whatever_its_path_holds(self):
+        app = (
+            "/Applications/Houdini/Houdini22.0.466/Houdini FX 22.0.466.app/Contents/MacOS/houdinifx"
+        )
+        fw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
+        assert firewall_guidance("0.0.0.0", 18811, app, "darwin")[1:] == [
+            f"macOS:          {fw} --add '{app}' && {fw} --unblockapp '{app}'"
+        ]
+
+    @pytest.mark.parametrize(
+        ("platform", "labels"),
+        [("darwin", ["macOS"]), ("win32", ["Windows"]), ("linux", ["Linux (ufw)", "Linux (nft)"])],
+    )
+    def test_guidance_gives_only_the_commands_for_the_host_os(self, platform, labels):
+        """The firewall that matters is the one on the host serving the listener."""
+        commands = firewall_guidance("0.0.0.0", 18811, "/opt/hfs/bin/hython", platform)[1:]
+        assert [c.split(":")[0] for c in commands] == labels
 
     def test_self_test_when_stopped_reports_unreachable(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)

@@ -24,9 +24,12 @@ so tests pass light-weight fakes and never need a real Houdini.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
+import shlex
 import socket
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -397,14 +400,65 @@ def _serve(server: HrpycServer) -> None:
         logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
-def firewall_guidance(host: str, port: int) -> list[str]:
-    """Return human-readable firewall / connectivity guidance."""
+# libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.
+_PROC_PIDPATHINFO_MAXSIZE = 4096
+
+
+def own_executable() -> str:
+    """The program the OS runs as this process, as the OS names it.
+
+    Not ``sys.executable``: Python derives that from argv[0] or
+    ``PYTHONEXECUTABLE``, so the environment can make it name another program,
+    or nothing.
+
+    Raises:
+        OSError: when the OS cannot name this process's executable.
+    """
+    if sys.platform == "darwin":
+        path = ctypes.create_string_buffer(_PROC_PIDPATHINFO_MAXSIZE)
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        if libproc.proc_pidpath(os.getpid(), path, len(path)) <= 0:
+            raise OSError(ctypes.get_errno(), "proc_pidpath could not name this process")
+        return os.fsdecode(path.value)
+    if sys.platform == "win32":
+        module = ctypes.create_unicode_buffer(32768)
+        if not ctypes.windll.kernel32.GetModuleFileNameW(None, module, len(module)):
+            raise ctypes.WinError()
+        return module.value
+    return os.readlink("/proc/self/exe")
+
+
+def firewall_guidance(host: str, port: int, executable: str, platform: str) -> list[str]:
+    """Return human-readable firewall / connectivity guidance.
+
+    ``executable`` is the program that owns the listener's socket and
+    ``platform`` is the ``sys.platform`` it runs on: the firewall that matters
+    is the one on the host serving the listener. The macOS Application Firewall
+    admits programs, not ports, and which binary runs a graphical Houdini
+    depends on the launcher (bin/houdinifx starts MacOS/houdinifx, bin/houdini
+    starts MacOS/houdini), so only the running process can name it.
+    """
+    match platform:
+        case "darwin":
+            socketfilterfw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
+            quoted = shlex.quote(executable)
+            commands = [
+                f"macOS:          {socketfilterfw} --add {quoted} && "
+                f"{socketfilterfw} --unblockapp {quoted}"
+            ]
+        case "win32":
+            commands = [
+                f"Windows:        New-NetFirewallRule -DisplayName 'Houdini hrpyc' "
+                f"-Direction Inbound -LocalPort {port} -Protocol TCP -Action Allow"
+            ]
+        case _:
+            commands = [
+                f"Linux (ufw):    sudo ufw allow {port}/tcp",
+                f"Linux (nft):    add rule inet filter input tcp dport {port} accept",
+            ]
     guidance = [
-        f"Ensure inbound TCP port {port} is allowed through the OS firewall.",
-        f"Linux (ufw):    sudo ufw allow {port}/tcp",
-        f"Linux (nft):    add rule inet filter input tcp dport {port} accept",
-        f"Windows:        New-NetFirewallRule -DisplayName 'Houdini hrpyc' "
-        f"-Direction Inbound -LocalPort {port} -Protocol TCP -Action Allow",
+        f"Ensure the OS firewall lets inbound TCP port {port} reach this process ({executable}).",
+        *commands,
     ]
     if is_loopback_host(host):
         guidance.insert(
@@ -776,6 +830,7 @@ class RemoteListener:
         - reachability of the bound endpoint,
         - whether the listener is stale (held but no longer serving),
         - Houdini / plugin / protocol versions,
+        - the executable that owns the socket,
         - loopback-only warning + firewall guidance,
         - the actual bound endpoints.
         """
@@ -799,6 +854,9 @@ class RemoteListener:
             held.config.host, held.bound_port, timeout=1.0
         )
 
+        # The listener serves from inside this process, so this process's
+        # binary is the one owning the socket.
+        executable = own_executable()
         warnings: list[str] = []
         if held.policy.loopback_only:
             warnings.append(
@@ -851,5 +909,8 @@ class RemoteListener:
             "plugin_version": plugin_version,
             "protocol": "rpyc/hrpyc SlaveService (classic)",
             "warnings": warnings,
-            "guidance": firewall_guidance(held.config.host, held.bound_port),
+            "executable": executable,
+            "guidance": firewall_guidance(
+                held.config.host, held.bound_port, executable, sys.platform
+            ),
         }
