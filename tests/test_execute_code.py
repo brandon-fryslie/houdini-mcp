@@ -920,3 +920,40 @@ class TestAProgramThatFailedOnTheLink:
         assert ended[1].endswith(
             "faults=['program'] link_lost=link to Houdini at localhost:18811 failed: EOFError"
         )
+
+    def test_an_undo_group_close_that_raised_a_base_exception_is_the_runs_failure(
+        self, mock_connection, monkeypatch
+    ):
+        from tests.conftest import MockUndoGroupContext
+
+        def close(self, *exc_info) -> bool:
+            raise SystemExit("closed the hard way")
+
+        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        result = _run("print('done')")
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == (
+            "The undo group did not open or close: SystemExit: closed the hard way"
+        )
+
+    def test_a_program_that_ended_in_time_is_not_timed_out_by_its_links_judgment(
+        self, mock_connection, monkeypatch
+    ):
+        import time
+
+        from houdini_mcp.tools import code, execute_code
+
+        def slow(*args):
+            time.sleep(1.5)
+
+        monkeypatch.setattr(code, "link_lost", slow)
+        result = execute_code(
+            "raise ValueError('mine')",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+            timeout=1,
+        )
+
+        assert (result["kind"], result["message"]) == ("operation_failed", "ValueError: mine")

@@ -838,6 +838,9 @@ def _execute_with_grant(
                 started = time.monotonic()
                 program_starts.set()
                 faults = run_program()
+                # The program and its undo group have ended: the caller's clock stops
+                # here, not after the judgment below, which the caller joins on.
+                program_ends.set()
                 # Written before the link is judged, so a judgment that raises cannot
                 # leave the program's failure reading as a success.
                 ended = _Ended(faults, None)
@@ -880,7 +883,8 @@ def _execute_with_grant(
             try:
                 with undos.group(_UNDO_GROUP_LABEL) if undos is not None else nullcontext():
                     faults = _run_code_thread(code, hou, stdout_capture, stderr_capture)
-            except Exception as error:  # noqa: BLE001
+            # Whatever the group raises is how the run ended, as for the program.
+            except BaseException as error:  # noqa: BLE001
                 return (*faults, _Fault("undo group", error, traceback.format_exc()))
             return faults
 
