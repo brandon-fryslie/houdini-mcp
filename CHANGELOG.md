@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stop Remote** with a client connected no longer logs a traceback from the
   thread serving that client (houdini-laws-etg.j33). Houdini's log records the
-  end of each client's connection with the client's address and which side
-  ended it: `by the listener` when the listener closed, `by the client`
-  otherwise.
+  end of each client's connection with the client's address, which side ended
+  it (`by the listener` when the listener closed, `by the client` otherwise),
+  and the socket error that ended it, if one did.
 
 ### Changed
 

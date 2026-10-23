@@ -204,7 +204,10 @@ class TestListenerAgainstRealRpyc:
             await_clients_served(server)
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
-        assert f"hrpyc client {peer} disconnected from port {port} by the client" in caplog.messages
+        assert (
+            f"hrpyc client {peer} disconnected from port {port} by the client (connection closed)"
+            in caplog.messages
+        )
 
     def test_stop_disconnects_a_client_about_to_poll_with_no_traceback(
         self, fake_hou, monkeypatch, caplog
@@ -239,15 +242,18 @@ class TestListenerAgainstRealRpyc:
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
 
         listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
-        port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
-        conn, peer = connect_classic(port)
-        with contextlib.closing(conn):
-            try:
-                conn.modules._park_probe.arm()
-                assert parked.wait(timeout=5)
-                assert listener.stop()["status"] == "success"
-            finally:
-                released.set()
+        with contextlib.ExitStack() as teardown:
+            # Registered first, so it runs last: a released serving thread
+            # whose listener a failure left open is still closed under it.
+            teardown.callback(listener.stop)
+            teardown.callback(released.set)
+            port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
+            conn, peer = connect_classic(port)
+            teardown.enter_context(contextlib.closing(conn))
+            conn.modules._park_probe.arm()
+            assert parked.wait(timeout=5)
+            assert listener.stop()["status"] == "success"
+            released.set()
             (thread,) = serving
             thread.join(timeout=5)
             assert not thread.is_alive(), "serving thread did not end after stop()"
@@ -255,6 +261,8 @@ class TestListenerAgainstRealRpyc:
                 conn.modules.math.sqrt(1.0)
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
-        assert (
-            f"hrpyc client {peer} disconnected from port {port} by the listener" in caplog.messages
-        )
+        # The thread failed on the closed descriptor, so the record carries
+        # that OSError, whose text is rpyc's and the platform's.
+        prefix = f"hrpyc client {peer} disconnected from port {port} by the listener ("
+        (record,) = [m for m in caplog.messages if m.startswith(prefix)]
+        assert record != f"{prefix}connection closed)"

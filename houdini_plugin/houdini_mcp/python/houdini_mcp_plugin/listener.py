@@ -405,7 +405,7 @@ def _serve(server: HrpycServer) -> None:
 
 
 def _serve_connection(server: HrpycServer, conn: Any) -> None:
-    """Serve one client's rpyc connection until it ends, and record who ended it.
+    """Serve one client's rpyc connection until it ends, and record how it ended.
 
     The client ends it by closing its side; the listener ends it by closing,
     which clears ``active`` and then closes each client's socket under the
@@ -413,22 +413,29 @@ def _serve_connection(server: HrpycServer, conn: Any) -> None:
     reads the close as EOF and returns, or about to enter it, which fails on
     the closed descriptor: ``serve_all()`` raises that as an OSError, knowing
     the socket closed but not that it was closed on purpose. Both are the
-    listener's own disconnect, recorded as one, not as a traceback.
+    listener's own disconnect, recorded as one, not as a traceback. A socket
+    error while the listener still serves is a real failure, recorded and
+    raised.
     """
+    ended: str | OSError = "connection closed"
     try:
         conn.serve_all()
-    except OSError:
-        # [LAW:one-source-of-truth] "the listener closed" is rpyc's own
-        # ``active``, cleared before close() touches any client socket.
-        if server.active:
-            raise
+    except OSError as exc:
+        ended = exc
+    # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,
+    # cleared before close() touches any client socket; read once, so the
+    # record and the raise below agree on it.
+    closer = "client" if server.active else "listener"
     # The peer as rpyc's own "welcome"/"goodbye" lines print it.
     logger.info(
-        "hrpyc client %s disconnected from port %s by the %s",
+        "hrpyc client %s disconnected from port %s by the %s (%s)",
         conn._config["endpoints"][1],
         server.port,
-        "client" if server.active else "listener",
+        closer,
+        ended,
     )
+    if isinstance(ended, OSError) and closer == "client":
+        raise ended
 
 
 # libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.

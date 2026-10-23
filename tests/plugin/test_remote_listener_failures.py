@@ -5,12 +5,14 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import socket
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import houdini_mcp_handshake as handshake
 import houdini_mcp_plugin.listener as listener_module
@@ -554,3 +556,48 @@ class TestReconnect:
         assert f"Stopped hrpyc listener (127.0.0.1:{port}, was_serving=False)" in caplog.text
         assert listener.is_running() is False
         assert listener.status()["stale"] is False
+
+
+# ---------------------------------------------------------------------------
+# A client's connection ending
+# ---------------------------------------------------------------------------
+
+
+class TestClientDisconnect:
+    """How a connection ended is the listener's ``active`` once serving stops
+    and whether serving stopped on a socket error; each is recorded, and only a
+    socket error under a listener still serving is raised."""
+
+    PEER = ("127.0.0.1", 50123)
+    RESET = ConnectionResetError(54, "Connection reset by peer")
+
+    @pytest.mark.parametrize(
+        ("error", "active", "record", "raised"),
+        [
+            (None, True, "by the client (connection closed)", None),
+            (None, False, "by the listener (connection closed)", None),
+            (RESET, False, f"by the listener ({RESET})", None),
+            (RESET, True, f"by the client ({RESET})", RESET),
+        ],
+        ids=["client-closed", "listener-closed", "listener-closed-under-poll", "socket-failed"],
+    )
+    def test_each_end_is_recorded_and_only_a_live_socket_error_raised(
+        self, caplog, error, active, record, raised
+    ):
+        def serve_all() -> None:
+            if error is not None:
+                raise error
+
+        conn = SimpleNamespace(
+            serve_all=serve_all, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
+        )
+        server = SimpleNamespace(active=active, port=18811)
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+
+        with pytest.raises(type(raised)) if raised else contextlib.nullcontext() as caught:
+            listener_module._serve_connection(server, conn)
+
+        assert caplog.messages == [
+            f"hrpyc client {self.PEER} disconnected from port 18811 {record}"
+        ]
+        assert raised is None or caught.value is raised
