@@ -9,10 +9,10 @@ from typing import Any
 
 from ._common import (
     InvalidInput,
-    ensure_connected,
     handle_connection_errors,
     node_at,
     tool_error,
+    using,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 from .reads import read
@@ -45,21 +45,22 @@ def set_parameter(
         - set_parameter("/obj/cam1", "tx", 10.0)
         - set_parameter("/obj/geo1", "t", [1.0, 2.0, 3.0])  # Vector param
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    writes = write_all(node, {param_name: value})
-    if writes.failed:
-        [failed] = writes.failed
-        raise tool_error(failed["kind"], failed["reason"], failed=writes.failed)
+        writes = write_all(node, {param_name: value})
+        if writes.failed:
+            [failed] = writes.failed
+            raise tool_error(failed["kind"], failed["reason"], failed=writes.failed)
 
-    return {
-        "status": "success",
-        "node_path": node_path,
-        "param_name": param_name,
-        "value": value,
-    }
+        return {
+            "status": "success",
+            "node_path": node_path,
+            "param_name": param_name,
+            "value": value,
+        }
 
 
 @handle_connection_errors("get_parameter_schema")
@@ -110,51 +111,52 @@ def get_parameter_schema(
     # Import helper to flatten parameter templates
     from ._common import _flatten_parm_templates
 
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    parameters: list[dict[str, Any]] = []
+        parameters: list[dict[str, Any]] = []
 
-    # Get parameter templates - either specific one or all
-    if parm_name is not None:
-        try:
-            parm_template = resolve(node, parm_name).template()
-        except ParmNotFound as e:
-            raise InvalidInput(str(e), parm_name=parm_name) from e
+        # Get parameter templates - either specific one or all
+        if parm_name is not None:
+            try:
+                parm_template = resolve(node, parm_name).template()
+            except ParmNotFound as e:
+                raise InvalidInput(str(e), parm_name=parm_name) from e
 
-        # When we only requested one parameter, we expect to include it even if
-        # its template is folder-like (rare but possible).
-        parm_templates = [parm_template]
-    else:
-        # Get all parameter templates from node.
-        # Prefer parmTemplates() if present since our unit tests mock that API.
-        if hasattr(node, "parmTemplates"):
-            parm_templates = list(node.parmTemplates())
-        elif hasattr(node, "parmTemplateGroup"):
-            ptg = node.parmTemplateGroup()
-            parm_templates = _flatten_parm_templates(hou, list(ptg.parmTemplates()))
+            # When we only requested one parameter, we expect to include it even if
+            # its template is folder-like (rare but possible).
+            parm_templates = [parm_template]
         else:
-            parm_templates = []
+            # Get all parameter templates from node.
+            # Prefer parmTemplates() if present since our unit tests mock that API.
+            if hasattr(node, "parmTemplates"):
+                parm_templates = list(node.parmTemplates())
+            elif hasattr(node, "parmTemplateGroup"):
+                ptg = node.parmTemplateGroup()
+                parm_templates = _flatten_parm_templates(hou, list(ptg.parmTemplates()))
+            else:
+                parm_templates = []
 
-    # Process each parameter template
-    for idx, parm_template in enumerate(parm_templates):
-        if idx >= max_parms and parm_name is None:
-            logger.info(f"Reached max_parms limit of {max_parms}")
-            break
+        # Process each parameter template
+        for idx, parm_template in enumerate(parm_templates):
+            if idx >= max_parms and parm_name is None:
+                logger.info(f"Reached max_parms limit of {max_parms}")
+                break
 
-        param_info = _extract_parameter_info(hou, node, parm_template)
-        if param_info is not None:
-            parameters.append(param_info)
+            param_info = _extract_parameter_info(hou, node, parm_template)
+            if param_info is not None:
+                parameters.append(param_info)
 
-    result = {
-        "status": "success",
-        "node_path": node_path,
-        "parameters": parameters,
-        "count": len(parameters),
-    }
+        result = {
+            "status": "success",
+            "node_path": node_path,
+            "parameters": parameters,
+            "count": len(parameters),
+        }
 
-    return result
+        return result
 
 
 def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any] | None:

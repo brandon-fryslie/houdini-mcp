@@ -15,29 +15,31 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ..connection import Link, houdini
 from ._common import (
     InvalidInput,
     OperationFailed,
     ToolError,
     Undone,
     batch_status,
-    ensure_connected,
-    ensure_link,
+    failed_on,
     failure_for,
     handle_connection_errors,
     node_at,
+    using,
 )
+from .failure import LinkLost
 from .reads import Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
-def _get_qt_modules(host: str, port: int) -> tuple[Any, Any, Any]:
-    """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``host:port`` names,
+def _get_qt_modules(link: Link) -> tuple[Any, Any, Any]:
+    """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``link`` reaches,
     or the one failure every capture tool reports when Houdini has no PySide2."""
     # [LAW:single-enforcer] the connection module owns the connection; Qt comes
     # over it the way ``hou`` does.
-    conn = ensure_link(host, port).conn
+    conn = link.conn
     try:
         return (
             conn.modules["PySide2.QtWidgets"],
@@ -244,28 +246,29 @@ def capture_pane_screenshot(
         Panes on inactive desktops cannot be captured (invalid geometry).
         Use list_visible_panes() to find capturable panes.
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
+        QtWidgets, QtCore, _ = _get_qt_modules(link)
 
-    # Capture pane to bytes
-    result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore, fit_contents)
+        # Capture pane to bytes
+        result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore, fit_contents)
 
-    # Extract raw bytes and add format info
-    raw_bytes: bytes = result.pop("raw_bytes")
-    result["image_format"] = "png"
-    result["image_size_bytes"] = len(raw_bytes)
+        # Extract raw bytes and add format info
+        raw_bytes: bytes = result.pop("raw_bytes")
+        result["image_format"] = "png"
+        result["image_size_bytes"] = len(raw_bytes)
 
-    # Either save to disk or return as base64
-    if save_path:
-        path = Path(save_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(raw_bytes)
-        result["file_path"] = str(path.absolute())
-    else:
-        result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
+        # Either save to disk or return as base64
+        if save_path:
+            path = Path(save_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw_bytes)
+            result["file_path"] = str(path.absolute())
+        else:
+            result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
 
-    return result
+        return result
 
 
 def _desktop_name(desktop: Any) -> str | None:
@@ -294,36 +297,37 @@ def list_visible_panes(
         capturable_count); the pane stays listed.
         - available_types: List of all valid pane type names
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
-    try:
-        desktops = [
-            (read("desktop name", desktop.name), desktop.paneTabs())
-            for desktop in hou.ui.desktops()
-        ]
-        panes_info = [
-            _pane_info(pane_tab, f"pane {index} of {name}", name, current_desktop_name)
-            for name, pane_tabs in desktops
-            for index, pane_tab in enumerate(pane_tabs)
-        ]
-    except Exception as e:
-        raise OperationFailed(f"Failed to enumerate panes: {e}") from e
+        current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
+        try:
+            desktops = [
+                (read("desktop name", desktop.name), desktop.paneTabs())
+                for desktop in hou.ui.desktops()
+            ]
+            panes_info = [
+                _pane_info(pane_tab, f"pane {index} of {name}", name, current_desktop_name)
+                for name, pane_tabs in desktops
+                for index, pane_tab in enumerate(pane_tabs)
+            ]
+        except Exception as e:
+            raise OperationFailed(f"Failed to enumerate panes: {e}") from e
 
-    # Capturable first, then by type name
-    panes_info.sort(key=lambda p: (p["capturable"] is not True, str(p["type"])))
-    capturable = [p["capturable"] for p in panes_info]
+        # Capturable first, then by type name
+        panes_info.sort(key=lambda p: (p["capturable"] is not True, str(p["type"])))
+        capturable = [p["capturable"] for p in panes_info]
 
-    return {
-        "status": "success",
-        "current_desktop": current_desktop_name,
-        "panes": panes_info,
-        # [LAW:no-silent-failure] a count over a pane that may or may not be
-        # capturable is not known either
-        "capturable_count": next(filter(is_unread, capturable), capturable.count(True)),
-        "total_count": len(panes_info),
-        "available_types": pane_type_names(hou),
-    }
+        return {
+            "status": "success",
+            "current_desktop": current_desktop_name,
+            "panes": panes_info,
+            # [LAW:no-silent-failure] a count over a pane that may or may not be
+            # capturable is not known either
+            "capturable_count": next(filter(is_unread, capturable), capturable.count(True)),
+            "total_count": len(panes_info),
+            "available_types": pane_type_names(hou),
+        }
 
 
 Fact = bool | Unread
@@ -407,43 +411,44 @@ def render_node_network(
         render_node_network("/obj/geo1")  # Capture SOPs inside geo1
         render_node_network("/stage")  # Capture LOPs/Solaris network
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    # Validate node exists
-    node = node_at(hou, node_path)
+        # Validate node exists
+        node = node_at(hou, node_path)
 
-    # Get child count for context
-    child_count = read(f"children of {node_path}", lambda: len(node.children()))
+        # Get child count for context
+        child_count = read(f"children of {node_path}", lambda: len(node.children()))
 
-    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
+        QtWidgets, QtCore, _ = _get_qt_modules(link)
 
-    # Find NetworkEditor pane
-    pane_type = hou.paneTabType.NetworkEditor
-    pane = hou.ui.paneTabOfType(pane_type)
-    if pane is None:
-        raise OperationFailed(
-            "No NetworkEditor pane found in the current Houdini layout.",
-            pane_type="NetworkEditor",
-        )
+        # Find NetworkEditor pane
+        pane_type = hou.paneTabType.NetworkEditor
+        pane = hou.ui.paneTabOfType(pane_type)
+        if pane is None:
+            raise OperationFailed(
+                "No NetworkEditor pane found in the current Houdini layout.",
+                pane_type="NetworkEditor",
+            )
 
-    # Navigate to the node (set as current network)
-    try:
-        pane.cd(node_path)
-    except Exception as e:
-        raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
+        # Navigate to the node (set as current network)
+        try:
+            pane.cd(node_path)
+        except Exception as e:
+            raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
 
-    # Capture the pane
-    result = _capture_pane_to_bytes(hou, "NetworkEditor", QtWidgets, QtCore, fit_contents)
+        # Capture the pane
+        result = _capture_pane_to_bytes(hou, "NetworkEditor", QtWidgets, QtCore, fit_contents)
 
-    # Extract raw bytes and build response
-    raw_bytes: bytes = result.pop("raw_bytes")
-    result["node_path"] = node_path
-    result["child_count"] = child_count
-    result["image_format"] = "png"
-    result["image_size_bytes"] = len(raw_bytes)
-    result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
+        # Extract raw bytes and build response
+        raw_bytes: bytes = result.pop("raw_bytes")
+        result["node_path"] = node_path
+        result["child_count"] = child_count
+        result["image_format"] = "png"
+        result["image_size_bytes"] = len(raw_bytes)
+        result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
 
-    return result
+        return result
 
 
 def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> dict[str, Any]:
@@ -458,7 +463,7 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw_bytes)
     except OSError as e:
-        # Not chained: _classify reads a ToolError's cause as the link's failure,
+        # Not chained: failed_on reads a ToolError's cause as the link's failure,
         # and a disk timeout is not the link's; the message carries the error.
         raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from None
     return {**picture, "file_path": str(path.absolute())}
@@ -490,48 +495,54 @@ def capture_multiple_panes(
         - total_requested: Number of pane types requested
         - results: Per-pane results with image_base64 or file_path
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    QtWidgets, QtCore, _ = _get_qt_modules(host, port)
+        QtWidgets, QtCore, _ = _get_qt_modules(link)
 
-    # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
-    # captured once, so the slots, the counts and the status all count the same panes.
-    requested = list(dict.fromkeys(pane_types))
-    results: dict[str, dict[str, Any]] = {}
+        # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
+        # captured once, so the slots, the counts and the status all count the same panes.
+        requested = list(dict.fromkeys(pane_types))
+        results: dict[str, dict[str, Any]] = {}
 
-    for pane_type_name in requested:
-        # A pane's own failure (unknown type, not in the layout, could not be
-        # captured or saved) is recorded in its slot, in the same shape every tool
-        # failure takes, and the next pane is still tried. Anything else - a torn
-        # link, a bug - is the whole call's and reaches the boundary.
-        try:
-            result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
-            result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
-        except ToolError as e:
-            failure = failure_for(e, "capture_multiple_panes")
-            logger.warning(
-                "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
-            )
-            results[pane_type_name] = failure.model_dump()
-            continue
+        for pane_type_name in requested:
+            # A pane's own failure (unknown type, not in the layout, could not be
+            # captured or saved) is recorded in its slot, in the same shape every tool
+            # failure takes, and the next pane is still tried. Anything else - a torn
+            # link, a bug - is the whole call's and reaches the boundary.
+            try:
+                result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+                result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
+            except ToolError as e:
+                judged = failed_on(houdini(), link, e)
+                # The link this pane failed on is dropped, so no later pane can be
+                # captured over it: the call fails, as a torn link above does.
+                if isinstance(judged, LinkLost):
+                    raise judged from e
+                failure = failure_for(judged, "capture_multiple_panes")
+                logger.warning(
+                    "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
+                )
+                results[pane_type_name] = failure.model_dump()
+                continue
 
-        results[pane_type_name] = result
+            results[pane_type_name] = result
 
-    # [LAW:one-source-of-truth] the slots are the record; the counts and the
-    # status are read off them.
-    captured = [name for name, slot in results.items() if slot["status"] == "success"]
-    failed = [
-        Undone(name, slot["kind"], slot["message"])
-        for name, slot in results.items()
-        if slot["status"] == "error"
-    ]
-    report: dict[str, Any] = {
-        "success_count": len(captured),
-        "total_requested": len(requested),
-        "results": results,
-    }
-    # Each slot is a capture or the failure arm for that pane.
-    return {
-        "status": batch_status("capture_multiple_panes", captured, failed, **report),
-        **report,
-    }
+        # [LAW:one-source-of-truth] the slots are the record; the counts and the
+        # status are read off them.
+        captured = [name for name, slot in results.items() if slot["status"] == "success"]
+        failed = [
+            Undone(name, slot["kind"], slot["message"])
+            for name, slot in results.items()
+            if slot["status"] == "error"
+        ]
+        report: dict[str, Any] = {
+            "success_count": len(captured),
+            "total_requested": len(requested),
+            "results": results,
+        }
+        # Each slot is a capture or the failure arm for that pane.
+        return {
+            "status": batch_status("capture_multiple_panes", captured, failed, **report),
+            **report,
+        }

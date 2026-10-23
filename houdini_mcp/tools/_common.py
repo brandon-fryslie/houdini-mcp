@@ -15,11 +15,11 @@ from typing import Annotated, Any, Generic, TypeVar, cast
 from pydantic import Field, TypeAdapter
 
 from ..connection import (
+    HoudiniConnection,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
-    disconnect,
-    ensure_connected,
-    ensure_link,
+    Link,
+    houdini,
     is_connected,
 )
 from .failure import (
@@ -32,6 +32,7 @@ from .failure import (
     ToolFailure,
     Undone,
     batch_status,
+    failed_on,
     failure_for,
     failure_response,
     tool_error,
@@ -43,12 +44,10 @@ T = TypeVar("T")
 # Re-export connection utilities for convenience
 __all__ = [
     # Connection utilities
-    "ensure_connected",
-    "ensure_link",
+    "using",
     "is_connected",
     "HoudiniConnectionError",
     "HoudiniTargetMismatch",
-    "disconnect",
     # Error handling: the boundary, the one result type, and what a tool body raises
     "handle_connection_errors",
     "ToolFailure",
@@ -103,7 +102,8 @@ import functools
 import inspect
 import reprlib
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 
 from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError, to_json
@@ -118,8 +118,8 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     The tool boundary: every tool call enters and leaves through this wrapper.
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
-    ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. A sync tool's body runs inside
+    ``failure_response`` builds for it; the link a failed call used was already
+    dropped by its ``using`` scope. A sync tool's body runs inside
     :func:`~houdini_mcp.tools.transactions.recovering`, so a call that replaces
     the scene has backed it up first. Who holds the scene while the tool's
     Houdini work runs is :func:`on_the_scene`'s to arbitrate.
@@ -134,9 +134,9 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     Example:
         @handle_connection_errors("get_scene_info")
         def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
-            hou = ensure_connected(host, port)
-            node = node_at(hou, "/obj/geo1")  # raises InvalidInput when absent
-            return {"status": "success", ...}
+            with using(host, port) as link:
+                node = node_at(link.hou, "/obj/geo1")  # raises InvalidInput when absent
+                return {"status": "success", ...}
     """
 
     def decorator(func: ToolFn) -> ToolFn:
@@ -215,7 +215,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                 call.apply_defaults()
                 with recovering(
                     operation_name,
-                    lambda: ensure_connected(call.arguments["host"], call.arguments["port"]),
+                    lambda: using(call.arguments["host"], call.arguments["port"]),
                 ) as recovered:
                     result: dict[str, Any] = func(*call.args, **call.kwargs)
                 return {**result, **recovered}
@@ -225,6 +225,30 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         return cast(ToolFn, wrapper)
 
     return decorator
+
+
+@contextmanager
+def held_link(owner: HoudiniConnection, host: str, port: int) -> Iterator[Link]:
+    """The open link ``owner`` holds to the Houdini ``host:port`` names, for the
+    block that does its Houdini work on it.
+
+    [LAW:dataflow-not-control-flow] The link the block used is this scope's value,
+    so when the block fails because that link did, the link dropped is the one it
+    used (:func:`failed_on`), never one another call has installed since.
+    """
+    link = owner.ensure(host, port)
+    try:
+        yield link
+    except Exception as e:
+        failed = failed_on(owner, link, e)
+        if failed is e:
+            raise
+        raise failed from e
+
+
+def using(host: str, port: int) -> AbstractContextManager[Link]:
+    """The one way a tool gets a link: :func:`held_link` on this process's owner."""
+    return held_link(houdini(), host, port)
 
 
 # =============================================================================

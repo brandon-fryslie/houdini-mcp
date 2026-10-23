@@ -3,6 +3,7 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+from houdini_mcp.connection import houdini
 from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
 from houdini_mcp.tools.summarization import Excerpt
@@ -609,31 +610,31 @@ class TestFindErrorNodesUninspected:
             side_effect=raised_inside_houdini(RuntimeError("locked HDA"))
         )
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = FAILURE.validate_python(
-                await find_error_nodes(
-                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
-                )
+        link = houdini().link()
+        result = FAILURE.validate_python(
+            await find_error_nodes(
+                root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
             )
+        )
 
         assert result.kind == "operation_failed"
         assert result.message.startswith("Could not list the nodes under /obj: locked HDA")
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
     async def test_a_link_lost_reading_a_node_is_connection_loss(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
 
         mock_connection.add_node(self._unreadable("/obj/geo1", EOFError("stream closed")))
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = FAILURE.validate_python(
-                await find_error_nodes(
-                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
-                )
+        link = houdini().link()
+        result = FAILURE.validate_python(
+            await find_error_nodes(
+                root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
             )
+        )
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")
-        disconnect.assert_called_once()
+        assert link.conn.closed and houdini().link() is None
 
     async def test_a_link_lost_listing_the_subtree_is_connection_loss(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
@@ -642,15 +643,15 @@ class TestFindErrorNodesUninspected:
             side_effect=EOFError("stream closed")
         )
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = FAILURE.validate_python(
-                await find_error_nodes(
-                    root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
-                )
+        link = houdini().link()
+        result = FAILURE.validate_python(
+            await find_error_nodes(
+                root_path="/obj", host="localhost", port=18811, summarizer=SUMMARIZER
             )
+        )
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")
-        disconnect.assert_called_once()
+        assert link.conn.closed and houdini().link() is None
 
 
 class TestEdgeCases:

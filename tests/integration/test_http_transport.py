@@ -10,9 +10,9 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from houdini_mcp import connection
 from houdini_mcp.server import SERVED_TOOLS
 from houdini_mcp.settings import Http, Target, serving
+from houdini_mcp.tools._common import using
 from tests.live_houdini import houdini_mcp_over_http, running_listener
 
 REPO = Path(__file__).resolve().parents[2]
@@ -59,5 +59,5 @@ async def test_a_client_at_the_documented_url_lists_and_calls_tools(
     assert listed == {tool.__name__ for tool in SERVED_TOOLS}
     assert created["status"] == "success"
     # The call named no Houdini: the server's own settings reached this one.
-    houdini_scene = connection.ensure_connected(houdini.host, houdini.port)
-    assert houdini_scene.node(created["node_path"]) is not None
+    with using(houdini.host, houdini.port) as link:
+        assert link.hou.node(created["node_path"]) is not None

@@ -7,8 +7,8 @@ import sys
 import pytest
 from rpyc.utils.classic import obtain
 
-from houdini_mcp import connection
 from houdini_mcp.settings import Target
+from houdini_mcp.tools._common import using
 
 
 def _lsof(*selection: str) -> list[str]:
@@ -29,8 +29,8 @@ def _socket_owner(port: int) -> str:
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS firewall guidance")
 def test_self_test_names_the_executable_that_owns_the_socket(houdini: Target) -> None:
     # The session's hython serves the listener its -c script built as __main__.listener.
-    conn = connection.ensure_link(houdini.host, houdini.port).conn
-    report = obtain(conn.modules["__main__"].listener.self_test())
+    with using(houdini.host, houdini.port) as link:
+        report = obtain(link.conn.modules["__main__"].listener.self_test())
 
     owner = _socket_owner(houdini.port)
     assert report["executable"] == owner

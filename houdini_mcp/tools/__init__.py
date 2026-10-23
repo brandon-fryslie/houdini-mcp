@@ -14,7 +14,7 @@ Usage:
 # Import shared utilities from _common (needed by some tests)
 from ._common import (
     _truncate_output,
-    ensure_connected,
+    using,
 )
 from .cache import get_cache_stats, invalidate_all_caches, manage_cache, node_type_cache
 from .code import execute_code, get_last_scene_diff
@@ -146,5 +146,5 @@ __all__ = [
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
     "_truncate_output",
-    "ensure_connected",
+    "using",
 ]

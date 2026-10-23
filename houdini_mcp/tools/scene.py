@@ -15,10 +15,10 @@ from ..settings import Summarizer
 from ._common import (
     Count,
     OperationFailed,
-    ensure_connected,
     handle_connection_errors,
     node_at,
     on_the_scene,
+    using,
 )
 from .cache import invalidate_all_caches
 from .parms import evaluated
@@ -38,23 +38,26 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
     - Houdini version
     - List of nodes in /obj
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    hip_file = hou.hipFile.path()
-    obj_node = hou.node("/obj")
+        hip_file = hou.hipFile.path()
+        obj_node = hou.node("/obj")
 
-    nodes: list[dict[str, Any]] = []
-    if obj_node:
-        for child in obj_node.children():
-            nodes.append({"path": child.path(), "type": child.type().name(), "name": child.name()})
+        nodes: list[dict[str, Any]] = []
+        if obj_node:
+            for child in obj_node.children():
+                nodes.append(
+                    {"path": child.path(), "type": child.type().name(), "name": child.name()}
+                )
 
-    return {
-        "status": "success",
-        "hip_file": hip_file,
-        "houdini_version": hou.applicationVersionString(),
-        "node_count": len(nodes),
-        "nodes": nodes,
-    }
+        return {
+            "status": "success",
+            "hip_file": hip_file,
+            "houdini_version": hou.applicationVersionString(),
+            "node_count": len(nodes),
+            "nodes": nodes,
+        }
 
 
 @handle_connection_errors("save_scene")
@@ -71,16 +74,17 @@ def save_scene(
         - save_scene() -> Saves to current file
         - save_scene("/path/to/scene.hip") -> Saves to specified path
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    if file_path:
-        hou.hipFile.save(file_path)
-        saved_path = file_path
-    else:
-        hou.hipFile.save()
-        saved_path = hou.hipFile.path()
+        if file_path:
+            hou.hipFile.save(file_path)
+            saved_path = file_path
+        else:
+            hou.hipFile.save()
+            saved_path = hou.hipFile.path()
 
-    return {"status": "success", "message": "Scene saved", "file_path": saved_path}
+        return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 
 
 @handle_connection_errors("load_scene")
@@ -97,16 +101,17 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
     Args:
         file_path: Path to the .hip file to load
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    # [LAW:single-enforcer] The boundary backed up the unsaved work, so a graphical
-    # Houdini's save prompt would only stall the call on the artist's answer.
-    hou.hipFile.load(file_path, suppress_save_prompt=True)
+        # [LAW:single-enforcer] The boundary backed up the unsaved work, so a graphical
+        # Houdini's save prompt would only stall the call on the artist's answer.
+        hou.hipFile.load(file_path, suppress_save_prompt=True)
 
-    # Invalidate caches since scene context changed
-    invalidate_all_caches()
+        # Invalidate caches since scene context changed
+        invalidate_all_caches()
 
-    return {"status": "success", "message": "Scene loaded", "file_path": file_path}
+        return {"status": "success", "message": "Scene loaded", "file_path": file_path}
 
 
 @handle_connection_errors("new_scene")
@@ -120,16 +125,17 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     been saved cannot be backed up, so one holding any node is refused: save it
     with save_scene(file_path) first.
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    # [LAW:single-enforcer] As in load_scene: the backup, not the prompt, keeps the
-    # unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
-    hou.hipFile.clear(suppress_save_prompt=True)
+        # [LAW:single-enforcer] As in load_scene: the backup, not the prompt, keeps the
+        # unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+        hou.hipFile.clear(suppress_save_prompt=True)
 
-    # Invalidate caches since scene context changed
-    invalidate_all_caches()
+        # Invalidate caches since scene context changed
+        invalidate_all_caches()
 
-    return {"status": "success", "message": "New scene created"}
+        return {"status": "success", "message": "New scene created"}
 
 
 @handle_connection_errors("serialize_scene")
@@ -177,33 +183,34 @@ def _scene_tree(
     port: int,
 ) -> dict[str, Any]:
     """The node tree under root_path, max_depth levels deep."""
-    hou = ensure_connected(host, port)
-    root = node_at(hou, root_path, "Root node")
-    snapshot = scene_snapshot(hou, root.path())
+    with using(host, port) as link:
+        hou = link.hou
+        root = node_at(hou, root_path, "Root node")
+        snapshot = scene_snapshot(hou, root.path())
 
-    # [LAW:one-source-of-truth] The tree is the snapshot nested under the root:
-    # each path in it is a child of its parent's path.
-    types = {root.path(): root.type().name(), **snapshot}
-    children: dict[str, list[str]] = {path: [] for path in types}
-    for path in snapshot:
-        children[path.rsplit("/", 1)[0] or "/"].append(path)
+        # [LAW:one-source-of-truth] The tree is the snapshot nested under the root:
+        # each path in it is a child of its parent's path.
+        types = {root.path(): root.type().name(), **snapshot}
+        children: dict[str, list[str]] = {path: [] for path in types}
+        for path in snapshot:
+            children[path.rsplit("/", 1)[0] or "/"].append(path)
 
-    def tree(path: str, name: str, depth: int) -> dict[str, Any]:
-        if depth > max_depth:
-            return {"path": path, "truncated": True}
-        node: dict[str, Any] = {"path": path, "type": types[path], "name": name}
-        if include_params:
-            node["parameters"] = dict(evaluated(hou, _still_there(hou, path).parms()))
-        node["children"] = [
-            tree(child, child.rsplit("/", 1)[1], depth + 1) for child in children[path]
-        ]
-        return node
+        def tree(path: str, name: str, depth: int) -> dict[str, Any]:
+            if depth > max_depth:
+                return {"path": path, "truncated": True}
+            node: dict[str, Any] = {"path": path, "type": types[path], "name": name}
+            if include_params:
+                node["parameters"] = dict(evaluated(hou, _still_there(hou, path).parms()))
+            node["children"] = [
+                tree(child, child.rsplit("/", 1)[1], depth + 1) for child in children[path]
+            ]
+            return node
 
-    return {
-        "status": "success",
-        "root": root_path,
-        "structure": tree(root.path(), root.name(), 0),
-    }
+        return {
+            "status": "success",
+            "root": root_path,
+            "structure": tree(root.path(), root.name(), 0),
+        }
 
 
 def _still_there(hou: Any, path: str) -> Any:

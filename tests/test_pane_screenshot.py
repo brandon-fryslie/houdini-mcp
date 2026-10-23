@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from houdini_mcp.connection import houdini
 from houdini_mcp.tools.pane_screenshot import (
     _get_qt_modules,
     capture_pane_screenshot,
@@ -52,7 +53,7 @@ def test_qt_comes_from_the_connected_houdini(
     for name, module in fakes.items():
         monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
 
-    assert _get_qt_modules("localhost", 18811) == (
+    assert _get_qt_modules(houdini().link()) == (
         fakes["QtWidgets"],
         fakes["QtCore"],
         fakes["QtGui"],
@@ -208,6 +209,34 @@ def test_capture_multiple_panes_captures_a_pane_named_twice_once(
     assert "batch outcome operation=capture_multiple_panes done=2 failed=[]" in caplog.text
 
 
+def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
+    mock_connection: MockHouModule,
+) -> None:
+    """A pane whose failure is the link's drops that link, and no later pane is
+    tried over it: the call is the connection's failure, not a partial batch."""
+    from houdini_mcp.tools._common import OperationFailed
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    attempts: list[str] = []
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        attempts.append(name)
+        raise OperationFailed(f"{name} not captured") from EOFError("stream closed")
+
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+    ):
+        result = capture_multiple_panes(["SceneViewer", "NetworkEditor"])
+
+    assert attempts == ["SceneViewer"]
+    assert result["kind"] == "connection_lost", result
+    assert houdini().link() is None
+
+
 def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     mock_connection: MockHouModule, tmp_path: Path
 ) -> None:
@@ -263,12 +292,12 @@ def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
             return_value=(object(), object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
-        patch("houdini_mcp.tools.failure.disconnect") as disconnect,
         patch.object(Path, "write_bytes", write_bytes),
     ):
+        link = houdini().link()
         result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
 
-    disconnect.assert_not_called()
+    assert houdini().link() is link and not link.conn.closed
     assert result["status"] == "partial", result
     slot = FAILURE.validate_python(result["results"]["NetworkEditor"])
     assert isinstance(slot, OperationFailure), slot

@@ -11,10 +11,10 @@ from ..connection import transport_failure
 from ..settings import Summarizer
 from ._common import (
     ResultLimit,
-    ensure_connected,
     handle_connection_errors,
     node_at,
     on_the_scene,
+    using,
 )
 from .failure import OperationFailed, Undone, batch_status
 from .summarization import ERRORS_BRIEF, summarized
@@ -86,73 +86,76 @@ def _scan_error_nodes(
     port: int,
 ) -> dict[str, Any]:
     """The nodes under root_path with errors or warnings."""
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    root = node_at(hou, root_path, "Root node")
-    try:
-        descendants = root.allSubChildren()
-    except Exception as e:
-        # [LAW:no-silent-failure] no node list, no scan. Chained so a lost link
-        # is classified as the loss it is, not as this tool's failure.
-        raise OperationFailed(f"Could not list the nodes under {root_path}: {e}") from e
-
-    error_nodes: list[dict[str, Any]] = []
-    warning_nodes: list[dict[str, Any]] = []
-    uninspected: list[dict[str, Any]] = []
-    total_scanned = 0
-
-    for node in [root, *descendants]:
-        if len(error_nodes) + len(warning_nodes) + len(uninspected) >= max_results:
-            break
-        total_scanned += 1
+        root = node_at(hou, root_path, "Root node")
         try:
-            errors = list(node.errors())
-            warnings = list(node.warnings()) if include_warnings else []
-            # every read is a round trip to Houdini: a clean node is not asked who it is
-            identity = _identity(node) if errors or warnings else {}
+            descendants = root.allSubChildren()
         except Exception as e:
-            # [LAW:single-enforcer] a lost link is the call's failure, not this node's
-            if transport_failure(e):
-                raise
-            uninspected.append(
-                {"path": _path_or_none(node), "kind": "operation_failed", "reason": str(e)}
+            # [LAW:no-silent-failure] no node list, no scan. Chained so a lost link
+            # is classified as the loss it is, not as this tool's failure.
+            raise OperationFailed(f"Could not list the nodes under {root_path}: {e}") from e
+
+        error_nodes: list[dict[str, Any]] = []
+        warning_nodes: list[dict[str, Any]] = []
+        uninspected: list[dict[str, Any]] = []
+        total_scanned = 0
+
+        for node in [root, *descendants]:
+            if len(error_nodes) + len(warning_nodes) + len(uninspected) >= max_results:
+                break
+            total_scanned += 1
+            try:
+                errors = list(node.errors())
+                warnings = list(node.warnings()) if include_warnings else []
+                # every read is a round trip to Houdini: a clean node is not asked who it is
+                identity = _identity(node) if errors or warnings else {}
+            except Exception as e:
+                # [LAW:single-enforcer] a lost link is the call's failure, not this node's
+                if transport_failure(e):
+                    raise
+                uninspected.append(
+                    {"path": _path_or_none(node), "kind": "operation_failed", "reason": str(e)}
+                )
+                continue
+            if errors:
+                error_nodes.append({**identity, "errors": errors})
+            if warnings:
+                warning_nodes.append({**identity, "warnings": warnings})
+
+        # [LAW:one-source-of-truth] limited is read off what the scan reached, not re-derived
+        # from the cap: a scan that ends exactly at max_results was not cut short
+        present = 1 + len(descendants)
+        logger.info(
+            "error scan root=%s scanned=%d present=%d uninspected=%d",
+            root_path,
+            total_scanned,
+            present,
+            len(uninspected),
+        )
+        # The scan's counts come before its lists, so the start of the result's text - all a
+        # summary is written from (summarization.EXCERPT_BYTES) - says what the scan found.
+        counts: dict[str, Any] = {
+            "root_path": root_path,
+            "total_scanned": total_scanned,
+            "error_count": len(error_nodes),
+        }
+        lists: dict[str, Any] = {"error_nodes": error_nodes, "uninspected": uninspected}
+        if include_warnings:
+            counts["warning_count"] = len(warning_nodes)
+            lists["warning_nodes"] = warning_nodes
+        if total_scanned < present:
+            counts["warning"] = (
+                f"Results limited to {max_results}. Increase max_results to see more."
             )
-            continue
-        if errors:
-            error_nodes.append({**identity, "errors": errors})
-        if warnings:
-            warning_nodes.append({**identity, "warnings": warnings})
+        report = {**counts, **lists}
 
-    # [LAW:one-source-of-truth] limited is read off what the scan reached, not re-derived
-    # from the cap: a scan that ends exactly at max_results was not cut short
-    present = 1 + len(descendants)
-    logger.info(
-        "error scan root=%s scanned=%d present=%d uninspected=%d",
-        root_path,
-        total_scanned,
-        present,
-        len(uninspected),
-    )
-    # The scan's counts come before its lists, so the start of the result's text - all a
-    # summary is written from (summarization.EXCERPT_BYTES) - says what the scan found.
-    counts: dict[str, Any] = {
-        "root_path": root_path,
-        "total_scanned": total_scanned,
-        "error_count": len(error_nodes),
-    }
-    lists: dict[str, Any] = {"error_nodes": error_nodes, "uninspected": uninspected}
-    if include_warnings:
-        counts["warning_count"] = len(warning_nodes)
-        lists["warning_nodes"] = warning_nodes
-    if total_scanned < present:
-        counts["warning"] = f"Results limited to {max_results}. Increase max_results to see more."
-    report = {**counts, **lists}
-
-    # [LAW:single-enforcer] success means every node scanned was inspected
-    failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
-    inspected = range(total_scanned - len(uninspected))
-    status = batch_status("find_error_nodes", inspected, failed, **report)
-    return {"status": status, **report}
+        # [LAW:single-enforcer] success means every node scanned was inspected
+        failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
+        inspected = range(total_scanned - len(uninspected))
+        status = batch_status("find_error_nodes", inspected, failed, **report)
+        return {"status": status, **report}
 
 
 def _identity(node: Any) -> dict[str, Any]:

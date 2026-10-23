@@ -22,9 +22,11 @@ from typing import Annotated, Any, Literal, NamedTuple, get_args, get_origin
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..connection import (
+    HoudiniConnection,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
-    disconnect,
+    Link,
+    TransportFailure,
     transport_failure,
 )
 from .workers import WorkerStillRunning
@@ -54,6 +56,8 @@ __all__ = [
     "add_note",
     "failure_for",
     "failure_response",
+    "LinkLost",
+    "failed_on",
     "BatchStatus",
     "Undone",
     "batch_status",
@@ -304,6 +308,51 @@ def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
 
 
 # =============================================================================
+# A link that failed in use
+# =============================================================================
+
+
+class LinkLost(Exception):
+    """Proof that the link a call used failed in use and has been dropped.
+
+    Only :func:`failed_on` builds one, after the drop, so the failure a caller
+    reads says the connection was reset exactly when it was.
+    """
+
+    def __init__(self, link: Link, lost: TransportFailure) -> None:
+        super().__init__(f"link to Houdini at {link.name} failed: {type(lost.exc).__name__}")
+        self.link = link
+        self.lost = lost
+
+
+def _cause(e: BaseException) -> BaseException:
+    """What a failure is classified by: a tool body that wrapped an exception in a
+    ``ToolError`` with ``from`` stated its cause, and the cause is what failed."""
+    return e.__cause__ if isinstance(e, ToolError) and e.__cause__ is not None else e
+
+
+def failed_on(owner: HoudiniConnection, link: Link, e: Exception) -> Exception:
+    """The failure ``e`` raised while a call held ``link``, once the link's own
+    failure has dropped that link.
+
+    [LAW:single-enforcer] The one place a failure is judged the link's and the
+    link torn down: ``LinkLost`` when it is, ``e`` itself when it is not. A
+    ``LinkLost`` from a scope nested inside this one passes through: its link is
+    already dropped. The notes ``e`` gathered on its way out (where the scene's
+    unsaved work was backed up) are the ``LinkLost``'s, for the caller still to read.
+    """
+    if isinstance(e, LinkLost):
+        return e
+    lost = transport_failure(_cause(e))
+    if lost is None:
+        return e
+    owner.drop(link)
+    failure = LinkLost(link, lost)
+    failure.__notes__ = list(getattr(e, "__notes__", ()))
+    return failure
+
+
+# =============================================================================
 # The enforcer
 # =============================================================================
 
@@ -330,14 +379,15 @@ def failure_for(e: Exception, operation: str) -> _Failure:
 def _classify(e: Exception, operation: str) -> _Failure:
     """The arm an exception raised during ``operation`` is.
 
-    [LAW:single-enforcer] Connection loss is whatever ``transport_failure`` says
-    it is, and it is the only failure that tears the connection down. A tool body
-    that wrapped an exception in a ``ToolError`` with ``from`` stated its cause,
-    and the link's own failures outrank the body's label: the cause is what is
-    classified. Everything else reaches the caller as its own kind with the
-    connection left standing.
+    [LAW:effects-at-boundaries] Classification tears nothing down: connection
+    loss is a ``LinkLost``, whose link :func:`failed_on` already dropped. A
+    tool body that wrapped an exception in a ``ToolError`` with ``from`` stated
+    its cause, and the link's own failures outrank the body's label: the cause
+    is what is classified. A transport failure here, raw or wrapped, came from
+    Houdini work done outside a ``using`` scope, and reaches the caller as the bug
+    it is.
     """
-    cause = e.__cause__ if isinstance(e, ToolError) and e.__cause__ is not None else e
+    cause = _cause(e)
     if isinstance(cause, HoudiniConnectionError):
         return ConnectionUnavailableFailure(
             operation=operation, message=str(cause), target=cause.target
@@ -356,10 +406,8 @@ def _classify(e: Exception, operation: str) -> _Failure:
             worker=cause.worker.describe(),
             **cause.wait.response_fields(),
         )
-    lost = transport_failure(cause)
-    if lost is not None:
-        # Clean up the broken connection so the next call can reconnect.
-        disconnect()
+    if isinstance(cause, LinkLost):
+        lost = cause.lost
         exception: dict[str, Any] = {"exception": type(lost.exc).__name__}
         if isinstance(lost.exc, TimeoutError):
             return TimeoutFailure(
@@ -382,7 +430,7 @@ def _classify(e: Exception, operation: str) -> _Failure:
             ),
             **exception,
         )
-    if isinstance(e, ToolError):
+    if isinstance(e, ToolError) and transport_failure(cause) is None:
         return e.failure(operation)
     # [LAW:no-silent-failure] an exception nobody classified is a bug: the alarm
     # is an ERROR with the traceback in the server log, and the traceback also

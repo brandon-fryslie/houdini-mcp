@@ -10,10 +10,10 @@ from typing import Any
 from ._common import (
     InvalidInput,
     OperationFailed,
-    ensure_connected,
     handle_connection_errors,
     node_at,
     node_category,
+    using,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 
@@ -62,31 +62,32 @@ def create_material(
         create_material("principledshader", "red_metal",
                        parameters={"basecolor": [1, 0, 0], "metallic": 1.0})
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    parent = node_at(hou, parent_path, "Parent context")
+        parent = node_at(hou, parent_path, "Parent context")
 
-    # Generate name if not provided
-    if not name:
-        name = f"{material_type}_1"
+        # Generate name if not provided
+        if not name:
+            name = f"{material_type}_1"
 
-    # Create the material node
-    try:
-        mat_node = parent.createNode(material_type, name)
-    except Exception as e:
-        raise OperationFailed(
-            f"Failed to create material of type '{material_type}': {str(e)}. "
-            f"Check if this material type is available in your Houdini installation.",
+        # Create the material node
+        try:
+            mat_node = parent.createNode(material_type, name)
+        except Exception as e:
+            raise OperationFailed(
+                f"Failed to create material of type '{material_type}': {str(e)}. "
+                f"Check if this material type is available in your Houdini installation.",
+                material_type=material_type,
+            ) from e
+
+        return write_all(mat_node, parameters or {}).fields(
+            "create_material",
+            created=[mat_node],
+            material_path=mat_node.path(),
+            material_name=mat_node.name(),
             material_type=material_type,
-        ) from e
-
-    return write_all(mat_node, parameters or {}).fields(
-        "create_material",
-        created=[mat_node],
-        material_path=mat_node.path(),
-        material_name=mat_node.name(),
-        material_type=material_type,
-    )
+        )
 
 
 @handle_connection_errors("assign_material")
@@ -122,83 +123,84 @@ def assign_material(
         assign_material("/obj/geo1", "/mat/red_metal")
         assign_material("/obj/geo1", "/mat/gold", group="top_faces")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    # Validate geometry node
-    geo_node = node_at(hou, geometry_path, "Geometry node")
+        # Validate geometry node
+        geo_node = node_at(hou, geometry_path, "Geometry node")
 
-    # Check if it's an OBJ-level geo node
-    node_type = geo_node.type().name()
-    category = node_category(geo_node)
+        # Check if it's an OBJ-level geo node
+        node_type = geo_node.type().name()
+        category = node_category(geo_node)
 
-    if category != "Object":
-        raise InvalidInput(
-            f"Node {geometry_path} is not an Object-level node. "
-            f"Expected geo node, got {category}/{node_type}",
-            path=geometry_path,
-        )
-
-    # The material must exist before anything is written to the geometry.
-    node_at(hou, material_path, "Material")
-
-    # Method 1: Try setting shop_materialpath on the OBJ node directly
-    if not group:
-        try:
-            resolve(geo_node, "shop_materialpath")
-        except ParmNotFound:
-            pass
-        else:
-            return write_all(geo_node, {"shop_materialpath": material_path}).fields(
-                "assign_material",
-                geometry_path=geometry_path,
-                material_path=material_path,
-                method="shop_materialpath",
-            )
-
-    # Method 2: Create/update Material SOP inside the geometry
-    # Find the display node to connect to
-    display_node = geo_node.displayNode()
-    if display_node is None:
-        # No display node, try to find any SOP
-        children = geo_node.children()
-        if not children:
+        if category != "Object":
             raise InvalidInput(
-                f"Geometry node {geometry_path} has no SOP nodes inside", path=geometry_path
+                f"Node {geometry_path} is not an Object-level node. "
+                f"Expected geo node, got {category}/{node_type}",
+                path=geometry_path,
             )
-        display_node = children[-1]
 
-    # Check if a material SOP already exists and is connected
-    existing_mat_sop = None
-    for child in geo_node.children():
-        if child.type().name() == "material":
-            existing_mat_sop = child
-            break
+        # The material must exist before anything is written to the geometry.
+        node_at(hou, material_path, "Material")
 
-    created: list[Any] = []
-    if existing_mat_sop:
-        mat_sop = existing_mat_sop
-    else:
-        # Create new Material SOP
-        mat_sop = geo_node.createNode("material", "material1")
-        mat_sop.setFirstInput(display_node)
-        mat_sop.setDisplayFlag(True)
-        mat_sop.setRenderFlag(True)
-        created.append(mat_sop)
+        # Method 1: Try setting shop_materialpath on the OBJ node directly
+        if not group:
+            try:
+                resolve(geo_node, "shop_materialpath")
+            except ParmNotFound:
+                pass
+            else:
+                return write_all(geo_node, {"shop_materialpath": material_path}).fields(
+                    "assign_material",
+                    geometry_path=geometry_path,
+                    material_path=material_path,
+                    method="shop_materialpath",
+                )
 
-    values = {"shop_materialpath1": material_path}
-    if group:
-        values["group1"] = group
-    # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
-    # writes did, so it counts as done; an existing one written nothing did nothing.
-    return write_all(mat_sop, values).fields(
-        "assign_material",
-        created=created,
-        geometry_path=geometry_path,
-        material_path=material_path,
-        material_sop_path=mat_sop.path(),
-        method="material_sop",
-        group=group if group else None,
-    )
+        # Method 2: Create/update Material SOP inside the geometry
+        # Find the display node to connect to
+        display_node = geo_node.displayNode()
+        if display_node is None:
+            # No display node, try to find any SOP
+            children = geo_node.children()
+            if not children:
+                raise InvalidInput(
+                    f"Geometry node {geometry_path} has no SOP nodes inside", path=geometry_path
+                )
+            display_node = children[-1]
+
+        # Check if a material SOP already exists and is connected
+        existing_mat_sop = None
+        for child in geo_node.children():
+            if child.type().name() == "material":
+                existing_mat_sop = child
+                break
+
+        created: list[Any] = []
+        if existing_mat_sop:
+            mat_sop = existing_mat_sop
+        else:
+            # Create new Material SOP
+            mat_sop = geo_node.createNode("material", "material1")
+            mat_sop.setFirstInput(display_node)
+            mat_sop.setDisplayFlag(True)
+            mat_sop.setRenderFlag(True)
+            created.append(mat_sop)
+
+        values = {"shop_materialpath1": material_path}
+        if group:
+            values["group1"] = group
+        # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
+        # writes did, so it counts as done; an existing one written nothing did nothing.
+        return write_all(mat_sop, values).fields(
+            "assign_material",
+            created=created,
+            geometry_path=geometry_path,
+            material_path=material_path,
+            material_sop_path=mat_sop.path(),
+            method="material_sop",
+            group=group if group else None,
+        )
 
 
 @handle_connection_errors("get_material_info")
@@ -226,73 +228,76 @@ def get_material_info(
     Examples:
         get_material_info("/mat/principledshader1")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    mat_node = node_at(hou, material_path, "Material")
+        mat_node = node_at(hou, material_path, "Material")
 
-    # Get basic info
-    result: dict[str, Any] = {
-        "status": "success",
-        "material_path": mat_node.path(),
-        "material_name": mat_node.name(),
-        "material_type": mat_node.type().name(),
-        "parameters": {},
-        "textures": [],
-    }
+        # Get basic info
+        result: dict[str, Any] = {
+            "status": "success",
+            "material_path": mat_node.path(),
+            "material_name": mat_node.name(),
+            "material_type": mat_node.type().name(),
+            "parameters": {},
+            "textures": [],
+        }
 
-    # Common material parameter names to include
-    common_params = [
-        # Principled Shader
-        "basecolor",
-        "basecolor_texture",
-        "rough",
-        "rough_texture",
-        "metallic",
-        "metallic_texture",
-        "ior",
-        "reflect",
-        "reflecttint",
-        "coat",
-        "coatrough",
-        "transparency",
-        "transcolor",
-        "dispersion",
-        "sss",
-        "sssdist",
-        "ssscolor",
-        "sheen",
-        "sheentint",
-        "emitcolor",
-        "emitint",
-        "opac",
-        "opaccolor",
-        # Normal/Bump
-        "baseBumpAndNormal_enable",
-        "baseNormal_texture",
-        "baseBump_bumpTexture",
-        # MaterialX Standard Surface
-        "base",
-        "base_color",
-        "diffuse_roughness",
-        "specular",
-        "specular_color",
-        "specular_roughness",
-        "specular_IOR",
-        "transmission",
-        "transmission_color",
-        "subsurface",
-        "subsurface_color",
-        "emission",
-        "emission_color",
-    ]
+        # Common material parameter names to include
+        common_params = [
+            # Principled Shader
+            "basecolor",
+            "basecolor_texture",
+            "rough",
+            "rough_texture",
+            "metallic",
+            "metallic_texture",
+            "ior",
+            "reflect",
+            "reflecttint",
+            "coat",
+            "coatrough",
+            "transparency",
+            "transcolor",
+            "dispersion",
+            "sss",
+            "sssdist",
+            "ssscolor",
+            "sheen",
+            "sheentint",
+            "emitcolor",
+            "emitint",
+            "opac",
+            "opaccolor",
+            # Normal/Bump
+            "baseBumpAndNormal_enable",
+            "baseNormal_texture",
+            "baseBump_bumpTexture",
+            # MaterialX Standard Surface
+            "base",
+            "base_color",
+            "diffuse_roughness",
+            "specular",
+            "specular_color",
+            "specular_roughness",
+            "specular_IOR",
+            "transmission",
+            "transmission_color",
+            "subsurface",
+            "subsurface_color",
+            "emission",
+            "emission_color",
+        ]
 
-    result["parameters"] = read_present(hou, mat_node, common_params)
-    result["textures"] = [
-        {"parameter": parm_name, "path": value}
-        for parm_name, value in result["parameters"].items()
-        if isinstance(value, str)
-        and any(ext in value.lower() for ext in [".jpg", ".png", ".exr", ".hdr", ".tif", ".tex"])
-    ]
-    result["parameter_count"] = len(result["parameters"])
+        result["parameters"] = read_present(hou, mat_node, common_params)
+        result["textures"] = [
+            {"parameter": parm_name, "path": value}
+            for parm_name, value in result["parameters"].items()
+            if isinstance(value, str)
+            and any(
+                ext in value.lower() for ext in [".jpg", ".png", ".exr", ".hdr", ".tif", ".tex"]
+            )
+        ]
+        result["parameter_count"] = len(result["parameters"])
 
-    return result
+        return result

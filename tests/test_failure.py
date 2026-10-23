@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
-from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch
+from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch, houdini
 from houdini_mcp.tools._common import (
     FAILURE,
     InvalidInput,
@@ -23,6 +22,7 @@ from houdini_mcp.tools._common import (
     TimedOut,
     handle_connection_errors,
     node_at,
+    using,
 )
 from tests.conftest import raised_inside_houdini
 
@@ -37,20 +37,25 @@ KINDS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def installed(mock_connection: Any) -> None:
+    """A link is installed, so a tool's ``using`` scope holds it and a failure on
+    it can be seen to drop it."""
+
+
 def failing(exc: BaseException, operation: str = "get_scene_info") -> dict[str, Any]:
-    """What ``operation`` returns when its body raises ``exc``."""
+    """What ``operation`` returns when its body raises ``exc`` holding its link."""
 
     @handle_connection_errors(operation)
     def tool() -> dict[str, Any]:
-        raise exc
+        with using("localhost", 18811):
+            raise exc
 
-    with patch("houdini_mcp.tools.failure.disconnect"):
-        return tool()
+    return tool()
 
 
 def failing_tool(tool: Any) -> dict[str, Any]:
-    with patch("houdini_mcp.tools.failure.disconnect"):
-        return tool()
+    return tool()
 
 
 def arm(result: dict[str, Any]) -> Any:
@@ -157,17 +162,18 @@ class TestEveryFailureIsOneArm:
 
         @handle_connection_errors("list_visible_panes")
         def tool() -> dict[str, Any]:
-            try:
-                raise EOFError("stream closed")
-            except EOFError as e:
-                raise OperationFailed("Failed to enumerate panes", hint="x") from e
+            with using("localhost", 18811):
+                try:
+                    raise EOFError("stream closed")
+                except EOFError as e:
+                    raise OperationFailed("Failed to enumerate panes", hint="x") from e
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = arm(tool())
+        link = houdini().link()
+        result = arm(tool())
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")
         assert result.exception == "EOFError"
-        disconnect.assert_called_once()
+        assert link.conn.closed and houdini().link() is None
 
     def test_a_tool_error_wrapping_an_unreachable_houdini_is_unavailable(self) -> None:
         @handle_connection_errors("capture_pane_screenshot")
@@ -193,35 +199,36 @@ class TestEveryFailureIsOneArm:
             except EOFError as e:
                 raise OperationFailed("Failed to enumerate panes") from e
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = arm(tool())
+        link = houdini().link()
+        result = arm(tool())
 
         assert result.kind == "operation_failed"
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
     def test_a_transport_timeout_resets_the_connection_and_says_so(self) -> None:
         @handle_connection_errors("render_viewport")
         def tool() -> dict[str, Any]:
-            raise TimeoutError("no answer")
+            with using("localhost", 18811):
+                raise TimeoutError("no answer")
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = arm(tool())
+        link = houdini().link()
+        result = arm(tool())
 
         assert result.connection_reset is True
         assert result.exception == "TimeoutError"
-        disconnect.assert_called_once()
+        assert link.conn.closed and houdini().link() is None
 
     def test_a_request_timeout_keeps_the_connection_and_says_so(self) -> None:
         @handle_connection_errors("get_houdini_help")
         def tool() -> dict[str, Any]:
             raise TimedOut("Request timed out after 30 seconds", url="https://x")
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = arm(tool())
+        link = houdini().link()
+        result = arm(tool())
 
         assert (result.kind, result.retry) == ("timeout", "call_again")
         assert result.connection_reset is False
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
     def test_a_program_that_outlives_its_bound_is_the_worker_to_wait_for(self) -> None:
         """The program still holds the scene, so "call again" would only be
@@ -231,13 +238,13 @@ class TestEveryFailureIsOneArm:
         def tool(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
             raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            result = arm(tool())
+        link = houdini().link()
+        result = arm(tool())
 
         assert (result.kind, result.retry) == ("worker_still_running", "wait_for_worker")
         assert result.timeout == 30
         assert result.worker == {"code_sha256": "abc"}
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
     def test_a_tool_payload_rides_beside_the_declared_fields(self) -> None:
         result = failing(InvalidInput("Unknown pane type: X", available_types=["A", "B"]))

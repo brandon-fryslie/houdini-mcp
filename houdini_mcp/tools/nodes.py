@@ -18,8 +18,6 @@ from ..connection import Link
 from ._common import (
     Count,
     OperationFailed,
-    ensure_connected,
-    ensure_link,
     handle_connection_errors,
     join_warnings,
     node_at,
@@ -27,6 +25,7 @@ from ._common import (
     paginate,
     paging_fields,
     parse_page_request,
+    using,
 )
 from .cache import node_type_cache
 from .connections import input_connections, input_paths
@@ -64,18 +63,19 @@ def create_node(
         - create_node("sphere", "/obj/geo1") -> Creates a sphere SOP inside geo1
         - create_node("cam", name="render_cam") -> Creates a camera named render_cam
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    parent = node_at(hou, parent_path, "Parent node")
+        parent = node_at(hou, parent_path, "Parent node")
 
-    node = parent.createNode(node_type, name) if name else parent.createNode(node_type)
+        node = parent.createNode(node_type, name) if name else parent.createNode(node_type)
 
-    return {
-        "status": "success",
-        "node_path": node.path(),
-        "node_type": node.type().name(),
-        "node_name": node.name(),
-    }
+        return {
+            "status": "success",
+            "node_path": node.path(),
+            "node_type": node.type().name(),
+            "node_name": node.name(),
+        }
 
 
 @handle_connection_errors("get_node_info")
@@ -117,26 +117,27 @@ def get_node_info(
         # Minimal info for reduced payload
         get_node_info("/obj/geo1/sphere1", detail="compact")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    info = _compact_record(node) if detail == "compact" else _standard_record(node)
-    if detail == "full":
-        info["parameters"] = _parameters(hou, node, max_params)
-    # [LAW:dataflow-not-control-flow] cook_info is orthogonal to detail: it is
-    # appended to any record, so no level silently drops it.
-    if cook_info != "none":
-        info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
+        info = _compact_record(node) if detail == "compact" else _standard_record(node)
+        if detail == "full":
+            info["parameters"] = _parameters(hou, node, max_params)
+        # [LAW:dataflow-not-control-flow] cook_info is orthogonal to detail: it is
+        # appended to any record, so no level silently drops it.
+        if cook_info != "none":
+            info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
 
-    logger.debug(
-        "get_node_info path=%s detail=%s cook_info=%s keys=%s",
-        node_path,
-        detail,
-        cook_info,
-        sorted(info),
-    )
-    return info
+        logger.debug(
+            "get_node_info path=%s detail=%s cook_info=%s keys=%s",
+            node_path,
+            detail,
+            cook_info,
+            sorted(info),
+        )
+        return info
 
 
 def _compact_record(node: Any) -> dict[str, Any]:
@@ -238,18 +239,19 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 
     Warning: This operation cannot be undone via this API.
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    node_name = node.name()
-    node.destroy()
+        node_name = node.name()
+        node.destroy()
 
-    return {
-        "status": "success",
-        "message": f"Deleted node: {node_name}",
-        "deleted_path": node_path,
-    }
+        return {
+            "status": "success",
+            "message": f"Deleted node: {node_name}",
+            "deleted_path": node_path,
+        }
 
 
 @handle_connection_errors("list_node_types")
@@ -290,28 +292,29 @@ def list_node_types(
         list_node_types(category="Sop", name_filter="vdb", limit=50)  # VDB SOPs
         list_node_types(category="Sop", cursor=100)  # Get next page of SOPs
     """
-    hou = ensure_connected(host, port)
-    request = parse_page_request(limit=limit, cursor=cursor)
+    with using(host, port) as link:
+        hou = link.hou
+        request = parse_page_request(limit=limit, cursor=cursor)
 
-    lookup = node_type_cache.lookup(hou)
+        lookup = node_type_cache.lookup(hou)
 
-    page = paginate(lookup.types.filter(category=category, name_filter=name_filter), request)
-    result: dict[str, Any] = {
-        "status": "success",
-        "node_types": page.items,
-        **paging_fields(page),
-    }
+        page = paginate(lookup.types.filter(category=category, name_filter=name_filter), request)
+        result: dict[str, Any] = {
+            "status": "success",
+            "node_types": page.items,
+            **paging_fields(page),
+        }
 
-    # Include category in result if filtered
-    if category:
-        result["category"] = category
-    else:
-        # Get available categories from cache
-        result["categories_available"] = list(lookup.types.categories)
+        # Include category in result if filtered
+        if category:
+            result["category"] = category
+        else:
+            # Get available categories from cache
+            result["categories_available"] = list(lookup.types.categories)
 
-    result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
+        result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
 
-    return result
+        return result
 
 
 @handle_connection_errors("list_children")
@@ -359,123 +362,128 @@ def list_children(
         list_children("/obj/geo1", recursive=True, max_depth=3)
         list_children("/obj/geo1", compact=True)  # Minimal payload
     """
-    hou = ensure_connected(host, port)
-    request = parse_page_request(limit=limit, cursor=cursor)
+    with using(host, port) as link:
+        hou = link.hou
+        request = parse_page_request(limit=limit, cursor=cursor)
 
-    parent = node_at(hou, node_path)
+        parent = node_at(hou, node_path)
 
-    children_list: list[dict[str, Any]] = []
-    nodes_collected = 0
-    walked = 0
-    # [LAW:no-silent-failure] what the walk could not enter, and what it did
-    # not enter because of max_depth, are both in the response
-    unwalked: list[dict[str, Any]] = []
-    beyond_depth = 0
-    beyond_depth_unknown = 0
+        children_list: list[dict[str, Any]] = []
+        nodes_collected = 0
+        walked = 0
+        # [LAW:no-silent-failure] what the walk could not enter, and what it did
+        # not enter because of max_depth, are both in the response
+        unwalked: list[dict[str, Any]] = []
+        beyond_depth = 0
+        beyond_depth_unknown = 0
 
-    def compact_flags(node: Any) -> str:
-        # Three-character bitset: display/render/bypassed. `-` means the node
-        # class does not expose that flag API.
-        getters = (
-            getattr(node, m, None) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
-        )
-        return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
+        def compact_flags(node: Any) -> str:
+            # Three-character bitset: display/render/bypassed. `-` means the node
+            # class does not expose that flag API.
+            getters = (
+                getattr(node, m, None)
+                for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
+            )
+            return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
-    def collect_children(node: Any, path: str, depth: int = 0) -> None:
-        nonlocal nodes_collected, walked, beyond_depth, beyond_depth_unknown
+        def collect_children(node: Any, path: str, depth: int = 0) -> None:
+            nonlocal nodes_collected, walked, beyond_depth, beyond_depth_unknown
 
-        if nodes_collected >= max_nodes:
-            return
-
-        # A locked HDA refuses to list its children; that is the one failure this
-        # walk tolerates, and the node is listed as unwalked. Anything a child's
-        # own record raises reaches the tool's error boundary, so a wire whose
-        # output cannot be read is reported, not dropped with its siblings.
-        # hou is untyped: a node's children are Any, so is_unread is the discriminator
-        children: Any = read(f"children of {path}", node.children)
-        if depth > max_depth:
-            # past the requested depth the walk only asks whether there is more;
-            # a node that will not say is outside the walk, so it is in the
-            # depth warning, not in unwalked
-            beyond_depth_unknown += is_unread(children)
-            beyond_depth += not is_unread(children) and len(children) > 0
-            return
-        if is_unread(children):
-            unwalked.append({"path": path, **children})
-            return
-        walked += 1
-
-        for child in children:
             if nodes_collected >= max_nodes:
-                break
+                return
 
-            child_path = child.path()
-            # Compact mode: only path, name, type
-            if compact:
-                child_info: dict[str, Any] = {
-                    "path": child_path,
-                    "name": child.name(),
-                    "type": child.type().name(),
-                    "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
-                }
-            else:
-                # Full mode: input wires with their source output, and output nodes
-                child_info = {
-                    "path": child_path,
-                    "name": child.name(),
-                    "type": child.type().name(),
-                    "inputs": [conn.as_record() for conn in input_connections(child)],
-                    "outputs": [out.path() for out in child.outputs()],
-                }
+            # A locked HDA refuses to list its children; that is the one failure this
+            # walk tolerates, and the node is listed as unwalked. Anything a child's
+            # own record raises reaches the tool's error boundary, so a wire whose
+            # output cannot be read is reported, not dropped with its siblings.
+            # hou is untyped: a node's children are Any, so is_unread is the discriminator
+            children: Any = read(f"children of {path}", node.children)
+            if depth > max_depth:
+                # past the requested depth the walk only asks whether there is more;
+                # a node that will not say is outside the walk, so it is in the
+                # depth warning, not in unwalked
+                beyond_depth_unknown += is_unread(children)
+                beyond_depth += not is_unread(children) and len(children) > 0
+                return
+            if is_unread(children):
+                unwalked.append({"path": path, **children})
+                return
+            walked += 1
 
-            children_list.append(child_info)
-            nodes_collected += 1
+            for child in children:
+                if nodes_collected >= max_nodes:
+                    break
 
-            # Recurse if requested
-            if recursive:
-                collect_children(child, child_path, depth + 1)
+                child_path = child.path()
+                # Compact mode: only path, name, type
+                if compact:
+                    child_info: dict[str, Any] = {
+                        "path": child_path,
+                        "name": child.name(),
+                        "type": child.type().name(),
+                        "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
+                    }
+                else:
+                    # Full mode: input wires with their source output, and output nodes
+                    child_info = {
+                        "path": child_path,
+                        "name": child.name(),
+                        "type": child.type().name(),
+                        "inputs": [conn.as_record() for conn in input_connections(child)],
+                        "outputs": [out.path() for out in child.outputs()],
+                    }
 
-    collect_children(parent, parent.path())
-    logger.info(
-        "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
-        "beyond_depth_unknown=%d",
-        node_path,
-        nodes_collected,
-        walked,
-        len(unwalked),
-        beyond_depth,
-        beyond_depth_unknown,
-    )
+                children_list.append(child_info)
+                nodes_collected += 1
 
-    page = paginate(children_list, request)
-    report: dict[str, Any] = {
-        "node_path": node_path,
-        "children": page.items,
-        "unwalked": unwalked,
-        **paging_fields(page),
-    }
-    failed = [Undone(u["path"], "operation_failed", u[UNREAD]) for u in unwalked]
-    result = {"status": batch_status("list_children", range(walked), failed, **report), **report}
+                # Recurse if requested
+                if recursive:
+                    collect_children(child, child_path, depth + 1)
 
-    if beyond_depth or beyond_depth_unknown:
-        unknown = (
-            f"; {beyond_depth_unknown} would not say whether they have any"
-            if beyond_depth_unknown
-            else ""
-        )
-        result["warning"] = join_warnings(
-            result.get("warning"),
-            f"Depth limited to {max_depth}: {beyond_depth} nodes at that depth have "
-            f"children not listed{unknown}",
-        )
-    if nodes_collected >= max_nodes:
-        # [LAW:no-silent-failure] A capped walk and a further page are two facts;
-        # neither may overwrite the other.
-        result["warning"] = join_warnings(
-            result.get("warning"), f"Collection limited to {max_nodes} nodes"
+        collect_children(parent, parent.path())
+        logger.info(
+            "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
+            "beyond_depth_unknown=%d",
+            node_path,
+            nodes_collected,
+            walked,
+            len(unwalked),
+            beyond_depth,
+            beyond_depth_unknown,
         )
 
-    return result
+        page = paginate(children_list, request)
+        report: dict[str, Any] = {
+            "node_path": node_path,
+            "children": page.items,
+            "unwalked": unwalked,
+            **paging_fields(page),
+        }
+        failed = [Undone(u["path"], "operation_failed", u[UNREAD]) for u in unwalked]
+        result = {
+            "status": batch_status("list_children", range(walked), failed, **report),
+            **report,
+        }
+
+        if beyond_depth or beyond_depth_unknown:
+            unknown = (
+                f"; {beyond_depth_unknown} would not say whether they have any"
+                if beyond_depth_unknown
+                else ""
+            )
+            result["warning"] = join_warnings(
+                result.get("warning"),
+                f"Depth limited to {max_depth}: {beyond_depth} nodes at that depth have "
+                f"children not listed{unknown}",
+            )
+        if nodes_collected >= max_nodes:
+            # [LAW:no-silent-failure] A capped walk and a further page are two facts;
+            # neither may overwrite the other.
+            result["warning"] = join_warnings(
+                result.get("warning"), f"Collection limited to {max_nodes} nodes"
+            )
+
+        return result
 
 
 def _search_module(link: Link) -> Any:
@@ -525,45 +533,44 @@ def find_nodes(
         find_nodes("/obj", "grid") - Substring match for "grid"
         find_nodes("/obj", "*", cursor=100) - Get next page of results
     """
-    link = ensure_link(host, port)
+    with using(host, port) as link:
+        root = node_at(link.hou, root_path, "Root node")
 
-    root = node_at(link.hou, root_path, "Root node")
+        request = parse_page_request(limit=limit, cursor=cursor)
 
-    request = parse_page_request(limit=limit, cursor=cursor)
+        # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
+        # the scene size, answered with the match count and the page's strings.
+        # [LAW:single-enforcer] Caller strings cross as arguments, never formatted into a
+        # program; find_nodes has no code-execution path of its own.
+        # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
+        # as an error instead of switching to a different result set.
+        total, found = _search_module(link).matching_descendants(
+            root, pattern, node_type, request.window
+        )
+        page = page_from(total, found, request)
+        matches = [
+            {"path": path, "name": name, "type": type_name} for path, name, type_name in page.items
+        ]
+        logger.debug(
+            "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
+            root_path,
+            pattern,
+            node_type,
+            page.offset,
+            page.total,
+            len(matches),
+            page.has_more,
+        )
 
-    # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
-    # the scene size, answered with the match count and the page's strings.
-    # [LAW:single-enforcer] Caller strings cross as arguments, never formatted into a
-    # program; find_nodes has no code-execution path of its own.
-    # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
-    # as an error instead of switching to a different result set.
-    total, found = _search_module(link).matching_descendants(
-        root, pattern, node_type, request.window
-    )
-    page = page_from(total, found, request)
-    matches = [
-        {"path": path, "name": name, "type": type_name} for path, name, type_name in page.items
-    ]
-    logger.debug(
-        "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
-        root_path,
-        pattern,
-        node_type,
-        page.offset,
-        page.total,
-        len(matches),
-        page.has_more,
-    )
+        result: dict[str, Any] = {
+            "status": "success",
+            "root_path": root_path,
+            "pattern": pattern,
+            "matches": matches,
+            **paging_fields(page),
+        }
 
-    result: dict[str, Any] = {
-        "status": "success",
-        "root_path": root_path,
-        "pattern": pattern,
-        "matches": matches,
-        **paging_fields(page),
-    }
+        if node_type:
+            result["node_type_filter"] = node_type
 
-    if node_type:
-        result["node_type_filter"] = node_type
-
-    return result
+        return result

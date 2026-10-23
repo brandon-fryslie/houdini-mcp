@@ -181,7 +181,7 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     def unreachable(host: str, port: int) -> None:
         raise conn_module.HoudiniConnectionError("not here", target=f"{host}:{port}")
 
-    monkeypatch.setattr(link, "ensure_link", unreachable)
+    monkeypatch.setattr(link, "using", unreachable)
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
     monkeypatch.setenv("MCP_TRANSPORT", "stdio")

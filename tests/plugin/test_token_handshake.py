@@ -114,7 +114,7 @@ class TestSharedHandshake:
     def test_token_against_untokened_listener_is_not_acknowledged(
         self, untokened_server, short_handshake
     ):
-        # A timeout, not a rejection: retried by connection.connect like any other.
+        # A timeout, not a rejection: retried by the connection owner's connect like any other.
         with pytest.raises(TimeoutError, match="did not acknowledge"):
             handshake.connect("127.0.0.1", untokened_server, token=TOKEN, sync_request_timeout=5.0)
 
@@ -301,7 +301,7 @@ class TestMcpServerPresentsToken:
 
         monkeypatch.setattr(handshake, "connect", fake_connect)
         connection.use_houdini(connection.remote_houdini(TOKEN))
-        connection.connect("houdini-box", 18811)
+        connection.houdini().connect("houdini-box", 18811)
         assert seen == [("houdini-box", 18811, TOKEN)]
 
     def test_a_target_never_shows_its_token(self):
@@ -312,7 +312,7 @@ class TestMcpServerPresentsToken:
         self, reset_connection_state, tokened_server
     ):
         with pytest.raises(connection.HoudiniConnectionError, match=handshake.TOKEN_ENV):
-            connection.connect("127.0.0.1", tokened_server, max_retries=1)
+            connection.houdini().connect("127.0.0.1", tokened_server, max_retries=1)
 
     def test_rejection_is_not_retried(self, reset_connection_state, monkeypatch):
         attempts: list[str | None] = []
@@ -326,7 +326,7 @@ class TestMcpServerPresentsToken:
         monkeypatch.setattr(handshake, "connect", rejecting_connect)
         connection.use_houdini(connection.remote_houdini(TOKEN))
         with pytest.raises(connection.HoudiniConnectionError, match="rejected the token"):
-            connection.connect("houdini-box", 18811, max_retries=3, retry_delay=0.01)
+            connection.houdini().connect("houdini-box", 18811, max_retries=3, retry_delay=0.01)
         assert attempts == [TOKEN]
 
     def test_no_acknowledgement_is_retried(self, reset_connection_state, monkeypatch):
@@ -339,7 +339,7 @@ class TestMcpServerPresentsToken:
         monkeypatch.setattr(handshake, "connect", silent_connect)
         connection.use_houdini(connection.remote_houdini(TOKEN))
         with pytest.raises(connection.HoudiniConnectionError, match="did not acknowledge"):
-            connection.connect("houdini-box", 18811, max_retries=2, retry_delay=0.01)
+            connection.houdini().connect("houdini-box", 18811, max_retries=2, retry_delay=0.01)
         assert attempts == [TOKEN, TOKEN]
 
 

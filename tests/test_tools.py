@@ -3,7 +3,7 @@
 import logging
 import sys
 from types import SimpleNamespace
-from typing import get_args
+from typing import Any, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -3251,19 +3251,28 @@ class TestConnectionErrorHandling:
     """Tests for graceful connection error handling."""
 
     @staticmethod
-    def _run(exc: BaseException, operation: str) -> tuple[dict, MagicMock]:
-        from houdini_mcp.tools._common import handle_connection_errors
+    def _run(exc: BaseException, operation: str) -> tuple[dict, Any]:
+        """``operation`` failing with ``exc`` inside its link's scope, and that link."""
+        from houdini_mcp.connection import houdini
+        from houdini_mcp.tools._common import handle_connection_errors, using
 
         @handle_connection_errors(operation)
         def tool(host: str = "localhost", port: int = 18811):
-            raise exc
+            with using(host, port):
+                raise exc
 
-        with patch("houdini_mcp.tools.failure.disconnect") as disconnect:
-            return tool(), disconnect
+        link = houdini().link()
+        return tool(), link
 
-    def test_handle_connection_error_timeout(self):
+    @staticmethod
+    def _dropped(link: Any) -> bool:
+        from houdini_mcp.connection import houdini
+
+        return link.conn.closed and houdini().link() is None
+
+    def test_handle_connection_error_timeout(self, mock_connection):
         """Test that TimeoutError produces a helpful error response."""
-        result, disconnect = self._run(TimeoutError("Connection timed out"), "render_viewport")
+        result, link = self._run(TimeoutError("Connection timed out"), "render_viewport")
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
@@ -3272,28 +3281,26 @@ class TestConnectionErrorHandling:
         assert result["exception"] == "TimeoutError"
         assert "timed out" in result["message"]
         assert "render_viewport" in result["message"]
-        disconnect.assert_called_once()
+        assert self._dropped(link)
 
-    def test_handle_connection_error_eof(self):
+    def test_handle_connection_error_eof(self, mock_connection):
         """Test that EOFError produces a helpful error response."""
-        result, disconnect = self._run(EOFError("Connection closed"), "get_scene_info")
+        result, link = self._run(EOFError("Connection closed"), "get_scene_info")
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_lost"
         assert result["retry"] == "call_again"
         assert result["exception"] == "EOFError"
         assert "closed unexpectedly" in result["message"]
-        disconnect.assert_called_once()
+        assert self._dropped(link)
 
-    def test_handle_connection_error_reset_arrives_as_eof(self):
+    def test_handle_connection_error_reset_arrives_as_eof(self, mock_connection):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
-        result, disconnect = self._run(
-            EOFError("[Errno 54] Connection reset by peer"), "create_node"
-        )
+        result, link = self._run(EOFError("[Errno 54] Connection reset by peer"), "create_node")
 
         assert result["kind"] == "connection_lost"
         assert "reset" in result["message"]
-        disconnect.assert_called_once()
+        assert self._dropped(link)
 
     @pytest.mark.parametrize(
         "exc",
@@ -3305,36 +3312,39 @@ class TestConnectionErrorHandling:
         ],
         ids=lambda e: type(e).__name__,
     )
-    def test_file_and_os_errors_leave_the_connection_standing(self, exc):
+    def test_file_and_os_errors_leave_the_connection_standing(self, mock_connection, exc):
         """A bad path is the tool's error, not the link's: no disconnect, no retry invitation."""
-        result, disconnect = self._run(exc, "set_parameter")
+        from houdini_mcp.connection import houdini
+
+        result, link = self._run(exc, "set_parameter")
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
         assert result["retry"] == "none"
         assert str(exc) in result["message"]
         assert type(exc).__name__ in result["traceback"]
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
-    def test_timeout_raised_inside_houdini_leaves_the_connection_standing(self):
+    def test_timeout_raised_inside_houdini_leaves_the_connection_standing(self, mock_connection):
         """A TimeoutError Houdini's own code raised arrived over an intact link."""
+        from houdini_mcp.connection import houdini
         from tests.conftest import raised_inside_houdini
 
-        result, disconnect = self._run(
+        result, link = self._run(
             raised_inside_houdini(TimeoutError("cook timed out")), "get_node_info"
         )
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
         assert "cook timed out" in result["message"]
-        disconnect.assert_not_called()
+        assert houdini().link() is link and not link.conn.closed
 
-    @patch("houdini_mcp.tools.scene.ensure_connected")
-    def test_get_scene_info_handles_timeout(self, mock_ensure):
+    def test_get_scene_info_handles_timeout(self, mock_connection, monkeypatch):
         """Test that get_scene_info handles TimeoutError gracefully."""
         from houdini_mcp.tools import get_scene_info
 
-        mock_ensure.side_effect = TimeoutError("Request timed out")
+        unanswered = MagicMock(side_effect=TimeoutError("Request timed out"))
+        monkeypatch.setattr(mock_connection.hipFile, "path", unanswered)
 
         result = get_scene_info(host="localhost", port=18811)
 
@@ -3343,12 +3353,11 @@ class TestConnectionErrorHandling:
         assert result["connection_reset"] is True
         assert "timed out" in result["message"]
 
-    @patch("houdini_mcp.tools.nodes.ensure_connected")
-    def test_create_node_handles_eof_error(self, mock_ensure):
+    def test_create_node_handles_eof_error(self, mock_connection, monkeypatch):
         """Test that create_node handles EOFError gracefully."""
         from houdini_mcp.tools import create_node
 
-        mock_ensure.side_effect = EOFError("Connection closed")
+        monkeypatch.setattr(mock_connection, "node", MagicMock(side_effect=EOFError("closed")))
 
         result = create_node("geo", host="localhost", port=18811)
 
@@ -3404,37 +3413,6 @@ class TestHandleConnectionErrorsDecorator:
         assert result["retry"] == "start_houdini"
         assert result["target"] == "localhost:18811"
         assert "Connection failed" in result["message"]
-
-    def test_decorator_handles_connection_errors(self):
-        """Test decorator reports a transport failure (e.g., TimeoutError) as connection loss."""
-        from houdini_mcp.tools._common import handle_connection_errors
-
-        @handle_connection_errors("get_scene_info")
-        def timeout_function():
-            raise TimeoutError("Operation timed out")
-
-        with patch("houdini_mcp.tools.failure.disconnect"):
-            result = timeout_function()
-
-        assert result["status"] == "error"
-        assert result["kind"] == "timeout"
-        assert result["retry"] == "call_again"
-        assert "get_scene_info" in result["operation"]
-
-    def test_decorator_handles_eof_error(self):
-        """Test decorator handles EOFError (connection closed)."""
-        from houdini_mcp.tools._common import handle_connection_errors
-
-        @handle_connection_errors("get_scene_info")
-        def eof_function():
-            raise EOFError("Connection closed")
-
-        with patch("houdini_mcp.tools.failure.disconnect"):
-            result = eof_function()
-
-        assert result["status"] == "error"
-        assert result["kind"] == "connection_lost"
-        assert result["retry"] == "call_again"
 
     def test_decorator_handles_generic_exception(self):
         """Test decorator handles generic exceptions with traceback."""
@@ -3494,11 +3472,10 @@ class TestHandleConnectionErrorsDecorator:
         from houdini_mcp.tools._common import handle_connection_errors
 
         @handle_connection_errors("list_children")
-        def closed_link_function():
-            raise EOFError("stream has been closed")
+        def failing_function():
+            raise RuntimeError("boom")
 
-        with patch("houdini_mcp.tools.failure.disconnect"):
-            result = closed_link_function()
+        result = failing_function()
 
         assert result["operation"] == "list_children"
 

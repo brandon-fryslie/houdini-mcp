@@ -48,13 +48,14 @@ from dataclasses import dataclass
 from io import StringIO
 from typing import Any, Literal
 
+from ..connection import houdini
 from ._common import (
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
     _truncate_output,
-    ensure_connected,
     handle_connection_errors,
+    using,
 )
 from .code_policy import (
     _detect_dangerous_code,
@@ -63,7 +64,7 @@ from .code_policy import (
     _detect_non_inspection_code,
     parse_code,
 )
-from .failure import failure_for
+from .failure import failed_on, failure_for
 from .program_output import captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
@@ -721,255 +722,263 @@ def _execute_with_grant(
         )
 
     # --- Connect and prepare execution --------------------------------------
-    hou = ensure_connected(host, port)
-    undos = _resolve_undo_primitive(hou)
+    with using(host, port) as link:
+        hou = link.hou
+        undos = _resolve_undo_primitive(hou)
 
-    stdout_capture = StringIO()
-    stderr_capture = StringIO()
-    exec_exception: list[BaseException | None] = [None]
-    exec_traceback: list[str] = [""]
-    # With capture_diff, the worker writes this on every way out: the program's
-    # diff, why it has none, or why the program never ran. Its first value
-    # stands only if the worker died without writing it. Without capture_diff,
-    # or once the program raised: None.
-    scene: _Diff | _DiffFailed | _NeverRan | Exception | None = (
-        RuntimeError(f"{operation}'s worker ended before it wrote the scene diff")
-        if capture_diff
-        else None
-    )
-    # The program's clock: timeout is the program's, not the scene reads around it.
-    program_starts, program_ends = threading.Event(), threading.Event()
-
-    def diff_since(before: SceneSnapshot, program_took: float) -> _Diff | _DiffFailed:
-        # [LAW:one-source-of-truth] The worker is the one writer of its run's
-        # last diff, so a program that outlived its caller's timeout still
-        # leaves its diff once it ends.
-        try:
-            changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
-        except Exception as error:  # noqa: BLE001
-            # [LAW:no-silent-failure] The program ran; only its diff is missing.
-            # [LAW:effects-at-boundaries] Classifying the error is the caller's:
-            # a lost link classified here would drop the connection, and a worker
-            # that outlived its call would drop one opened since.
-            logger.warning("%s ran but its scene diff failed: %r", operation, error)
-            return _DiffFailed(error)
-        lists = ("added", "removed", "modified", "added_nodes")
-        over = [key for key in lists if len(changes[key]) > max_diff_nodes]
-        logger.info(
-            "%s scene diff of %s, program took %.3fs of timeout %ss: "
-            "added=%d removed=%d modified=%d truncated=%s",
-            operation,
-            _DIFF_ROOT,
-            program_took,
-            timeout,
-            *(len(changes[key]) for key in ("added", "removed", "modified")),
-            over,
+        stdout_capture = StringIO()
+        stderr_capture = StringIO()
+        exec_exception: list[BaseException | None] = [None]
+        exec_traceback: list[str] = [""]
+        # With capture_diff, the worker writes this on every way out: the program's
+        # diff, why it has none, or why the program never ran. Its first value
+        # stands only if the worker died without writing it. Without capture_diff,
+        # or once the program raised: None.
+        scene: _Diff | _DiffFailed | _NeverRan | Exception | None = (
+            RuntimeError(f"{operation}'s worker ended before it wrote the scene diff")
+            if capture_diff
+            else None
         )
-        changes.update({key: changes[key][:max_diff_nodes] for key in lists})
-        LAST_SCENE_DIFF.record(changes)
-        return _Diff(changes, over)
+        # The program's clock: timeout is the program's, not the scene reads around it.
+        program_starts, program_ends = threading.Event(), threading.Event()
 
-    def run_code() -> None:
-        # [LAW:no-ambient-temporal-coupling] Both reads of the scene happen in the
-        # worker, under its ledger slot, so no other program runs between them
-        # and the diff is this program's alone. A scene that could not be read
-        # first is not written. Every way out, SystemExit included, leaves
-        # through the finally, so the caller's clock never waits on a program
-        # that is not running.
-        nonlocal scene
-        before: SceneSnapshot | None = None
-        try:
-            if capture_diff:
-                # [LAW:one-source-of-truth] From its first act until its diff
-                # exists, the last capture is this run's, with no diff.
-                LAST_SCENE_DIFF.record(None)
-                try:
-                    before = scene_snapshot(hou, _DIFF_ROOT)
-                except Exception as error:  # noqa: BLE001
-                    logger.warning(
-                        "%s did not run: the scene before it could not be read: %r",
-                        operation,
-                        error,
-                    )
-                    scene = _NeverRan(error)
-                    return
-            started = time.monotonic()
-            program_starts.set()
-            run_program()
-        finally:
-            program_starts.set()
-            program_ends.set()
-            if before is not None:
-                # A program that raised has no diff; its scene is not read again.
-                scene = (
-                    None
-                    if exec_exception[0] is not None
-                    else diff_since(before, time.monotonic() - started)
-                )
-
-    def run_program() -> None:
-        # Never retry user code if the undo context fails: __exit__ may raise
-        # after the body already mutated the scene, so fallback would execute it
-        # twice. Fail closed and surface the context error instead.
-        if undos is not None:
+        def diff_since(before: SceneSnapshot, program_took: float) -> _Diff | _DiffFailed:
+            # [LAW:one-source-of-truth] The worker is the one writer of its run's
+            # last diff, so a program that outlived its caller's timeout still
+            # leaves its diff once it ends.
             try:
-                with undos.group(_UNDO_GROUP_LABEL):
-                    _run_code_thread(
-                        code,
-                        hou,
-                        stdout_capture,
-                        stderr_capture,
-                        exec_exception,
-                        exec_traceback,
-                    )
+                changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
             except Exception as error:  # noqa: BLE001
-                if exec_exception[0] is None:
-                    exec_exception[0] = error
-                    exec_traceback[0] = traceback.format_exc()
-            return
-        _run_code_thread(
-            code,
-            hou,
-            stdout_capture,
-            stderr_capture,
-            exec_exception,
-            exec_traceback,
+                # [LAW:no-silent-failure] The program ran; only its diff is missing.
+                # [LAW:effects-at-boundaries] Classifying the error is the caller's,
+                # which drops this call's link when the link is what failed. A worker
+                # that outlived its call has no caller left (houdini-laws-etg.il8).
+                logger.warning("%s ran but its scene diff failed: %r", operation, error)
+                return _DiffFailed(error)
+            lists = ("added", "removed", "modified", "added_nodes")
+            over = [key for key in lists if len(changes[key]) > max_diff_nodes]
+            logger.info(
+                "%s scene diff of %s, program took %.3fs of timeout %ss: "
+                "added=%d removed=%d modified=%d truncated=%s",
+                operation,
+                _DIFF_ROOT,
+                program_took,
+                timeout,
+                *(len(changes[key]) for key in ("added", "removed", "modified")),
+                over,
+            )
+            changes.update({key: changes[key][:max_diff_nodes] for key in lists})
+            LAST_SCENE_DIFF.record(changes)
+            return _Diff(changes, over)
+
+        def run_code() -> None:
+            # [LAW:no-ambient-temporal-coupling] Both reads of the scene happen in the
+            # worker, under its ledger slot, so no other program runs between them
+            # and the diff is this program's alone. A scene that could not be read
+            # first is not written. Every way out, SystemExit included, leaves
+            # through the finally, so the caller's clock never waits on a program
+            # that is not running.
+            nonlocal scene
+            before: SceneSnapshot | None = None
+            try:
+                if capture_diff:
+                    # [LAW:one-source-of-truth] From its first act until its diff
+                    # exists, the last capture is this run's, with no diff.
+                    LAST_SCENE_DIFF.record(None)
+                    try:
+                        before = scene_snapshot(hou, _DIFF_ROOT)
+                    except Exception as error:  # noqa: BLE001
+                        logger.warning(
+                            "%s did not run: the scene before it could not be read: %r",
+                            operation,
+                            error,
+                        )
+                        scene = _NeverRan(error)
+                        return
+                started = time.monotonic()
+                program_starts.set()
+                run_program()
+            finally:
+                program_starts.set()
+                program_ends.set()
+                if before is not None:
+                    # A program that raised has no diff; its scene is not read again.
+                    scene = (
+                        None
+                        if exec_exception[0] is not None
+                        else diff_since(before, time.monotonic() - started)
+                    )
+
+        def run_program() -> None:
+            # Never retry user code if the undo context fails: __exit__ may raise
+            # after the body already mutated the scene, so fallback would execute it
+            # twice. Fail closed and surface the context error instead.
+            if undos is not None:
+                try:
+                    with undos.group(_UNDO_GROUP_LABEL):
+                        _run_code_thread(
+                            code,
+                            hou,
+                            stdout_capture,
+                            stderr_capture,
+                            exec_exception,
+                            exec_traceback,
+                        )
+                except Exception as error:  # noqa: BLE001
+                    if exec_exception[0] is None:
+                        exec_exception[0] = error
+                        exec_traceback[0] = traceback.format_exc()
+                return
+            _run_code_thread(
+                code,
+                hou,
+                stdout_capture,
+                stderr_capture,
+                exec_exception,
+                exec_traceback,
+            )
+
+        # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
+        # starts the thread inside this call's hold on the scene, the thread clears
+        # the slot once the program, its undo group, and the scene reads around it
+        # have ended, and a timeout leaves the slot occupied after this call returns.
+        worker = WORKERS.launch(
+            run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
         )
+        program_starts.wait()
+        # [LAW:no-ambient-temporal-coupling] The timeout runs on the monotonic clock
+        # the program's duration is read on, from after that clock started, so a
+        # program called timed out has run its whole timeout. Event.wait alone can
+        # keep the wall clock (CPython on macOS) and return before it has.
+        deadline = time.monotonic() + timeout
+        woke_early = 0
+        while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
+            woke_early += time.monotonic() < deadline
 
-    # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
-    # starts the thread inside this call's hold on the scene, the thread clears
-    # the slot once the program, its undo group, and the scene reads around it
-    # have ended, and a timeout leaves the slot occupied after this call returns.
-    worker = WORKERS.launch(
-        run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
-    )
-    program_starts.wait()
-    # [LAW:no-ambient-temporal-coupling] The timeout runs on the monotonic clock
-    # the program's duration is read on, from after that clock started, so a
-    # program called timed out has run its whole timeout. Event.wait alone can
-    # keep the wall clock (CPython on macOS) and return before it has.
-    deadline = time.monotonic() + timeout
-    woke_early = 0
-    while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
-        woke_early += time.monotonic() < deadline
+        # [LAW:one-source-of-truth] The program's own end, set once its undo group
+        # has closed, says whether it is still running - not the ledger slot, which
+        # the worker holds on through the scene read after it - so a program that
+        # ended as the wait expired is reported as complete.
+        if not program_ends.is_set():
+            # The worker is still inside the undo-group context. Calling performUndo
+            # now can undo the PREVIOUS human action because this run's group has not
+            # closed yet, while the worker can continue mutating afterward. Never
+            # touch the undo stack from this state.
+            logger.warning(
+                "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
+                operation,
+                timeout,
+                detected.code_sha256,
+            )
+            raise ProgramStillRunning(
+                f"Execution timeout: code did not complete within {timeout} seconds",
+                policy=grant.policy,
+                stdout=stdout_capture.getvalue()[:max_stdout_size],
+                stderr=stderr_capture.getvalue()[:max_stderr_size],
+                timeout=timeout,
+                warning=(
+                    "Execution timed out while its background thread and undo group are still active. "
+                    "No undo was attempted because doing so could undo a previous human action. "
+                    "Every tool that writes the scene is refused until this worker finishes. "
+                    f"{HOW_A_WORKER_ENDS} Scene consistency is unknown: verify state before "
+                    "further edits."
+                ),
+                worker=worker.describe(),
+                rollback={
+                    "attempted": False,
+                    "succeeded": False,
+                    "error": None,
+                    # True whenever we hit this branch: the thread was still running
+                    # at the moment we decided not to roll back, and we have no way to
+                    # confirm it has stopped since.
+                    "thread_still_running": True,
+                    "scene_consistency": "unknown",
+                },
+                audit=_build_audit(
+                    code=code,
+                    grant=grant,
+                    detected=detected,
+                    timed_out=True,
+                    woke_early=woke_early,
+                    rollback_attempted=False,
+                    rollback_succeeded=False,
+                ),
+            )
 
-    # [LAW:one-source-of-truth] The program's own end, set once its undo group
-    # has closed, says whether it is still running - not the ledger slot, which
-    # the worker holds on through the scene read after it - so a program that
-    # ended as the wait expired is reported as complete.
-    if not program_ends.is_set():
-        # The worker is still inside the undo-group context. Calling performUndo
-        # now can undo the PREVIOUS human action because this run's group has not
-        # closed yet, while the worker can continue mutating afterward. Never
-        # touch the undo stack from this state.
-        logger.warning(
-            "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
-            operation,
-            timeout,
-            detected.code_sha256,
-        )
-        raise ProgramStillRunning(
-            f"Execution timeout: code did not complete within {timeout} seconds",
-            policy=grant.policy,
-            stdout=stdout_capture.getvalue()[:max_stdout_size],
-            stderr=stderr_capture.getvalue()[:max_stderr_size],
-            timeout=timeout,
-            warning=(
-                "Execution timed out while its background thread and undo group are still active. "
-                "No undo was attempted because doing so could undo a previous human action. "
-                "Every tool that writes the scene is refused until this worker finishes. "
-                f"{HOW_A_WORKER_ENDS} Scene consistency is unknown: verify state before "
-                "further edits."
-            ),
-            worker=worker.describe(),
-            rollback={
-                "attempted": False,
-                "succeeded": False,
-                "error": None,
-                # True whenever we hit this branch: the thread was still running
-                # at the moment we decided not to roll back, and we have no way to
-                # confirm it has stopped since.
-                "thread_still_running": True,
-                "scene_consistency": "unknown",
-            },
-            audit=_build_audit(
-                code=code,
-                grant=grant,
-                detected=detected,
-                timed_out=True,
-                woke_early=woke_early,
-                rollback_attempted=False,
-                rollback_succeeded=False,
-            ),
-        )
+        # The program ended; what remains of the worker is the scene read after it.
+        worker.thread.join()
+        audit = _build_audit(code=code, grant=grant, detected=detected, woke_early=woke_early)
 
-    # The program ended; what remains of the worker is the scene read after it.
-    worker.thread.join()
-    audit = _build_audit(code=code, grant=grant, detected=detected, woke_early=woke_early)
+        # --- Exception during execution -----------------------------------------
+        if exec_exception[0] is not None:
+            stdout_val, stdout_truncated = _truncate_output(
+                stdout_capture.getvalue(), max_stdout_size
+            )
+            stderr_val, stderr_truncated = _truncate_output(
+                stderr_capture.getvalue(), max_stderr_size
+            )
+            error_fields: dict[str, Any] = {
+                "traceback": exec_traceback[0],
+                "stdout": stdout_val,
+                "stderr": stderr_val,
+                "policy": grant.policy,
+                "audit": audit,
+            }
+            if stdout_truncated:
+                error_fields["stdout_truncated"] = True
+            if stderr_truncated:
+                error_fields["stderr_truncated"] = True
+            # The exception's type leads, for some say nothing else: SystemExit(0) is "0".
+            told = traceback.format_exception_only(exec_exception[0])
+            raise OperationFailed("".join(told).strip(), **error_fields)
 
-    # --- Exception during execution -----------------------------------------
-    if exec_exception[0] is not None:
+        # [LAW:no-silent-failure] A scene that could not be read before the program
+        # is raised: the program never ran on it.
+        if isinstance(scene, _NeverRan):
+            raise scene.error
+        # The worker died without writing what became of the scene.
+        if isinstance(scene, Exception):
+            raise scene
+
+        # --- Success -------------------------------------------------------------
         stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
         stderr_val, stderr_truncated = _truncate_output(stderr_capture.getvalue(), max_stderr_size)
-        error_fields: dict[str, Any] = {
-            "traceback": exec_traceback[0],
+
+        result = {
+            "status": "success",
             "stdout": stdout_val,
             "stderr": stderr_val,
             "policy": grant.policy,
             "audit": audit,
         }
+
         if stdout_truncated:
-            error_fields["stdout_truncated"] = True
+            result["stdout_truncated"] = True
+            result["stdout_warning"] = f"stdout truncated to {max_stdout_size} bytes"
         if stderr_truncated:
-            error_fields["stderr_truncated"] = True
-        # The exception's type leads, for some say nothing else: SystemExit(0) is "0".
-        told = traceback.format_exception_only(exec_exception[0])
-        raise OperationFailed("".join(told).strip(), **error_fields)
+            result["stderr_truncated"] = True
+            result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
-    # [LAW:no-silent-failure] A scene that could not be read before the program
-    # is raised: the program never ran on it.
-    if isinstance(scene, _NeverRan):
-        raise scene.error
-    # The worker died without writing what became of the scene.
-    if isinstance(scene, Exception):
-        raise scene
+        if isinstance(scene, _DiffFailed):
+            # A diff that failed on the link drops this call's own link, as a
+            # failure leaving the scope would.
+            lost = failed_on(houdini(), link, scene.error)
+            result["scene_changes_error"] = failure_for(lost, operation).model_dump()
+        if isinstance(scene, _Diff):
+            if scene.truncated:
+                result["diff_truncated"] = True
+                result["diff_warning"] = (
+                    f"{', '.join(scene.truncated)} truncated to {max_diff_nodes} nodes"
+                )
+            result["scene_changes"] = scene.changes
 
-    # --- Success -------------------------------------------------------------
-    stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
-    stderr_val, stderr_truncated = _truncate_output(stderr_capture.getvalue(), max_stderr_size)
-
-    result = {
-        "status": "success",
-        "stdout": stdout_val,
-        "stderr": stderr_val,
-        "policy": grant.policy,
-        "audit": audit,
-    }
-
-    if stdout_truncated:
-        result["stdout_truncated"] = True
-        result["stdout_warning"] = f"stdout truncated to {max_stdout_size} bytes"
-    if stderr_truncated:
-        result["stderr_truncated"] = True
-        result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
-
-    if isinstance(scene, _DiffFailed):
-        result["scene_changes_error"] = failure_for(scene.error, operation).model_dump()
-    if isinstance(scene, _Diff):
-        if scene.truncated:
-            result["diff_truncated"] = True
-            result["diff_warning"] = (
-                f"{', '.join(scene.truncated)} truncated to {max_diff_nodes} nodes"
+        if detected.dangerous:
+            result["dangerous_patterns_executed"] = detected.dangerous
+            result["safety_warning"] = (
+                "Code with dangerous patterns was executed with an approved bypass."
             )
-        result["scene_changes"] = scene.changes
 
-    if detected.dangerous:
-        result["dangerous_patterns_executed"] = detected.dangerous
-        result["safety_warning"] = (
-            "Code with dangerous patterns was executed with an approved bypass."
-        )
-
-    return result
+        return result
 
 
 def get_last_scene_diff() -> dict[str, Any]:

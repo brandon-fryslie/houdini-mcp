@@ -19,9 +19,10 @@ This document describes the error handling patterns used throughout the Houdini 
 │               Tool (houdini_mcp/tools)                          │
 │  @handle_connection_errors("some_tool")  ◄── Decorator          │
 │  def some_tool(...):                                            │
-│      hou = ensure_connected(host, port)  ◄── Connection         │
-│      # ... actual logic (no try/except needed)                  │
-│      return {"status": "success", ...}                          │
+│      with using(host, port) as link:  ◄── Connection            │
+│          hou = link.hou                                         │
+│          # ... actual logic (no try/except needed)              │
+│          return {"status": "success", ...}                      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -29,8 +30,9 @@ This document describes the error handling patterns used throughout the Houdini 
 │                    Connection Layer                             │
 │  connection.py                                                  │
 │  - HoudiniConnection: the one owner of the target and the link  │
-│  - connect() with exponential backoff + jitter                  │
-│  - ensure_connected() reaches the Houdini named, or fails       │
+│  - ensure() reaches the Houdini named, or fails                 │
+│  - opening a link retries with exponential backoff + jitter     │
+│  - drop(link) tears down the link a failed call used            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,9 +47,10 @@ The primary error handling mechanism. Wraps tool functions with a three-tier err
 ```python
 @handle_connection_errors("get_scene_info")
 def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
-    hou = ensure_connected(host, port)
-    # ... actual logic without try/except boilerplate
-    return {"status": "success", ...}
+    with using(host, port) as link:
+        hou = link.hou
+        # ... actual logic without try/except boilerplate
+        return {"status": "success", ...}
 ```
 
 **The failure arms** (one definition, `failure_for()` in `houdini_mcp/tools/failure.py`,
@@ -58,8 +61,8 @@ discriminated on `kind`; each kind fixes its own `retry`:
 |------|-----------|----------|------|
 | `HoudiniConnectionError` | `connection_unavailable` | `start_houdini` | `target`: the Houdini that was wanted |
 | `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
-| A `TransportFailure` (see below) that is not a timeout | `connection_lost` | `call_again` | `exception`; the link is torn down first |
-| A `TransportFailure` that is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
+| A `LinkLost`: a `TransportFailure` raised inside a `using` scope (see below), not a timeout | `connection_lost` | `call_again` | `exception`; that call's link was dropped first |
+| A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
 | `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
 | `ProgramStillRunning` (the program this call launched outlived its bound and holds the scene) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `rollback`, `audit`, ...) |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
@@ -69,8 +72,9 @@ discriminated on `kind`; each kind fixes its own `retry`:
 
 A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
 its cause, and the link's own failures in that cause outrank the label: a torn link,
-an unreachable Houdini or a mismatched one wrapped that way is still its own arm, and
-a torn link still tears the connection down. A served tool that finishes its result
+an unreachable Houdini or a mismatched one wrapped that way is still its own arm. A
+torn link inside a `using` scope drops the link that call used; one outside any scope,
+raw or wrapped, is reported as the bug it is (`operation_failed`, logged at error). A served tool that finishes its result
 after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then cap)
 is under the same boundary, awaited.
 
@@ -112,8 +116,12 @@ tears the session down and is never `connection_lost` or `timeout` with
 
 ### 3. Connection loss as the caller reads it
 
-A `TransportFailure` is the one thing that tears the connection down: `failure_for`
-calls `disconnect()` so the next call reconnects, then builds the arm.
+A `TransportFailure` raised inside a tool's `using` block is the one thing that tears
+the connection down. `failed_on` drops the link that call used, so the next call
+reconnects, and raises a `LinkLost` in its place; the classifier builds the
+`connection_lost` or `timeout` arm from that `LinkLost` alone. A transport failure
+that reaches the boundary raw came from Houdini work done outside any `using` scope,
+and is reported as the bug it is: `operation_failed`, logged at error.
 
 ```python
 {
@@ -141,7 +149,8 @@ calls `disconnect()` so the next call reconnects, then builds the arm.
 #### Retry with Exponential Backoff
 
 Opening a link is the one place anything retries, in `_open_link_with_retries()`,
-which `connect()` and `ensure_connected()` both go through. The one retry rule above
+which the owner's `connect` runs, as does `ensure` when it finds no live link. The
+one retry rule above
 decides whether an open-time failure is worth another attempt: any `OSError` or
 `EOFError` that Houdini did not raise is, and a rejected token is not. The delay starts
 at `retry_delay` (1.0s), doubles each attempt, is capped at `DEFAULT_MAX_DELAY` (30s),
@@ -150,18 +159,41 @@ Houdini together do not reconnect in lockstep, even once they are all at the cap
 `max_retries` (3) attempts it raises `HoudiniConnectionError` with the last error;
 `max_retries` below 1 is rejected with `ValueError`.
 
-#### `ensure_connected()` Function
+#### `using()`: how a tool gets a link
 
-Returns the `hou` of the Houdini `host:port` names, reconnecting when the link is
-gone. Connection state has one owner, `HoudiniConnection`: the target in use and at
-most one open `Link` (host, port, connection, `hou`), written only under its
-lock, so concurrent tool calls that find the link gone share one reconnect. A live
-link to a *different* Houdini is not an answer: the call raises
+`using(host, port)` in `houdini_mcp/tools/_common.py` is the one way a tool gets a
+link: a context manager yielding the `Link` (`link.hou`, `link.conn`) that the
+connection owner's `ensure(host, port)` returns, reconnecting when the link is gone.
+Connection state has one owner, `HoudiniConnection`, and `houdini()` returns the
+process's: the target in use and at most one open `Link` (host, port, `conn`, `hou`),
+written only under its lock, so concurrent tool calls that find the link gone share
+one reconnect. A live link to a *different* Houdini is not an answer: `ensure` raises
 `HoudiniTargetMismatch` naming both, and the link it did not ask for stands.
 
+`held_link(owner, host, port)` is the same scope over any owner. When the block
+raises, the exception goes through `failed_on(owner, link, e)`, the one place a
+failure is judged the link's: a transport failure, or for a `ToolError` the cause it
+was raised from. Then `owner.drop(link)` closes that link and uninstalls it only if it
+is still the installed one, so a call whose link failed after another call reconnected
+never drops the replacement, and `failed_on` returns a `LinkLost` carrying the link
+and the transport failure. Any other exception comes back unchanged and propagates as
+it was raised.
+
 ```python
-def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
-    return _houdini.ensure(host, port).hou
+@contextmanager
+def held_link(owner: HoudiniConnection, host: str, port: int) -> Iterator[Link]:
+    link = owner.ensure(host, port)
+    try:
+        yield link
+    except Exception as e:
+        failed = failed_on(owner, link, e)
+        if failed is e:
+            raise
+        raise failed from e
+
+
+def using(host: str, port: int) -> AbstractContextManager[Link]:
+    return held_link(houdini(), host, port)
 ```
 
 `is_connected()` and `get_connection_info()` are queries: they read the link and
@@ -251,24 +283,25 @@ asserts the schema and the server's refusals agree.
 ### Pattern 1: Simple Tool with Decorator
 
 `delete_node` (`houdini_mcp/tools/nodes.py`) is the whole shape: the decorator,
-`ensure_connected`, `node_at` raising `invalid_input` for a path with no node,
+`using`, `node_at` raising `invalid_input` for a path with no node,
 and a body that returns only success.
 
 ```python
 @handle_connection_errors("delete_node")
 def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    node_name = node.name()
-    node.destroy()
+        node_name = node.name()
+        node.destroy()
 
-    return {
-        "status": "success",
-        "message": f"Deleted node: {node_name}",
-        "deleted_path": node_path,
-    }
+        return {
+            "status": "success",
+            "message": f"Deleted node: {node_name}",
+            "deleted_path": node_path,
+        }
 ```
 
 ### Pattern 2: Tool with Constrained Input
@@ -279,9 +312,10 @@ def render_viewport(
     resolution: Resolution = DEFAULT_RESOLUTION,
     ...
 ) -> dict[str, Any]:
-    hou = ensure_connected(host, port)
-    width, height = resolution
-    # ... proceed with rendering: the type already refused anything else
+    with using(host, port) as link:
+        prepared = _prepare(link, resolution, renderer, karma_engine)
+        # ... proceed with rendering: _prepare unpacks `width, height = resolution`,
+        # and the type already refused anything else
 ```
 
 ### Pattern 3: Tool with Multiple Error Sources
@@ -302,7 +336,7 @@ raised; none is a dict the body builds.
 
 Tests use `MockHouModule` and `MockHouNode` from `tests/conftest.py`. The
 `mock_connection` fixture connects to the double through the connection module's own
-API (the handshake seam hands out a `MockRpycConnection`, `ensure_connected` installs
+API (the handshake seam hands out a `MockRpycConnection`, the owner's `connect` installs
 it), so a test sees exactly what a tool call would; `connected_to(hou)` does the same
 for any other `hou` double:
 
@@ -317,7 +351,7 @@ def test_reads_my_double(self, connected_to):
 `TestConnectionErrorHandling` in `tests/test_tools.py` raises each exception from a
 stub tool under the decorator and reads the arm it returns, including the errors
 that leave the connection standing. `test_get_scene_info_handles_timeout` raises a
-timeout from a real tool's patched `ensure_connected`.
+timeout from a Houdini read inside a real tool's `using` block.
 
 `tests/test_failure.py` parses every arm the boundary emits back through `FAILURE`
 and refuses a response relabelled as another kind or as success.
@@ -333,7 +367,7 @@ MCP client, not by calling the tool function. See
 
 1. **Always use the decorator** - Don't write try/except for connection errors in tool functions
 2. **Refuse before connecting** - a check that needs no Houdini, like `execute_code`'s
-   program gates, runs before `ensure_connected`; input shape belongs in the
+   program gates, runs before `using`; input shape belongs in the
    parameter types (see Input Validation)
 3. **Raise, don't build error dicts** - one of the exceptions under Key Components,
    with the fields the caller needs; the boundary shapes the response, so every

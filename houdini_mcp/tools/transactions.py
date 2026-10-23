@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, assert_never
 
-from ..connection import transport_failure
+from ..connection import Link, transport_failure
 from .failure import OperationFailed, add_note
 
 logger = logging.getLogger("houdini_mcp.tools.transactions")
@@ -136,14 +136,15 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
 
 
 def recovering(
-    operation: str, houdini: Callable[[], Any]
+    operation: str, houdini: Callable[[], AbstractContextManager[Link]]
 ) -> AbstractContextManager[dict[str, Any]]:
     """Recover from ``operation``'s effect, as its policy says, around its body.
 
-    ``houdini`` gives the ``hou`` the call reaches; it is asked for only when the
-    recovery acts in Houdini. The block yields the fields the recovery adds to a
-    successful result. A failure leaves it with notes saying what became of the
-    scene, which ``failure_for`` appends to the failure's message.
+    ``houdini`` opens the scope of the link the call reaches; it is entered only
+    when the recovery acts in Houdini, and holds that link around the body. The
+    block yields the fields the recovery adds to a successful result. A failure
+    leaves it with notes saying what became of the scene, which ``failure_for``
+    appends to the failure's message.
     """
     recovery = TOOL_POLICIES[operation].recovery
     match recovery:
@@ -164,7 +165,16 @@ def recovering(
 
 
 @contextmanager
-def _backed_up_first(operation: str, hou: Any) -> Iterator[dict[str, Any]]:
+def _backed_up_first(
+    operation: str, houdini: AbstractContextManager[Link]
+) -> Iterator[dict[str, Any]]:
+    """The body, inside the scope of the link it reaches, once its scene is backed up."""
+    with houdini as link, _backup_then_body(operation, link.hou) as recovered:
+        yield recovered
+
+
+@contextmanager
+def _backup_then_body(operation: str, hou: Any) -> Iterator[dict[str, Any]]:
     """The body, once the scene it is about to replace has its unsaved work backed up.
 
     The backup is Houdini's own: ``saveAsBackup`` writes the scene as it stands
