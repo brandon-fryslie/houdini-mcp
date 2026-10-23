@@ -26,7 +26,7 @@ import math
 import pathlib
 import re
 import textwrap
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Any, get_args
 
@@ -327,16 +327,26 @@ class TestServedSchemas:
         assert not await accepts(client, served, "render_viewport", {"camera_rotation": None})
 
     @pytest.mark.parametrize(
-        ("tool", "base", "name", "shape"),
+        ("tool", "base", "name", "value"),
         [
-            ("render_viewport", {}, "camera_position", lambda bad: [bad, 0.0, 0.0]),
-            ("render_viewport", {}, "camera_rotation", lambda bad: [bad, 0.0, 0.0]),
-            ("set_node_position", {"node_path": "/obj", "y": 0.0}, "x", lambda bad: bad),
-            ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", lambda bad: [bad]),
-            ("set_node_color", {"node_path": "/obj"}, "color", lambda bad: [bad, 0.0, 0.0]),
+            *(
+                case
+                # An integer past a float's range parses as an infinity.
+                for bad in (math.nan, math.inf, -math.inf, 10**400)
+                for case in (
+                    ("render_viewport", {}, "camera_position", [bad, 0.0, 0.0]),
+                    ("render_viewport", {}, "camera_rotation", [bad, 0.0, 0.0]),
+                    ("set_node_position", {"node_path": "/obj", "y": 0.0}, "x", bad),
+                    ("set_node_color", {"node_path": "/obj"}, "color", [bad, 0.0, 0.0]),
+                )
+            ),
+            # Where an integer is legal too, a huge one is that integer.
+            *(
+                ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", [bad])
+                for bad in (math.nan, math.inf, -math.inf)
+            ),
         ],
     )
-    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
     async def test_a_number_is_finite(
         self,
         mcp: FastMCP,
@@ -344,15 +354,14 @@ class TestServedSchemas:
         tool: str,
         base: dict[str, Any],
         name: str,
-        shape: Callable[[float], Any],
-        bad: float,
+        value: Any,
     ) -> None:
         """A NaN would reach Houdini and the call report success: a render from a
         camera that sees nothing, a color clamped to 1.0 as if it were asked for.
         Served or called directly, the call is refused first.
         Served through the server's own ``call_tool``: a client writes NaN as null,
         where JSON-RPC's parse of a NaN on the wire hands the server NaN."""
-        arguments = {**base, name: shape(bad)}
+        arguments = {**base, name: value}
         served = (await mcp.call_tool(tool, arguments)).structured_content
         direct = getattr(tools, tool)(**arguments)
         for result in (served, direct):

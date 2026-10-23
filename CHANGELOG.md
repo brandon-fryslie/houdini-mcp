@@ -598,8 +598,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Every tool refuses a number that is NaN or Infinity (houdini-laws-etg.xfj).
-  The JSON-RPC parse admits both, and only a color refused them, so a
+- Every tool refuses a number that is NaN or Infinity, or an integer too large
+  for a float parameter (houdini-laws-etg.xfj). The JSON-RPC parse admits NaN
+  and Infinity, a float parse turns such an integer into Infinity, and only a
+  color refused them, so a
   `render_viewport` camera vector, a `set_node_position` coordinate or a
   `set_parameter` value reached Houdini: a render either reported success from
   a camera that sees nothing or failed inside as `operation_failed`
