@@ -222,8 +222,8 @@ def _capture_pane_to_bytes(
                 f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
             ) from e
 
-    # Framed only once nothing above can refuse the capture, so a refused
-    # capture leaves the user's view as it was.
+    # Framed only once the input and the pane are known good, so a capture refused
+    # for either leaves the user's view as it was; only the grab can fail after.
     main_thread.call(link, framed)
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is
@@ -232,14 +232,16 @@ def _capture_pane_to_bytes(
     # current). So the grab is the next main-thread call, which Houdini begins
     # only when its event loop is idle again, after that drawing.
     image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
+    # Encoded here, off the main thread, so Houdini's UI is held only for the grab.
+    raw_bytes = png_bytes(image, QtCore, pane_type_name)
+    logger.info("Grabbed %s from its window: %d PNG bytes", pane_type_name, len(raw_bytes))
 
     return {
         "status": "success",
         "pane_type": pane_type_name,
         "pane_name": read("pane name", lambda: str(pane.name())),
         "geometry": geometry,
-        # Encoded here, off the main thread, so Houdini's UI is held only for the grab.
-        "raw_bytes": png_bytes(image, QtCore, pane_type_name),
+        "raw_bytes": raw_bytes,
     }
 
 
@@ -545,8 +547,8 @@ def capture_multiple_panes(
     """
     Capture screenshots of multiple pane types in one call.
 
-    More efficient than calling capture_pane_screenshot multiple times
-    as it reuses Qt module references.
+    One pane's failure is reported in its slot and the other panes are still
+    captured; a failure that is Houdini's, not the pane's, fails the call.
 
     Args:
         pane_types: List of pane type names to capture
@@ -580,6 +582,12 @@ def capture_multiple_panes(
             except MainThreadRefused:
                 # Houdini's main thread refused, not this pane: every later pane
                 # would wait out the same refusal, so the call fails here.
+                logger.warning(
+                    "Houdini's main thread refused %s; the batch ends after %d of %d panes",
+                    pane_type_name,
+                    len(results),
+                    len(requested),
+                )
                 raise
             except ToolError as e:
                 judged = failed_on(houdini(), link, e)

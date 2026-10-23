@@ -256,7 +256,9 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
 
 
 def test_capture_multiple_panes_whose_main_thread_refused_fails_the_call(
-    mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+    mock_connection: MockHouModule,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A refusal from Houdini's main thread is Houdini's, not the pane's: no later
     pane is sent to wait out the same refusal, and the call fails saying why."""
@@ -282,7 +284,10 @@ def refusing(undos):
 """
     with served_namespace(plugin) as plugins:
         monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
-        with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
+        with (
+            caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
+            patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),
+        ):
             from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
             result = capture_multiple_panes(["NetworkEditor", "SceneViewer"])
@@ -292,6 +297,10 @@ def refusing(undos):
     assert result["message"] == "Houdini's main thread did not begin the call within 30.0s"
     assert asked == 1
     assert mock_connection.ui.grabs == []
+    assert (
+        "Houdini's main thread refused NetworkEditor; the batch ends after 0 of 2 panes"
+        in caplog.messages
+    )
 
 
 def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
@@ -650,3 +659,4 @@ def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
     assert events == []
     assert mock_connection.ui.grabs == [("panetab1", "as left", (0, 0, 800, 600))]
     assert "Left panetab1 as shown" in caplog.messages
+    assert "Grabbed Parm from its window: 3 PNG bytes" in caplog.messages
