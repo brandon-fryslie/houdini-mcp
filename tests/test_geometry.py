@@ -213,7 +213,7 @@ class TestGetGeoSummary:
             bbox_min=[-100.0, -100.0, -100.0],
             bbox_max=[100.0, 100.0, 100.0],
             sample_points=sample_points,
-            warning="Geometry has 1500000 points (>1M). Sampling limited.",
+            warning="Geometry has 1500000 points (>1M); samples are its first 100.",
         )
         mock_execute_code.return_value = {
             "status": "success",
@@ -511,47 +511,6 @@ class TestGetGeoSummary:
         assert pt1["P"] == [1.0, 0.0, 0.0]
         assert pt1["N"] == [1.0, 0.0, 0.0]
 
-    async def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
-        """Test max_sample_points validation (capped at 10000)."""
-        from houdini_mcp.tools import get_geo_summary
-
-        # Response when max_sample_points=0 (no sample_points key)
-        geo_data = {
-            "status": "success",
-            "node_path": "/obj/geo1/grid1",
-            "cook_state": "cooked",
-            "point_count": 1,
-            "primitive_count": 0,
-            "vertex_count": 0,
-            "bounding_box": {
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 1.0],
-                "size": [1.0, 1.0, 1.0],
-                "center": [0.5, 0.5, 0.5],
-            },
-            "attributes": {"point": [], "primitive": [], "vertex": [], "detail": []},
-            "groups": {"point": [], "primitive": []},
-            # Note: no sample_points key when max_sample_points=0
-        }
-
-        mock_execute_code.return_value = {
-            "status": "success",
-            "stdout": json.dumps(geo_data),
-            "stderr": "",
-        }
-
-        # Test negative value -> 0 (no sample_points in result)
-        result = await get_geo_summary(
-            "/obj/geo1/grid1",
-            max_sample_points=-10,
-            host="localhost",
-            port=18811,
-            summarizer=SUMMARIZER,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert "sample_points" not in result
-
     async def test_get_geo_summary_multiple_groups(self, mock_execute_code):
         """Test geometry with multiple groups."""
         from houdini_mcp.tools import get_geo_summary
@@ -681,6 +640,34 @@ class TestGetGeoSummary:
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]
 
+    async def test_get_geo_summary_output_past_its_ceiling(self, mock_execute_code):
+        """A cut-off read names the ceiling and the knob, not a parse error."""
+        from houdini_mcp.tools import get_geo_summary
+
+        mock_execute_code.return_value = {
+            "status": "success",
+            "stdout": '{"status": "success", "sample_points": [{"ind',
+            "stderr": "",
+            "stdout_truncated": True,
+        }
+
+        result = await get_geo_summary(
+            "/obj/geo1/sphere1",
+            max_sample_points=1000,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
+
+        assert result["status"] == "error"
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == (
+            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters with "
+            "max_sample_points=1000; each sample carries every point attribute, so ask for "
+            "fewer, or set include_groups=False if the node has many groups"
+        )
+
 
 class _Raises:
     """A hou call that raises inside Houdini."""
@@ -770,6 +757,15 @@ class TestTheProgramHoudiniRuns:
         assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
         assert result["groups"]["point"] == ["top"]
         assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
+
+    async def test_a_massive_geometry_says_so_and_still_samples(self):
+        counts = {"pointcount": 1_500_000}
+        geo = self._geo(intrinsicValue=lambda name: counts.get(name, 1))
+
+        result = await self._run(self._node(geo), max_sample_points=2)
+
+        assert result["warning"] == "Geometry has 1500000 points (>1M); samples are its first 2."
+        assert [p["index"] for p in result["sample_points"]] == [0, 1]
 
     async def test_a_cook_that_raises_is_unread_not_a_state(self):
         node = self._node(self._geo(), needsToCook=lambda: True, cook=_Raises("cook failed"))

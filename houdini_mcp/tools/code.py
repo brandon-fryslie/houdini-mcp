@@ -50,9 +50,11 @@ from typing import Any, Literal
 
 from ..connection import houdini
 from ._common import (
+    Count,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
+    Seconds,
     _truncate_output,
     handle_connection_errors,
     using,
@@ -488,10 +490,10 @@ def _blocked(
 def execute_code(
     code: str,
     capture_diff: bool = False,
-    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
-    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
-    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
-    timeout: int = DEFAULT_TIMEOUT,
+    max_stdout_size: Count = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: Count = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
+    timeout: Seconds = DEFAULT_TIMEOUT,
     allow_dangerous: bool = False,
     host: str = "localhost",
     port: int = 18811,
@@ -598,10 +600,10 @@ def _execute_with_grant(
     *,
     operation: str,
     capture_diff: bool = False,
-    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
-    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
-    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
-    timeout: int = DEFAULT_TIMEOUT,
+    max_stdout_size: Count = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: Count = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
+    timeout: Seconds = DEFAULT_TIMEOUT,
     host: str,
     port: int,
 ) -> dict[str, Any]:

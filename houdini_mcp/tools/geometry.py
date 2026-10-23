@@ -6,12 +6,12 @@ including point/primitive counts, attributes, groups, and sampling.
 
 import inspect
 import json
-import logging
 from typing import Any
 
 from ..settings import Summarizer
 from ._common import (
     OperationFailed,
+    SampleCount,
     handle_connection_errors,
     on_the_scene,
     tool_error,
@@ -19,17 +19,18 @@ from ._common import (
 from .reads import UNREAD, format_reason, log_unread, unreads
 from .summarization import GEOMETRY_BRIEF, summarized
 
-logger = logging.getLogger("houdini_mcp.tools.geometry")
-
 # [LAW:one-source-of-truth] the program run inside Houdini spells a reason
 # with reads.format_reason itself, so one failure reads the same from any tool
 _FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
+# The most output a geometry read may print; a sample of many points with many
+# attributes can pass it, and that read fails naming this ceiling.
+_GEOMETRY_OUTPUT_LIMIT = 500000
 
 
 @handle_connection_errors("get_geo_summary")
 async def get_geo_summary(
     node_path: str,
-    max_sample_points: int = 16,
+    max_sample_points: SampleCount = 16,
     include_attributes: bool = True,
     include_groups: bool = True,
     *,
@@ -48,7 +49,7 @@ async def get_geo_summary(
 
     Args:
         node_path: Full path to the SOP node (e.g., "/obj/geo1/sphere1")
-        max_sample_points: Maximum number of sample points to return (default: 16, max: 10000).
+        max_sample_points: Maximum number of sample points to return (default: 16).
                           Set to 0 to skip point sampling.
         include_attributes: Whether to include attribute metadata (default: True)
         include_groups: Whether to include group information (default: True)
@@ -71,7 +72,8 @@ async def get_geo_summary(
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
         - Empty geometry: Returns zeros for counts, not an error
-        - Massive geometry (>1M points): Automatically caps sampling with warning
+        - Massive geometry (>1M points): a warning names the point count; the
+          samples are still the first max_sample_points
         - No geometry/Not a SOP: Returns error status
         - Anything Houdini will not read (the cook, the bounding box, an
           attribute's name/type/size, a group, a sample value) is
@@ -104,7 +106,7 @@ async def get_geo_summary(
 
 def _read_geometry(
     node_path: str,
-    max_sample_points: int,
+    max_sample_points: SampleCount,
     include_attributes: bool,
     include_groups: bool,
     bypass_config_enabled: bool,
@@ -114,13 +116,6 @@ def _read_geometry(
     """The geometry statistics of the SOP at node_path."""
     # Imported here to avoid circular imports
     from .code import ExecutionGrant, _execute_with_grant
-
-    # Validate max_sample_points
-    if max_sample_points < 0:
-        max_sample_points = 0
-    elif max_sample_points > 10000:
-        logger.warning(f"max_sample_points capped at 10000 (was {max_sample_points})")
-        max_sample_points = 10000
 
     # Build Houdini-side code that does all the heavy lifting locally
     # This avoids slow RPC iteration over geometry elements
@@ -231,10 +226,9 @@ else:
         # Sample points - use numpy-style array access if possible
         point_count = result["point_count"]
         if max_sample_points > 0 and point_count > 0:
-            if point_count > 1000000:
-                result["warning"] = f"Geometry has {{point_count}} points (>1M). Sampling limited."
-
             sample_count = min(max_sample_points, point_count)
+            if point_count > 1000000:
+                result["warning"] = f"Geometry has {{point_count}} points (>1M); samples are its first {{sample_count}}."
             sample_points = []
 
             # Get point attribute names
@@ -263,10 +257,18 @@ print(json.dumps(result))
         geo_analysis_code,
         ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=bypass_config_enabled),
         operation="get_geo_summary",
-        max_stdout_size=500000,  # Allow larger output for geo data
+        max_stdout_size=_GEOMETRY_OUTPUT_LIMIT,
         host=host,
         port=port,
     )
+    # [LAW:no-silent-failure] a cut-off read is not malformed data: name the
+    # ceiling it hit and the knobs that shrink the read, rather than a parse error.
+    if exec_result.get("stdout_truncated"):
+        raise OperationFailed(
+            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters with "
+            f"max_sample_points={max_sample_points}; each sample carries every point attribute, "
+            "so ask for fewer, or set include_groups=False if the node has many groups"
+        )
 
     # Parse the JSON output from stdout
     stdout = exec_result["stdout"].strip()

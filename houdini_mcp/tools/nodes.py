@@ -18,6 +18,7 @@ from ..connection import Link
 from ._common import (
     Count,
     OperationFailed,
+    ResultLimit,
     handle_connection_errors,
     join_warnings,
     node_at,
@@ -321,8 +322,8 @@ def list_node_types(
 def list_children(
     node_path: str,
     recursive: bool = False,
-    max_depth: int = 10,
-    max_nodes: int = 1000,
+    max_depth: Count = 10,
+    max_nodes: ResultLimit = 1000,
     compact: bool = False,
     host: str = "localhost",
     port: int = 18811,

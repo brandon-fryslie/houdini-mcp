@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: the counts and timeout a caller passes to
+  `list_children`, `execute_code`, `get_parameter_schema` and `get_geo_summary`
+  are bounded in the served schema and refused there
+  (houdini-tool-contracts-14l). A negative `list_children` `max_depth`,
+  `execute_code` `max_stdout_size`, `max_stderr_size` or `max_diff_nodes`, or
+  `get_geo_summary` `max_sample_points` is refused; before, the output and diff
+  lists were sliced from the end, and the sample count was clamped to 0.
+  `list_children` `max_nodes` and `get_parameter_schema` `max_parms` must be at
+  least 1: a limit of 0 listed no nodes, and no parameters as a plain success.
+  `get_geo_summary` `max_sample_points` over 1000 is refused, where it was
+  clamped to 10000, a sample that never fit the read's output ceiling.
+  `execute_code` `timeout` must be from 1 to 86400 seconds; a timeout of 0 or
+  less reported the program still running at once and held the scene, and one
+  past `threading.TIMEOUT_MAX` raised after the program had started.
+  `get_houdini_help` `timeout` shares that type, so over 86400 is refused too.
+
+- `get_parameter_schema` `max_parms` counts parameters; folders, separators and
+  labels no longer use it up. A listing it cut short carries
+  `warning: "Parameters limited to the first N of M parameters"`
+  (houdini-tool-contracts-14l). Before, the cut list was a plain success.
+
+- `get_geo_summary` whose output passes its 500000-character ceiling fails
+  naming that ceiling and the arguments that shrink the read, where it failed as unparseable
+  geometry data (houdini-tool-contracts-14l).
+
 - **BREAKING (Python API)**: `houdini_mcp.connection` no longer has `connect`,
   `get_connection`, `disconnect`, `ensure_link` or `ensure_connected`
   (houdini-laws-etg.gxj). Code that reaches Houdini opens

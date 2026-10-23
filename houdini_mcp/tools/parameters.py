@@ -9,6 +9,7 @@ from typing import Any
 
 from ._common import (
     InvalidInput,
+    ResultLimit,
     handle_connection_errors,
     node_at,
     tool_error,
@@ -67,7 +68,7 @@ def set_parameter(
 def get_parameter_schema(
     node_path: str,
     parm_name: str | None = None,
-    max_parms: int = 100,
+    max_parms: ResultLimit = 100,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -85,7 +86,8 @@ def get_parameter_schema(
         max_parms: Maximum number of parameters to return when parm_name is None (default: 100)
 
     Returns:
-        Dict containing parameter schemas with type information, defaults, ranges, and current values.
+        Dict containing parameter schemas with type information, defaults, ranges, and current values,
+        and a "warning" when max_parms left some of the node's parameters out.
 
     Schema includes:
         - name: Parameter name
@@ -116,8 +118,6 @@ def get_parameter_schema(
 
         node = node_at(hou, node_path)
 
-        parameters: list[dict[str, Any]] = []
-
         # Get parameter templates - either specific one or all
         if parm_name is not None:
             try:
@@ -125,8 +125,6 @@ def get_parameter_schema(
             except ParmNotFound as e:
                 raise InvalidInput(str(e), parm_name=parm_name) from e
 
-            # When we only requested one parameter, we expect to include it even if
-            # its template is folder-like (rare but possible).
             parm_templates = [parm_template]
         else:
             # Get all parameter templates from node.
@@ -139,27 +137,43 @@ def get_parameter_schema(
             else:
                 parm_templates = []
 
-        # Process each parameter template
-        for idx, parm_template in enumerate(parm_templates):
-            if idx >= max_parms and parm_name is None:
-                logger.info(f"Reached max_parms limit of {max_parms}")
-                break
+        # Templates this tool does not list are dropped before the cut, so
+        # max_parms, count and the warning all count what is listed.
+        unlisted = _unlisted_types(hou)
+        listed = [t for t in parm_templates if t.type() not in unlisted]
+        # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
+        # template, and max_parms is at least 1.
+        parameters = [_extract_parameter_info(hou, node, t) for t in listed[:max_parms]]
+        logger.info(
+            "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), len(listed)
+        )
 
-            param_info = _extract_parameter_info(hou, node, parm_template)
-            if param_info is not None:
-                parameters.append(param_info)
-
-        result = {
+        result: dict[str, Any] = {
             "status": "success",
             "node_path": node_path,
             "parameters": parameters,
             "count": len(parameters),
         }
+        if len(listed) > max_parms:
+            # [LAW:no-silent-failure] a capped listing is not the node's whole schema.
+            result["warning"] = (
+                f"Parameters limited to the first {max_parms} of {len(listed)} parameters"
+            )
 
         return result
 
 
-def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any] | None:
+def _unlisted_types(hou: Any) -> tuple[Any, ...]:
+    """The template types this tool does not list."""
+    return (
+        hou.parmTemplateType.Folder,
+        hou.parmTemplateType.FolderSet,
+        hou.parmTemplateType.Separator,
+        hou.parmTemplateType.Label,
+    )
+
+
+def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any]:
     """
     Extract parameter information from a parameter template.
 
@@ -172,18 +186,9 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
         parm_template: The parameter template to extract info from
 
     Returns:
-        Dict with parameter info, or None if parameter should be skipped
+        Dict with parameter info
     """
     parm_type = parm_template.type()
-
-    # Skip folder/separator parameters - they're not settable
-    if parm_type in (
-        hou.parmTemplateType.Folder,
-        hou.parmTemplateType.FolderSet,
-        hou.parmTemplateType.Separator,
-        hou.parmTemplateType.Label,
-    ):
-        return None
 
     param_name = parm_template.name()
     num_components = parm_template.numComponents()

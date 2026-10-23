@@ -305,14 +305,6 @@ class TestServedSchemas:
         assert not await accepts(client, served, "find_error_nodes", {"max_results": 0})
         assert await accepts(client, served, "find_error_nodes", {"max_results": 1})
 
-    async def test_a_docs_fetch_waits_at_least_a_second(
-        self, client: Client[Any], served: dict[str, Tool]
-    ) -> None:
-        """httpx cannot wait zero seconds; the wire refuses the timeout before it gets there."""
-        arguments = {"help_type": "sop", "item_name": "box"}
-        assert not await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 0})
-        assert await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 1})
-
     async def test_render_viewport_camera_vectors_are_three_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
@@ -358,10 +350,52 @@ class TestServedSchemas:
         calls = {
             ("get_node_info", "max_params"): {"node_path": "/obj"},
             ("serialize_scene", "max_depth"): {},
+            ("list_children", "max_depth"): {"node_path": "/obj"},
+            ("execute_code", "max_stdout_size"): {"code": "pass"},
+            ("execute_code", "max_stderr_size"): {"code": "pass"},
+            ("execute_code", "max_diff_nodes"): {"code": "pass"},
+            ("get_geo_summary", "max_sample_points"): {"node_path": "/obj/geo1/box1"},
         }
         for (name, limit), base in calls.items():
-            assert await accepts(client, served, name, {**base, limit: 0}), name
-            assert not await accepts(client, served, name, {**base, limit: -1}), name
+            assert await accepts(client, served, name, {**base, limit: 0}), (name, limit)
+            assert not await accepts(client, served, name, {**base, limit: -1}), (name, limit)
+
+    async def test_a_listing_limit_lists_at_least_one(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A limit of zero would list nothing and call it the node's contents."""
+        calls = {
+            ("list_children", "max_nodes"): {"node_path": "/obj"},
+            ("get_parameter_schema", "max_parms"): {"node_path": "/obj"},
+        }
+        for (name, limit), base in calls.items():
+            assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
+            assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
+
+    async def test_a_wait_is_between_a_second_and_a_day(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """Zero would give up before the call began; an unbounded wait can overflow the clock."""
+        calls = {
+            "execute_code": {"code": "pass"},
+            "get_houdini_help": {"help_type": "sop", "item_name": "box"},
+        }
+        for name, base in calls.items():
+            for timeout in (1, 86400):
+                assert await accepts(client, served, name, {**base, "timeout": timeout}), name
+            for timeout in (0, 86401):
+                assert not await accepts(client, served, name, {**base, "timeout": timeout}), name
+
+    async def test_geo_summary_samples_at_most_a_thousand_points(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        arguments = {"node_path": "/obj/geo1/box1"}
+        assert await accepts(
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 1000}
+        )
+        assert not await accepts(
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 1001}
+        )
 
     @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
     def test_summarize_and_the_target_are_keyword_only(self, name: str) -> None:

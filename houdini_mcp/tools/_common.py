@@ -88,6 +88,9 @@ __all__ = [
     "DEFAULT_RESOLUTION",
     "Vec3",
     "Count",
+    "ResultLimit",
+    "SampleCount",
+    "Seconds",
     "RGB",
 ]
 
@@ -292,6 +295,13 @@ RGB = tuple[Channel, Channel, Channel]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
+SampleCount = Annotated[Count, Field(le=1000)]
+"""How many points a geometry read samples; a thousand points with a few attributes
+fit the read's output ceiling, where ten thousand never do."""
+Seconds = Annotated[int, Field(ge=1, le=86400)]
+"""How long a call may wait: zero would give up before it began, and an unbounded wait
+can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is
+the ceiling."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:
