@@ -915,7 +915,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`uv sync --locked`), so every tool runs at one version everywhere.
   Set up with `uv sync && uv run pytest`.
 - **BREAKING (floors)**: Python 3.11+ is required; 3.10, end-of-life since
-  2026-10, is dropped. `fastmcp>=4.1` and `rpyc>=5.3.1,<6`. The Houdini plugin
+  2026-10, is dropped. `fastmcp>=4.1` and `rpyc>=5.3.1,<6`. uv 0.12.15 or newer
+  runs the project (`[tool.uv] required-version`). The Houdini plugin
   keeps its 3.10 floor (ruff `per-file-target-version`).
 
 ### Fixed
