@@ -846,3 +846,77 @@ class TestAProgramThatFailedOnTheLink:
             "The undo group did not open or close: ValueError: undo stack locked"
         )
         assert result["stdout"] == "done\n"
+
+    def test_an_undo_group_that_failed_to_open_is_the_runs_failure(
+        self, mock_connection, monkeypatch
+    ):
+        from tests.conftest import MockUndos
+
+        def refuse(self, label: str):
+            raise ValueError("undo disabled")
+
+        monkeypatch.setattr(MockUndos, "group", refuse)
+        result = _run("print('never')")
+
+        assert result["kind"] == "operation_failed"
+        assert (
+            result["message"] == "The undo group did not open or close: ValueError: undo disabled"
+        )
+        assert result["stdout"] == ""
+
+    def test_an_undo_group_that_failed_to_open_on_the_link_resets_the_connection(
+        self, mock_connection, monkeypatch
+    ):
+        from houdini_mcp.connection import houdini
+        from tests.conftest import MockUndos, link_failure
+
+        def lose(self, label: str):
+            raise link_failure(EOFError("stream has been closed"))
+
+        monkeypatch.setattr(MockUndos, "group", lose)
+        link = houdini().link()
+        result = _run("print('never')")
+
+        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
+        assert link.conn.closed and houdini().link() is None
+
+    def test_a_judgment_of_the_link_that_raises_leaves_the_programs_failure(
+        self, mock_connection, monkeypatch
+    ):
+        """The judgment's own failure is the worker thread's, raised there."""
+        import threading
+
+        from houdini_mcp.tools import code
+
+        def broken(*args):
+            raise RuntimeError("judgment broke")
+
+        raised: list[threading.ExceptHookArgs] = []
+        monkeypatch.setattr(code, "link_lost", broken)
+        monkeypatch.setattr(threading, "excepthook", raised.append)
+        result = _run("raise ValueError('mine')")
+
+        assert (result["kind"], result["message"]) == ("operation_failed", "ValueError: mine")
+        assert [str(r.exc_value) for r in raised] == ["judgment broke"]
+
+    def test_the_worker_records_how_its_program_ended(self, mock_connection, monkeypatch, caplog):
+        import logging
+
+        from tests.conftest import link_failure
+
+        def lose() -> None:
+            raise link_failure(EOFError("stream has been closed"))
+
+        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            completed = _run("print('done')")
+            lost = _run("hou.lose()")
+
+        ended = [r.getMessage() for r in caplog.records if " program ended " in r.getMessage()]
+        assert len(ended) == 2
+        assert completed["audit"]["code_sha256"] in ended[0]
+        assert ended[0].endswith("faults=[] link_lost=None")
+        assert lost["audit"]["code_sha256"] in ended[1]
+        assert ended[1].endswith(
+            "faults=['program'] link_lost=link to Houdini at localhost:18811 failed: EOFError"
+        )

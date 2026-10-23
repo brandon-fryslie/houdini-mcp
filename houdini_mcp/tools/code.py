@@ -838,12 +838,29 @@ def _execute_with_grant(
                 started = time.monotonic()
                 program_starts.set()
                 faults = run_program()
+                # Written before the link is judged, so a judgment that raises cannot
+                # leave the program's failure reading as a success.
+                ended = _Ended(faults, None)
                 # [LAW:single-enforcer] Judged once the undo group has closed, so its
                 # close still reached Houdini, and here, where the link was used, so a
                 # program that outlived its call still drops the link it failed on. The
                 # first fault that is the link's drops it; none after is judged.
-                lost = (link_lost(houdini(), link, f.error) for f in faults)
-                ended = _Ended(faults, next((x for x in lost if x is not None), None))
+                for fault in faults:
+                    if (lost := link_lost(houdini(), link, fault.error)) is not None:
+                        ended = _Ended(faults, lost)
+                        break
+                # The worker's own record of its run: it alone outlives a call that
+                # timed out, and a link it dropped is traced to the program here.
+                logger.info(
+                    "%s program ended code_sha256=%s after %.3fs of timeout %ss: "
+                    "faults=%s link_lost=%s",
+                    operation,
+                    detected.code_sha256,
+                    time.monotonic() - started,
+                    timeout,
+                    [fault.step for fault in faults],
+                    ended.lost,
+                )
             finally:
                 program_starts.set()
                 program_ends.set()
@@ -858,10 +875,10 @@ def _execute_with_grant(
             # whatever the program raised.
             # [LAW:dataflow-not-control-flow] Without an undo primitive the group is
             # one that does nothing, so the program runs inside a group either way.
-            group = undos.group(_UNDO_GROUP_LABEL) if undos is not None else nullcontext()
+            # Opening it is a request to Houdini too, so it fails inside the try.
             faults: tuple[_Fault, ...] = ()
             try:
-                with group:
+                with undos.group(_UNDO_GROUP_LABEL) if undos is not None else nullcontext():
                     faults = _run_code_thread(code, hou, stdout_capture, stderr_capture)
             except Exception as error:  # noqa: BLE001
                 return (*faults, _Fault("undo group", error, traceback.format_exc()))
