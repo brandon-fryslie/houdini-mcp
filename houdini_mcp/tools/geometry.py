@@ -65,7 +65,8 @@ async def get_geo_summary(
         Dict with comprehensive geometry summary including:
         - point_count, primitive_count, vertex_count: Geometry topology stats
         - bounding_box: {min, max, size, center} vectors in the SOP's own space;
-          absent for geometry with no points, which occupies no place
+          absent for geometry with no point that has a position (no points, or
+          only points at NaN), which occupies no place
         - cook_state: "cooked" (the node is cooked first if it needs it)
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
@@ -77,6 +78,7 @@ async def get_geo_summary(
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
         - Empty geometry: Returns zeros for counts and no bounding_box, not an error
+        - Points all at NaN: Returns their count and no bounding_box
         - Massive geometry (>1M points): a warning names the point count; the
           samples are still the first max_sample_points
         - No geometry/Not a SOP: Returns error status

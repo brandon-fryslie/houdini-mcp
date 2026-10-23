@@ -109,3 +109,25 @@ async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
         "size": [2.0, 2.0, 2.0],
         "center": [0.0, 0.0, 0.0],
     }
+
+
+async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
+    at: dict[str, Any], bound: dict[str, Any]
+) -> None:
+    """Houdini 22's bounds skip a point at NaN, so a stray one costs no box, and
+    points all at NaN have no box though they have a count."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_nan", **at)["node_path"]
+
+    async def summary(name: str, positions: str) -> dict[str, Any]:
+        sop = tools.create_node("python", geo, name, **at)["node_path"]
+        code = f"g = hou.pwd().geometry()\nfor p in {positions}: g.createPoint().setPosition(p)"
+        tools.set_parameter(sop, "python", code, **at)
+        return await tools.get_geo_summary(sop, max_sample_points=0, summarize=False, **bound)
+
+    nan = "float('nan')"
+    stray = await summary("stray1", f"[({nan}, 0, 0), (1, 1, 1), (2, 2, 2)]")
+    lost = await summary("lost1", f"[({nan}, {nan}, {nan})] * 3")
+
+    assert stray["bounding_box"]["min"] == [1.0, 0.0, 0.0]
+    assert stray["bounding_box"]["max"] == [2.0, 2.0, 2.0]
+    assert lost["point_count"] == 3 and "bounding_box" not in lost
