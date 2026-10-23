@@ -14,7 +14,6 @@ from ._common import (
     ResultLimit,
     node_at,
     tool,
-    tool_error,
     using,
 )
 from .parms import Parm, ParmNotFound, of_tuple, resolve, value, write_all
@@ -54,17 +53,9 @@ def set_parameter(
 
         node = node_at(hou, node_path)
 
-        writes = write_all(node, {param_name: value})
-        if writes.failed:
-            [failed] = writes.failed
-            raise tool_error(failed["kind"], failed["reason"], failed=writes.failed)
-
-        return {
-            "status": "success",
-            "node_path": node_path,
-            "param_name": param_name,
-            "value": value,
-        }
+        return write_all(node, {param_name: value}).fields(
+            node_path=node_path, param_name=param_name, value=value
+        )
 
 
 @tool(READ)

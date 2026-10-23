@@ -14,12 +14,10 @@ import time
 from functools import partial
 from typing import Any, Literal
 
-from ..connection import Link
 from ._common import (
     READ,
     UNDOABLE,
     Count,
-    OperationFailed,
     ResultLimit,
     join_warnings,
     node_at,
@@ -34,7 +32,8 @@ from .cache import node_type_cache
 from .connections import input_connections, input_paths
 from .failure import Undone, batch_status
 from .parms import evaluated
-from .reads import UNREAD, Unread, is_unread, read, reason
+from .plugin import plugin_module
+from .reads import UNREAD, Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -509,18 +508,6 @@ def list_children(
         return result
 
 
-def _search_module(link: Link) -> Any:
-    """Houdini's ``houdini_mcp_search``, or the failure that names the plugin to install."""
-    try:
-        return link.conn.modules["houdini_mcp_search"]
-    except ImportError as e:
-        raise OperationFailed(
-            f"Houdini cannot import houdini_mcp_search ({reason(e)}): Houdini's path lacks "
-            "this release's houdini_mcp plugin. Install the plugin from the same release, "
-            "then restart Houdini."
-        ) from e
-
-
 @tool(READ)
 def find_nodes(
     root_path: str = "/obj",
@@ -567,7 +554,7 @@ def find_nodes(
         # program; find_nodes has no code-execution path of its own.
         # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
         # as an error instead of switching to a different result set.
-        total, found = _search_module(link).matching_descendants(
+        total, found = plugin_module(link, "houdini_mcp_search").matching_descendants(
             root, pattern, node_type, request.window
         )
         page = page_from(total, found, request)

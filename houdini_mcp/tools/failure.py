@@ -62,6 +62,7 @@ __all__ = [
     "BatchStatus",
     "Undone",
     "batch_status",
+    "items_failed",
 ]
 
 FailureKind = Literal[
@@ -211,9 +212,7 @@ def batch_status(
 
     [LAW:single-enforcer] Every multi-item tool reads its status here, so
     ``"success"`` never stands over an item whose effect did not happen and
-    ``"partial"`` never stands over a call that did nothing. A call whose every
-    item was refused as ``invalid_input`` is the caller's to fix; any other is
-    ``operation_failed``.
+    ``"partial"`` never stands over a call that did nothing.
     """
     logger.info(
         "batch outcome operation=%s done=%d failed=%s",
@@ -222,15 +221,25 @@ def batch_status(
         [(u.name, u.kind) for u in failed],
     )
     if failed and not len(done):
-        refused = all(u.kind == "invalid_input" for u in failed)
-        # every item is in ``report``; the message names the first, so it stays
-        # one item long however many failed
-        first, *rest = failed
-        more = f" (and {len(rest)} more, listed in the response)" if rest else ""
-        raise (InvalidInput if refused else OperationFailed)(
-            f"Nothing was done: {first.name}: {first.message}{more}", **report
-        )
+        raise items_failed(failed, "Nothing was done: ", **report)
     return "partial" if failed else "success"
+
+
+def items_failed(failed: Sequence[Undone], lead: str = "", /, **report: Any) -> ToolError:
+    """The failure of a call whose items ``failed``, carrying ``report``, its
+    message opening with ``lead``.
+
+    [LAW:single-enforcer] Every call failed by its items is classified here: one
+    whose every failed item was refused as ``invalid_input`` is the caller's to
+    fix; any other is ``operation_failed``. Every item is in ``report``; the
+    message names the first, so it stays one item long however many failed.
+    """
+    first, *rest = failed
+    more = f" (and {len(rest)} more, listed in the response)" if rest else ""
+    refused = all(u.kind == "invalid_input" for u in failed)
+    return (InvalidInput if refused else OperationFailed)(
+        f"{lead}{first.name}: {first.message}{more}", **report
+    )
 
 
 # =============================================================================

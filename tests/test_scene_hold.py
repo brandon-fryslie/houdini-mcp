@@ -2,9 +2,11 @@
 
 A call that needs the scene to itself holds it for its whole body. A second such
 call waits for the first and its response says what it waited for; a call that
-arrives while a launched program still runs is refused naming it; a call that
-shares the scene never waits. Waiting costs no thread, and a call its client
-gives up on while it waits never runs.
+arrives while a launched program still runs is refused naming it. A call that
+shares the scene waits only for an undoable call, whose work runs on Houdini's
+main thread with the link to itself (houdini-laws-etg.4ve), and says so too.
+Waiting costs no thread, and a call its client gives up on while it waits never
+runs.
 """
 
 import asyncio
@@ -17,13 +19,14 @@ from fastmcp import Client, FastMCP
 
 from houdini_mcp.server import held, served
 from houdini_mcp.tools.transactions import (
+    HOLDS_SCENE,
     PROGRAM,
     READ,
     UNDOABLE,
     ToolPolicy,
     declare_policy,
 )
-from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
+from houdini_mcp.tools.workers import WORKERS, Admission, WorkerLedger, WorkerStillRunning
 from tests.conftest import DEFAULT_SETTINGS, SUMMARIZER
 
 
@@ -113,16 +116,39 @@ class TestCallsHoldTheScene:
             answer.set()
             assert (await summary)["status"] == "success"
 
-    async def test_a_reader_runs_beside_a_writer_without_waiting(self):
-        writer = _Gated("create_node", UNDOABLE, [])
-        call = asyncio.create_task(held(writer.tool)())
-        await _until(writer.entered)
+    async def test_a_reader_runs_beside_a_call_holding_the_scene_without_waiting(self):
+        render = _Gated("render_viewport", HOLDS_SCENE, [])
+        call = asyncio.create_task(held(render.tool)())
+        await _until(render.entered)
         try:
             read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
-            writer.gate.set()
+            render.gate.set()
             await call
+
+    async def test_a_reader_waits_for_an_undoable_call_and_says_so(self, heard):
+        log: list[str] = []
+        writer = _Gated("create_node", UNDOABLE, log)
+        reader = _Gated("get_scene_info", READ, log)
+        reader.gate.set()
+        queued = heard("get_scene_info waits for the scene behind create_node")
+        call = asyncio.create_task(held(writer.tool)())
+        await _until(writer.entered)
+        read = asyncio.create_task(held(reader.tool)())
+        await _until(queued)
+        assert not reader.entered.is_set()
+        writer.gate.set()
+        await call
+
+        result = await read
+        assert log == [
+            "create_node start",
+            "create_node end",
+            "get_scene_info start",
+            "get_scene_info end",
+        ]
+        assert result["scene_wait"]["waited_for"] == ["create_node"]
 
     async def test_an_async_tool_reads_off_the_event_loop(self, monkeypatch):
         """get_geo_summary's read joins a worker; on the loop it would stall every call."""
@@ -150,15 +176,15 @@ class TestCallsHoldTheScene:
         release.set()
         assert (await summary)["status"] == "success"
 
-    async def test_queued_writers_cost_no_thread_so_reads_still_run(self):
+    async def test_queued_calls_cost_no_thread_so_reads_still_run(self):
         """A waiting call holds no thread from the pool that runs tool bodies."""
         anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-        writer = _Gated("create_node", UNDOABLE, [])
-        holder = asyncio.create_task(held(writer.tool)())
-        await _until(writer.entered)
+        render = _Gated("render_viewport", HOLDS_SCENE, [])
+        holder = asyncio.create_task(held(render.tool)())
+        await _until(render.entered)
         queued = [
             asyncio.create_task(
-                held(_named("set_parameter", UNDOABLE, lambda: {"status": "success"}))()
+                held(_named("render_quad_view", HOLDS_SCENE, lambda: {"status": "success"}))()
             )
             for _ in range(5)
         ]
@@ -166,7 +192,7 @@ class TestCallsHoldTheScene:
             read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
-            writer.gate.set()
+            render.gate.set()
             await holder
             await asyncio.gather(*queued)
 
@@ -209,7 +235,7 @@ class TestCallsHoldTheScene:
             if worker is not None:
                 worker.thread.join(5)
         assert WORKERS.running() is None
-        async with WORKERS.hold("create_node") as wait:
+        async with WORKERS.hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
 
 
@@ -246,11 +272,11 @@ class TestLedgerQueue:
         c_queued = heard("c waits for the scene behind a, b")
 
         async def take(operation: str) -> None:
-            async with ledger.hold(operation) as wait:
+            async with ledger.hold(operation, Admission.EXCLUSIVE) as wait:
                 order.append(operation)
                 waits[operation] = wait
 
-        async with ledger.hold("a"):
+        async with ledger.hold("a", Admission.EXCLUSIVE):
             b = asyncio.create_task(take("b"))
             await _until(b_queued)
             c = asyncio.create_task(take("c"))
@@ -266,10 +292,10 @@ class TestLedgerQueue:
         b_queued, c_queued = heard("b waits for the scene"), heard("c waits for the scene")
 
         async def take(operation: str):
-            async with ledger.hold(operation) as wait:
+            async with ledger.hold(operation, Admission.EXCLUSIVE) as wait:
                 return wait
 
-        async with ledger.hold("a"):
+        async with ledger.hold("a", Admission.EXCLUSIVE):
             b = asyncio.create_task(take("b"))
             await _until(b_queued)
             c = asyncio.create_task(take("c"))
@@ -287,7 +313,7 @@ class TestLedgerQueue:
         dead_loop = asyncio.new_event_loop()
 
         async def take(operation: str) -> None:
-            async with ledger.hold(operation):
+            async with ledger.hold(operation, Admission.EXCLUSIVE):
                 pytest.fail("a waiter on a closed loop never runs")
 
         def queue_on_a_loop_that_then_closes() -> None:
@@ -295,12 +321,12 @@ class TestLedgerQueue:
             dead_loop.run_until_complete(asyncio.sleep(0))
             dead_loop.close()
 
-        async with ledger.hold("a"):
+        async with ledger.hold("a", Admission.EXCLUSIVE):
             await asyncio.to_thread(queue_on_a_loop_that_then_closes)
             assert queued.is_set()
         assert dropped.is_set()
 
-        async with asyncio.timeout(5), ledger.hold("c") as wait:
+        async with asyncio.timeout(5), ledger.hold("c", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
 
     async def test_a_worker_alone_refuses_an_arriving_call(self):
@@ -309,14 +335,14 @@ class TestLedgerQueue:
         worker = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=1)
         try:
             with pytest.raises(WorkerStillRunning) as refused:
-                async with ledger.hold("create_node"):
+                async with ledger.hold("create_node", Admission.EXCLUSIVE):
                     pass
             assert refused.value.worker is worker
             assert refused.value.wait.waited_for == ()
         finally:
             gate.set()
             worker.thread.join(5)
-        async with ledger.hold("create_node") as wait:
+        async with ledger.hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
 
     async def test_a_call_cancelled_while_queued_gives_up_its_place(self, heard):
@@ -325,10 +351,10 @@ class TestLedgerQueue:
         gave_up = heard("get_geo_summary gave up its place in the queue for the scene")
 
         async def take():
-            async with ledger.hold("get_geo_summary"):
+            async with ledger.hold("get_geo_summary", Admission.EXCLUSIVE):
                 pytest.fail("a cancelled call must never hold the scene")
 
-        async with ledger.hold("create_node"):
+        async with ledger.hold("create_node", Admission.EXCLUSIVE):
             task = asyncio.create_task(take())
             await _until(queued)
             task.cancel()
@@ -336,17 +362,17 @@ class TestLedgerQueue:
                 await task
         assert gave_up.is_set()
 
-        async with asyncio.timeout(5), ledger.hold("create_node") as wait:
+        async with asyncio.timeout(5), ledger.hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
 
     async def test_a_call_cancelled_as_the_scene_reaches_it_hands_the_scene_on(self, heard):
         ledger = WorkerLedger()
         handed_on = heard("get_geo_summary was cancelled as it took the scene, and handed it on")
-        holding = ledger.hold("create_node")
+        holding = ledger.hold("create_node", Admission.EXCLUSIVE)
         await holding.__aenter__()
 
         async def take():
-            async with ledger.hold("get_geo_summary"):
+            async with ledger.hold("get_geo_summary", Admission.EXCLUSIVE):
                 pytest.fail("a cancelled call must never run its body")
 
         task = asyncio.create_task(take())
@@ -357,5 +383,152 @@ class TestLedgerQueue:
             await task
         assert handed_on.is_set()
 
-        async with asyncio.timeout(5), ledger.hold("create_node") as wait:
+        async with asyncio.timeout(5), ledger.hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
+
+
+class TestReadsBesideTheMainThread:
+    """A call on Houdini's main thread has the link to itself; reads share it otherwise."""
+
+    async def test_an_undoable_call_waits_for_the_reads_in_flight(self, heard):
+        ledger = WorkerLedger()
+        order: list[str] = []
+        queued = heard("set_parameter waits for the scene behind get_scene_info")
+
+        async def write():
+            async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD) as wait:
+                order.append("set_parameter")
+                return wait
+
+        async with ledger.hold("get_scene_info", Admission.SHARED):
+            writing = asyncio.create_task(write())
+            await _until(queued)
+            order.append("get_scene_info ends")
+
+        assert (await writing).waited_for == ("get_scene_info",)
+        assert order == ["get_scene_info ends", "set_parameter"]
+
+    async def test_a_read_queued_behind_a_waiting_undoable_call_does_not_pass_it(self, heard):
+        ledger = WorkerLedger()
+        order: list[str] = []
+        write_queued = heard("set_parameter waits for the scene behind first_read")
+        read_queued = heard("second_read waits for the scene behind set_parameter")
+
+        async def take(operation: str, admission: Admission):
+            async with ledger.hold(operation, admission) as wait:
+                order.append(operation)
+                return wait
+
+        async with ledger.hold("first_read", Admission.SHARED):
+            writing = asyncio.create_task(take("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD))
+            await _until(write_queued)
+            reading = asyncio.create_task(take("second_read", Admission.SHARED))
+            await _until(read_queued)
+
+        await asyncio.gather(writing, reading)
+        assert order == ["set_parameter", "second_read"]
+        assert (await reading).waited_for == ("set_parameter",)
+
+    async def test_a_read_passes_an_undoable_call_waiting_on_a_render(self, heard):
+        """The undoable call waits for the render either way; the read need not."""
+        ledger = WorkerLedger()
+        order: list[str] = []
+        write_queued = heard("set_parameter waits for the scene behind render_viewport")
+
+        async def write():
+            async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD) as wait:
+                order.append("set_parameter")
+                return wait
+
+        async with ledger.hold("render_viewport", Admission.EXCLUSIVE):
+            writing = asyncio.create_task(write())
+            await _until(write_queued)
+            async with asyncio.timeout(5), ledger.hold("get_node_info", Admission.SHARED) as wait:
+                assert wait.waited_for == ()
+                order.append("get_node_info")
+
+        assert (await writing).waited_for == ("render_viewport", "get_node_info")
+        assert order == ["get_node_info", "set_parameter"]
+
+    async def test_a_read_freed_when_the_undoable_call_ahead_gives_up(self, heard):
+        ledger = WorkerLedger()
+        write_queued = heard("set_parameter waits for the scene behind first_read")
+        read_queued = heard("second_read waits for the scene behind set_parameter")
+
+        async def write():
+            async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD):
+                pytest.fail("a cancelled call must never hold the scene")
+
+        async def read():
+            async with ledger.hold("second_read", Admission.SHARED) as wait:
+                return wait
+
+        async with ledger.hold("first_read", Admission.SHARED):
+            writing = asyncio.create_task(write())
+            await _until(write_queued)
+            reading = asyncio.create_task(read())
+            await _until(read_queued)
+            writing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await writing
+            # The read runs while first_read still holds: nothing it waits behind is
+            # left, and the call that gave up never held the scene, so it is not named.
+            async with asyncio.timeout(5):
+                assert (await reading).waited_for == ()
+
+    async def test_a_cancelled_waiting_read_never_runs(self, heard):
+        ledger = WorkerLedger()
+        queued = heard("get_scene_info waits for the scene behind set_parameter")
+
+        async def read():
+            async with ledger.hold("get_scene_info", Admission.SHARED):
+                pytest.fail("a cancelled read must never run")
+
+        async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD):
+            reading = asyncio.create_task(read())
+            await _until(queued)
+            reading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reading
+
+        async with (
+            asyncio.timeout(5),
+            ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD) as wait,
+        ):
+            assert wait.waited_for == ()
+
+    async def test_an_undoable_call_a_worker_refuses_keeps_no_read_waiting(self):
+        ledger = WorkerLedger()
+        gate = threading.Event()
+        worker = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=1)
+        try:
+            async with ledger.hold("first_read", Admission.SHARED):
+                with pytest.raises(WorkerStillRunning) as refused:
+                    async with (
+                        asyncio.timeout(5),
+                        ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD),
+                    ):
+                        pass
+                assert refused.value.wait.seconds < 1
+                async with (
+                    asyncio.timeout(5),
+                    ledger.hold("second_read", Admission.SHARED) as wait,
+                ):
+                    assert wait.waited_for == ()
+        finally:
+            gate.set()
+            worker.thread.join(5)
+
+    async def test_a_read_runs_beside_a_running_worker(self):
+        ledger = WorkerLedger()
+        gate = threading.Event()
+        worker = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=1)
+        try:
+            async with asyncio.timeout(5), ledger.hold("get_scene_info", Admission.SHARED) as wait:
+                assert wait.waited_for == ()
+            with pytest.raises(WorkerStillRunning):
+                async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD):
+                    pass
+        finally:
+            gate.set()
+            worker.thread.join(5)

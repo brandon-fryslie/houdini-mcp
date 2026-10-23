@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.parms import (
     ParmNotFound,
     ParmValueError,
@@ -122,7 +123,12 @@ class TestWriteAll:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
             writes = write_all(node, {"radx": 3.0, "t": 1.0, "nope": 1, "bad": 2})
 
-        assert writes.fields("op")["status"] == "partial"
+        with pytest.raises(OperationFailed) as failed:
+            writes.fields()
+        assert str(failed.value) == (
+            "t: Parameter t is a tuple, provide a list/tuple value "
+            "(and 2 more, listed in the response)"
+        )
         assert writes.updated == [{"name": "radx", "value": 3.0}]
         assert [f["name"] for f in writes.failed] == ["t", "nope", "bad"]
         assert writes.failed[0]["reason"] == "Parameter t is a tuple, provide a list/tuple value"
@@ -144,7 +150,7 @@ class TestWriteAll:
 
     def test_nothing_failed_is_success(self):
         writes = write_all(node_with(radx=2.5), {"radx": 1.0})
-        assert writes.fields("op", rop_path="/out/k") == {
+        assert writes.fields(rop_path="/out/k") == {
             "status": "success",
             "updated": [{"name": "radx", "value": 1.0}],
             "failed": [],
@@ -163,17 +169,21 @@ class TestWriteAll:
 class TestToolsShareTheOwner:
     """The same parm and value behave the same whichever tool the agent picks."""
 
-    def test_set_parameter_refuses_a_scalar_for_a_tuple(self, mock_connection):
+    def test_set_parameter_refuses_a_scalar_for_a_tuple(self, mock_connection, caplog):
         from houdini_mcp.tools import set_parameter
 
         mock_connection.add_node(node_with(t=[0.0, 0.0, 0.0]))
-        result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
+            result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
+        assert "parameters written node=/obj/n updated=[] failed=[{'name': 't'" in caplog.text
         assert result["status"] == "error"
         assert result["kind"] == "invalid_input"
-        assert result["message"] == "Parameter t is a tuple, provide a list/tuple value"
+        assert result["message"] == "t: Parameter t is a tuple, provide a list/tuple value"
         assert result["failed"][0]["name"] == "t"
 
-    def test_create_material_reports_the_parameter_it_could_not_set(self, mock_connection):
+    def test_create_material_whose_parameter_fails_is_undone(self, mock_connection):
+        """A scene write is all or nothing: the material it created goes with the
+        parameter it could not set, and the failure says which writes it made."""
         from houdini_mcp.tools import create_material
 
         result = create_material(
@@ -183,7 +193,10 @@ class TestToolsShareTheOwner:
             host="localhost",
             port=18811,
         )
-        assert result["status"] == "partial"
+        assert result["kind"] == "invalid_input", result
+        assert result["message"] == (
+            "nope: Parameter not found: nope on /mat/m\nIts changes to the scene were undone."
+        )
         assert result["updated"] == [{"name": "metallic", "value": 1.0}]
         assert result["failed"] == [
             {
@@ -192,14 +205,16 @@ class TestToolsShareTheOwner:
                 "reason": "Parameter not found: nope on /mat/m",
             }
         ]
+        assert mock_connection.node("/mat/m") is None
+        assert mock_connection.undos.undoLabels() == ()
 
-    def test_create_render_node_reports_the_setting_it_could_not_set(self, mock_connection):
+    def test_create_render_node_whose_setting_fails_is_undone(self, mock_connection):
         from houdini_mcp.tools import create_render_node
 
         result = create_render_node(
             "karma", "k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811
         )
-        assert result["status"] == "partial"
+        assert result["kind"] == "invalid_input", result
         assert result["updated"] == [{"name": "tx", "value": 1.0}]
         assert result["failed"] == [
             {
@@ -208,13 +223,15 @@ class TestToolsShareTheOwner:
                 "reason": "Parameter not found: nope on /out/k",
             }
         ]
+        assert mock_connection.node("/out/k") is None
 
-    def test_set_render_settings_reports_the_same_way(self, mock_connection):
+    def test_set_render_settings_whose_setting_fails_is_undone(self, mock_connection):
         from houdini_mcp.tools import set_render_settings
 
         mock_connection.add_node(MockHouNode(path="/out/k", name="k", node_type="karma"))
+        before = mock_connection.node("/out/k").parm("tx").eval()
         result = set_render_settings("/out/k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811)
-        assert result["status"] == "partial"
+        assert result["kind"] == "invalid_input", result
         assert result["updated"] == [{"name": "tx", "value": 1.0}]
         assert result["failed"] == [
             {
@@ -223,40 +240,24 @@ class TestToolsShareTheOwner:
                 "reason": "Parameter not found: nope on /out/k",
             }
         ]
+        assert mock_connection.node("/out/k").parm("tx").eval() == before
 
-    def test_set_render_settings_that_writes_nothing_is_an_error(self, mock_connection, caplog):
-        """Every setting refused is not "partial": nothing was done, and the
-        caller is told which settings and why, as its own input to fix."""
+    def test_set_render_settings_that_writes_nothing_is_an_error(self, mock_connection):
+        """Every setting refused: the caller is told which settings and why, as
+        its own input to fix, and there was nothing to undo."""
         from houdini_mcp.tools import set_render_settings
         from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
 
         mock_connection.add_node(MockHouNode(path="/out/k", name="k", node_type="karma"))
-        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
-            result = set_render_settings("/out/k", {"nope": 1}, host="localhost", port=18811)
+        result = set_render_settings("/out/k", {"nope": 1}, host="localhost", port=18811)
 
         failure = FAILURE.validate_python(result)
         assert isinstance(failure, InvalidInputFailure), result
-        assert failure.message == "Nothing was done: nope: Parameter not found: nope on /out/k"
+        assert failure.message == "nope: Parameter not found: nope on /out/k"
         assert result["updated"] == []
         assert [f["name"] for f in result["failed"]] == ["nope"]
         # the error carries the report a success would have, ROP included
         assert result["rop_path"] == "/out/k"
-        assert (
-            "batch outcome operation=set_render_settings done=0 "
-            "failed=[('nope', 'invalid_input')]" in caplog.text
-        )
-
-    def test_create_material_whose_every_parameter_fails_is_partial(self, mock_connection):
-        """The material node was created, so the call did something: partial, not error."""
-        from houdini_mcp.tools import create_material
-
-        result = create_material(
-            "principledshader", "m", parameters={"nope": 1}, host="localhost", port=18811
-        )
-
-        assert result["status"] == "partial", result
-        assert result["material_path"] == "/mat/m"
-        assert result["updated"] == []
 
     def test_reads_return_one_shape_for_a_vector(self, mock_connection):
         from houdini_mcp.tools import get_material_info, get_render_settings

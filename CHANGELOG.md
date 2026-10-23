@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Each call to `set_parameter`, `create_node`, `delete_node`, `connect_nodes`,
+  `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
+  `set_node_color`, `set_node_position`, `layout_children`,
+  `create_network_box`, `create_material`, `assign_material`,
+  `set_render_settings` or `create_render_node` is one step on Houdini's undo
+  stack, labelled `houdini-mcp <tool> <8 hex chars>`, so one undo takes the
+  whole call back (houdini-laws-etg.4ve). A call that fails is undone before it
+  returns, and its error message ends with `Its changes to the scene were
+  undone.` A call that failed before changing anything undoes nothing, so the
+  artist's last step stays on top. Houdini 22 records undo groups only on its
+  main thread, so these calls run their Houdini work there (see Changed). A
+  graphical Houdini's interface does not redraw while such a call runs,
+  usually a fraction of a second; its main thread gives a call up once the
+  MCP server has sent nothing for 60 seconds, so a dropped network link
+  cannot hold the interface frozen. Reads that arrive while one of these
+  calls runs wait for it and report the wait in `scene_wait`; they still run
+  beside renders and `execute_code` programs. `execute_code`'s own undo group
+  still records nothing (houdini-laws-etg.lbc).
+
 - An `execute_code` program that failed because the link to Houdini did (a `hou`
   call that timed out, a connection that closed) is now reported as the link's
   failure, `timeout` with `connection_reset: true` or `connection_lost`, instead of
@@ -39,6 +58,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (deployment)**: the fifteen editing tools listed under Fixed need
+  the houdini_mcp plugin installed in the Houdini they reach, whether its
+  listener was started from the plugin or with bare `hrpyc`
+  (houdini-laws-etg.4ve); without it they fail saying to install the plugin,
+  and reads still work. A headless `hython` script, after starting the
+  listener, must run `from houdini_mcp_plugin import main_thread;
+  main_thread.serve()` on its main thread; with nothing serving, these calls
+  are refused at once with a message naming
+  `houdini_mcp_plugin.main_thread.serve()`.
+
+- **BREAKING (wire)**: `create_material`, `assign_material`,
+  `set_render_settings` and `create_render_node` are all or nothing
+  (houdini-laws-etg.4ve). When one of their parameter writes fails, the call
+  fails and the whole call is undone, where it returned `status: "partial"`.
+  The error's kind is `invalid_input` when every failed write was the caller's
+  input, else `operation_failed`, and it still carries `updated`, the writes
+  that were made and then undone, and `failed`, a `{name, kind, reason}` for
+  each write that failed.
+  `set_parameter` answers the same way: its response carries `updated` and
+  `failed`, and its error message opens with the parameter's name.
 
 - A tool's name has one source, its function's name (houdini-laws-etg.8vh). The
   tool boundary is `@tool(policy)`: it takes the tool's `ToolPolicy` and names

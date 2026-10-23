@@ -1,25 +1,31 @@
 """What each tool leaves behind in Houdini, and how a call recovers from it.
 
-[LAW:single-enforcer] The tool boundary (``_common.tool``) enters
-:func:`recovering` around every sync tool's body and refuses a scene writer that is
-not sync, so every call that can leave an effect in the scene passes through it. A
-call that replaces the scene first backs up the scene's unsaved work there; no tool
-body recovers its own effect.
+[LAW:single-enforcer] The tool boundary (``_common.tool``) runs every sync tool's
+body through :func:`recovering` and refuses a scene writer that is not sync, so
+every call that can leave an effect in the scene passes through it. An undoable
+call is one step on Houdini's undo stack, undone if it fails; a call that
+replaces the scene first backs up the scene's unsaved work. No tool body
+recovers its own effect.
 """
 
 from __future__ import annotations
 
 import inspect
 import logging
+import uuid
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from types import ModuleType
-from typing import Any, assert_never
+from typing import Any, Generic, NoReturn, TypeVar, assert_never
+
+import rpyc
 
 from ..connection import Link, transport_failure
 from .failure import OperationFailed, add_note
+from .plugin import plugin_module
+from .workers import Admission
 
 logger = logging.getLogger("houdini_mcp.tools.transactions")
 
@@ -28,12 +34,15 @@ class TransactionPolicy(StrEnum):
     """What recovering from a tool's lasting effect takes."""
 
     UNDOABLE = "undoable"
-    """Houdini's undo can reverse it, one edit at a time in a graphical session."""
+    """The call is one step on Houdini's undo stack, labelled as the call, and is
+    undone if it fails."""
     CHECKPOINT_REQUIRED = "checkpoint_required"
     """The call replaces the scene, so the scene's unsaved work is backed up first."""
     PROGRAM_UNDO_GROUP = "program_undo_group"
-    """As undoable, but the tool's program goes on editing the scene for as long as
-    it runs, which can be after the call has returned."""
+    """The tool's program edits the scene inside its own undo group, for as long
+    as it runs, which can be after the call has returned. The program runs off
+    Houdini's main thread, so Houdini records no step for it
+    (houdini-laws-etg.lbc)."""
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
     """A file outside the scene: nothing in Houdini to recover."""
 
@@ -70,6 +79,15 @@ class ToolPolicy:
     @property
     def writes_scene(self) -> bool:
         return self.recovery in _SCENE_WRITERS
+
+    @property
+    def admission(self) -> Admission:
+        """How the ledger admits the call: its access, and whether its Houdini work
+        runs on Houdini's main thread, as an undoable call's does
+        (:func:`_undone_on_failure`)."""
+        if self.recovery is TransactionPolicy.UNDOABLE:
+            return Admission.EXCLUSIVE_ON_MAIN_THREAD
+        return Admission.EXCLUSIVE if self.access is SceneAccess.EXCLUSIVE else Admission.SHARED
 
     def __post_init__(self) -> None:
         if self.writes_scene and self.access is SceneAccess.SHARED:
@@ -120,43 +138,173 @@ def tools_in(module: ModuleType) -> tuple[Callable[..., Any], ...]:
     )
 
 
+Result = TypeVar("Result")
+
+
 def recovering(
     operation: str,
-    recovery: TransactionPolicy | None,
+    policy: ToolPolicy,
     houdini: Callable[[], AbstractContextManager[Link]],
-) -> AbstractContextManager[dict[str, Any]]:
-    """Recover from ``operation``'s effect, as ``recovery`` says, around its body.
+    body: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """Run ``body``, recovering from ``operation``'s effect as ``policy`` says.
 
     ``houdini`` opens the scope of the link the call reaches; it is entered only
     when the recovery acts in Houdini, and holds that link around the body. The
-    block yields the fields the recovery adds to a successful result. A failure
-    leaves it with notes saying what became of the scene, which ``failure_for``
-    appends to the failure's message.
+    result is the body's, with the fields the recovery adds. A failure leaves
+    with notes saying what became of the scene, which ``failure_for`` appends to
+    the failure's message.
     """
-    match recovery:
+    match policy.recovery:
+        case TransactionPolicy.UNDOABLE:
+            recover = _undone_on_failure
         case TransactionPolicy.CHECKPOINT_REQUIRED:
-            return _backed_up_first(operation, houdini())
-        # Houdini records no undo group opened off its main thread, and every call
-        # reaches it off that thread, so an undoable call's group here would undo
-        # nothing (houdini-laws-etg.4ve).
-        case (
-            TransactionPolicy.UNDOABLE
-            | TransactionPolicy.PROGRAM_UNDO_GROUP
-            | TransactionPolicy.EXTERNAL_SIDE_EFFECT
-            | None
-        ):
-            return nullcontext({})
+            recover = _backed_up_first
+        # execute_code's program opens its own undo group, which Houdini does not
+        # record off its main thread (houdini-laws-etg.lbc).
+        case TransactionPolicy.PROGRAM_UNDO_GROUP | TransactionPolicy.EXTERNAL_SIDE_EFFECT | None:
+            return body()
         case _:
-            assert_never(recovery)
+            assert_never(policy.recovery)
+    with houdini() as link:
+        return recover(operation, link, body)
 
 
-@contextmanager
+@dataclass(frozen=True)
+class _Returned(Generic[Result]):
+    value: Result
+
+    def result(self) -> Result:
+        return self.value
+
+
+@dataclass(frozen=True)
+class _Raised:
+    failure: BaseException
+
+    def result(self) -> NoReturn:
+        raise self.failure
+
+
+def _on_main_thread(
+    link: Link, entry: str, work: Callable[[], Result], *args: Any
+) -> _Returned[Result] | _Raised:
+    """How ``work`` ended, run here while Houdini's main thread, calling it through
+    the plugin's ``main_thread.<entry>``, serves every request it makes.
+
+    The plugin's entry has the main thread call back into this process; while
+    that call is out, the main thread serves the link, so each ``hou`` request
+    ``work`` makes runs there, bounded by the link's sync timeout. The wait
+    around ``work`` is bounded too: the main thread begins it within the
+    plugin's pickup timeout or refuses it, and answers within the sync timeout
+    once it has ended, so a Houdini that stops answering fails the call with
+    a timeout rather than holding it, and the scene, for good.
+
+    [LAW:effects-at-boundaries] ``work``'s outcome stays in this process: the
+    function Houdini calls back never raises, so a failure keeps its own type,
+    fields and notes, not rebuilt by rpyc from a copy that crossed to Houdini
+    and back. That outcome is the call's even when the link fails before the
+    reply saying ``work`` ended arrives: a request ``work`` made that timed
+    out drops the link while the main thread is still calling ``work``.
+
+    Raises:
+        OperationFailed: the main thread refused the call, which never ran.
+    """
+    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
+    outcomes: list[_Returned[Result] | _Raised] = []
+
+    def run() -> None:
+        try:
+            outcomes.append(_Returned(work()))
+        except BaseException as failure:  # noqa: BLE001
+            outcomes.append(_Raised(failure))
+        finally:
+            reply.set_expiry(link.sync_timeout)
+
+    # Read before the call goes out: a request made after it waits behind it.
+    entered = rpyc.async_(getattr(main_thread, entry))
+    expiry = main_thread.PICKUP_TIMEOUT + link.sync_timeout
+    reply = entered(run, *args)
+    reply.set_expiry(expiry)
+    try:
+        # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
+        refusal: str | None = reply.value
+    except Exception as raised:
+        if not outcomes or transport_failure(raised) is None:
+            raise
+        logger.info("The link failed before the reply to a call Houdini ran: %r", raised)
+    else:
+        if refusal is not None:
+            raise OperationFailed(refusal)
+    (outcome,) = outcomes
+    return outcome
+
+
+def _undone_on_failure(
+    operation: str, link: Link, body: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """The body as one Houdini undo step, undone if the body fails.
+
+    Both run on Houdini's main thread, the one thread whose undo groups Houdini
+    records, and the step's group is opened and closed there by the plugin,
+    whatever becomes of the link. The step's label is the call's own: a call
+    that changed nothing leaves no step, so a label shared with an earlier
+    call could undo that call instead.
+    """
+    label = f"houdini-mcp {operation} {uuid.uuid4().hex[:8]}"
+    logger.info("%s runs as undo group %r", operation, label)
+    # A call the main thread refused never ran: nothing to undo.
+    outcome = _on_main_thread(link, "call_as_step", body, label)
+    if isinstance(outcome, _Returned):
+        return outcome.value
+    failure = outcome.failure
+    try:
+        told = _on_main_thread(link, "call", lambda: _undo_step(link.hou.undos, label)).result()
+    except Exception as error:
+        undo_failed = f"Undoing its changes failed ({error!r}), so the scene may hold part of them."
+        # A link that failed is the connection owner's to drop, so its failure is
+        # the call's, telling the one it was undoing.
+        if transport_failure(error) is not None:
+            add_note(error, f"{operation} had failed: {failure}")
+            add_note(error, undo_failed)
+            raise error from failure
+        told = (undo_failed,)
+    logger.info("%s failed; its undo group %r: %s", operation, label, told or "no step")
+    for note in told:
+        add_note(failure, note)
+    raise failure
+
+
+def _undo_step(undos: Any, label: str) -> tuple[str, ...]:
+    """Undo the step ``label`` names if it is Houdini's latest, and tell what became
+    of the changes it holds.
+
+    Houdini records a group only if something in it changed, so when the latest
+    step is someone else's, undoing it would undo their work. A call with no step
+    changed nothing, and there is nothing to tell.
+    """
+    steps = tuple(undos.undoLabels())
+    if steps[:1] == (label,):
+        undos.performUndo()
+        return ("Its changes to the scene were undone.",)
+    if label in steps:
+        return (
+            f"Its changes were not undone: {steps[0]!r} came after them on Houdini's "
+            "undo stack, so the scene may hold part of them.",
+        )
+    if not undos.areEnabled():
+        return (
+            "Its changes were not undone: Houdini's undo is off, so the scene may hold part of them.",
+        )
+    return ()
+
+
 def _backed_up_first(
-    operation: str, houdini: AbstractContextManager[Link]
-) -> Iterator[dict[str, Any]]:
-    """The body, inside the scope of the link it reaches, once its scene is backed up."""
-    with houdini as link, _backup_then_body(operation, link.hou) as recovered:
-        yield recovered
+    operation: str, link: Link, body: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """The body, once the scene it is about to replace has its unsaved work backed up."""
+    with _backup_then_body(operation, link.hou) as recovered:
+        return {**body(), **recovered}
 
 
 @contextmanager

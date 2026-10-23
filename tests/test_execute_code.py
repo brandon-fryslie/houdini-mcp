@@ -1,6 +1,11 @@
 """Tests for the execute_code function and related helpers."""
 
+import contextlib
+from collections.abc import Callable, Iterator
+from typing import Any
 from unittest.mock import patch
+
+from tests.conftest import MockUndos
 
 
 class TestDetectDangerousCode:
@@ -713,6 +718,23 @@ def _run(program: str) -> dict:
     return execute_code(program, host="localhost", port=18811, bypass_config_enabled=False)
 
 
+def _closing_with(close: Callable[..., Any]) -> Callable[..., Any]:
+    """``MockUndos.group``, leaving through ``close`` as Houdini's group leaves
+    through ``__exit__``: whether or not the program raised, and what it raises
+    is what leaving the group raises."""
+    group = MockUndos.group
+
+    @contextlib.contextmanager
+    def closing(self: MockUndos, label: str) -> Iterator[None]:
+        try:
+            with group(self, label):
+                yield
+        finally:
+            close(self)
+
+    return closing
+
+
 class TestAProgramThatFailedOnTheLink:
     """(houdini-laws-etg.il8) A program whose link failed under it reads as the link's
     failure, keeps what it left behind, and leaves no dead link installed; a program
@@ -789,7 +811,7 @@ class TestAProgramThatFailedOnTheLink:
         """The program caught the link's timeout and raised its own error; the undo
         group's close then failed on the same link."""
         from houdini_mcp.connection import houdini
-        from tests.conftest import MockUndoGroupContext, link_failure
+        from tests.conftest import MockUndos, link_failure
 
         def lose() -> None:
             raise link_failure(TimeoutError("result expired"))
@@ -798,7 +820,7 @@ class TestAProgramThatFailedOnTheLink:
             raise link_failure(TimeoutError("result expired"))
 
         monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
-        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        monkeypatch.setattr(MockUndos, "group", _closing_with(close))
         link = houdini().link()
         result = _run(
             "try:\n    hou.lose()\nexcept TimeoutError:\n    raise RuntimeError('gave up')"
@@ -813,12 +835,12 @@ class TestAProgramThatFailedOnTheLink:
         self, mock_connection, monkeypatch
     ):
         from houdini_mcp.connection import houdini
-        from tests.conftest import MockUndoGroupContext
+        from tests.conftest import MockUndos
 
         def close(self, *exc_info) -> bool:
             raise ValueError("undo stack locked")
 
-        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        monkeypatch.setattr(MockUndos, "group", _closing_with(close))
         link = houdini().link()
         result = _run("raise RuntimeError('gave up')")
 
@@ -833,12 +855,12 @@ class TestAProgramThatFailedOnTheLink:
     def test_an_undo_group_that_failed_after_a_completed_program_is_the_groups(
         self, mock_connection, monkeypatch
     ):
-        from tests.conftest import MockUndoGroupContext
+        from tests.conftest import MockUndos
 
         def close(self, *exc_info) -> bool:
             raise ValueError("undo stack locked")
 
-        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        monkeypatch.setattr(MockUndos, "group", _closing_with(close))
         result = _run("print('done')")
 
         assert result["kind"] == "operation_failed"
@@ -924,12 +946,12 @@ class TestAProgramThatFailedOnTheLink:
     def test_an_undo_group_close_that_raised_a_base_exception_is_the_runs_failure(
         self, mock_connection, monkeypatch
     ):
-        from tests.conftest import MockUndoGroupContext
+        from tests.conftest import MockUndos
 
         def close(self, *exc_info) -> bool:
             raise SystemExit("closed the hard way")
 
-        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        monkeypatch.setattr(MockUndos, "group", _closing_with(close))
         result = _run("print('done')")
 
         assert result["kind"] == "operation_failed"

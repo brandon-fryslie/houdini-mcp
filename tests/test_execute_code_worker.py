@@ -18,7 +18,7 @@ from houdini_mcp.server import held
 from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, get_scene_info
 from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.rendering import render_quad_view, render_viewport
-from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
+from houdini_mcp.tools.workers import WORKERS, Admission, WorkerLedger, WorkerStillRunning
 from tests.conftest import SUMMARIZER, link_failure
 
 
@@ -329,7 +329,7 @@ class TestWorkerLedger:
         assert ledger.running() is None
 
     async def test_hold_is_granted_when_idle(self):
-        async with WorkerLedger().hold("create_node") as wait:
+        async with WorkerLedger().hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
 
     async def test_a_thread_that_fails_to_start_holds_no_slot(self, monkeypatch):
@@ -344,5 +344,5 @@ class TestWorkerLedger:
 
         assert ledger.running() is None
         monkeypatch.undo()
-        async with ledger.hold("create_node") as wait:
+        async with ledger.hold("create_node", Admission.EXCLUSIVE) as wait:
             assert wait.waited_for == ()
