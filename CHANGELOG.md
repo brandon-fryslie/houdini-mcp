@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-laws-etg.qeo). The listener that was serving before is started again
   on its old config; the result is an error whose message says why the reload
   failed and where the listener serves now, with the failed start under
-  `attempt`. If the old config cannot start again either, `running` is false
+  `attempt` and the restart under `restore`. A listener started on port 0
+  comes back on the port it was bound to. If the old config cannot start again either, `running` is false
   and the message says nothing is serving and why.
 
 - **Stop Remote** with a client connected no longer logs a traceback from the

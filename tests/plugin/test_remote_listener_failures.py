@@ -163,7 +163,7 @@ class TestFailedReload:
         self, error, error_type, fake_hrpyc, fake_hou, caplog
     ):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
-        started(listener.start(_BEFORE))
+        port = started(listener.start(_BEFORE))["bound_port"]
         _servers_fail(fake_hrpyc, error, _AFTER.host)
 
         with caplog.at_level(logging.WARNING, logger=listener_module.logger.name):
@@ -173,13 +173,15 @@ class TestFailedReload:
         assert result["error_type"] == error_type
         assert result["attempt"]["error_type"] == error_type
         assert result["stop"]["status"] == "success"
-        # Serving again, on the config it served before, and the report says where.
+        # Serving again, on the host it served before and the port its clients
+        # were given, not a fresh kernel choice for its port-0 config.
         assert result["running"] is True
+        assert result["restore"]["status"] == "success"
         assert listener.is_running() is True
         status = listener.status()
-        assert (status["host"], status["port"]) == (_BEFORE.host, _BEFORE.port)
+        assert (status["host"], status["bound_port"]) == (_BEFORE.host, port)
         assert str(error) in result["message"]
-        assert f"started on {status['host']}:{status['bound_port']}" in result["message"]
+        assert f"started on {_BEFORE.host}:{port}" in result["message"]
         assert ("WARNING", result["message"]) in [
             (r.levelname, r.getMessage()) for r in caplog.records
         ]
@@ -196,13 +198,38 @@ class TestFailedReload:
         assert result["error_type"] == "start"
         assert result["running"] is False
         assert listener.is_running() is False
-        assert "Nothing is serving" in result["message"]
+        assert result["restore"]["running"] is False
+        assert "serves nothing" in result["message"]
         assert f"{_BEFORE.host}:{endpoint}" in result["message"]
         # Both causes: the reload's and the restart's, which here are the same error.
         assert result["message"].count("hrpyc server broke") == 2
         assert ("ERROR", result["message"]) in [
             (r.levelname, r.getMessage()) for r in caplog.records
         ]
+
+    def test_a_stop_whose_close_failed_is_said_when_nothing_serves(self, fake_hou):
+        """A close() that failed may leave the old server accepting on its port,
+        so the result says so rather than only that this listener serves nothing."""
+
+        class CloseFails(FakeThreadedServer):
+            # As in TestBindFailure: only stop()'s close, from the test's thread, fails.
+            def close(self) -> None:
+                super().close()
+                if threading.current_thread() is threading.main_thread():
+                    raise OSError(104, "Connection reset by peer")
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: CloseFails(*a, **kw)
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        port = started(listener.start(_BEFORE))["bound_port"]
+        _servers_fail(hrpyc, RuntimeError("hrpyc server broke"), None)
+
+        result = listener.reload(_AFTER)
+
+        assert result["stop"]["error_type"] == "close"
+        assert result["running"] is False
+        assert result["stop"]["message"] in result["message"]
+        assert f"Port {port} may stay bound" in result["message"]
 
     def test_a_reload_to_the_same_port_that_starts_serves_on_it(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)

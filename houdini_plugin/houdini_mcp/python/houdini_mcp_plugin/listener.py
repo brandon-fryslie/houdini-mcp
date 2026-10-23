@@ -33,7 +33,7 @@ import socket
 import sys
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
 
 from houdini_mcp_handshake import Authenticator, token_authenticator, token_from
@@ -593,10 +593,15 @@ def _failed_reload(
     """The result of a reload whose *cfg* failed to start after *before* was stopped.
 
     It is an error whatever the restart of *before* did: ``error_type`` and the
-    message lead with why *cfg* failed, and ``running`` and the rest of the
-    message say what serves now, read from *restore*, the restart's own result.
+    message lead with why *cfg* failed, the message goes on with what stopping
+    *before* did, and ``running`` and the rest of the message say what serves
+    now, read from *restore*, the restart's own result. Each step's result is
+    kept whole under its own key, so no field's meaning depends on which failed.
     """
-    failed = f"Reload to {cfg.host}:{cfg.port} failed: {attempt['message']}"
+    # [LAW:no-silent-failure] the stop's outcome is always said: a close() that
+    # failed may leave the old server accepting on its port, which "serves
+    # nothing" would otherwise deny.
+    failed = f"Reload to {cfg.host}:{cfg.port} failed: {attempt['message']} {stopped['message']}"
     if restore["running"]:
         message = (
             f"{failed} The listener that was serving before was started again: {restore['message']}"
@@ -604,16 +609,17 @@ def _failed_reload(
         logger.warning("%s", message)
     else:
         message = (
-            f"{failed} Nothing is serving: the listener that was serving before, on "
-            f"{before.endpoint}, did not start again: {restore['message']}"
+            f"{failed} The listener that was serving before, on {before.endpoint}, did not "
+            f"start again, so this listener serves nothing: {restore['message']}"
         )
         logger.error("%s", message)
     return {
-        **restore,
         "status": "error",
         "error_type": attempt["error_type"],
+        "running": restore["running"],
         "message": message,
         "attempt": attempt,
+        "restore": restore,
         "stop": stopped,
     }
 
@@ -884,10 +890,10 @@ class RemoteListener:
         For a config the policy admits, the result is ``start()``'s, carrying
         ``stop()``'s under ``"stop"``: a server that failed to close is reported,
         not replaced by the fresh start. When *config* fails to start and a
-        listener was serving before, that listener's config is started again;
-        the result is then an error whose ``running`` and message say what
-        serves now, with the failed start under ``"attempt"`` (see
-        :func:`_failed_reload`). A config the policy refuses is refused as
+        listener was serving before, it is started again on its config and the
+        port it was bound to; the result is then an error whose ``running`` and
+        message say what serves now, with the failed start under ``"attempt"``
+        and the restart under ``"restore"`` (see :func:`_failed_reload`). A config the policy refuses is refused as
         start() refuses it, before anything is stopped, so the result has no
         ``"stop"`` and the running listener keeps serving.
         """
@@ -907,8 +913,10 @@ class RemoteListener:
             if self._running is not None or before is None:
                 return {**attempt, "stop": stopped}
             # The record carries the policy that admitted its config, so the
-            # restart passes the one gate's stamp on, not a second check.
-            restore = self._start(before.config, before.policy)
+            # restart passes the one gate's stamp on, not a second check. It binds
+            # the port clients were given: [LAW:one-source-of-truth] for a port-0
+            # config that is the kernel's choice, held as bound_port.
+            restore = self._start(replace(before.config, port=before.bound_port), before.policy)
             return _failed_reload(cfg, before, attempt, restore, stopped)
 
     # -- introspection --------------------------------------------------------
