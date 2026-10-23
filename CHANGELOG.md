@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `get_geo_summary` of a node whose cook failed says why (houdini-laws-etg.216).
+  On Houdini 22 such a node has no geometry, and the reason is only in the errors
+  Houdini lists on it. The failure of a SOP with no geometry now carries those
+  under `errors`, where it used to say only `geometry() returned None`.
+
 - `get_parameter_schema` reads a node's parameters inside Houdini, in the same
   few requests whatever the node's parameter count (houdini-laws-etg.foj). It
   read each parameter's template, type, value, default, range and menu over the
@@ -760,6 +765,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
   (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
   `available_types`.
+
+- `get_geo_summary`'s `cook_state` (houdini-laws-etg.216). It could only ever say
+  `"cooked"`, and meant something different from `get_node_info`'s field of the
+  same name, which is now the only one. A node whose cook fails has no geometry,
+  so a summary is never of one, and the step that cooked the node first cooked
+  nothing `geometry()` would not.
 
 ### Fixed
 
