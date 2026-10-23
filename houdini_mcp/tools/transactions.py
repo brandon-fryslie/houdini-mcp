@@ -1,6 +1,6 @@
 """What each tool leaves behind in Houdini, and how a call recovers from it.
 
-[LAW:single-enforcer] The tool boundary (``handle_connection_errors``) enters
+[LAW:single-enforcer] The tool boundary (``_common.tool``) enters
 :func:`recovering` around every sync tool's body and refuses a scene writer that is
 not sync, so every call that can leave an effect in the scene passes through it. A
 call that replaces the scene first backs up the scene's unsaved work there; no tool
@@ -74,71 +74,47 @@ class ToolPolicy:
             raise ValueError(f"A {self.recovery} tool writes the scene, so it cannot share it")
 
 
-_READ = ToolPolicy(None, SceneAccess.SHARED)
+READ = ToolPolicy(None, SceneAccess.SHARED)
 # Needs the scene to itself for the call and leaves it as found: a read through a
 # program in the one worker slot, or a render that adds a camera and a ROP
 # for the call and removes them before returning.
-_HOLDS_SCENE = ToolPolicy(None, SceneAccess.EXCLUSIVE)
-_UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, SceneAccess.EXCLUSIVE)
-_CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, SceneAccess.EXCLUSIVE)
-_PROGRAM = ToolPolicy(TransactionPolicy.PROGRAM_UNDO_GROUP, SceneAccess.EXCLUSIVE)
-_FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHARED)
+HOLDS_SCENE = ToolPolicy(None, SceneAccess.EXCLUSIVE)
+UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, SceneAccess.EXCLUSIVE)
+CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, SceneAccess.EXCLUSIVE)
+PROGRAM = ToolPolicy(TransactionPolicy.PROGRAM_UNDO_GROUP, SceneAccess.EXCLUSIVE)
+FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHARED)
 
-# [LAW:types-are-the-program] Every tool the server exposes is classified here:
-# the server looks every served tool's name up when it registers it, so one with
-# no policy cannot be served, and tests/test_tool_contracts.py holds the served
-# tool names equal to these keys.
-TOOL_POLICIES: dict[str, ToolPolicy] = {
-    "assign_material": _UNDOABLE,
-    "capture_multiple_panes": _FILE_WRITE,
-    "capture_pane_screenshot": _FILE_WRITE,
-    "check_connection": _READ,
-    "connect_nodes": _UNDOABLE,
-    "create_material": _UNDOABLE,
-    "create_network_box": _UNDOABLE,
-    "create_node": _UNDOABLE,
-    "create_render_node": _UNDOABLE,
-    "delete_node": _UNDOABLE,
-    "disconnect_node_input": _UNDOABLE,
-    "execute_code": _PROGRAM,
-    "find_error_nodes": _READ,
-    "find_nodes": _READ,
-    "get_geo_summary": _HOLDS_SCENE,
-    "get_houdini_help": _READ,
-    "get_last_scene_diff": _READ,
-    "get_material_info": _READ,
-    "get_node_info": _READ,
-    "get_parameter_schema": _READ,
-    "get_render_settings": _READ,
-    "get_scene_info": _READ,
-    "get_summarization_status": _READ,
-    "layout_children": _UNDOABLE,
-    "list_children": _READ,
-    "list_node_types": _READ,
-    "list_render_nodes": _READ,
-    "list_visible_panes": _READ,
-    "load_scene": _CHECKPOINTED,
-    "manage_cache": _READ,
-    "new_scene": _CHECKPOINTED,
-    "ping_houdini": _READ,
-    "render_quad_view": _HOLDS_SCENE,
-    "render_node_network": _READ,
-    "render_viewport": _HOLDS_SCENE,
-    "reorder_inputs": _UNDOABLE,
-    "save_scene": _FILE_WRITE,
-    "serialize_scene": _READ,
-    "set_node_color": _UNDOABLE,
-    "set_node_flags": _UNDOABLE,
-    "set_node_position": _UNDOABLE,
-    "set_parameter": _UNDOABLE,
-    "set_render_settings": _UNDOABLE,
-}
+_POLICY = "__tool_policy__"
+
+
+def declare_policy(tool: Callable[..., Any], policy: ToolPolicy) -> None:
+    """Record ``policy`` as ``tool``'s: the tool boundary's, the one writer."""
+    setattr(tool, _POLICY, policy)
+
+
+def policy_of(tool: Callable[..., Any]) -> ToolPolicy:
+    """The policy ``tool``'s boundary declared.
+
+    [LAW:one-source-of-truth] A tool's policy is declared where the tool is
+    defined, and its name is its function's, so no table keyed by name can
+    drift from either. A function no boundary declared has none, and cannot
+    be served.
+    """
+    try:
+        policy: ToolPolicy = getattr(tool, _POLICY)
+    except AttributeError:
+        raise TypeError(
+            f"{tool.__name__} is not a tool: no tool boundary declared its policy"
+        ) from None
+    return policy
 
 
 def recovering(
-    operation: str, houdini: Callable[[], AbstractContextManager[Link]]
+    operation: str,
+    recovery: TransactionPolicy | None,
+    houdini: Callable[[], AbstractContextManager[Link]],
 ) -> AbstractContextManager[dict[str, Any]]:
-    """Recover from ``operation``'s effect, as its policy says, around its body.
+    """Recover from ``operation``'s effect, as ``recovery`` says, around its body.
 
     ``houdini`` opens the scope of the link the call reaches; it is entered only
     when the recovery acts in Houdini, and holds that link around the body. The
@@ -146,7 +122,6 @@ def recovering(
     leaves it with notes saying what became of the scene, which ``failure_for``
     appends to the failure's message.
     """
-    recovery = TOOL_POLICIES[operation].recovery
     match recovery:
         case TransactionPolicy.CHECKPOINT_REQUIRED:
             return _backed_up_first(operation, houdini())

@@ -10,6 +10,9 @@ Usage:
     from houdini_mcp.tools.scene import get_scene_info
 """
 
+from collections.abc import Callable
+from typing import Any
+
 # Import from extracted modules
 # Import shared utilities from _common (needed by some tests)
 from ._common import (
@@ -58,91 +61,86 @@ from .summarization import (
     get_summarization_status,
 )
 from .transactions import (
-    TOOL_POLICIES,
     SceneAccess,
     ToolPolicy,
     TransactionPolicy,
+    policy_of,
     recovering,
 )
 from .wiring import connect_nodes, disconnect_node_input, reorder_inputs, set_node_flags
 from .workers import WORKERS, RunningWorker, WorkerLedger, WorkerStillRunning
 
+# [LAW:one-source-of-truth] Each tool's caller-facing signature and docs are its
+# function here; the served tool is derived from that function, so the schema a
+# client reads and the function that runs cannot diverge. Each tool is named here
+# once, as itself, which is also what re-exports it.
+SERVED_TOOLS: tuple[Callable[..., Any], ...] = (
+    get_scene_info,
+    create_node,
+    execute_code,
+    set_parameter,
+    get_node_info,
+    delete_node,
+    save_scene,
+    load_scene,
+    new_scene,
+    serialize_scene,
+    get_last_scene_diff,
+    list_node_types,
+    list_children,
+    find_nodes,
+    render_viewport,
+    render_quad_view,
+    list_render_nodes,
+    get_render_settings,
+    set_render_settings,
+    create_render_node,
+    find_error_nodes,
+    check_connection,
+    ping_houdini,
+    connect_nodes,
+    disconnect_node_input,
+    set_node_flags,
+    reorder_inputs,
+    get_parameter_schema,
+    get_geo_summary,
+    get_houdini_help,
+    create_material,
+    assign_material,
+    get_material_info,
+    layout_children,
+    set_node_color,
+    set_node_position,
+    create_network_box,
+    manage_cache,
+    get_summarization_status,
+    capture_pane_screenshot,
+    list_visible_panes,
+    capture_multiple_panes,
+    render_node_network,
+)
+
 __all__ = [
+    "SERVED_TOOLS",
     # Running execute_code worker
     "WORKERS",
     "RunningWorker",
     "WorkerLedger",
     "WorkerStillRunning",
     # What a tool leaves behind, and how a call recovers from it
-    "TOOL_POLICIES",
+    "policy_of",
     "SceneAccess",
     "ToolPolicy",
     "TransactionPolicy",
     "recovering",
-    # Scene management
-    "get_scene_info",
-    "serialize_scene",
-    "new_scene",
-    "save_scene",
-    "load_scene",
-    "get_last_scene_diff",
-    # Node management
-    "create_node",
-    "delete_node",
-    "get_node_info",
-    "list_children",
-    "find_nodes",
-    "list_node_types",
-    # Wiring/connections
-    "connect_nodes",
-    "disconnect_node_input",
-    "reorder_inputs",
-    "set_node_flags",
-    # Parameters
-    "set_parameter",
-    "get_parameter_schema",
-    # Geometry
-    "get_geo_summary",
-    # Rendering
-    "render_viewport",
-    "render_quad_view",
-    "list_render_nodes",
-    "get_render_settings",
-    "set_render_settings",
-    "create_render_node",
-    # Materials
-    "create_material",
-    "assign_material",
-    "get_material_info",
-    # Errors
-    "find_error_nodes",
-    # Layout
-    "layout_children",
-    "set_node_position",
-    "set_node_color",
-    "create_network_box",
     # Code execution
-    "execute_code",
     "_detect_heavy_geometry_code",
     "_detect_non_inspection_code",
     "parse_code",
-    # Help/documentation
-    "get_houdini_help",
     # Cache management
     "node_type_cache",
     "invalidate_all_caches",
     "get_cache_stats",
-    "manage_cache",
-    # The link to Houdini
-    "check_connection",
-    "ping_houdini",
-    # AI Summarization
-    "get_summarization_status",
-    # Pane screenshots
-    "capture_pane_screenshot",
-    "list_visible_panes",
-    "capture_multiple_panes",
-    "render_node_network",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
     "_truncate_output",

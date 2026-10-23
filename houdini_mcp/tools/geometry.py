@@ -10,10 +10,11 @@ from typing import Any
 
 from ..settings import Summarizer
 from ._common import (
+    HOLDS_SCENE,
     OperationFailed,
     SampleCount,
-    handle_connection_errors,
     on_the_scene,
+    tool,
     tool_error,
 )
 from .reads import UNREAD, format_reason, log_unread, unreads
@@ -27,7 +28,7 @@ _FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
 _GEOMETRY_OUTPUT_LIMIT = 500000
 
 
-@handle_connection_errors("get_geo_summary")
+@tool(HOLDS_SCENE)
 async def get_geo_summary(
     node_path: str,
     max_sample_points: SampleCount = 16,
@@ -91,7 +92,7 @@ async def get_geo_summary(
         get_geo_summary("/obj/geo1/noise1", max_sample_points=200, summarize=False)
     """
     result = await on_the_scene(
-        "get_geo_summary",
+        get_geo_summary,
         _read_geometry,
         node_path,
         max_sample_points,
@@ -256,7 +257,7 @@ print(json.dumps(result))
     exec_result = _execute_with_grant(
         geo_analysis_code,
         ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=bypass_config_enabled),
-        operation="get_geo_summary",
+        operation=get_geo_summary.__name__,
         max_stdout_size=_GEOMETRY_OUTPUT_LIMIT,
         host=host,
         port=port,

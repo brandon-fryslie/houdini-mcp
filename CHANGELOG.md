@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A tool's name has one source, its function's name (houdini-laws-etg.8vh). The
+  tool boundary is `@tool(policy)`: it takes the tool's `ToolPolicy` and names
+  the tool's failures after the function, so the `operation` a failure carries,
+  the policy the call runs under and the name the tool is served as cannot
+  disagree. `TOOL_POLICIES` is gone; `policy_of(tool)` reads the declared
+  policy. `get_last_scene_diff` and `get_summarization_status` now pass the
+  boundary too, so a failure of either names its operation. `SERVED_TOOLS`
+  moved to `houdini_mcp.tools`.
+
 - **BREAKING (wire)**: each `get_parameter_schema` `menu_items` `value` is
   the value `set_parameter` takes to select that item, the same value
   `current_value` and `default` report (houdini-parameters-1nj). That is the

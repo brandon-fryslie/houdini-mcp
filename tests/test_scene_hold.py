@@ -16,6 +16,13 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from houdini_mcp.server import held, served
+from houdini_mcp.tools.transactions import (
+    PROGRAM,
+    READ,
+    UNDOABLE,
+    ToolPolicy,
+    declare_policy,
+)
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
 from tests.conftest import DEFAULT_SETTINGS, SUMMARIZER
 
@@ -23,7 +30,7 @@ from tests.conftest import DEFAULT_SETTINGS, SUMMARIZER
 class _Gated:
     """A tool body that holds still until its gate opens, recording its span."""
 
-    def __init__(self, operation: str, log: list[str]) -> None:
+    def __init__(self, operation: str, policy: ToolPolicy, log: list[str]) -> None:
         self.entered = threading.Event()
         self.gate = threading.Event()
 
@@ -35,11 +42,13 @@ class _Gated:
             return {"status": "success"}
 
         tool.__name__ = operation
+        declare_policy(tool, policy)
         self.tool = tool
 
 
-def _named(operation: str, body: Callable[[], dict]) -> Callable[[], dict]:
+def _named(operation: str, policy: ToolPolicy, body: Callable[[], dict]) -> Callable[[], dict]:
     body.__name__ = operation
+    declare_policy(body, policy)
     return body
 
 
@@ -50,7 +59,7 @@ async def _until(event: threading.Event) -> None:
 class TestCallsHoldTheScene:
     async def test_a_second_writer_waits_for_the_first_and_says_so(self, heard):
         log: list[str] = []
-        first, second = _Gated("set_parameter", log), _Gated("create_node", log)
+        first, second = _Gated("set_parameter", UNDOABLE, log), _Gated("create_node", UNDOABLE, log)
         queued = heard("create_node waits for the scene behind set_parameter")
         granted = heard("create_node waited ")
         released = heard("set_parameter released the scene after holding it ")
@@ -98,18 +107,18 @@ class TestCallsHoldTheScene:
         )
         await asyncio.wait_for(summarizing.wait(), 5)
         try:
-            write = _named("create_node", lambda: {"status": "success"})
+            write = _named("create_node", UNDOABLE, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(write)(), 5) == {"status": "success"}
         finally:
             answer.set()
             assert (await summary)["status"] == "success"
 
     async def test_a_reader_runs_beside_a_writer_without_waiting(self):
-        writer = _Gated("create_node", [])
+        writer = _Gated("create_node", UNDOABLE, [])
         call = asyncio.create_task(held(writer.tool)())
         await _until(writer.entered)
         try:
-            read = _named("get_scene_info", lambda: {"status": "success"})
+            read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
             writer.gate.set()
@@ -134,7 +143,7 @@ class TestCallsHoldTheScene:
             )
         )
         await _until(reading)
-        read = _named("get_scene_info", lambda: {"status": "success"})
+        read = _named("get_scene_info", READ, lambda: {"status": "success"})
         assert await held(read)() == {"status": "success"}
         # The read ran while get_geo_summary's read was still stalled.
         assert not read_over.is_set()
@@ -144,15 +153,17 @@ class TestCallsHoldTheScene:
     async def test_queued_writers_cost_no_thread_so_reads_still_run(self):
         """A waiting call holds no thread from the pool that runs tool bodies."""
         anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-        writer = _Gated("create_node", [])
+        writer = _Gated("create_node", UNDOABLE, [])
         holder = asyncio.create_task(held(writer.tool)())
         await _until(writer.entered)
         queued = [
-            asyncio.create_task(held(_named("set_parameter", lambda: {"status": "success"}))())
+            asyncio.create_task(
+                held(_named("set_parameter", UNDOABLE, lambda: {"status": "success"}))()
+            )
             for _ in range(5)
         ]
         try:
-            read = _named("get_scene_info", lambda: {"status": "success"})
+            read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
             writer.gate.set()
@@ -173,10 +184,10 @@ class TestCallsHoldTheScene:
             return {"status": "error"}
 
         log: list[str] = []
-        writer = _Gated("create_node", log)
+        writer = _Gated("create_node", UNDOABLE, log)
         writer.gate.set()
         queued = heard("create_node waits for the scene behind execute_code")
-        caller = asyncio.create_task(held(_named("execute_code", times_out))())
+        caller = asyncio.create_task(held(_named("execute_code", PROGRAM, times_out))())
         try:
             await _until(launched)
             writer_call = asyncio.create_task(held(writer.tool)())
@@ -207,7 +218,7 @@ class TestAClientThatGivesUp:
         """The client's timeout cancels the queued call on the server, so its
         write never starts."""
         log: list[str] = []
-        holder, late = _Gated("set_parameter", log), _Gated("create_node", log)
+        holder, late = _Gated("set_parameter", UNDOABLE, log), _Gated("create_node", UNDOABLE, log)
         late.gate.set()
         gave_up = heard("create_node gave up its place in the queue for the scene")
         mcp = FastMCP("scene-hold")

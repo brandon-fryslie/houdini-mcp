@@ -98,6 +98,9 @@ class TestWorkerBlocksMutation:
         """A screenshot is how a caller verifies the scene the warning tells it to verify."""
         _time_out(stalled_program)
 
+        from houdini_mcp.tools._common import FILE_WRITE, tool
+
+        @tool(FILE_WRITE)
         def capture_pane_screenshot() -> dict:
             return {"status": "success"}
 
@@ -106,7 +109,7 @@ class TestWorkerBlocksMutation:
     @pytest.mark.parametrize("render", [render_viewport, render_quad_view])
     async def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render):
         """A render tool adds a camera and a ROP to the scene for the call, so it
-        must not run beside a program still mutating it (TOOL_POLICIES says why)."""
+        must not run beside a program still mutating it (its policy says why)."""
         _time_out(stalled_program)
 
         result = await held(render)(host="localhost", port=18811)

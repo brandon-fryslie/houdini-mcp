@@ -8,22 +8,28 @@ from typing import Any
 
 import pytest
 
-from houdini_mcp.tools import execute_code, load_scene, new_scene
-from houdini_mcp.tools._common import handle_connection_errors
+from houdini_mcp.tools import (
+    execute_code,
+    load_scene,
+    new_scene,
+    render_quad_view,
+    render_viewport,
+)
+from houdini_mcp.tools._common import UNDOABLE, tool
 from houdini_mcp.tools.transactions import (
-    TOOL_POLICIES,
     SceneAccess,
     ToolPolicy,
     TransactionPolicy,
+    policy_of,
 )
 from tests.conftest import raised_inside_houdini
 
 
-@pytest.mark.parametrize("render_tool", ["render_viewport", "render_quad_view"])
+@pytest.mark.parametrize("render_tool", [render_viewport, render_quad_view])
 def test_render_tools_need_no_recovery(render_tool):
     """A render leaves the scene as it found it; that it still waits for a running
     program is test_execute_code_worker's."""
-    assert TOOL_POLICIES[render_tool].recovery is None
+    assert policy_of(render_tool).recovery is None
 
 
 @pytest.mark.parametrize(
@@ -49,8 +55,8 @@ def _no_target() -> dict[str, Any]:
 
 @pytest.mark.parametrize("body", [_async_body, _no_target], ids=["async", "no_host_port"])
 def test_a_scene_writer_the_boundary_cannot_recover_is_refused_where_declared(body):
-    with pytest.raises(TypeError, match="create_node writes the scene"):
-        handle_connection_errors("create_node")(body)
+    with pytest.raises(TypeError, match=f"{body.__name__} writes the scene"):
+        tool(UNDOABLE)(body)
 
 
 REPLACERS = {

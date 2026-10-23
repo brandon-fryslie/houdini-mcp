@@ -10,8 +10,8 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from houdini_mcp.server import SERVED_TOOLS
 from houdini_mcp.settings import Http, Target, serving
+from houdini_mcp.tools import SERVED_TOOLS
 from houdini_mcp.tools._common import using
 from tests.live_houdini import houdini_mcp_over_http, running_listener
 

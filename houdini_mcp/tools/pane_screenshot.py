@@ -18,6 +18,8 @@ from typing import Any
 
 from ..connection import Link, houdini
 from ._common import (
+    FILE_WRITE,
+    READ,
     InvalidInput,
     OperationFailed,
     ToolError,
@@ -25,8 +27,8 @@ from ._common import (
     batch_status,
     failed_on,
     failure_for,
-    handle_connection_errors,
     node_at,
+    tool,
     using,
 )
 from .failure import LinkLost
@@ -260,7 +262,7 @@ def png_bytes(image: Any, QtCore: Any, pane_type_name: str) -> bytes:
     return bytes(buffer.data().data())
 
 
-@handle_connection_errors("capture_pane_screenshot")
+@tool(FILE_WRITE)
 def capture_pane_screenshot(
     pane_type_name: str = "NetworkEditor",
     save_path: str | None = None,
@@ -318,7 +320,7 @@ def _desktop_name(desktop: Any) -> str | None:
     return str(desktop.name()) if desktop else None
 
 
-@handle_connection_errors("list_visible_panes")
+@tool(READ)
 def list_visible_panes(
     host: str = "localhost",
     port: int = 18811,
@@ -421,7 +423,7 @@ def _both(a: Fact, b: Fact) -> Fact:
     return a if is_unread(a) else b
 
 
-@handle_connection_errors("render_node_network")
+@tool(READ)
 def render_node_network(
     node_path: str = "/obj",
     fit_contents: bool = True,
@@ -512,7 +514,7 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
     return {**picture, "file_path": str(path.absolute())}
 
 
-@handle_connection_errors("capture_multiple_panes")
+@tool(FILE_WRITE)
 def capture_multiple_panes(
     pane_types: list[str],
     save_dir: str | None = None,
@@ -560,7 +562,7 @@ def capture_multiple_panes(
                 # captured over it: the call fails, as a torn link above does.
                 if isinstance(judged, LinkLost):
                     raise judged from e
-                failure = failure_for(judged, "capture_multiple_panes")
+                failure = failure_for(judged, capture_multiple_panes.__name__)
                 logger.warning(
                     "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
                 )
@@ -584,6 +586,6 @@ def capture_multiple_panes(
         }
         # Each slot is a capture or the failure arm for that pane.
         return {
-            "status": batch_status("capture_multiple_panes", captured, failed, **report),
+            "status": batch_status(capture_multiple_panes.__name__, captured, failed, **report),
             **report,
         }

@@ -8,11 +8,13 @@ import logging
 from typing import Any
 
 from ._common import (
+    READ,
+    UNDOABLE,
     InvalidInput,
     OperationFailed,
-    handle_connection_errors,
     node_at,
     node_category,
+    tool,
     using,
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
@@ -20,7 +22,7 @@ from .parms import ParmNotFound, read_present, resolve, write_all
 logger = logging.getLogger("houdini_mcp.tools.materials")
 
 
-@handle_connection_errors("create_material")
+@tool(UNDOABLE)
 def create_material(
     material_type: str = "principledshader",
     name: str | None = None,
@@ -82,7 +84,7 @@ def create_material(
             ) from e
 
         return write_all(mat_node, parameters or {}).fields(
-            "create_material",
+            create_material.__name__,
             created=[mat_node],
             material_path=mat_node.path(),
             material_name=mat_node.name(),
@@ -90,7 +92,7 @@ def create_material(
         )
 
 
-@handle_connection_errors("assign_material")
+@tool(UNDOABLE)
 def assign_material(
     geometry_path: str,
     material_path: str,
@@ -151,7 +153,7 @@ def assign_material(
                 pass
             else:
                 return write_all(geo_node, {"shop_materialpath": material_path}).fields(
-                    "assign_material",
+                    assign_material.__name__,
                     geometry_path=geometry_path,
                     material_path=material_path,
                     method="shop_materialpath",
@@ -193,7 +195,7 @@ def assign_material(
         # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
         # writes did, so it counts as done; an existing one written nothing did nothing.
         return write_all(mat_sop, values).fields(
-            "assign_material",
+            assign_material.__name__,
             created=created,
             geometry_path=geometry_path,
             material_path=material_path,
@@ -203,7 +205,7 @@ def assign_material(
         )
 
 
-@handle_connection_errors("get_material_info")
+@tool(READ)
 def get_material_info(
     material_path: str,
     host: str = "localhost",

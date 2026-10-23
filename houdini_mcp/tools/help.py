@@ -11,11 +11,12 @@ import httpx
 from bs4 import BeautifulSoup
 
 from ._common import (
+    READ,
     InvalidInput,
     OperationFailed,
     Seconds,
     TimedOut,
-    handle_connection_errors,
+    tool,
 )
 
 # [LAW:types-are-the-program] the help types are the parameter's type, so the
@@ -49,7 +50,7 @@ def docs_client(timeout: Seconds) -> httpx.Client:
     return httpx.Client(timeout=timeout, follow_redirects=True)
 
 
-@handle_connection_errors("get_houdini_help")
+@tool(READ)
 def get_houdini_help(
     help_type: HelpType,
     item_name: str,

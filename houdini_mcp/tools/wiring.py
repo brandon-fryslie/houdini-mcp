@@ -8,11 +8,12 @@ import logging
 from typing import Any
 
 from ._common import (
+    UNDOABLE,
     InvalidInput,
     OperationFailed,
-    handle_connection_errors,
     node_at,
     node_category,
+    tool,
     using,
 )
 from .connections import (
@@ -26,7 +27,7 @@ from .connections import (
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
 
-@handle_connection_errors("connect_nodes")
+@tool(UNDOABLE)
 def connect_nodes(
     src_path: str,
     dst_path: str,
@@ -111,7 +112,7 @@ def connect_nodes(
         }
 
 
-@handle_connection_errors("disconnect_node_input")
+@tool(UNDOABLE)
 def disconnect_node_input(
     node_path: str, input_index: int = 0, host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
@@ -170,7 +171,7 @@ def disconnect_node_input(
         }
 
 
-@handle_connection_errors("set_node_flags")
+@tool(UNDOABLE)
 def set_node_flags(
     node_path: str,
     display: bool | None = None,
@@ -253,7 +254,7 @@ def set_node_flags(
         return result
 
 
-@handle_connection_errors("reorder_inputs")
+@tool(UNDOABLE)
 def reorder_inputs(
     node_path: str, new_order: list[int], host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:

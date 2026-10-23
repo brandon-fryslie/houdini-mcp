@@ -3251,18 +3251,18 @@ class TestConnectionErrorHandling:
     """Tests for graceful connection error handling."""
 
     @staticmethod
-    def _run(exc: BaseException, operation: str) -> tuple[dict, Any]:
-        """``operation`` failing with ``exc`` inside its link's scope, and that link."""
+    def _run(exc: BaseException) -> tuple[dict, Any]:
+        """A tool, ``probe``, failing with ``exc`` inside its link's scope, and that link."""
         from houdini_mcp.connection import houdini
-        from houdini_mcp.tools._common import handle_connection_errors, using
+        from houdini_mcp.tools._common import READ, tool, using
 
-        @handle_connection_errors(operation)
-        def tool(host: str = "localhost", port: int = 18811):
+        @tool(READ)
+        def probe(host: str = "localhost", port: int = 18811):
             with using(host, port):
                 raise exc
 
         link = houdini().link()
-        return tool(), link
+        return probe(), link
 
     @staticmethod
     def _dropped(link: Any) -> bool:
@@ -3272,7 +3272,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_timeout(self, mock_connection):
         """Test that TimeoutError produces a helpful error response."""
-        result, link = self._run(TimeoutError("Connection timed out"), "render_viewport")
+        result, link = self._run(TimeoutError("Connection timed out"))
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
@@ -3280,12 +3280,12 @@ class TestConnectionErrorHandling:
         assert result["retry"] == "call_again"
         assert result["exception"] == "TimeoutError"
         assert "timed out" in result["message"]
-        assert "render_viewport" in result["message"]
+        assert "probe" in result["message"]
         assert self._dropped(link)
 
     def test_handle_connection_error_eof(self, mock_connection):
         """Test that EOFError produces a helpful error response."""
-        result, link = self._run(EOFError("Connection closed"), "get_scene_info")
+        result, link = self._run(EOFError("Connection closed"))
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_lost"
@@ -3296,7 +3296,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_reset_arrives_as_eof(self, mock_connection):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
-        result, link = self._run(EOFError("[Errno 54] Connection reset by peer"), "create_node")
+        result, link = self._run(EOFError("[Errno 54] Connection reset by peer"))
 
         assert result["kind"] == "connection_lost"
         assert "reset" in result["message"]
@@ -3316,7 +3316,7 @@ class TestConnectionErrorHandling:
         """A bad path is the tool's error, not the link's: no disconnect, no retry invitation."""
         from houdini_mcp.connection import houdini
 
-        result, link = self._run(exc, "set_parameter")
+        result, link = self._run(exc)
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
@@ -3330,9 +3330,7 @@ class TestConnectionErrorHandling:
         from houdini_mcp.connection import houdini
         from tests.conftest import raised_inside_houdini
 
-        result, link = self._run(
-            raised_inside_houdini(TimeoutError("cook timed out")), "get_node_info"
-        )
+        result, link = self._run(raised_inside_houdini(TimeoutError("cook timed out")))
 
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
@@ -3385,13 +3383,13 @@ class TestParallelExecution:
 
 
 class TestHandleConnectionErrorsDecorator:
-    """Tests for the @handle_connection_errors decorator."""
+    """Tests for the @tool boundary."""
 
     def test_decorator_passes_through_success(self):
         """Test decorator passes through successful results."""
-        from houdini_mcp.tools._common import handle_connection_errors
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def successful_function():
             return {"status": "success", "data": "test"}
 
@@ -3401,9 +3399,9 @@ class TestHandleConnectionErrorsDecorator:
 
     def test_decorator_handles_houdini_connection_error(self):
         """Test decorator handles HoudiniConnectionError."""
-        from houdini_mcp.tools._common import HoudiniConnectionError, handle_connection_errors
+        from houdini_mcp.tools._common import READ, HoudiniConnectionError, tool
 
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def failing_function():
             raise HoudiniConnectionError("Connection failed", target="localhost:18811")
 
@@ -3416,9 +3414,9 @@ class TestHandleConnectionErrorsDecorator:
 
     def test_decorator_handles_generic_exception(self):
         """Test decorator handles generic exceptions with traceback."""
-        from houdini_mcp.tools._common import handle_connection_errors
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def generic_error_function():
             raise ValueError("Something went wrong")
 
@@ -3430,9 +3428,9 @@ class TestHandleConnectionErrorsDecorator:
 
     def test_decorator_preserves_function_metadata(self):
         """Test decorator preserves function name and docstring."""
-        from houdini_mcp.tools._common import handle_connection_errors
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def documented_function():
             """This is the docstring."""
             return {"status": "success"}
@@ -3442,9 +3440,9 @@ class TestHandleConnectionErrorsDecorator:
 
     def test_decorator_passes_args_and_kwargs(self):
         """Test decorator passes arguments correctly."""
-        from houdini_mcp.tools._common import handle_connection_errors
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def function_with_args(a: int, b: int, c: int = 10) -> dict:
             return {"status": "success", "result": a + b + c}
 
@@ -3454,9 +3452,9 @@ class TestHandleConnectionErrorsDecorator:
 
     def test_an_argument_is_parsed_as_the_json_it_is_sent_as(self):
         """A tuple is the array it crosses the wire as; a string is never a boolean."""
-        from houdini_mcp.tools._common import handle_connection_errors
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("reorder_inputs")
+        @tool(READ)
         def echo(
             order: list[int], flag: bool = False, host: str = "localhost", port: int = 18811
         ) -> dict:
@@ -3467,24 +3465,24 @@ class TestHandleConnectionErrorsDecorator:
         assert (refused["kind"], refused["parameter"]) == ("invalid_input", "flag")
         assert echo(object())["message"].startswith("order: not expressible as JSON")
 
-    def test_decorator_uses_operation_name_in_logs(self):
-        """Test decorator uses operation name in error handling."""
-        from houdini_mcp.tools._common import handle_connection_errors
+    def test_a_failure_names_the_function_as_its_operation(self):
+        """A tool's name is its function's: renaming the function renames its failures."""
+        from houdini_mcp.tools._common import READ, tool
 
-        @handle_connection_errors("list_children")
+        @tool(READ)
         def failing_function():
             raise RuntimeError("boom")
 
         result = failing_function()
 
-        assert result["operation"] == "list_children"
+        assert result["operation"] == "failing_function"
 
     def test_a_tool_with_no_policy_cannot_be_served(self):
-        """Every tool is classified in TOOL_POLICIES; an unclassified one cannot be served."""
+        """A tool's boundary declares its policy; a function no boundary declared cannot be served."""
         from houdini_mcp.server import held
 
         def custom_operation_name():
             return {"status": "success"}
 
-        with pytest.raises(KeyError, match="custom_operation_name"):
+        with pytest.raises(TypeError, match="custom_operation_name is not a tool"):
             held(custom_operation_name)

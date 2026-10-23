@@ -37,7 +37,19 @@ from .failure import (
     failure_response,
     tool_error,
 )
-from .transactions import TOOL_POLICIES, SceneAccess, recovering
+from .transactions import (
+    CHECKPOINTED,
+    FILE_WRITE,
+    HOLDS_SCENE,
+    PROGRAM,
+    READ,
+    UNDOABLE,
+    SceneAccess,
+    ToolPolicy,
+    declare_policy,
+    policy_of,
+    recovering,
+)
 
 T = TypeVar("T")
 
@@ -49,7 +61,13 @@ __all__ = [
     "HoudiniConnectionError",
     "HoudiniTargetMismatch",
     # Error handling: the boundary, the one result type, and what a tool body raises
-    "handle_connection_errors",
+    "tool",
+    "READ",
+    "HOLDS_SCENE",
+    "UNDOABLE",
+    "CHECKPOINTED",
+    "PROGRAM",
+    "FILE_WRITE",
     "ToolFailure",
     "FAILURE",
     "failure_for",
@@ -114,9 +132,13 @@ from pydantic_core import PydanticSerializationError, from_json, to_json
 ToolFn = TypeVar("ToolFn", bound=Callable[..., Any])
 
 
-def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
+def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
     """
     The tool boundary: every tool call enters and leaves through this wrapper.
+
+    [LAW:one-source-of-truth] The tool's name is its function's: the operation
+    its failures name, the name its policy is declared under, and the name it
+    is served as are one value, so renaming the function renames all three.
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; the link a failed call used was already
@@ -126,14 +148,14 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     Houdini work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
-        operation_name: The tool's name: it names the operation in error
-            responses.
+        policy: What the tool leaves behind in the scene, and whether it needs
+            the scene to itself (:mod:`~houdini_mcp.tools.transactions`).
 
     Returns:
         Decorated function with error handling
 
     Example:
-        @handle_connection_errors("get_scene_info")
+        @tool(READ)
         def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
             with using(host, port) as link:
                 node = node_at(link.hou, "/obj/geo1")  # raises InvalidInput when absent
@@ -141,6 +163,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     """
 
     def decorator(func: ToolFn) -> ToolFn:
+        operation_name = func.__name__
         # [LAW:no-silent-failure] A call that does not fit the tool's signature is
         # the caller's bug and raises as one, before the boundary opens. A value
         # that does not fit its parameter's type is the caller's input, refused
@@ -211,7 +234,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
 
         # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
         # body, off the event loop, in the Houdini its host and port name.
-        if TOOL_POLICIES[operation_name].writes_scene and (
+        if policy.writes_scene and (
             inspect.iscoroutinefunction(func) or not {"host", "port"} <= signature.parameters.keys()
         ):
             raise TypeError(
@@ -233,6 +256,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                 except Exception as e:
                     return failure_response(e, operation_name)
 
+            declare_policy(async_wrapper, policy)
             return cast(ToolFn, async_wrapper)
 
         @functools.wraps(func)
@@ -244,6 +268,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                 call.apply_defaults()
                 with recovering(
                     operation_name,
+                    policy.recovery,
                     lambda: using(call.arguments["host"], call.arguments["port"]),
                 ) as recovered:
                     result: dict[str, Any] = func(*call.args, **call.kwargs)
@@ -251,6 +276,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             except Exception as e:
                 return failure_response(e, operation_name)
 
+        declare_policy(wrapper, policy)
         return cast(ToolFn, wrapper)
 
     return decorator
@@ -363,9 +389,9 @@ from .workers import NO_WAIT, WORKERS, SceneWait
 
 
 async def on_the_scene(
-    operation: str, work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
+    tool: Callable[..., Any], work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
 ) -> dict[str, Any]:
-    """Run ``operation``'s blocking Houdini work off the event loop, holding the
+    """Run ``tool``'s blocking Houdini work off the event loop, holding the
     scene for it when its policy needs the scene to itself.
 
     [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
@@ -377,9 +403,9 @@ async def on_the_scene(
     with :class:`WorkerStillRunning` while a program still runs against
     Houdini. The result tells the wait in ``scene_wait``.
     """
-    exclusive = TOOL_POLICIES[operation].access is SceneAccess.EXCLUSIVE
+    exclusive = policy_of(tool).access is SceneAccess.EXCLUSIVE
     hold = WORKERS.hold if exclusive else _holds_nothing
-    async with hold(operation) as wait:
+    async with hold(tool.__name__) as wait:
         result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
     return {**result, **wait.response_fields()}
 

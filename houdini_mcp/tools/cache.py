@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, NamedTuple, TypedDict
 
-from ._common import handle_connection_errors, using
+from ._common import READ, tool, using
 from .failure import OperationFailed
 from .reads import Unread, is_unread, read, reraise_transport_failure, unread
 
@@ -331,7 +331,7 @@ def get_cache_stats() -> dict[str, Any]:
 CacheAction = Literal["stats", "invalidate", "warmup"]
 
 
-@handle_connection_errors("manage_cache")
+@tool(READ)
 def manage_cache(
     action: CacheAction = "stats", host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:

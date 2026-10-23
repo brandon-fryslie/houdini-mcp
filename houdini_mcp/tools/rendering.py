@@ -17,15 +17,18 @@ from typing import Any, Literal, cast
 from ..connection import Link, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
+    HOLDS_SCENE,
+    READ,
+    UNDOABLE,
     InvalidInput,
     OperationFailed,
     Resolution,
     Undone,
     Vec3,
     batch_status,
-    handle_connection_errors,
     node_at,
     node_category,
+    tool,
     using,
 )
 from .failure import add_note
@@ -522,7 +525,7 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
 # =============================================================================
 
 
-@handle_connection_errors("render_viewport")
+@tool(HOLDS_SCENE)
 def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 = _ISOMETRIC,
@@ -610,7 +613,7 @@ def render_viewport(
         return result
 
 
-@handle_connection_errors("render_quad_view")
+@tool(HOLDS_SCENE)
 def render_quad_view(
     resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: Renderer = "opengl",
@@ -689,7 +692,7 @@ def render_quad_view(
                 except OperationFailed as e:
                     # A view owns only Houdini's failure to produce its picture, which
                     # _render_picture names; a dead link or a bug is the call's.
-                    failure = e.failure("render_quad_view")
+                    failure = e.failure(render_quad_view.__name__)
                     logger.warning("Quad view %s not rendered: %s", name, failure.message)
                     view = {**failure.model_dump(), **view}
                 else:
@@ -716,7 +719,10 @@ def render_quad_view(
             for view in view_results
             if view["status"] == "error"
         ]
-        return {"status": batch_status("render_quad_view", rendered, failed, **report), **report}
+        return {
+            "status": batch_status(render_quad_view.__name__, rendered, failed, **report),
+            **report,
+        }
 
 
 # =============================================================================
@@ -776,7 +782,7 @@ RENDER_SETTINGS_SCHEMA = {
 }
 
 
-@handle_connection_errors("list_render_nodes")
+@tool(READ)
 def list_render_nodes(
     host: str = "localhost",
     port: int = 18811,
@@ -834,7 +840,7 @@ def list_render_nodes(
         }
 
 
-@handle_connection_errors("get_render_settings")
+@tool(READ)
 def get_render_settings(
     rop_path: str,
     host: str = "localhost",
@@ -882,7 +888,7 @@ def get_render_settings(
         }
 
 
-@handle_connection_errors("set_render_settings")
+@tool(UNDOABLE)
 def set_render_settings(
     rop_path: str,
     settings: dict[str, Any],
@@ -913,10 +919,10 @@ def set_render_settings(
 
         node = node_at(hou, rop_path, "ROP")
 
-        return write_all(node, settings).fields("set_render_settings", rop_path=rop_path)
+        return write_all(node, settings).fields(set_render_settings.__name__, rop_path=rop_path)
 
 
-@handle_connection_errors("create_render_node")
+@tool(UNDOABLE)
 def create_render_node(
     rop_type: str,
     name: str | None = None,
@@ -960,7 +966,7 @@ def create_render_node(
             raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
         return write_all(node, settings or {}).fields(
-            "create_render_node",
+            create_render_node.__name__,
             created=[node],
             rop_path=node.path(),
             rop_name=node.name(),

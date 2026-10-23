@@ -10,10 +10,11 @@ from typing import Any
 from ..connection import transport_failure
 from ..settings import Summarizer
 from ._common import (
+    READ,
     ResultLimit,
-    handle_connection_errors,
     node_at,
     on_the_scene,
+    tool,
     using,
 )
 from .failure import OperationFailed, Undone, batch_status
@@ -22,7 +23,7 @@ from .summarization import ERRORS_BRIEF, summarized
 logger = logging.getLogger("houdini_mcp.tools.errors")
 
 
-@handle_connection_errors("find_error_nodes")
+@tool(READ)
 async def find_error_nodes(
     root_path: str = "/",
     include_warnings: bool = True,
@@ -73,7 +74,7 @@ async def find_error_nodes(
     """
     # A scan that inspected nothing raises, so a failure is never summarized.
     result = await on_the_scene(
-        "find_error_nodes", _scan_error_nodes, root_path, include_warnings, max_results, host, port
+        find_error_nodes, _scan_error_nodes, root_path, include_warnings, max_results, host, port
     )
     return await summarized(result, ERRORS_BRIEF, summarizer=summarizer, asked=summarize)
 
@@ -154,7 +155,7 @@ def _scan_error_nodes(
         # [LAW:single-enforcer] success means every node scanned was inspected
         failed = [Undone(u["path"] or "(no path)", u["kind"], u["reason"]) for u in uninspected]
         inspected = range(total_scanned - len(uninspected))
-        status = batch_status("find_error_nodes", inspected, failed, **report)
+        status = batch_status(find_error_nodes.__name__, inspected, failed, **report)
         return {"status": status, **report}
 
 

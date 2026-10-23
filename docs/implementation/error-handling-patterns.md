@@ -17,7 +17,7 @@ This document describes the error handling patterns used throughout the Houdini 
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │               Tool (houdini_mcp/tools)                          │
-│  @handle_connection_errors("some_tool")  ◄── Decorator          │
+│  @tool(READ)  ◄── Decorator: the policy; the name is the function│
 │  def some_tool(...):                                            │
 │      with using(host, port) as link:  ◄── Connection            │
 │          hou = link.hou                                         │
@@ -38,14 +38,18 @@ This document describes the error handling patterns used throughout the Houdini 
 
 ## Key Components
 
-### 1. `@handle_connection_errors` Decorator
+### 1. `@tool(policy)` Decorator
 
-**Location:** `handle_connection_errors` in `houdini_mcp/tools/_common.py`
+**Location:** `tool` in `houdini_mcp/tools/_common.py`
+
+It takes the tool's `ToolPolicy` (`READ`, `UNDOABLE`, ... in `tools/transactions.py`).
+The tool's name is its function's: the `operation` its failures carry and the name it is
+served as are both that name.
 
 The primary error handling mechanism. Wraps tool functions with a three-tier error pattern:
 
 ```python
-@handle_connection_errors("get_scene_info")
+@tool(READ)
 def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     with using(host, port) as link:
         hou = link.hou
@@ -236,8 +240,8 @@ All tools return consistent response dictionaries:
 `execute_code` runs the caller's program in a thread the server cannot kill.
 When it times out, the program keeps running with its undo group open, and
 `WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
-ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (see
-`TOOL_POLICIES` in `tools/transactions.py`: the scene writers,
+ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (the policy
+its `@tool` declares, from `tools/transactions.py`: the scene writers,
 `get_geo_summary`, which reads through a program in the same worker slot, and
 the render tools, which add a camera and a ROP for the call) is refused at
 the tool boundary:
@@ -287,7 +291,7 @@ asserts the schema and the server's refusals agree.
 and a body that returns only success.
 
 ```python
-@handle_connection_errors("delete_node")
+@tool(UNDOABLE)
 def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     with using(host, port) as link:
         hou = link.hou
@@ -307,7 +311,7 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 ### Pattern 2: Tool with Constrained Input
 
 ```python
-@handle_connection_errors("render_viewport")
+@tool(HOLDS_SCENE)
 def render_viewport(
     resolution: Resolution = DEFAULT_RESOLUTION,
     ...
@@ -380,7 +384,7 @@ MCP client, not by calling the tool function. See
 | File | Purpose |
 |------|---------|
 | `houdini_mcp/tools/failure.py` | `ToolFailure`, its arms, what tools raise, and `failure_for` |
-| `houdini_mcp/tools/_common.py` | The `@handle_connection_errors` boundary and `node_at` |
+| `houdini_mcp/tools/_common.py` | The `@tool` boundary and `node_at` |
 | `houdini_mcp/connection.py` | Connection management with retry logic |
 | `tests/conftest.py` | Mock infrastructure for testing |
 | `tests/test_tools.py` | Tests for error handling decorator |
