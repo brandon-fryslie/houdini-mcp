@@ -175,8 +175,10 @@ def test_world_transform_turns_then_moves_as_houdini_does(mock_hou: MockHouModul
     ]
 
 
-# What Houdini's createNode raises for a type its network's category does not offer.
+# What Houdini's createNode raises for a type its network's category does not offer,
+# and inside a node that is not a network.
 INVALID_TYPE = r"hou\.OperationFailed: The attempted operation failed\.\nInvalid node type name"
+NOT_A_NETWORK = r"hou\.OperationFailed: The attempted operation failed\.\nThis node cannot contain"
 
 
 def test_a_node_is_of_the_category_its_network_holds(mock_hou: MockHouModule) -> None:
@@ -203,11 +205,16 @@ def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
 
 
 @pytest.mark.parametrize(
-    ("network", "node_type"),
-    [("/", "matnet"), ("/obj", "box"), ("/obj/geo1/box1", "sphere"), ("/ch", "null")],
+    ("network", "node_type", "message"),
+    [
+        ("/", "matnet", INVALID_TYPE),
+        ("/obj", "box", INVALID_TYPE),
+        ("/obj/geo1/box1", "sphere", NOT_A_NETWORK),
+        ("/ch", "null", INVALID_TYPE),
+    ],
 )
 def test_create_node_refuses_a_type_its_network_does_not_hold(
-    mock_hou: MockHouModule, network: str, node_type: str
+    mock_hou: MockHouModule, network: str, node_type: str, message: str
 ) -> None:
     """A context at the root, a SOP among objects, anything inside a node that is not
     a network, and a type the network's category does not list."""
@@ -215,7 +222,7 @@ def test_create_node_refuses_a_type_its_network_does_not_hold(
     parent = mock_hou.node(network)
     before = parent.children()
 
-    with pytest.raises(Exception, match=INVALID_TYPE):
+    with pytest.raises(Exception, match=message):
         parent.createNode(node_type, "refused")
 
     assert parent.children() == before
@@ -256,6 +263,18 @@ def test_a_hand_built_tree_with_one_wrong_node_leaves_the_scene_unchanged(
 
     assert mock_hou.node("/obj").children() == ()
     assert (geo.parent(), box.parent(), child.parent()) == (None, None, None)
+
+
+def test_a_destroyed_tree_is_placed_again_as_a_hand_built_one(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    geo.destroy()
+
+    mock_hou.add_node(geo)
+
+    assert mock_hou.node("/obj/geo1/box1") is box
+    assert box.parent() is geo
+    assert box.type().category().name() == "Sop"
 
 
 def test_a_nested_duplicate_name_is_refused(mock_hou: MockHouModule) -> None:

@@ -282,15 +282,17 @@ class MockHouNode:
         """Place a prebuilt subtree in this network, as Houdini could have built it.
 
         [LAW:single-enforcer] the one way into the scene (createNode and add_node
-        come here) and the one place a parent link is set. The whole subtree is
+        come here) and the one place a parent link is made. The whole subtree is
         judged before any of it is linked, so a refused one leaves the scene and
         every node's links as they were. A path, name or parent that lies is a
         fixture lying, ValueError; a type its network cannot hold is refused as
         Houdini's createNode refuses it.
         """
         _admit(self, self._held(), child, self._children)
-        for network, node in [(self, child), *_links(child)]:
-            node._parent = network
+        for network in [child, *child.allSubChildren()]:
+            for node in network._children:
+                node._parent = network
+        child._parent = self
         self._children.append(child)
 
     def node(self, path: str) -> "MockHouNode | None":
@@ -476,15 +478,21 @@ class MockHouNode:
         return new_node
 
     def destroy(self) -> None:
-        """Leave the scene: the subtree resolves from no path and every wire to it is cut."""
+        """Leave the scene: the subtree resolves from no path and every wire to it is cut.
+
+        What is left is a tree as one is built by hand, its children listed and no
+        parent link set, so attach judges and links it again if it is ever placed.
+        """
         if self._parent is None:
             raise RuntimeError(f"{self.path()!r} is not in a scene")
-        for node in [self, *self.allSubChildren()]:
+        subtree = [self, *self.allSubChildren()]
+        for node in subtree:
             node._disconnect()
         for box in self._parent._network_boxes:
             box._nodes = [n for n in box._nodes if n is not self]
         self._parent._children.remove(self)
-        self._parent = None
+        for node in subtree:
+            node._parent = None
 
     def _disconnect(self) -> None:
         """Cut every wire into and out of this node, through setInput so both ends agree."""
@@ -686,18 +694,18 @@ def _admit(
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
     offered = {} if held is None else NODE_TYPES[held]
     if node._node_type not in offered:
-        refused = OperationFailed("The attempted operation failed.\nInvalid node type name")
-        refused.add_note(f"{node._node_type!r} in {network.path()!r}, which holds {held}")
+        # Houdini's two refusals: a node that is not a network, and a type its network's
+        # category does not offer.
+        reason = (
+            "This node cannot contain other nodes" if held is None else "Invalid node type name"
+        )
+        refused = OperationFailed(f"The attempted operation failed.\n{reason}")
+        refused.add_note(
+            f"{node._node_type!r} in {network.path()!r}, which holds {held or 'no'} nodes"
+        )
         raise raised_inside_houdini(refused)
     for index, child in enumerate(node._children):
         _admit(node, offered[node._node_type], child, node._children[:index])
-
-
-def _links(node: MockHouNode) -> Generator[tuple[MockHouNode, MockHouNode], None, None]:
-    """Every (network, child) pair under ``node``, the links attach sets."""
-    for child in node._children:
-        yield node, child
-        yield from _links(child)
 
 
 class MockModuleNamespace:

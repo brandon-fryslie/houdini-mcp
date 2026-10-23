@@ -136,7 +136,13 @@ class TestNodeTypeCacheReadsThroughTheProxy:
 
         connection.execute.assert_not_called()
         assert cache.is_valid()
-        assert set(types.categories) == set(hou.nodeTypeCategories())
+        offered = hou.nodeTypeCategories()
+        assert set(types.categories) == set(offered)
+        assert {(t["category"], t["name"]) for t in types.all} == {
+            (category, name)
+            for category, types_of in offered.items()
+            for name in types_of.nodeTypes()
+        }
         assert types.filter(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]
