@@ -31,9 +31,11 @@ is `False`, and **Start Remote** starts a fresh listener in its place.
 
 **Stop Remote** with clients connected disconnects them: each one's next call
 fails with a closed connection, and Houdini's log records
-`hrpyc client ('<host>', <port>) disconnected from port <port> by the listener`
+`hrpyc client ('<host>', <port>) disconnected from port <port> by the listener (<how>)`
 for each, not an error. A client that closes its own connection is recorded
-`by the client`.
+`by the client`. `<how>` is how the thread serving the client saw the end:
+`end of stream`, the socket error it ran into, or `between rounds` when the
+stop never woke it and it ended on its next one-second round.
 
 ## Configuration (environment variables)
 

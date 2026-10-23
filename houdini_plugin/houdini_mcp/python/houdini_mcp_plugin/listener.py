@@ -170,7 +170,9 @@ class HrpycConnection(Protocol):
     server recorded for it."""
 
     _config: Mapping[str, Any]
-    closed: bool
+
+    @property
+    def closed(self) -> bool: ...
 
     def serve(self, timeout: float) -> bool: ...
 
@@ -439,8 +441,13 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     but not that it was closed on purpose. Either way it is the listener's own
     disconnect, recorded as one, not as a traceback. A socket error while the
     listener still serves is a real failure, and is raised.
+
+    The record says who ended the connection and how serving saw it end: end
+    of stream (a client's close request ends this way too), the socket error,
+    or between rounds: a stop whose close the round's poll never heard.
     """
     error: OSError | None = None
+    ending = "between rounds"
     try:
         # [LAW:no-ambient-temporal-coupling] the thread's end is the listener's
         # ``active``, cleared before close() touches a socket, read every round;
@@ -448,9 +455,9 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
         while server.active and not conn.closed:
             conn.serve(_SERVE_ROUND_SECONDS)
     except EOFError:
-        pass  # the client closed its side
+        ending = "end of stream"
     except OSError as exc:
-        error = exc
+        error, ending = exc, str(exc)
     finally:
         conn.close()
     # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,
@@ -461,10 +468,11 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
         raise error
     # The peer as rpyc's own "welcome"/"goodbye" lines print it.
     logger.info(
-        "hrpyc client %s disconnected from port %s by the %s",
+        "hrpyc client %s disconnected from port %s by the %s (%s)",
         conn._config["endpoints"][1],
         server.port,
         "client" if active else "listener",
+        ending,
     )
 
 

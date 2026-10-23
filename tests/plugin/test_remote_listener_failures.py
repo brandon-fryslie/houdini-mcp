@@ -728,9 +728,9 @@ class TestClientDisconnect:
     @pytest.mark.parametrize(
         ("round_", "record"),
         [
-            (_client_closes, "by the client"),
-            (_listener_closes_unheard, "by the listener"),
-            (_listener_closes_under_poll, "by the listener"),
+            (_client_closes, "by the client (end of stream)"),
+            (_listener_closes_unheard, "by the listener (between rounds)"),
+            (_listener_closes_under_poll, "by the listener ([Errno 9] Bad file descriptor)"),
         ],
         ids=["client-closed", "listener-closed-unheard", "listener-closed-under-poll"],
     )
