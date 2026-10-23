@@ -387,7 +387,7 @@ class TestErrorHandling:
         assert node_info["status"] == "success"
         assert "cook_info" in node_info
 
-        assert node_info["cook_info"]["cook_state"] == "cooked"
+        assert node_info["cook_info"]["needs_to_cook"] is False
 
         # Step 2: a cooked node's geometry reads
         geo = await get_geo_summary(box_path, max_sample_points=0, **bound)

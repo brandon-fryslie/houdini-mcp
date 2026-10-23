@@ -37,7 +37,7 @@ from .connections import input_connections, input_paths
 from .failure import Undone, batch_status
 from .parms import evaluated
 from .plugin import plugin_module
-from .reads import UNREAD, Unread, is_unread, read
+from .reads import UNREAD, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -111,10 +111,12 @@ def get_node_info(
     Returns:
         Node information at the requested detail; a type_description Houdini
         would not give is {unread}. When cook_info is not "none",
-        also includes cook_info with cook_state, errors, and warnings (and
-        last_cook_time after a forced cook). cook_state is "error" (Houdini
-        lists errors on the node), "uncooked" (never cooked), "dirty" (cooked,
-        then changed) or "cooked".
+        also includes cook_info with cook_count, needs_to_cook, errors and
+        warnings (and last_cook_time after a forced cook). cook_count is how many
+        times Houdini has cooked the node, and needs_to_cook is Houdini's
+        needsToCook(): for a SOP, whether it changed since its last cook. Some
+        nodes answer the same after every cook: VOPs, most DOPs and networks
+        such as /obj always need to cook, and ROPs never do.
 
     Example:
         # Check cook state and errors
@@ -207,48 +209,39 @@ def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
 
 
 def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
-    """Cook state, errors and warnings; cooks the node first when ``force``.
+    """Houdini's cook count, whether it needs to cook, errors and warnings; cooks
+    the node first when ``force``.
 
     [LAW:no-silent-failure] Each part Houdini will not give reads as ``Unread``,
     so a node whose errors could not be read never looks like one with none.
     """
     cook_info: dict[str, Any] = {}
     path = node.path()
-    # Houdini has no direct lastCookTime; after a forced cook, now is it.
+    # Houdini 22's lastCookTime() reads 0.0 for every node; after a forced cook, now is it.
     if force:
         cook_info["last_cook_time"] = read(f"forced cook of {path}", lambda: _cook(node))
-    # [LAW:one-source-of-truth] one read of the errors, which the state derives from
-    errors = read(f"errors of {path}", lambda: _messages("error", path, node.errors()))
-    cook_info["cook_state"] = read(f"cook state of {path}", lambda: _cook_state(node, errors))
-    cook_info["errors"] = errors
+    # [LAW:types-are-the-program] Houdini's own two answers, not a state built from
+    # them: no reading of them is true of every node (a VOP needs to cook after any
+    # cook, a ROP never does), and every pair of them is one Houdini gives.
+    cook_info["cook_count"] = read(f"cook count of {path}", node.cookCount)
+    cook_info["needs_to_cook"] = read(f"needs to cook of {path}", node.needsToCook)
+    cook_info["errors"] = read(f"errors of {path}", lambda: _messages("error", path, node.errors()))
     cook_info["warnings"] = read(
         f"warnings of {path}", lambda: _messages("warning", path, node.warnings())
     )
-    logger.debug("cook info path=%s force=%s cook_state=%s", path, force, cook_info["cook_state"])
+    logger.debug(
+        "cook info path=%s force=%s cook_count=%s needs_to_cook=%s",
+        path,
+        force,
+        cook_info["cook_count"],
+        cook_info["needs_to_cook"],
+    )
     return cook_info
-
-
-CookState = Literal["error", "uncooked", "dirty", "cooked"]
-"""Houdini lists errors on it; never cooked; cooked but since changed; cooked and current."""
 
 
 def _cook(node: Any) -> float:
     node.cook(force=True)
     return time.time()
-
-
-def _cook_state(node: Any, errors: list[dict[str, str]] | Unread) -> CookState | Unread:
-    # [LAW:types-are-the-program] Houdini 22 has no cookState(). Only its errors
-    # tell a failed cook from a stale one (a failed cook still counts, and still
-    # needs to cook), so errors the node would not give leave its state unread
-    # too; and only cookCount() tells a node that never cooked.
-    if is_unread(errors):
-        return errors
-    if errors:
-        return "error"
-    if node.cookCount() == 0:
-        return "uncooked"
-    return "dirty" if node.needsToCook() else "cooked"
 
 
 def _messages(severity: str, path: str, messages: Any) -> list[dict[str, str]]:

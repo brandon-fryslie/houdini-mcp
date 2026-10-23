@@ -116,7 +116,10 @@ def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, 
         assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")
 
 
-def test_cook_state_reads_what_houdini_22_can_tell(at: dict[str, Any]) -> None:
+def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str, Any]) -> None:
+    """A forced cook counts, for a manager and for a displayed SOP alike: compared with
+    the count before it, so a viewer that already cooked the box changes nothing."""
+
     def cook_info(path: str, how: str) -> dict[str, Any]:
         return tools.get_node_info(path, cook_info=how, **at)["cook_info"]
 
@@ -125,12 +128,17 @@ def test_cook_state_reads_what_houdini_22_can_tell(at: dict[str, Any]) -> None:
     failing = tools.create_node("python", geo, "failing1", **at)["node_path"]
     planted = tools.set_parameter(failing, "python", "raise RuntimeError('planted')", **at)
     assert planted["status"] == "success"
+    assert tools.get_node_info(box, **at)["is_displayed"] is True
 
-    assert cook_info(box, "inspect")["cook_state"] == "uncooked"
-    assert cook_info(box, "force_cook")["cook_state"] == "cooked"
+    for path in ("/obj", box):
+        before = cook_info(path, "inspect")["cook_count"]
+        assert cook_info(path, "force_cook")["cook_count"] > before
+    # a manager needs to cook after every cook; a SOP that cooked does not
+    assert cook_info("/obj", "inspect")["needs_to_cook"] is True
+    assert cook_info(box, "inspect")["needs_to_cook"] is False
 
     failed = cook_info(failing, "force_cook")
-    assert failed["cook_state"] == "error"
+    assert failed["needs_to_cook"] is True
     assert "planted" in failed["errors"][0]["message"]
     assert failed["last_cook_time"]["unread"].startswith("hou.OperationFailed")
 

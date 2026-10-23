@@ -717,6 +717,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call reached Houdini. The server validates every tool's arguments strictly,
   so the string `"512"` or `"yes"` is refused as the schema says, not coerced.
 
+- **BREAKING (wire)**: `get_node_info`'s `cook_info` has `cook_count`
+  (Houdini's `cookCount()`, how many times the node has cooked) and
+  `needs_to_cook` (Houdini's `needsToCook()`) in place of `cook_state`
+  (houdini-laws-etg.3zn). `cook_state` told `"dirty"` from `"cooked"` by
+  `needsToCook()`, which Houdini answers True after every cook for VOPs, most
+  DOPs and networks such as `/obj`, and False for a ROP even after a parameter
+  change. So those nodes read `"dirty"` right after the forced cook
+  `cook_state` had just run, and a changed ROP read `"cooked"`. The split does
+  not follow node category, so both answers are now reported as Houdini gives
+  them; for a SOP, `needs_to_cook` is whether it changed since its last cook.
+  Each field is unread on its own when Houdini will not give it, where before,
+  errors Houdini would not give left `cook_state` unread too.
+
 ### Removed
 
 - `examples/`, `docs/implementation/examples-docs.md` and
@@ -768,9 +781,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `get_geo_summary`'s `cook_state` (houdini-laws-etg.216). It could only ever say
   `"cooked"`, and meant something different from `get_node_info`'s field of the
-  same name, which is now the only one. A node whose cook fails has no geometry,
+  same name. A node whose cook fails has no geometry,
   so a summary is never of one, and the step that cooked the node first cooked
   nothing `geometry()` would not.
+
+- `get_node_info`'s `cook_state` (houdini-laws-etg.3zn), which shipped in
+  1.0.0 as `"error"`, `"uncooked"`, `"dirty"` or `"cooked"`. Its `"dirty"` and
+  `"cooked"` were false for whole families of nodes, as Changed explains.
+  `cook_info` reports Houdini's own answers in its place: a failed cook is in
+  `errors` as before, a node that never cooked has a `cook_count` of 0, and
+  `needs_to_cook` is the answer `cook_state` read as dirty or cooked.
 
 ### Fixed
 
@@ -791,16 +811,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter, before it reaches Houdini, served or called directly. Every tool's
   parameter defaults are checked against their types when the tool is defined,
   so a tool cannot serve a default it would refuse from a caller.
-
-- `get_node_info`'s `cook_state` reports a failed cook and a never-cooked node
-  in Houdini 22 (houdini-laws-etg.86b). It asked for `cookState()`, which no
-  Houdini 22 node has, so a live call could only answer `"cooked"` or
-  `"dirty"`: a node whose cook failed read as `"dirty"`, and one that had never
-  cooked read as `"dirty"` too. It now reads `"error"` when Houdini lists errors
-  on the node, `"uncooked"` when the node has never cooked, and `"dirty"` or
-  `"cooked"` otherwise. Without the node's errors a failed cook and a stale one
-  look the same, so when Houdini will not give the errors, `cook_state` is
-  unread with the same reason.
 
 - A whole-node `get_parameter_schema` lists the parameters the node has
   (houdini-laws-etg.6z0). It walked the node's parameter templates, so a
