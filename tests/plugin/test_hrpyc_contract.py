@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import socket
+import sys
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -18,8 +19,10 @@ from typing import Any
 import pytest
 import rpyc
 import rpyc.core
+import rpyc.core.stream
 import rpyc.utils.server
 from houdini_mcp_plugin.listener import (
+    HrpycConnection,
     HrpycModule,
     HrpycServer,
     ListenerConfig,
@@ -56,6 +59,13 @@ def real_hrpyc() -> SimpleNamespace:
     return SimpleNamespace(
         SlaveService=rpyc.core.SlaveService, ThreadedServer=threaded_server, servers=servers
     )
+
+
+def connect_classic(port: int) -> tuple[rpyc.Connection, tuple[str, int]]:
+    """A classic client on 127.0.0.1:``port``, and its own address: the peer
+    the server's records name it by."""
+    sock = socket.create_connection(("127.0.0.1", port))
+    return rpyc.classic.connect_stream(rpyc.core.stream.SocketStream(sock)), sock.getsockname()
 
 
 def build(hrpyc, port: int) -> HrpycServer:
@@ -174,3 +184,93 @@ class TestListenerAgainstRealRpyc:
             probe.settimeout(1)
             assert probe.connect_ex(("127.0.0.1", port)) != 0
         assert listener.self_test()["running"] is False
+
+    def test_a_client_closing_its_connection_is_recorded_with_its_address(
+        self, fake_hou, monkeypatch, caplog
+    ):
+        """A client that closes its own connection is recorded by address as
+        having ended it."""
+        unhandled: list[BaseException | None] = []
+        monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        hrpyc = real_hrpyc()
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        with contextlib.ExitStack() as teardown:
+            teardown.callback(listener.stop)
+            port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
+            (server,) = hrpyc.servers
+            conn, peer = connect_classic(port)
+            with contextlib.closing(conn):
+                # rpyc's one Connection class serves both ends of a connection.
+                assert isinstance(conn, HrpycConnection)
+                assert conn.modules.math.sqrt(16.0) == 4.0
+            await_clients_served(server)
+        assert [r.getMessage() for r in caplog.records if r.exc_info] == []
+        assert unhandled == []
+        assert f"hrpyc client {peer} disconnected from port {port} by the client" in caplog.messages
+
+    def test_stop_disconnects_a_client_about_to_poll_with_no_traceback(
+        self, fake_hou, monkeypatch, caplog
+    ):
+        """stop() closes each client's socket under the thread serving it. A
+        thread blocked in poll() reads that as EOF; one about to enter poll()
+        reads a closed descriptor and fails. Left to itself that second ordering
+        is a narrow race, so the test parks the serving thread at poll()'s entry
+        and stops the listener while it waits there: the losing interleaving,
+        on every run, through rpyc's own code."""
+        real_poll = rpyc.core.stream.SocketStream.poll
+        test_thread = threading.current_thread()
+        armed, parked, released = threading.Event(), threading.Event(), threading.Event()
+        serving: list[threading.Thread] = []
+        raised: list[BaseException] = []
+
+        def poll(stream: Any, timeout: Any) -> bool:
+            # The client polls on this thread; any other caller is the server's.
+            server_side = threading.current_thread() is not test_thread
+            if not (armed.is_set() and server_side and not parked.is_set()):
+                return real_poll(stream, timeout)
+            serving.append(threading.current_thread())
+            parked.set()
+            assert released.wait(timeout=5), "serving thread was never released"
+            try:
+                return real_poll(stream, timeout)
+            except BaseException as exc:
+                raised.append(exc)
+                raise
+
+        monkeypatch.setattr(rpyc.core.stream.SocketStream, "poll", poll)
+        # The classic service imports a module by name, so this one is served by
+        # the thread serving the client: arm() is set there, mid-request, and
+        # that thread's next poll() is the one after it answers.
+        monkeypatch.setitem(sys.modules, "_park_probe", SimpleNamespace(arm=armed.set))
+        unhandled: list[BaseException | None] = []
+        monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+
+        listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
+        with contextlib.ExitStack() as teardown:
+            # Registered first, so it runs last: a released serving thread
+            # whose listener a failure left open is still closed under it.
+            teardown.callback(listener.stop)
+            teardown.callback(released.set)
+            port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
+            conn, peer = connect_classic(port)
+            teardown.enter_context(contextlib.closing(conn))
+            conn.modules._park_probe.arm()
+            assert parked.wait(timeout=5)
+            assert listener.stop()["status"] == "success"
+            released.set()
+            (thread,) = serving
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "serving thread did not end after stop()"
+            with pytest.raises(EOFError):
+                conn.modules.math.sqrt(1.0)
+        assert [r.getMessage() for r in caplog.records if r.exc_info] == []
+        assert unhandled == []
+        # The parked poll() failed on the descriptor closed under it: the
+        # losing interleaving ran, and was recorded as the listener's close.
+        (error,) = raised
+        assert isinstance(error, OSError)
+        assert (
+            f"hrpyc client {peer} disconnected from port {port} by the listener" in caplog.messages
+        )

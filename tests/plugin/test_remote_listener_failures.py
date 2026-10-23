@@ -5,12 +5,14 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import socket
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import houdini_mcp_handshake as handshake
 import houdini_mcp_plugin.listener as listener_module
@@ -554,3 +556,54 @@ class TestReconnect:
         assert f"Stopped hrpyc listener (127.0.0.1:{port}, was_serving=False)" in caplog.text
         assert listener.is_running() is False
         assert listener.status()["stale"] is False
+
+
+# ---------------------------------------------------------------------------
+# A client's connection ending
+# ---------------------------------------------------------------------------
+
+
+class TestClientDisconnect:
+    """Who ended a connection is the listener's ``active`` once serving stops:
+    the end is recorded with it, unless serving stopped on a socket error under
+    a listener still serving, which is raised instead."""
+
+    PEER = ("127.0.0.1", 50123)
+    # What poll() raises on a descriptor closed under it.
+    CLOSED_FD = OSError(errno.EBADF, "Bad file descriptor")
+
+    @pytest.mark.parametrize(
+        ("error", "active", "record"),
+        [
+            (None, True, "by the client"),
+            (None, False, "by the listener"),
+            (CLOSED_FD, False, "by the listener"),
+        ],
+        ids=["client-closed", "listener-closed", "listener-closed-under-poll"],
+    )
+    def test_a_clean_end_is_recorded_with_who_ended_it(self, caplog, error, active, record):
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        listener_module._serve_connection(
+            SimpleNamespace(active=active, port=18811), self.connection(error)
+        )
+        assert caplog.messages == [
+            f"hrpyc client {self.PEER} disconnected from port 18811 {record}"
+        ]
+
+    def test_a_socket_error_under_a_serving_listener_is_raised_not_recorded(self, caplog):
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        with pytest.raises(OSError) as caught:
+            listener_module._serve_connection(
+                SimpleNamespace(active=True, port=18811), self.connection(self.CLOSED_FD)
+            )
+        assert caught.value is self.CLOSED_FD
+        assert caplog.messages == []
+
+    def connection(self, error: OSError | None) -> SimpleNamespace:
+        def serve_all() -> None:
+            if error is not None:
+                raise error
+
+        return SimpleNamespace(
+            serve_all=serve_all, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
+        )

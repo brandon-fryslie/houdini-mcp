@@ -112,6 +112,11 @@ class FakeThreadedServer:
         else:
             self.authenticated += 1
 
+    def _handle_connection(self, conn: Any) -> None:
+        # The listener replaces this on every server it builds; this fake speaks
+        # no rpyc protocol, so no admitted client is served through it.
+        raise AssertionError("FakeThreadedServer serves no rpyc connection")
+
     def close(self) -> None:
         # As rpyc: shut down before close. On Linux, close() alone leaves the
         # socket bound until an in-flight accept() returns, so the port could not
