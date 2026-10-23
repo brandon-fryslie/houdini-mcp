@@ -5,7 +5,7 @@ Part of houdini-mcp-00p. Uses hermetic fakes (see ``conftest.py``).
 
 from __future__ import annotations
 
-import contextlib
+import errno
 import logging
 import os
 import socket
@@ -564,40 +564,46 @@ class TestReconnect:
 
 
 class TestClientDisconnect:
-    """How a connection ended is the listener's ``active`` once serving stops
-    and whether serving stopped on a socket error; each is recorded, and only a
-    socket error under a listener still serving is raised."""
+    """Who ended a connection is the listener's ``active`` once serving stops:
+    the end is recorded with it, unless serving stopped on a socket error under
+    a listener still serving, which is raised instead."""
 
     PEER = ("127.0.0.1", 50123)
-    RESET = ConnectionResetError(54, "Connection reset by peer")
+    # What poll() raises on a descriptor closed under it.
+    CLOSED_FD = OSError(errno.EBADF, "Bad file descriptor")
 
     @pytest.mark.parametrize(
-        ("error", "active", "record", "raised"),
+        ("error", "active", "record"),
         [
-            (None, True, "by the client (connection closed)", None),
-            (None, False, "by the listener (connection closed)", None),
-            (RESET, False, f"by the listener ({RESET})", None),
-            (RESET, True, f"by the client ({RESET})", RESET),
+            (None, True, "by the client"),
+            (None, False, "by the listener"),
+            (CLOSED_FD, False, "by the listener"),
         ],
-        ids=["client-closed", "listener-closed", "listener-closed-under-poll", "socket-failed"],
+        ids=["client-closed", "listener-closed", "listener-closed-under-poll"],
     )
-    def test_each_end_is_recorded_and_only_a_live_socket_error_raised(
-        self, caplog, error, active, record, raised
-    ):
+    def test_a_clean_end_is_recorded_with_who_ended_it(self, caplog, error, active, record):
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        listener_module._serve_connection(
+            SimpleNamespace(active=active, port=18811), self.connection(error)
+        )
+        assert caplog.messages == [
+            f"hrpyc client {self.PEER} disconnected from port 18811 {record}"
+        ]
+
+    def test_a_socket_error_under_a_serving_listener_is_raised_not_recorded(self, caplog):
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        with pytest.raises(OSError) as caught:
+            listener_module._serve_connection(
+                SimpleNamespace(active=True, port=18811), self.connection(self.CLOSED_FD)
+            )
+        assert caught.value is self.CLOSED_FD
+        assert caplog.messages == []
+
+    def connection(self, error: OSError | None) -> SimpleNamespace:
         def serve_all() -> None:
             if error is not None:
                 raise error
 
-        conn = SimpleNamespace(
+        return SimpleNamespace(
             serve_all=serve_all, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
         )
-        server = SimpleNamespace(active=active, port=18811)
-        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
-
-        with pytest.raises(type(raised)) if raised else contextlib.nullcontext() as caught:
-            listener_module._serve_connection(server, conn)
-
-        assert caplog.messages == [
-            f"hrpyc client {self.PEER} disconnected from port 18811 {record}"
-        ]
-        assert raised is None or caught.value is raised

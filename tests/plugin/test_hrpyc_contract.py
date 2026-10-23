@@ -22,6 +22,7 @@ import rpyc.core
 import rpyc.core.stream
 import rpyc.utils.server
 from houdini_mcp_plugin.listener import (
+    HrpycConnection,
     HrpycModule,
     HrpycServer,
     ListenerConfig,
@@ -200,14 +201,13 @@ class TestListenerAgainstRealRpyc:
             (server,) = hrpyc.servers
             conn, peer = connect_classic(port)
             with contextlib.closing(conn):
+                # rpyc's one Connection class serves both ends of a connection.
+                assert isinstance(conn, HrpycConnection)
                 assert conn.modules.math.sqrt(16.0) == 4.0
             await_clients_served(server)
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
-        assert (
-            f"hrpyc client {peer} disconnected from port {port} by the client (connection closed)"
-            in caplog.messages
-        )
+        assert f"hrpyc client {peer} disconnected from port {port} by the client" in caplog.messages
 
     def test_stop_disconnects_a_client_about_to_poll_with_no_traceback(
         self, fake_hou, monkeypatch, caplog
@@ -222,15 +222,21 @@ class TestListenerAgainstRealRpyc:
         test_thread = threading.current_thread()
         armed, parked, released = threading.Event(), threading.Event(), threading.Event()
         serving: list[threading.Thread] = []
+        raised: list[BaseException] = []
 
         def poll(stream: Any, timeout: Any) -> bool:
             # The client polls on this thread; any other caller is the server's.
             server_side = threading.current_thread() is not test_thread
-            if armed.is_set() and server_side and not parked.is_set():
-                serving.append(threading.current_thread())
-                parked.set()
-                assert released.wait(timeout=5), "serving thread was never released"
-            return real_poll(stream, timeout)
+            if not (armed.is_set() and server_side and not parked.is_set()):
+                return real_poll(stream, timeout)
+            serving.append(threading.current_thread())
+            parked.set()
+            assert released.wait(timeout=5), "serving thread was never released"
+            try:
+                return real_poll(stream, timeout)
+            except BaseException as exc:
+                raised.append(exc)
+                raise
 
         monkeypatch.setattr(rpyc.core.stream.SocketStream, "poll", poll)
         # The classic service imports a module by name, so this one is served by
@@ -261,8 +267,10 @@ class TestListenerAgainstRealRpyc:
                 conn.modules.math.sqrt(1.0)
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
-        # The thread failed on the closed descriptor, so the record carries
-        # that OSError, whose text is rpyc's and the platform's.
-        prefix = f"hrpyc client {peer} disconnected from port {port} by the listener ("
-        (record,) = [m for m in caplog.messages if m.startswith(prefix)]
-        assert record != f"{prefix}connection closed)"
+        # The parked poll() failed on the descriptor closed under it: the
+        # losing interleaving ran, and was recorded as the listener's close.
+        (error,) = raised
+        assert isinstance(error, OSError)
+        assert (
+            f"hrpyc client {peer} disconnected from port {port} by the listener" in caplog.messages
+        )

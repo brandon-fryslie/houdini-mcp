@@ -32,7 +32,7 @@ import shlex
 import socket
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
 
@@ -162,6 +162,18 @@ class SecurityError(RuntimeError):
 # the rpyc the tests run; ``tests/plugin/test_hrpyc_contract.py`` holds the real
 # module to it.
 @runtime_checkable
+class HrpycConnection(Protocol):
+    """One admitted client's rpyc connection, as the server hands it to
+    ``_handle_connection``: ``serve_all()`` serves it until it ends, and
+    ``_config["endpoints"]`` is the ``(local, peer)`` address pair the server
+    recorded for it."""
+
+    _config: Mapping[str, Any]
+
+    def serve_all(self) -> None: ...
+
+
+@runtime_checkable
 class HrpycServer(Protocol):
     """A bound rpyc server: constructed bound, made to listen, drained, closed.
 
@@ -175,7 +187,7 @@ class HrpycServer(Protocol):
 
     active: bool
     port: int
-    _handle_connection: Callable[[Any], None]
+    _handle_connection: Callable[[HrpycConnection], None]
 
     def _listen(self) -> None: ...
 
@@ -404,8 +416,8 @@ def _serve(server: HrpycServer) -> None:
         logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
-def _serve_connection(server: HrpycServer, conn: Any) -> None:
-    """Serve one client's rpyc connection until it ends, and record how it ended.
+def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
+    """Serve one client's rpyc connection until it ends, and record who ended it.
 
     The client ends it by closing its side; the listener ends it by closing,
     which clears ``active`` and then closes each client's socket under the
@@ -414,28 +426,26 @@ def _serve_connection(server: HrpycServer, conn: Any) -> None:
     the closed descriptor: ``serve_all()`` raises that as an OSError, knowing
     the socket closed but not that it was closed on purpose. Both are the
     listener's own disconnect, recorded as one, not as a traceback. A socket
-    error while the listener still serves is a real failure, recorded and
-    raised.
+    error while the listener still serves is a real failure, and is raised.
     """
-    ended: str | OSError = "connection closed"
+    error: OSError | None = None
     try:
         conn.serve_all()
     except OSError as exc:
-        ended = exc
+        error = exc
     # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,
     # cleared before close() touches any client socket; read once, so the
-    # record and the raise below agree on it.
-    closer = "client" if server.active else "listener"
+    # raise and the record below agree on it.
+    active = server.active
+    if error is not None and active:
+        raise error
     # The peer as rpyc's own "welcome"/"goodbye" lines print it.
     logger.info(
-        "hrpyc client %s disconnected from port %s by the %s (%s)",
+        "hrpyc client %s disconnected from port %s by the %s",
         conn._config["endpoints"][1],
         server.port,
-        closer,
-        ended,
+        "client" if active else "listener",
     )
-    if isinstance(ended, OSError) and closer == "client":
-        raise ended
 
 
 # libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.
