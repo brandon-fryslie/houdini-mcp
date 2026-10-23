@@ -306,7 +306,7 @@ class TestErrorHandling:
         # Force cook
         noise_info = get_node_info(noise_path, cook_info="force_cook", **at)
         assert noise_info["status"] == "success"
-        assert "cook_info" in noise_info
+        assert noise_info["cook_info"]["errors"], noise_info
 
         # Noise without input cooks to no geometry at all
         geo = await get_geo_summary(noise_path, max_sample_points=0, **bound)

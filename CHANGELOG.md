@@ -720,15 +720,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (wire)**: `get_node_info`'s `cook_info` has `cook_count`
   (Houdini's `cookCount()`, how many times the node has cooked) and
   `needs_to_cook` (Houdini's `needsToCook()`) in place of `cook_state`
-  (houdini-laws-etg.3zn). `cook_state` told `"dirty"` from `"cooked"` by
-  `needsToCook()`, which Houdini answers True after every cook for VOPs, most
-  DOPs and networks such as `/obj`, and False for a ROP even after a parameter
-  change. So those nodes read `"dirty"` right after the forced cook
-  `cook_state` had just run, and a changed ROP read `"cooked"`. The split does
-  not follow node category, so both answers are now reported as Houdini gives
-  them; for a SOP, `needs_to_cook` is True after a change and after a cook
-  that failed. Each field is unread on its own when Houdini will not give it,
-  where before, errors Houdini would not give left `cook_state` unread too.
+  (houdini-laws-etg.3zn), which 1.0.0 gave as `"error"`, `"uncooked"`,
+  `"dirty"`, `"cooked"` or `"unknown"`. `cook_state` told `"dirty"` from
+  `"cooked"` by `needsToCook()`, which Houdini 22 answers True after every
+  cook for VOPs, most DOPs and networks such as `/obj`, and False for a ROP
+  even after a parameter change. So those nodes read `"dirty"` right after the
+  forced cook `cook_state` had just run, and a changed ROP read `"cooked"`.
+  The split does not follow node category, so both answers are now reported
+  as Houdini gives them; for a SOP, `needs_to_cook` is True after a change and
+  after a cook that failed. A failed cook is in `errors` as before, and a node
+  that never cooked has a `cook_count` of 0. Each field is unread on its own
+  when Houdini will not give it.
 
 ### Removed
 
@@ -784,13 +786,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same name. A node whose cook fails has no geometry,
   so a summary is never of one, and the step that cooked the node first cooked
   nothing `geometry()` would not.
-
-- `get_node_info`'s `cook_state` (houdini-laws-etg.3zn), which shipped in
-  1.0.0 as `"error"`, `"uncooked"`, `"dirty"`, `"cooked"` or `"unknown"`. Its `"dirty"` and
-  `"cooked"` were false for whole families of nodes, as Changed explains.
-  `cook_info` reports Houdini's own answers in its place: a failed cook is in
-  `errors` as before, a node that never cooked has a `cook_count` of 0, and
-  `needs_to_cook` is the answer `cook_state` read as dirty or cooked.
 
 ### Fixed
 

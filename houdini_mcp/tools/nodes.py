@@ -115,9 +115,9 @@ def get_node_info(
         also includes cook_info with cook_count, needs_to_cook, errors and
         warnings (and last_cook_time after a forced cook). cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
-        needsToCook(): for a SOP, True after a change and after a cook that failed. Some
-        nodes answer the same after every cook: VOPs, most DOPs and networks
-        such as /obj always need to cook, and ROPs never do.
+        needsToCook(): for a SOP, True after a change and after a cook that failed.
+        On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
+        and networks such as /obj always need to cook, and ROPs never do.
 
     Example:
         # Check cook count and errors

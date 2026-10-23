@@ -94,7 +94,7 @@ class TestGetNodeInfoWithErrors:
     ):
         from houdini_mcp.tools import get_node_info
 
-        # every pair is one Houdini gives, and none hides the errors it lists
+        # whatever pair Houdini gives is reported as given, beside the errors it lists
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         geo1._cook_count = cook_count
         geo1._needs_to_cook = needs_to_cook
