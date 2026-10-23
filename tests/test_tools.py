@@ -12,7 +12,7 @@ import pytest
 from tests.conftest import (
     SUMMARIZER,
     MockHouNode,
-    MockNodeWithoutRenderFlag,
+    MockNodeLacking,
     link_failure,
     raised_inside_houdini,
 )
@@ -1523,8 +1523,8 @@ class TestListChildren:
     def test_compact_flags_are_optional_per_node(self, mock_connection):
         from houdini_mcp.tools import list_children
 
-        child = MockNodeWithoutRenderFlag(
-            path="/obj/geo1/custom", name="custom", node_type="custom"
+        child = MockNodeLacking(
+            path="/obj/geo1/custom", name="custom", node_type="custom", lacks=("isRenderFlagSet",)
         )
         mock_connection.add_node(
             MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])

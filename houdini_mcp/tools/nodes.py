@@ -26,6 +26,7 @@ from ._common import (
     ResultLimit,
     join_warnings,
     node_at,
+    node_flag,
     page_from,
     paginate,
     paging_fields,
@@ -195,25 +196,14 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
-        "is_displayed": read(f"display flag of {path}", partial(_flag, node, "isDisplayFlagSet")),
-        "is_rendered": read(f"render flag of {path}", partial(_flag, node, "isRenderFlagSet")),
+        "is_displayed": read(
+            f"display flag of {path}", partial(node_flag, node, "isDisplayFlagSet")
+        ),
+        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "isRenderFlagSet")),
     }
 
     info["input_connections"] = [conn.as_record() for conn in connections]
     return info
-
-
-def _flag(node: Any, method: str) -> bool | None:
-    """The flag ``method`` reads, or None when the node's class has no such flag.
-
-    Which flags a node has follows its class: on Houdini 22, for example, a SOP has
-    a display and a render flag, an object only a display flag, and a network such
-    as /obj neither.
-    """
-    # [LAW:no-silent-failure] looked up, then called: an AttributeError Houdini raises
-    # while reading the flag is a refused read, not a flag the node lacks
-    getter = getattr(node, method, None)
-    return None if getter is None else bool(getter())
 
 
 def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
@@ -390,6 +380,9 @@ def list_children(
         - type: Node type
         - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
         - outputs: Array of output node paths (omitted if compact=True)
+        - flags (compact=True only): display, render and bypass as "1" or "0",
+          "-" for a flag the node's class does not have; {unread} when Houdini
+          will not read them
         Also unwalked: nodes whose children Houdini would not list, as
         {path, unread}; any makes status "partial". A walk stopped by max_depth
         above nodes that have children, or that would not say, says so in warning,
@@ -415,7 +408,9 @@ def list_children(
         def compact_flags(node: Any) -> str:
             # Three-character bitset: display/render/bypassed. `-` means the node
             # class does not expose that flag API.
-            flags = (_flag(node, m) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed"))
+            flags = (
+                node_flag(node, m) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
+            )
             return "".join("-" if f is None else "1" if f else "0" for f in flags)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:

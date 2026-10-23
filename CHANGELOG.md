@@ -533,6 +533,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed with `operation_failed`. A flag the node's class does not have is
   still `null`; a link lost during the read is still `connection_lost`.
 
+- **BREAKING (wire)**: `list_render_nodes`'s `bypassed` is `null` for a node in
+  /out with no bypass flag, a network such as a `sopnet` or `matnet`
+  (houdini-laws-etg.1dc). It was `false`, which a node that is not bypassed
+  also reads.
+
 - **BREAKING (wire)**: `get_node_info`'s `type_description` is
   `{"unread": "<ExcType>: <message>"}` when Houdini will not give the node
   type's description, beside the rest of the node info (houdini-laws-etg.wvs).

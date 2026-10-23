@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import MockHouNode, MockNodeLacking
+
 
 class TestRenderViewportValidation:
     """Tests for render_viewport input validation."""
@@ -394,6 +396,22 @@ class TestListRenderNodes:
 
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
+
+    def test_bypassed_is_null_for_a_node_with_no_bypass_flag(self, mock_connection):
+        from houdini_mcp.tools import list_render_nodes
+
+        rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
+        rop.setBypass(True)
+        mock_connection.add_node(rop)
+        mock_connection.add_node(
+            MockNodeLacking(
+                path="/out/sopnet1", name="sopnet1", node_type="sopnet", lacks=("isBypassed",)
+            )
+        )
+
+        listed = list_render_nodes()["render_nodes"]
+
+        assert {r["name"]: r["bypassed"] for r in listed} == {"opengl1": True, "sopnet1": None}
 
 
 class TestGetRenderSettings:

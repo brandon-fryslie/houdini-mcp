@@ -28,6 +28,7 @@ from ._common import (
     batch_status,
     node_at,
     node_category,
+    node_flag,
     tool,
     using,
 )
@@ -786,7 +787,8 @@ def list_render_nodes(
             - type: ROP type (opengl, karma, ifd, etc.)
             - camera: Camera path if set
             - output: Output image path if set
-            - bypassed: Whether the node is bypassed
+            - bypassed: Whether the node is bypassed; null for a node with no
+              bypass flag (on Houdini 22, a network such as a sopnet or matnet)
 
     Examples:
         list_render_nodes()  # List all ROPs in /out
@@ -803,7 +805,7 @@ def list_render_nodes(
                 "path": node.path(),
                 "name": node.name(),
                 "type": node_type,
-                "bypassed": node.isBypassed(),
+                "bypassed": node_flag(node, "isBypassed"),
             }
 
             # Output path lives under a different name per ROP type

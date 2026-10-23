@@ -94,7 +94,7 @@ NODE_TYPES: dict[str, dict[str, str | None]] = {
     "Sop": {**dict.fromkeys(_SOP_LEAVES), "subnet": "Sop", "hda": "Sop", "dopnet": "Dop"},
     "Dop": {"pyrosolver": None, "subnet": "Dop"},
     "Vop": {"principledshader": None, "subnet": "Vop"},
-    "Driver": {"opengl": None, "karma": None, "subnet": "Driver"},
+    "Driver": {"opengl": None, "karma": None, "subnet": "Driver", "sopnet": "Sop"},
     "Lop": {"sopnet": "Sop"},
     **{category: {} for category in ("ChopNet", "Chop", "Shop", "CopNet", "VopNet", "TopNet")},
 }
@@ -802,13 +802,18 @@ def _admit(
         _admit(node, offered[node._node_type], child, node._children[:index])
 
 
-class MockNodeWithoutRenderFlag(MockHouNode):
-    """A node whose class has no render flag, as an object's has none on Houdini 22:
-    the method is not there, so looking it up raises AttributeError."""
+class MockNodeLacking(MockHouNode):
+    """A node whose class lacks the methods ``lacks`` names, as an object has no
+    render flag on Houdini 22: looking one up raises AttributeError."""
 
-    @property
-    def isRenderFlagSet(self) -> Any:  # type: ignore[override]
-        raise AttributeError("isRenderFlagSet")
+    def __init__(self, *args: Any, lacks: tuple[str, ...], **kwargs: Any):
+        object.__setattr__(self, "_lacks", frozenset(lacks))
+        super().__init__(*args, **kwargs)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in object.__getattribute__(self, "_lacks"):
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
 
 
 class MockModuleNamespace:
