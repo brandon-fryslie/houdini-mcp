@@ -10,9 +10,9 @@ from typing import Any
 from ._common import (
     RGB,
     InvalidInput,
-    ensure_connected,
     handle_connection_errors,
     node_at,
+    using,
 )
 
 logger = logging.getLogger("houdini_mcp.tools.layout")
@@ -49,34 +49,35 @@ def layout_children(
         layout_children("/obj/geo1")
         layout_children("/obj/geo1", horizontal_spacing=3.0, vertical_spacing=2.0)
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    children = node.children()
-    child_count = len(children)
+        children = node.children()
+        child_count = len(children)
 
-    if child_count == 0:
+        if child_count == 0:
+            return {
+                "status": "success",
+                "node_path": node_path,
+                "child_count": 0,
+                "message": "No children to layout",
+            }
+
+        # Call layoutChildren with spacing parameters
+        node.layoutChildren(
+            horizontal_spacing=horizontal_spacing,
+            vertical_spacing=vertical_spacing,
+        )
+
         return {
             "status": "success",
             "node_path": node_path,
-            "child_count": 0,
-            "message": "No children to layout",
+            "child_count": child_count,
+            "horizontal_spacing": horizontal_spacing,
+            "vertical_spacing": vertical_spacing,
         }
-
-    # Call layoutChildren with spacing parameters
-    node.layoutChildren(
-        horizontal_spacing=horizontal_spacing,
-        vertical_spacing=vertical_spacing,
-    )
-
-    return {
-        "status": "success",
-        "node_path": node_path,
-        "child_count": child_count,
-        "horizontal_spacing": horizontal_spacing,
-        "vertical_spacing": vertical_spacing,
-    }
 
 
 @handle_connection_errors("set_node_color")
@@ -100,18 +101,19 @@ def set_node_color(
         set_node_color("/obj/geo1/sphere1", [1, 0, 0])  # Red
         set_node_color("/obj/geo1/important", [1, 1, 0])  # Yellow
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
-    clamped_color = _clamped(color)
-    node.setColor(hou.Color(clamped_color))
-    logger.info("node color set path=%s color=%s", node_path, clamped_color)
+        node = node_at(hou, node_path)
+        clamped_color = _clamped(color)
+        node.setColor(hou.Color(clamped_color))
+        logger.info("node color set path=%s color=%s", node_path, clamped_color)
 
-    return {
-        "status": "success",
-        "node_path": node_path,
-        "color": clamped_color,
-    }
+        return {
+            "status": "success",
+            "node_path": node_path,
+            "color": clamped_color,
+        }
 
 
 @handle_connection_errors("set_node_position")
@@ -137,19 +139,20 @@ def set_node_position(
         set_node_position("/obj/geo1/sphere1", 0, 0)
         set_node_position("/obj/geo1/sphere1", 5.0, -3.0)
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, node_path)
+        node = node_at(hou, node_path)
 
-    # Create position vector and set it
-    position = hou.Vector2(x, y)
-    node.setPosition(position)
+        # Create position vector and set it
+        position = hou.Vector2(x, y)
+        node.setPosition(position)
 
-    return {
-        "status": "success",
-        "node_path": node_path,
-        "position": [x, y],
-    }
+        return {
+            "status": "success",
+            "node_path": node_path,
+            "position": [x, y],
+        }
 
 
 @handle_connection_errors("create_network_box")
@@ -183,53 +186,54 @@ def create_network_box(
     Examples:
         create_network_box("/obj/geo1", ["/obj/geo1/sphere1", "/obj/geo1/noise1"], "Deform")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    applied_color = None if color is None else _clamped(color)
-    parent = node_at(hou, parent_path, "Parent node")
+        applied_color = None if color is None else _clamped(color)
+        parent = node_at(hou, parent_path, "Parent node")
 
-    # Validate all nodes exist and are children of parent
-    nodes = []
-    for path in node_paths:
-        node = node_at(hou, path)
-        # Check if it's a child of the parent
-        if node.parent().path() != parent_path:
-            raise InvalidInput(f"Node {path} is not a child of {parent_path}", path=path)
-        nodes.append(node)
+        # Validate all nodes exist and are children of parent
+        nodes = []
+        for path in node_paths:
+            node = node_at(hou, path)
+            # Check if it's a child of the parent
+            if node.parent().path() != parent_path:
+                raise InvalidInput(f"Node {path} is not a child of {parent_path}", path=path)
+            nodes.append(node)
 
-    if not nodes:
-        raise InvalidInput("No nodes specified for network box", node_paths=node_paths)
+        if not nodes:
+            raise InvalidInput("No nodes specified for network box", node_paths=node_paths)
 
-    # Create network box
-    netbox = parent.createNetworkBox()
+        # Create network box
+        netbox = parent.createNetworkBox()
 
-    # Set label
-    if label:
-        netbox.setComment(label)
+        # Set label
+        if label:
+            netbox.setComment(label)
 
-    if applied_color is not None:
-        netbox.setColor(hou.Color(applied_color))
+        if applied_color is not None:
+            netbox.setColor(hou.Color(applied_color))
 
-    # Add nodes to the box
-    for node in nodes:
-        netbox.addNode(node)
+        # Add nodes to the box
+        for node in nodes:
+            netbox.addNode(node)
 
-    # Fit box to contents
-    netbox.fitAroundContents()
-    box_name = netbox.name()
-    logger.info(
-        "network box created parent=%s name=%s nodes=%d color=%s",
-        parent_path,
-        box_name,
-        len(nodes),
-        applied_color,
-    )
+        # Fit box to contents
+        netbox.fitAroundContents()
+        box_name = netbox.name()
+        logger.info(
+            "network box created parent=%s name=%s nodes=%d color=%s",
+            parent_path,
+            box_name,
+            len(nodes),
+            applied_color,
+        )
 
-    return {
-        "status": "success",
-        "network_box_name": box_name,
-        "parent_path": parent_path,
-        "nodes_contained": node_paths,
-        "label": label,
-        "color": applied_color,
-    }
+        return {
+            "status": "success",
+            "network_box_name": box_name,
+            "parent_path": parent_path,
+            "nodes_contained": node_paths,
+            "label": label,
+            "color": applied_color,
+        }

@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, NamedTuple, TypedDict
 
-from ._common import ensure_connected, handle_connection_errors
+from ._common import handle_connection_errors, using
 from .failure import OperationFailed
 from .reads import Unread, is_unread, read, reraise_transport_failure, unread
 
@@ -181,7 +181,7 @@ class NodeTypeCache(BaseCache):
         that ``hou`` and served from the cache after.
 
         Args:
-            hou: The hou module (from ensure_connected)
+            hou: The hou module (``link.hou`` of a ``using`` scope)
         """
         with self._lock:
             held = self._held
@@ -377,13 +377,14 @@ def manage_cache(
             }
         case "warmup":
             start = time.time()
-            hou = ensure_connected(host, port)
-            node_type_cache.lookup(hou)
-            elapsed_ms = (time.time() - start) * 1000
-            return {
-                "status": "success",
-                "action": "warmup",
-                "message": "Caches warmed up successfully",
-                "warmup_time_ms": round(elapsed_ms, 1),
-                "caches": get_cache_stats(),
-            }
+            with using(host, port) as link:
+                hou = link.hou
+                node_type_cache.lookup(hou)
+                elapsed_ms = (time.time() - start) * 1000
+                return {
+                    "status": "success",
+                    "action": "warmup",
+                    "message": "Caches warmed up successfully",
+                    "warmup_time_ms": round(elapsed_ms, 1),
+                    "caches": get_cache_stats(),
+                }

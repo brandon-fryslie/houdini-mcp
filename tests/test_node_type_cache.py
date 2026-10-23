@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from houdini_mcp.connection import get_connection
+from houdini_mcp.connection import houdini
 from houdini_mcp.tools import list_node_types
 from houdini_mcp.tools.cache import NodeType, NodeTypeCache, invalidate_all_caches
 from houdini_mcp.tools.failure import OperationFailed
@@ -123,11 +123,11 @@ class TestNodeTypeCacheReadsThroughTheProxy:
         # [LAW:single-enforcer] The gate in ``tools/code.py`` is the one place a
         # Python program is executed in Houdini; the cache reads through the proxy.
         # The two roads the old fill took to a connection: the proxy's own
-        # ``____conn__`` and the installed connection ``get_connection`` returns.
+        # ``____conn__`` and the installed link's connection.
         # Both lead to this one, which records any program sent over it.
         hou: Any = MockHouModule()
         connected_to(hou)
-        connection = get_connection()
+        connection = houdini().link().conn
         connection.execute = MagicMock()
         hou.____conn__ = connection
 

@@ -14,6 +14,7 @@ import pytest
 
 from houdini_mcp import connection
 from houdini_mcp.settings import Target
+from houdini_mcp.tools._common import using
 from tests.conftest import DEFAULT_SETTINGS
 from tests.live_houdini import (
     HOUDINI_LISTENER_HOST,
@@ -49,7 +50,9 @@ def houdini_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target
             try:
                 yield Target(host=HOUDINI_LISTENER_HOST, port=port)
             finally:
-                connection.disconnect()
+                # The owner's own API drops the session's link, as the unit suite's
+                # reset_connection_state does.
+                connection.use_houdini(connection.remote_houdini(None))
 
 
 @pytest.fixture
@@ -59,9 +62,8 @@ def houdini(houdini_session: Target) -> Target:
     [LAW:dataflow-not-control-flow] the empty scene comes with asking for Houdini, so a
     test that asks for none starts no listener.
     """
-    connection.ensure_connected(houdini_session.host, houdini_session.port).hipFile.clear(
-        suppress_save_prompt=True
-    )
+    with using(houdini_session.host, houdini_session.port) as link:
+        link.hou.hipFile.clear(suppress_save_prompt=True)
     return houdini_session
 
 

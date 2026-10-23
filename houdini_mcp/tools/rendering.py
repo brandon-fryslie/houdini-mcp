@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from ..connection import transport_failure
+from ..connection import Link, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
     InvalidInput,
@@ -23,11 +23,10 @@ from ._common import (
     Undone,
     Vec3,
     batch_status,
-    ensure_connected,
-    ensure_link,
     handle_connection_errors,
     node_at,
     node_category,
+    using,
 )
 from .failure import add_note
 from .parms import read_present, write_all
@@ -74,9 +73,9 @@ _QUAD_VIEWS: tuple[tuple[str, Vec3], ...] = (
 )
 
 
-def _get_remote_modules(host: str, port: int):
+def _get_remote_modules(link: Link):
     """Get remote os and tempfile modules via RPyC for file operations on Houdini machine."""
-    conn = ensure_link(host, port).conn
+    conn = link.conn
     # Access remote modules through the RPyC connection
     remote_os = conn.modules.os
     remote_tempfile = conn.modules.tempfile
@@ -393,18 +392,18 @@ class _Prepared:
 
 
 def _prepare(
-    resolution: Resolution, renderer: Renderer, karma_engine: KarmaEngine, host: str, port: int
+    link: Link, resolution: Resolution, renderer: Renderer, karma_engine: KarmaEngine
 ) -> _Prepared:
     """Resolve every context a render needs, or raise.
 
     [LAW:no-ambient-temporal-coupling] a failure creates nothing: both contexts
     and the link are settled here, before the first temporary node is made.
     """
-    hou = ensure_connected(host, port)
+    hou = link.hou
     width, height = resolution
     obj = hou.node("/obj")
     out = hou.node("/out")
-    remote_os, remote_tempfile = _get_remote_modules(host, port)
+    remote_os, remote_tempfile = _get_remote_modules(link)
     return _Prepared(
         hou=hou,
         obj=obj,
@@ -579,35 +578,36 @@ def render_viewport(
         render_viewport(look_at="/obj/geo1", orthographic=True)
         render_viewport(renderer="karma", karma_engine="gpu")  # Fast GPU render
     """
-    prepared = _prepare(resolution, renderer, karma_engine, host, port)
+    with using(host, port) as link:
+        prepared = _prepare(link, resolution, renderer, karma_engine)
 
-    # What to frame: the node asked for, else what the viewport shows, else nothing.
-    if look_at is not None:
-        anchor, shapes = _look_at(prepared.hou, look_at)
-        framing = _framing(shapes)
-        if framing.bounds is None:
-            # A node with nothing to show is framed where it stands.
-            framing = _framing_at(anchor)
-    elif auto_frame:
-        framing = _framing(_displayed_shapes(prepared.obj))
-    else:
-        framing = Framing(bounds=None)
-    with _temporary_nodes() as create:
-        camera = _build_camera(create, prepared, "_mcp_")
-        rop = _build_rop(create, prepared, "_mcp_", camera)
-        _aim(camera, camera_position, camera_rotation, orthographic, framing)
-        image = _render_picture(rop, prepared, output_format)
+        # What to frame: the node asked for, else what the viewport shows, else nothing.
+        if look_at is not None:
+            anchor, shapes = _look_at(prepared.hou, look_at)
+            framing = _framing(shapes)
+            if framing.bounds is None:
+                # A node with nothing to show is framed where it stands.
+                framing = _framing_at(anchor)
+        elif auto_frame:
+            framing = _framing(_displayed_shapes(prepared.obj))
+        else:
+            framing = Framing(bounds=None)
+        with _temporary_nodes() as create:
+            camera = _build_camera(create, prepared, "_mcp_")
+            rop = _build_rop(create, prepared, "_mcp_", camera)
+            _aim(camera, camera_position, camera_rotation, orthographic, framing)
+            image = _render_picture(rop, prepared, output_format)
 
-    result: dict[str, Any] = {
-        "status": "success",
-        "image_base64": image,
-        "format": output_format,
-        "resolution": [prepared.width, prepared.height],
-        "renderer": renderer,
-    }
-    if (box := framing.report()) is not None:
-        result["bounding_box"] = box
-    return result
+        result: dict[str, Any] = {
+            "status": "success",
+            "image_base64": image,
+            "format": output_format,
+            "resolution": [prepared.width, prepared.height],
+            "renderer": renderer,
+        }
+        if (box := framing.report()) is not None:
+            result["bounding_box"] = box
+        return result
 
 
 @handle_connection_errors("render_quad_view")
@@ -668,54 +668,55 @@ def render_quad_view(
     """
     start_time = time.time()
 
-    prepared = _prepare(resolution, renderer, karma_engine, host, port)
+    with using(host, port) as link:
+        prepared = _prepare(link, resolution, renderer, karma_engine)
 
-    views = [(name, rotation, orthographic) for name, rotation in _QUAD_VIEWS]
-    if include_perspective:
-        views.append(("perspective", _ISOMETRIC, False))
+        views = [(name, rotation, orthographic) for name, rotation in _QUAD_VIEWS]
+        if include_perspective:
+            views.append(("perspective", _ISOMETRIC, False))
 
-    framing = _framing(_displayed_shapes(prepared.obj))
-    view_results: list[dict[str, Any]] = []
+        framing = _framing(_displayed_shapes(prepared.obj))
+        view_results: list[dict[str, Any]] = []
 
-    with _temporary_nodes() as create:
-        camera = _build_camera(create, prepared, "_mcp_quad_")
-        rop = _build_rop(create, prepared, "_mcp_quad_", camera)
-        for name, rotation, is_ortho in views:
-            view: dict[str, Any] = {"name": name, "rotation": list(rotation)}
-            try:
-                _aim(camera, None, rotation, is_ortho, framing)
-                image = _render_picture(rop, prepared, output_format)
-            except OperationFailed as e:
-                # A view owns only Houdini's failure to produce its picture, which
-                # _render_picture names; a dead link or a bug is the call's.
-                failure = e.failure("render_quad_view")
-                logger.warning("Quad view %s not rendered: %s", name, failure.message)
-                view = {**failure.model_dump(), **view}
-            else:
-                logger.info("Rendered quad view %s", name)
-                view.update(
-                    status="success",
-                    image_base64=image,
-                    format=output_format,
-                    resolution=[prepared.width, prepared.height],
-                    orthographic=is_ortho,
-                )
-            view_results.append(view)
+        with _temporary_nodes() as create:
+            camera = _build_camera(create, prepared, "_mcp_quad_")
+            rop = _build_rop(create, prepared, "_mcp_quad_", camera)
+            for name, rotation, is_ortho in views:
+                view: dict[str, Any] = {"name": name, "rotation": list(rotation)}
+                try:
+                    _aim(camera, None, rotation, is_ortho, framing)
+                    image = _render_picture(rop, prepared, output_format)
+                except OperationFailed as e:
+                    # A view owns only Houdini's failure to produce its picture, which
+                    # _render_picture names; a dead link or a bug is the call's.
+                    failure = e.failure("render_quad_view")
+                    logger.warning("Quad view %s not rendered: %s", name, failure.message)
+                    view = {**failure.model_dump(), **view}
+                else:
+                    logger.info("Rendered quad view %s", name)
+                    view.update(
+                        status="success",
+                        image_base64=image,
+                        format=output_format,
+                        resolution=[prepared.width, prepared.height],
+                        orthographic=is_ortho,
+                    )
+                view_results.append(view)
 
-    report: dict[str, Any] = {
-        "views": view_results,
-        "renderer": renderer,
-        "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
-    }
-    if (box := framing.report()) is not None:
-        report["bounding_box"] = box
-    rendered = [view for view in view_results if view["status"] == "success"]
-    failed = [
-        Undone(view["name"], view["kind"], view["message"])
-        for view in view_results
-        if view["status"] == "error"
-    ]
-    return {"status": batch_status("render_quad_view", rendered, failed, **report), **report}
+        report: dict[str, Any] = {
+            "views": view_results,
+            "renderer": renderer,
+            "total_render_time_ms": round((time.time() - start_time) * 1000, 1),
+        }
+        if (box := framing.report()) is not None:
+            report["bounding_box"] = box
+        rendered = [view for view in view_results if view["status"] == "success"]
+        failed = [
+            Undone(view["name"], view["kind"], view["message"])
+            for view in view_results
+            if view["status"] == "error"
+        ]
+        return {"status": batch_status("render_quad_view", rendered, failed, **report), **report}
 
 
 # =============================================================================
@@ -801,35 +802,36 @@ def list_render_nodes(
     Examples:
         list_render_nodes()  # List all ROPs in /out
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    out_context = hou.node("/out")
+        out_context = hou.node("/out")
 
-    render_nodes = []
-    for node in out_context.children():
-        node_type = node.type().name()
-        node_info = {
-            "path": node.path(),
-            "name": node.name(),
-            "type": node_type,
-            "bypassed": node.isBypassed() if hasattr(node, "isBypassed") else False,
+        render_nodes = []
+        for node in out_context.children():
+            node_type = node.type().name()
+            node_info = {
+                "path": node.path(),
+                "name": node.name(),
+                "type": node_type,
+                "bypassed": node.isBypassed() if hasattr(node, "isBypassed") else False,
+            }
+
+            # Output path lives under a different name per ROP type
+            values = read_present(hou, node, ["camera", "picture", "vm_picture"])
+            if "camera" in values:
+                node_info["camera"] = values["camera"]
+            outputs = [values[name] for name in ("picture", "vm_picture") if name in values]
+            if outputs:
+                node_info["output"] = outputs[0]
+
+            render_nodes.append(node_info)
+
+        return {
+            "status": "success",
+            "count": len(render_nodes),
+            "render_nodes": render_nodes,
         }
-
-        # Output path lives under a different name per ROP type
-        values = read_present(hou, node, ["camera", "picture", "vm_picture"])
-        if "camera" in values:
-            node_info["camera"] = values["camera"]
-        outputs = [values[name] for name in ("picture", "vm_picture") if name in values]
-        if outputs:
-            node_info["output"] = outputs[0]
-
-        render_nodes.append(node_info)
-
-    return {
-        "status": "success",
-        "count": len(render_nodes),
-        "render_nodes": render_nodes,
-    }
 
 
 @handle_connection_errors("get_render_settings")
@@ -858,25 +860,26 @@ def get_render_settings(
         get_render_settings("/out/karma1")
         get_render_settings("/out/mantra1")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, rop_path, "ROP")
+        node = node_at(hou, rop_path, "ROP")
 
-    node_type = node.type().name()
+        node_type = node.type().name()
 
-    # Get the schema for this ROP type
-    schema = RENDER_SETTINGS_SCHEMA.get(node_type, {})
+        # Get the schema for this ROP type
+        schema = RENDER_SETTINGS_SCHEMA.get(node_type, {})
 
-    # Known settings for this ROP type, plus the frame range every ROP has
-    settings_dict = read_present(hou, node, [*schema, "trange", "f1", "f2", "f3"])
+        # Known settings for this ROP type, plus the frame range every ROP has
+        settings_dict = read_present(hou, node, [*schema, "trange", "f1", "f2", "f3"])
 
-    return {
-        "status": "success",
-        "rop_path": rop_path,
-        "rop_type": node_type,
-        "settings": settings_dict,
-        "schema": schema,
-    }
+        return {
+            "status": "success",
+            "rop_path": rop_path,
+            "rop_type": node_type,
+            "settings": settings_dict,
+            "schema": schema,
+        }
 
 
 @handle_connection_errors("set_render_settings")
@@ -905,11 +908,12 @@ def set_render_settings(
         set_render_settings("/out/karma1", {"samplesperpixel": 64, "engine": "xpu"})
         set_render_settings("/out/mantra1", {"vm_samplesx": 6, "vm_samplesy": 6})
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    node = node_at(hou, rop_path, "ROP")
+        node = node_at(hou, rop_path, "ROP")
 
-    return write_all(node, settings).fields("set_render_settings", rop_path=rop_path)
+        return write_all(node, settings).fields("set_render_settings", rop_path=rop_path)
 
 
 @handle_connection_errors("create_render_node")
@@ -944,20 +948,21 @@ def create_render_node(
         create_render_node("opengl", settings={"antialias": 8})
         create_render_node("ifd", "final_render")
     """
-    hou = ensure_connected(host, port)
+    with using(host, port) as link:
+        hou = link.hou
 
-    out_context = hou.node("/out")
+        out_context = hou.node("/out")
 
-    # Create the node
-    node = out_context.createNode(rop_type, name) if name else out_context.createNode(rop_type)
+        # Create the node
+        node = out_context.createNode(rop_type, name) if name else out_context.createNode(rop_type)
 
-    if node is None:
-        raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
+        if node is None:
+            raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
-    return write_all(node, settings or {}).fields(
-        "create_render_node",
-        created=[node],
-        rop_path=node.path(),
-        rop_name=node.name(),
-        rop_type=rop_type,
-    )
+        return write_all(node, settings or {}).fields(
+            "create_render_node",
+            created=[node],
+            rop_path=node.path(),
+            rop_name=node.name(),
+            rop_type=rop_type,
+        )

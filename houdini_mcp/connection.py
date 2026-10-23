@@ -396,6 +396,24 @@ class HoudiniConnection:
                 link.close()
                 logger.info(f"Disconnected from Houdini at {link.name}")
 
+    def drop(self, link: Link) -> None:
+        """Close ``link``, a link that failed in use, and uninstall it if it is still
+        the installed one.
+
+        [LAW:no-ambient-temporal-coupling] The link is named by its holder, never read
+        off the installed slot: a call that failed on a link another call has already
+        replaced must not drop the replacement it never used.
+        """
+        with self._lock:
+            installed = self._link is link
+            if installed:
+                self._link = None
+            link.close()
+            logger.info(
+                f"Dropped failed link to Houdini at {link.name} "
+                f"({'was installed' if installed else 'not installed'})"
+            )
+
     def info(self, host: str, port: int) -> dict[str, Any]:
         """Connection state for diagnostics: the Houdini reached when connected, else
         the one a connection to ``host:port`` would reach."""
@@ -425,83 +443,15 @@ def use_houdini(target: HoudiniTarget) -> None:
     _houdini.use(target)
 
 
-def connect(
-    host: str = "localhost",
-    port: int = 18811,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    retry_delay: float = DEFAULT_RETRY_DELAY,
-    sync_timeout: float = DEFAULT_SYNC_TIMEOUT,
-    jitter: bool = True,
-) -> Link:
-    """
-    Open a fresh link to Houdini with retry logic, replacing any installed one.
-
-    Args:
-        host: Houdini server hostname (default: localhost)
-        port: Houdini RPC port (default: 18811)
-        max_retries: Number of connection attempts, at least 1 (default: 3)
-        retry_delay: Initial delay between retries in seconds (default: 1.0)
-        sync_timeout: Timeout for synchronous RPC calls in seconds (default: 30)
-        jitter: If True, add random jitter to delays (default: True)
-
-    Returns:
-        The installed ``Link``
-
-    Raises:
-        HoudiniConnectionError: If connection fails after all retries
-        ValueError: If ``max_retries`` is below 1
-    """
-    return _houdini.connect(host, port, max_retries, retry_delay, sync_timeout, jitter)
-
-
-def get_connection() -> Any | None:
-    """The installed connection object, or None when none is installed."""
-    link = _houdini.link()
-    return None if link is None else link.conn
-
-
-def disconnect() -> None:
-    """Drop the installed link to Houdini, closing it."""
-    _houdini.close()
-
-
 def is_connected() -> bool:
     """Whether an open link to Houdini is installed. Reads socket state; no RPC."""
     return _houdini.is_connected()
 
 
-def ensure_link(host: str = "localhost", port: int = 18811) -> Link:
-    """
-    The open ``Link`` to the Houdini ``host:port`` names, connecting or reconnecting if needed.
-
-    [LAW:parse-dont-validate] A ``Link`` is proof the connection reached Houdini:
-    a tool that needs the connection object asks here and gets one that cannot be
-    absent, instead of reading the installed one and guarding against None.
-
-    Raises:
-        HoudiniConnectionError: If unable to establish connection
-        HoudiniTargetMismatch: If the installed connection reaches a different
-            Houdini than the one named
-    """
-    return _houdini.ensure(host, port)
-
-
-def ensure_connected(host: str = "localhost", port: int = 18811) -> Any:
-    """
-    The ``hou`` of the Houdini ``host:port`` names, connecting or reconnecting if needed.
-
-    This is the preferred method for tools to get the hou module,
-    as it handles connection recovery automatically.
-
-    Returns:
-        The remote hou module
-
-    Raises:
-        HoudiniConnectionError: If unable to establish connection
-        HoudiniTargetMismatch: If the installed connection reaches a different
-            Houdini than the one named
-    """
-    return ensure_link(host, port).hou
+def houdini() -> HoudiniConnection:
+    """This process's connection owner. Tools reach it through ``tools._common.using``,
+    which drops the link a call used when that call's link fails."""
+    return _houdini
 
 
 def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:

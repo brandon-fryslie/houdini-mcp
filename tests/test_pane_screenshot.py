@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from houdini_mcp.connection import houdini
 from houdini_mcp.tools.pane_screenshot import (
     _get_qt_modules,
     capture_pane_screenshot,
@@ -52,7 +53,7 @@ def test_qt_comes_from_the_connected_houdini(
     for name, module in fakes.items():
         monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
 
-    assert _get_qt_modules("localhost", 18811) == (
+    assert _get_qt_modules(houdini().link()) == (
         fakes["QtWidgets"],
         fakes["QtCore"],
         fakes["QtGui"],
@@ -263,12 +264,12 @@ def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
             return_value=(object(), object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
-        patch("houdini_mcp.tools.failure.disconnect") as disconnect,
         patch.object(Path, "write_bytes", write_bytes),
     ):
+        link = houdini().link()
         result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
 
-    disconnect.assert_not_called()
+    assert houdini().link() is link and not link.conn.closed
     assert result["status"] == "partial", result
     slot = FAILURE.validate_python(result["results"]["NetworkEditor"])
     assert isinstance(slot, OperationFailure), slot

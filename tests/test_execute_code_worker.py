@@ -220,13 +220,13 @@ class TestATimedOutRunsDiff:
     ):
         from types import SimpleNamespace
 
+        from houdini_mcp.connection import houdini
         from houdini_mcp.tools import failure as failure_module
 
         program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
         _time_out(program, capture_diff=True)
         # The old link is gone by the time the program ends; a newer one may be open.
-        disconnects: list[str] = []
-        monkeypatch.setattr(failure_module, "disconnect", lambda: disconnects.append("x"))
+        link = houdini().link()
         monkeypatch.setattr(
             failure_module,
             "transport_failure",
@@ -240,7 +240,7 @@ class TestATimedOutRunsDiff:
         worker = WORKERS.running()
         mock_connection.stall_gate.set()
         worker.thread.join(5)
-        assert disconnects == []
+        assert houdini().link() is link and not link.conn.closed
         assert get_last_scene_diff()["status"] == "warning"
 
 

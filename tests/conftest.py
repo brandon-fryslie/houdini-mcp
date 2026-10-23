@@ -1073,12 +1073,12 @@ def connected_to(reset_connection_state: None) -> Callable[[Any], Any]:
     it, replacing whatever link stood: the ``hou`` returned is the one installed, in
     a test that connects twice as in one that connects once.
     """
-    from houdini_mcp.connection import connect
+    from houdini_mcp.connection import houdini
 
     def _connect(hou: Any) -> Any:
         with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
             mock_rpyc_module.connect.return_value = MockRpycConnection(hou)
-            connect("localhost", 18811)
+            houdini().connect("localhost", 18811)
         return hou
 
     return _connect

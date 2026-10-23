@@ -556,7 +556,7 @@ class TestServedFailures:
         def refuse(*_a: Any, **_k: Any) -> None:
             raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
 
-        monkeypatch.setattr(link, "ensure_link", refuse)
+        monkeypatch.setattr(link, "using", refuse)
         monkeypatch.setattr(link, "ping", refuse)
         for probe in ("check_connection", "ping_houdini"):
             failure = await self.failure_of(client, probe, {})
@@ -596,7 +596,7 @@ class TestServedFailures:
         def refuse(*_a: Any, **_k: Any) -> None:
             raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
 
-        monkeypatch.setattr(cache, "ensure_connected", refuse)
+        monkeypatch.setattr(cache, "using", refuse)
         failure = await self.failure_of(client, "manage_cache", {"action": "warmup"})
         assert (failure.kind, failure.target) == ("connection_unavailable", "farm:1")
 
