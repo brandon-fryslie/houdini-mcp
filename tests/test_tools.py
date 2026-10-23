@@ -23,7 +23,7 @@ class TestGetSceneInfo:
 
         assert result["status"] == "success"
         assert result["hip_file"] == "/path/to/test.hip"
-        assert result["houdini_version"] == "20.5.123"
+        assert result["houdini_version"] == "22.0.466"
 
     def test_get_scene_info_reports_the_hip_file_houdini_reports(self, mock_connection):
         """``hip_file`` is Houdini's own answer, passed through as the connection
@@ -2765,9 +2765,10 @@ class TestMaterialTools:
             port=18811,
         )
 
-        assert result["status"] == "error"
-        assert (
-            "not found" in result["message"].lower() or "cannot find" in result["message"].lower()
+        assert (result["status"], result["kind"], result["message"]) == (
+            "error",
+            "invalid_input",
+            "Parent context not found: /nonexistent",
         )
 
     def test_assign_material_geometry_not_found(self, mock_connection):
@@ -2820,7 +2821,6 @@ class TestMaterialTools:
         from houdini_mcp.tools import get_material_info
 
         # Create a mock material node with params dict
-        mock_connection.node("/").createNode("matnet", "mat")
         mat = MockHouNode(
             path="/mat/principledshader1",
             name="principledshader1",
@@ -2847,10 +2847,6 @@ class TestMaterialTools:
         """Test successful material creation."""
         from houdini_mcp.tools import create_material
 
-        # Add /mat context to the mock
-        mat_context = MockHouNode(path="/mat", name="mat", node_type="matnet")
-        mock_connection.add_node(mat_context)
-
         result = create_material(
             material_type="principledshader",
             name="test_material",
@@ -2867,9 +2863,6 @@ class TestMaterialTools:
         """Test material creation with custom parameters."""
         from houdini_mcp.tools import create_material
 
-        mat_context = MockHouNode(path="/mat", name="mat", node_type="matnet")
-        mock_connection.add_node(mat_context)
-
         result = create_material(
             material_type="principledshader",
             name="red_metal",
@@ -2883,7 +2876,7 @@ class TestMaterialTools:
         # Side effects: parameters actually landed on the created node.
         assert sorted(u["name"] for u in result["updated"]) == ["basecolor", "metallic"]
         assert result["failed"] == []
-        created = mat_context.children()[-1]
+        created = mock_connection.node("/mat").children()[-1]
         assert created.name() == "red_metal"
         assert created._params["metallic"] == 1.0
         assert list(created._params["basecolor"]) == [1, 0, 0]
@@ -2893,7 +2886,6 @@ class TestMaterialTools:
         from houdini_mcp.tools import assign_material
 
         # Create geometry node with a child SOP (required for material assignment)
-        mock_connection.node("/").createNode("matnet", "mat")
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
         sphere._display_flag = True
@@ -2930,7 +2922,6 @@ class TestMaterialTools:
         from houdini_mcp.tools import assign_material
         from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
 
-        mock_connection.node("/").createNode("matnet", "mat")
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mat_sop = MockHouNode(path="/obj/geo1/material1", name="material1", node_type="material")
         mat_sop._display_flag = True
@@ -2957,7 +2948,6 @@ class TestMaterialTools:
         """A group the Material SOP cannot take is reported, not hidden behind an error."""
         from houdini_mcp.tools import assign_material
 
-        mock_connection.node("/").createNode("matnet", "mat")
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mat_sop = MockHouNode(
             path="/obj/geo1/material1",

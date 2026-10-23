@@ -629,10 +629,7 @@ def renders_locally(mock_connection: Any, monkeypatch: pytest.MonkeyPatch) -> An
 
 @pytest.fixture
 def rendering_scene(renders_locally: Any) -> Any:
-    """A scene with /out and a user's geo, so a render can succeed."""
-    from tests.conftest import MockHouNode
-
-    renders_locally.add_node(MockHouNode(path="/out", name="out", node_type="out"))
+    """A scene with a user's geo, so a render can succeed."""
     renders_locally.node("/obj").createNode("geo", "user_geo")
     return renders_locally
 
@@ -769,9 +766,8 @@ class TestRenderLeavesSceneUnchanged:
     def _scene(hou: Any) -> dict[str, list[tuple[int, str]]]:
         """Every context's children by identity and name: the scene as a value."""
         return {
-            path: [(id(child), child.name()) for child in context.children()]
-            for path in ("/obj", "/out")
-            if (context := hou.node(path)) is not None
+            context.path(): [(id(child), child.name()) for child in context.children()]
+            for context in hou.node("/").children()
         }
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -815,6 +811,21 @@ class TestRenderLeavesSceneUnchanged:
             raise RuntimeError("OpenGL ROP: no display")
 
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
+        return rendering_scene
+
+    @pytest.fixture
+    def rop_refused(self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """A scene whose /out refuses the ROP's type, as Houdini refuses a type it
+        lacks: the camera exists, the ROP never does."""
+        out = rendering_scene.node("/out")
+        create = out.createNode
+
+        def refuse_opengl(node_type: str, name: str | None = None) -> Any:
+            if node_type == "opengl":
+                raise RuntimeError("Invalid node type name")
+            return create(node_type, name)
+
+        monkeypatch.setattr(out, "createNode", refuse_opengl)
         return rendering_scene
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -912,7 +923,7 @@ class TestRenderLeavesSceneUnchanged:
         ), result
         # The locked camera is the one node left behind; the ROP is gone.
         after = self._names(self._scene(rendering_scene))
-        assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
+        assert after == {**before, "/obj": [*before["/obj"], cam]}
         events = [
             r
             for r in caplog.records
@@ -989,29 +1000,27 @@ class TestRenderLeavesSceneUnchanged:
         assert destroyed == []
 
     @pytest.mark.parametrize("tool", TOOLS)
-    @pytest.mark.parametrize("outcome", ["success", "failure"])
+    @pytest.mark.parametrize("scene", ["rendering_scene", "render_raises", "rop_refused"])
     def test_a_user_node_with_a_temporary_name_survives(
-        self, request: pytest.FixtureRequest, renders_locally: Any, tool: str, outcome: str
+        self, request: pytest.FixtureRequest, tool: str, scene: str
     ) -> None:
         import houdini_mcp.tools as tools
 
-        if outcome == "success":
-            request.getfixturevalue("rendering_scene")
-        obj = renders_locally.node("/obj")
+        hou = request.getfixturevalue(scene)
         users = [
-            obj.createNode("geo", name) for name in ("_mcp_render_cam", "_mcp_quad_render_cam")
+            hou.node(context).createNode("geo", name)
+            for context, names in (
+                ("/obj", ("_mcp_render_cam", "_mcp_quad_render_cam")),
+                ("/out", ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")),
+            )
+            for name in names
         ]
-        out = renders_locally.node("/out")
-        if out is not None:
-            users += [
-                out.createNode("geo", name) for name in ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")
-            ]
-        before = self._scene(renders_locally)
+        before = self._scene(hou)
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert (result["status"] == "success") is (outcome == "success"), result
-        assert self._scene(renders_locally) == before
+        assert (result["status"] == "success") is (scene == "rendering_scene"), result
+        assert self._scene(hou) == before
         assert [user.parent().node(user.name()) for user in users] == users
 
 
@@ -1037,9 +1046,6 @@ class TestRenderFraming:
 
     @pytest.fixture
     def framed_scene(self, renders_locally: Any) -> Any:
-        from tests.conftest import MockHouNode
-
-        renders_locally.add_node(MockHouNode(path="/out", name="out", node_type="out"))
         obj = renders_locally.node("/obj")
         _geo_with_box(obj, "cube_a", 0.0, (-1, -1, -1), (1, 1, 1))
         _geo_with_box(obj, "cube_b", 10.0, (-1, -1, -1), (1, 1, 1))
