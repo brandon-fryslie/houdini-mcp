@@ -81,7 +81,7 @@ says where.
   or Houdini is too busy) is a timeout, retried like any other. A client
   presenting no token to a tokened listener sees a connection failure that
   names the token as a cause. The package lives in the plugin tree
-  (`houdini_plugin/python/houdini_mcp_handshake`), so the package JSON puts it
+  (`houdini_plugin/houdini_mcp/python/houdini_mcp_handshake`), so the package JSON puts it
   on Houdini's path, and the server distribution ships the same source. The
   listener imports it only when a token is configured; if Houdini's `rpyc`
   lacks the authenticator primitives, the bind is refused with a message

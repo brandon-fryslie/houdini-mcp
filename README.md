@@ -184,18 +184,16 @@ hrpyc listener, and it holds the search `find_nodes` runs inside Houdini.
 
 From your clone of this repository:
 
-1. Copy the `houdini_plugin` folder to your Houdini packages directory:
+1. Copy the contents of `houdini_plugin`, which is laid out as a packages
+   directory, into your Houdini packages directory:
    ```bash
    mkdir -p ~/Library/Preferences/houdini/22.0/packages
-   cp -r houdini_plugin ~/Library/Preferences/houdini/22.0/packages/houdini_mcp
+   cp -R houdini_plugin/. ~/Library/Preferences/houdini/22.0/packages/
    ```
+   This puts `houdini_mcp.json` in `packages/` and the plugin beside it in
+   `packages/houdini_mcp/`.
 
-2. Copy the package JSON:
-   ```bash
-   cp houdini_plugin/houdini_mcp.json ~/Library/Preferences/houdini/22.0/packages/
-   ```
-
-3. Restart Houdini and find the "Houdini MCP" shelf
+2. Restart Houdini and find the "Houdini MCP" shelf
 
 ### Windows and Linux
 
@@ -612,10 +610,11 @@ houdini_mcp/
     ├── summarization.py   # AI response summarization
     └── wiring.py          # Node connection tools
 
-houdini_plugin/            # Houdini plugin: the hrpyc remote listener, find_nodes' search
-├── python/houdini_mcp_plugin/
-├── toolbar/               # Shelf tools
-└── houdini_mcp.json       # Package descriptor
+houdini_plugin/            # Houdini plugin, laid out as a packages directory
+├── houdini_mcp.json       # Package descriptor
+└── houdini_mcp/
+    ├── python/            # The hrpyc remote listener, its handshake, find_nodes' search
+    └── toolbar/           # Shelf tools
 
 tests/                     # pytest suite
 docs/                      # Implementation documentation

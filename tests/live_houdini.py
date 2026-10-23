@@ -28,7 +28,9 @@ from houdini_mcp.settings import setting
 logger = logging.getLogger(__name__)
 
 DEFAULT_HYTHON = "/Applications/Houdini/Current/Frameworks/Houdini.framework/Versions/Current/Resources/bin/hython"
-PLUGIN_PYTHON = Path(__file__).resolve().parents[1] / "houdini_plugin" / "python"
+# The plugin tree, laid out as the packages directory the README installs it into.
+PLUGIN_PACKAGES = Path(__file__).resolve().parents[1] / "houdini_plugin"
+PLUGIN_PYTHON = PLUGIN_PACKAGES / "houdini_mcp" / "python"
 # The address the hython child's listener binds, and so the host of the Houdini it serves.
 HOUDINI_LISTENER_HOST = "127.0.0.1"
 

@@ -39,7 +39,7 @@ from pathlib import Path
 # Runs as a file, not a module: make houdini_mcp and the plugin tree's handshake
 # package importable.
 _REPO = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(_REPO), str(_REPO / "houdini_plugin" / "python")]
+sys.path[:0] = [str(_REPO), str(_REPO / "houdini_plugin" / "houdini_mcp" / "python")]
 
 import houdini_mcp_handshake as handshake  # noqa: E402
 from pydantic import TypeAdapter  # noqa: E402
