@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Python API)**: `houdini_mcp.connection` no longer has `connect`,
+  `get_connection`, `disconnect`, `ensure_link` or `ensure_connected`
+  (houdini-laws-etg.gxj). Code that reaches Houdini opens
+  `houdini_mcp.tools._common.using(host, port)`, a context manager that yields
+  the `Link` (`link.hou`, `link.conn`) and, when the block fails because that
+  link did, drops that link and no other. `houdini_mcp.connection.houdini()`
+  returns the process's `HoudiniConnection`, which keeps `connect`, `ensure`,
+  `link` and `close` and gains `drop(link)`. A connection failure raised by
+  Houdini work done outside any `using` block is now an `operation_failed`,
+  logged at ERROR as a bug, where it was a `connection_lost`: no link was
+  dropped for it.
+
 - The listener's self-test gives a macOS firewall command (houdini-tuneup-ef3.ll5).
   The macOS Application Firewall admits programs, not ports, so the command
   allows the executable that owns the listener's socket, as `socketfilterfw
@@ -551,6 +563,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `available_types`.
 
 ### Fixed
+
+- **A failed call no longer drops another call's connection**
+  (houdini-laws-etg.gxj): when calls ran at once and one's link to Houdini
+  failed after another had already reconnected, the failing call closed
+  whichever link was installed, which was the other call's new, healthy one.
+  That call's next request then failed with a second `connection_lost` or
+  `timeout` against a Houdini that was up. A call now drops only the link it
+  used.
 
 - `docs/tool-contracts.md` claims only what the tools return
   (houdini-tuneup-ef3.6yb). Its render example read `image_base64` from the
