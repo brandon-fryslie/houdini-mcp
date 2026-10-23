@@ -299,8 +299,9 @@ SampleCount = Annotated[Count, Field(le=1000)]
 """How many points a geometry read samples; a thousand points with a few attributes
 fit the read's output ceiling, where ten thousand never do."""
 Seconds = Annotated[int, Field(ge=1, le=86400)]
-"""How long a call may wait, at most a day: zero would give up before it began, and a
-wait past threading.TIMEOUT_MAX raises after the program has started."""
+"""How long a call may wait: zero would give up before it began, and an unbounded wait
+can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is
+the ceiling."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:

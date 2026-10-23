@@ -72,7 +72,8 @@ async def get_geo_summary(
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
         - Empty geometry: Returns zeros for counts, not an error
-        - Massive geometry (>1M points): Automatically caps sampling with warning
+        - Massive geometry (>1M points): a warning names the point count; the
+          samples are still the first max_sample_points
         - No geometry/Not a SOP: Returns error status
         - Anything Houdini will not read (the cook, the bounding box, an
           attribute's name/type/size, a group, a sample value) is
@@ -226,7 +227,7 @@ else:
         point_count = result["point_count"]
         if max_sample_points > 0 and point_count > 0:
             if point_count > 1000000:
-                result["warning"] = f"Geometry has {{point_count}} points (>1M). Sampling limited."
+                result["warning"] = f"Geometry has {{point_count}} points (>1M); samples are its first {{sample_count}}."
 
             sample_count = min(max_sample_points, point_count)
             sample_points = []
@@ -265,9 +266,9 @@ print(json.dumps(result))
     # ceiling it hit and the knobs that shrink the read, rather than a parse error.
     if exec_result.get("stdout_truncated"):
         raise OperationFailed(
-            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters "
-            f"(max_sample_points={max_sample_points}, include_attributes={include_attributes}, "
-            f"include_groups={include_groups}); lower or turn off one of them"
+            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters with "
+            f"max_sample_points={max_sample_points}; each sample carries every point attribute, "
+            "so ask for fewer, or set include_groups=False if the node has many groups"
         )
 
     # Parse the JSON output from stdout

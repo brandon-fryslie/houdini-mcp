@@ -213,7 +213,7 @@ class TestGetGeoSummary:
             bbox_min=[-100.0, -100.0, -100.0],
             bbox_max=[100.0, 100.0, 100.0],
             sample_points=sample_points,
-            warning="Geometry has 1500000 points (>1M). Sampling limited.",
+            warning="Geometry has 1500000 points (>1M); samples are its first 100.",
         )
         mock_execute_code.return_value = {
             "status": "success",
@@ -663,9 +663,9 @@ class TestGetGeoSummary:
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
         assert result["message"] == (
-            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters "
-            "(max_sample_points=1000, include_attributes=True, include_groups=True); "
-            "lower or turn off one of them"
+            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters with "
+            "max_sample_points=1000; each sample carries every point attribute, so ask for "
+            "fewer, or set include_groups=False if the node has many groups"
         )
 
 

@@ -305,14 +305,6 @@ class TestServedSchemas:
         assert not await accepts(client, served, "find_error_nodes", {"max_results": 0})
         assert await accepts(client, served, "find_error_nodes", {"max_results": 1})
 
-    async def test_a_docs_fetch_waits_at_least_a_second(
-        self, client: Client[Any], served: dict[str, Tool]
-    ) -> None:
-        """httpx cannot wait zero seconds; the wire refuses the timeout before it gets there."""
-        arguments = {"help_type": "sop", "item_name": "box"}
-        assert not await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 0})
-        assert await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 1})
-
     async def test_render_viewport_camera_vectors_are_three_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
@@ -380,17 +372,19 @@ class TestServedSchemas:
             assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
 
-    async def test_execute_code_waits_between_a_second_and_a_day(
+    async def test_a_wait_is_between_a_second_and_a_day(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        """Zero would give up before the program began; past a day the wait itself raises."""
-        arguments = {"code": "pass"}
-        for timeout in (1, 86400):
-            assert await accepts(client, served, "execute_code", {**arguments, "timeout": timeout})
-        for timeout in (0, 86401):
-            assert not await accepts(
-                client, served, "execute_code", {**arguments, "timeout": timeout}
-            )
+        """Zero would give up before the call began; an unbounded wait can overflow the clock."""
+        calls = {
+            "execute_code": {"code": "pass"},
+            "get_houdini_help": {"help_type": "sop", "item_name": "box"},
+        }
+        for name, base in calls.items():
+            for timeout in (1, 86400):
+                assert await accepts(client, served, name, {**base, "timeout": timeout}), name
+            for timeout in (0, 86401):
+                assert not await accepts(client, served, name, {**base, "timeout": timeout}), name
 
     async def test_geo_summary_samples_at_most_a_thousand_points(
         self, client: Client[Any], served: dict[str, Tool]

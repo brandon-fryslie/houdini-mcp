@@ -33,7 +33,7 @@ async def test_a_geometry_summary_says_how_much_of_its_file_it_read(
                 "set_parameter", {"node_path": grid["node_path"], "param_name": parm, "value": 60}
             )
         pointer = await call(
-            "get_geo_summary", {"node_path": grid["node_path"], "max_sample_points": 2000}
+            "get_geo_summary", {"node_path": grid["node_path"], "max_sample_points": 1000}
         )
 
     assert pointer["status"] == "success" and "result_file" in pointer
