@@ -879,7 +879,6 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "pydantic" },
-    { name = "requests" },
     { name = "rpyc" },
     { name = "starlette" },
 ]
@@ -898,7 +897,6 @@ dev = [
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "twine" },
-    { name = "types-requests" },
 ]
 
 [package.metadata]
@@ -908,7 +906,6 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=4.1" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "pydantic", specifier = ">=2.14" },
-    { name = "requests", specifier = ">=2.34" },
     { name = "rpyc", specifier = ">=5.3.1,<6" },
     { name = "starlette", specifier = ">=1.7" },
 ]
@@ -927,7 +924,6 @@ dev = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.17,<0.18" },
     { name = "twine", specifier = ">=7" },
-    { name = "types-requests" },
 ]
 
 [[package]]
@@ -2493,18 +2489,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/92/3c/58f808a359700f39a967dffede33efeac809262c03303fa3eec6afff8f49/twine-7.0.0.tar.gz", hash = "sha256:85cdb29c518efef867360ae4acd4b0dfd61c8654a22fca08e6f8539f05022177", size = 215032, upload-time = "2026-07-27T15:59:00.825Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/08/ddcdc06225eaad6de0e48e1002b06d919dbde20582d0662c7af51308e5d6/twine-7.0.0-py3-none-any.whl", hash = "sha256:b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7", size = 43204, upload-time = "2026-07-27T15:58:59.26Z" },
-]
-
-[[package]]
-name = "types-requests"
-version = "2.33.0.20261006"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/57/15/9b7e2e2e7c87d01366185b198b3febc6bc0c973f2bf21a62da4ab7d3495e/types_requests-2.33.0.20261006.tar.gz", hash = "sha256:0652999e9306aea345f40732d58fa49a7f6cade6a0d74d92119c5c8d82eddaf0", size = 25316, upload-time = "2026-10-06T08:15:57.782Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/72/b82789207b3d360ce9f5a4372c790c52cc3dd928aeb7d4faeec652b651b2/types_requests-2.33.0.20261006-py3-none-any.whl", hash = "sha256:26cc8146505cab33cda9737991929e4144c559bebe05078ccc6998f27c4ca2c1", size = 21445, upload-time = "2026-10-06T08:15:56.658Z" },
 ]
 
 [[package]]

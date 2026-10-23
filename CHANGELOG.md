@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replace an empty `HOUDINI_PORT`, `MCP_PORT` or `LOG_LEVEL` with its own default.
   An empty `HOUDINI_RPC_TOKEN=` still means no token.
 
+- **BREAKING (install)**: houdini-mcp no longer depends on `requests`
+  (houdini-tuneup-ef3.vrw): `get_houdini_help` fetches over httpx, which the
+  server already used. Code that got `requests` from houdini-mcp's install now
+  has to install it itself.
+
 - **BREAKING (wire)**: a summary says how much of the result it was written from
   (houdini-laws-spine-cqp.lf0). The summarizer was sent the first 8000
   characters of the result's indented JSON (`serialize_scene`: 10000), cut
@@ -488,6 +493,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `available_types`.
 
 ### Fixed
+
+- `get_houdini_help` (houdini-tuneup-ef3.vrw): an `item_name` is one page of its
+  section, so a `/`, `#` or `?` in it no longer fetches some other page. Its
+  `url`, on success or a missing page, is where it read, after any redirect. The
+  schema refuses a `timeout` under 1, which failed as an unclassified error.
 
 - **Docker Compose passes the container every setting the server reads**
   (houdini-tuneup-ef3.d72): it passed only `HOUDINI_HOST`, `HOUDINI_PORT`,

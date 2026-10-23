@@ -4,10 +4,12 @@ This module provides tools for fetching Houdini documentation from
 the SideFX website. It does NOT require a Houdini connection.
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
+from pydantic import Field
 
 from ._common import (
     InvalidInput,
@@ -37,12 +39,25 @@ _HELP_PATHS: dict[HelpType, str] = {
     "python_hou": "hom/hou",
 }
 
+# [LAW:types-are-the-program] httpx refuses a zero or negative timeout, so the served
+# schema refuses it first.
+Seconds = Annotated[int, Field(ge=1)]
+
+
+# [LAW:effects-at-boundaries] The one place the docs site's HTTP client is built. Tests
+# replace it with a client over a fake transport, so the request put on the wire is
+# what gets asserted.
+def docs_client(timeout: Seconds) -> httpx.Client:
+    """Build the client a docs page is fetched through, ``timeout`` seconds a phase."""
+    # A page the site moves is still the page asked for; httpx follows only when told.
+    return httpx.Client(timeout=timeout, follow_redirects=True)
+
 
 @handle_connection_errors("get_houdini_help")
 def get_houdini_help(
     help_type: HelpType,
     item_name: str,
-    timeout: int = 10,
+    timeout: Seconds = 10,
 ) -> dict[str, Any]:
     """
     Fetch Houdini documentation from SideFX website.
@@ -68,13 +83,14 @@ def get_houdini_help(
             - "vex_function": VEX functions (e.g., "noise", "lerp", "chramp")
             - "python_hou": Python hou module classes (e.g., "Node", "Geometry")
         item_name: Name of the node or function (e.g., "box", "noise", "Node")
-        timeout: Request timeout in seconds (default: 10)
+        timeout: Seconds the fetch may wait at each step - connecting, sending,
+            reading - before it gives up (default: 10)
 
     Returns:
         Dict with:
         - status: "success" or "error"
         - title: Documentation title
-        - url: Source URL
+        - url: Where the page was read from, after any redirect
         - description: Summary description
         - parameters: List of parameters with names, descriptions, and options
         - inputs: List of input connections (for nodes)
@@ -88,20 +104,25 @@ def get_houdini_help(
         get_houdini_help("python_hou", "Node")  # Get hou.Node class docs
         get_houdini_help("obj", "cam")  # Get camera object docs
     """
-    full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{item_name}.html"
+    # [LAW:parse-dont-validate] item_name is one page of its section: quoted whole, a
+    # '/', '#' or '?' in it is part of the name, never a way to another page.
+    page = quote(item_name, safe="")
+    full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{page}.html"
 
     try:
-        response = requests.get(full_url, timeout=timeout)
+        with docs_client(timeout) as client:
+            response = client.get(full_url)
 
         if response.status_code == 404:
             raise InvalidInput(
                 f"Documentation not found for {help_type}/{item_name}. Check if the name is correct.",
-                url=full_url,
+                url=str(response.url),
             )
 
         if response.status_code != 200:
             raise OperationFailed(
-                f"Failed to fetch help page. HTTP status: {response.status_code}", url=full_url
+                f"Failed to fetch help page. HTTP status: {response.status_code}",
+                url=str(response.url),
             )
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -216,7 +237,7 @@ def get_houdini_help(
         result: dict[str, Any] = {
             "status": "success",
             "title": title,
-            "url": full_url,
+            "url": str(response.url),
             "help_type": help_type,
             "item_name": item_name,
             "description": description,
@@ -243,7 +264,13 @@ def get_houdini_help(
 
         return result
 
-    except requests.exceptions.Timeout as e:
-        raise TimedOut(f"Request timed out after {timeout} seconds", url=full_url) from e
-    except requests.exceptions.RequestException as e:
+    except httpx.TimeoutException as e:
+        raise TimedOut(
+            f"Request timed out: a step of the fetch took over {timeout} seconds", url=full_url
+        ) from e
+    # Only an item_name too long for any URL makes it unparseable; a bad redirect is a
+    # RemoteProtocolError, an HTTPError.
+    except httpx.InvalidURL as e:
+        raise InvalidInput(f"No docs page can be named {item_name!r}: {e}", url=full_url) from e
+    except httpx.HTTPError as e:
         raise OperationFailed(f"Network error: {str(e)}", url=full_url) from e
