@@ -171,7 +171,7 @@ class TestToolsShareTheOwner:
         mock_connection.add_node(node_with(t=[0.0, 0.0, 0.0]))
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
             result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
-        assert "writes outcome updated=0 failed=[('t', 'invalid_input')]" in caplog.text
+        assert "parameters written node=/obj/n updated=[] failed=[{'name': 't'" in caplog.text
         assert result["status"] == "error"
         assert result["kind"] == "invalid_input"
         assert result["message"] == "t: Parameter t is a tuple, provide a list/tuple value"

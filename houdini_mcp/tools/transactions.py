@@ -187,27 +187,30 @@ class _Raised:
 
 
 def _on_main_thread(
-    entry: Any, work: Callable[[], Result], *args: Any
+    link: Link, entry: str, work: Callable[[], Result], *args: Any
 ) -> _Returned[Result] | _Raised:
     """How ``work`` ended, run here while Houdini's main thread, calling it through
-    the plugin's ``entry``, serves every request it makes.
+    the plugin's ``main_thread.<entry>``, serves every request it makes.
 
     The plugin's entry has the main thread call back into this process; while
     that call is out, the main thread serves the link, so each ``hou`` request
-    ``work`` makes runs there. The call is made with no expiry on its reply,
-    since it lasts as long as ``work``, whose own requests each keep the link's
-    sync timeout.
+    ``work`` makes runs there, bounded by the link's sync timeout. The wait
+    around ``work`` is bounded too: the main thread begins it within the
+    plugin's pickup timeout or refuses it, and answers within the sync timeout
+    once it has ended, so a Houdini that stops answering fails the call with
+    a timeout rather than holding it, and the scene, for good.
 
     [LAW:effects-at-boundaries] ``work``'s outcome stays in this process: the
     function Houdini calls back never raises, so a failure keeps its own type,
     fields and notes, not rebuilt by rpyc from a copy that crossed to Houdini
-    and back. That outcome is the call's even when the reply saying ``work``
-    ended is lost: a request ``work`` made that timed out drops the link while
-    the main thread is still calling ``work``.
+    and back. That outcome is the call's even when the link fails before the
+    reply saying ``work`` ended arrives: a request ``work`` made that timed
+    out drops the link while the main thread is still calling ``work``.
 
     Raises:
         OperationFailed: the main thread refused the call, which never ran.
     """
+    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     outcomes: list[_Returned[Result] | _Raised] = []
 
     def run() -> None:
@@ -215,14 +218,21 @@ def _on_main_thread(
             outcomes.append(_Returned(work()))
         except BaseException as failure:  # noqa: BLE001
             outcomes.append(_Raised(failure))
+        finally:
+            reply.set_expiry(link.sync_timeout)
 
+    # Read before the call goes out: a request made after it waits behind it.
+    entered = rpyc.async_(getattr(main_thread, entry))
+    expiry = main_thread.PICKUP_TIMEOUT + link.sync_timeout
+    reply = entered(run, *args)
+    reply.set_expiry(expiry)
     try:
         # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
-        refusal: str | None = rpyc.async_(entry)(run, *args).value
-    except Exception as lost:
-        if not outcomes:
+        refusal: str | None = reply.value
+    except Exception as raised:
+        if not outcomes or transport_failure(raised) is None:
             raise
-        logger.info("The reply to a call Houdini's main thread ran was lost: %r", lost)
+        logger.info("The link failed before the reply to a call Houdini ran: %r", raised)
     else:
         if refusal is not None:
             raise OperationFailed(refusal)
@@ -241,18 +251,24 @@ def _undone_on_failure(
     that changed nothing leaves no step, so a label shared with an earlier
     call could undo that call instead.
     """
-    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     label = f"houdini-mcp {operation} {uuid.uuid4().hex[:8]}"
     logger.info("%s runs as undo group %r", operation, label)
     # A call the main thread refused never ran: nothing to undo.
-    outcome = _on_main_thread(main_thread.call_as_step, body, label)
+    outcome = _on_main_thread(link, "call_as_step", body, label)
     if isinstance(outcome, _Returned):
         return outcome.value
     failure = outcome.failure
     try:
-        told = _on_main_thread(main_thread.call, lambda: _undo_step(link.hou.undos, label)).result()
+        told = _on_main_thread(link, "call", lambda: _undo_step(link.hou.undos, label)).result()
     except Exception as error:
-        told = (f"Undoing its changes failed ({error!r}), so the scene may hold part of them.",)
+        undo_failed = f"Undoing its changes failed ({error!r}), so the scene may hold part of them."
+        # A link that failed is the connection owner's to drop, so its failure is
+        # the call's, telling the one it was undoing.
+        if transport_failure(error) is not None:
+            add_note(error, f"{operation} had failed: {failure}")
+            add_note(error, undo_failed)
+            raise error from failure
+        told = (undo_failed,)
     logger.info("%s failed; its undo group %r: %s", operation, label, told or "no step")
     for note in told:
         add_note(failure, note)

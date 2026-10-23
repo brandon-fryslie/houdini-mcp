@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import time
+
 import pytest
 
 from houdini_mcp.tools import (
@@ -345,38 +347,63 @@ class TestOnMainThread:
     """What the main thread's reply to an undoable call means for the call."""
 
     _PLUGINS = """
+PICKUP_TIMEOUT = 30.0
+
+def _as_step(undos, fn, label):
+    undos.enter_main_thread()
+    try:
+        with undos.group(label):
+            fn()
+    finally:
+        undos.leave_main_thread()
+
 def refusing(undos):
     class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
         @staticmethod
         def call_as_step(fn, label):
             return "Houdini's main thread is not taking calls"
     return main_thread
 
-def losing_the_reply(undos):
+def losing_the_link(undos):
     class main_thread:
-        @staticmethod
-        def call_as_step(fn, label):
-            undos.enter_main_thread()
-            try:
-                with undos.group(label):
-                    fn()
-            finally:
-                undos.leave_main_thread()
-            raise EOFError("the link closed before the reply")
+        PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call(fn):
-            undos.enter_main_thread()
-            try:
-                fn()
-            finally:
-                undos.leave_main_thread()
+        def call_as_step(fn, label):
+            _as_step(undos, fn, label)
+            object.__getattribute__(fn, "____conn__").close()
+    return main_thread
+
+def never_answering(undos):
+    import time
+
+    class main_thread:
+        PICKUP_TIMEOUT = 0.2
+
+        @staticmethod
+        def call_as_step(fn, label):
+            time.sleep(2)
+    return main_thread
+
+def failing_after(undos):
+    class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
+        @staticmethod
+        def call_as_step(fn, label):
+            _as_step(undos, fn, label)
+            raise RuntimeError("closing the group failed")
     return main_thread
 """
 
+    def _served(self, monkeypatch, plugins, name):
+        monkeypatch.setattr(conftest, "served_main_thread", plugins[name])
+
     def test_a_refused_call_fails_saying_why_and_never_ran(self, mock_connection, monkeypatch):
         with conftest.served_namespace(self._PLUGINS) as plugins:
-            monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
+            self._served(monkeypatch, plugins, "refusing")
             result = create_node("geo", "/obj", "made", host="localhost", port=18811)
 
         assert result["kind"] == "operation_failed", result
@@ -384,19 +411,48 @@ def losing_the_reply(undos):
         assert "traceback" not in result
         assert mock_connection.node("/obj/made") is None
 
-    def test_a_call_that_ran_is_its_own_outcome_when_the_reply_is_lost(
+    def test_a_call_that_ran_stands_when_the_link_fails_before_its_reply(
         self, mock_connection, monkeypatch, caplog
     ):
         with (
             conftest.served_namespace(self._PLUGINS) as plugins,
             caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"),
         ):
-            monkeypatch.setattr(conftest, "served_main_thread", plugins["losing_the_reply"])
+            self._served(monkeypatch, plugins, "losing_the_link")
+            result = create_node("geo", "/obj", "made", host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert mock_connection.node("/obj/made") is not None
+        assert "The link failed before the reply to a call Houdini ran" in caplog.text
+
+    def test_a_failed_call_whose_link_fails_undoing_it_is_the_links_failure(
+        self, mock_connection, monkeypatch
+    ):
+        with conftest.served_namespace(self._PLUGINS) as plugins:
+            self._served(monkeypatch, plugins, "losing_the_link")
             result = _creates_then_fails()
 
-        assert result["kind"] == "invalid_input", result
-        assert result["message"] == (
-            "the second edit was refused\nIts changes to the scene were undone."
-        )
-        assert mock_connection.node("/obj/half_done") is None
-        assert "The reply to a call Houdini's main thread ran was lost" in caplog.text
+        assert result["kind"] == "connection_lost", result
+        assert "_creates_then_fails had failed: the second edit was refused" in result["message"]
+        assert result["message"].endswith("so the scene may hold part of them.")
+
+    def test_houdini_failing_after_the_call_ran_fails_the_call(self, mock_connection, monkeypatch):
+        with conftest.served_namespace(self._PLUGINS) as plugins:
+            self._served(monkeypatch, plugins, "failing_after")
+            result = create_node("geo", "/obj", "made", host="localhost", port=18811)
+
+        assert result["kind"] == "operation_failed", result
+        assert "closing the group failed" in result["message"]
+
+    def test_a_houdini_that_stops_answering_times_the_call_out(self, mock_connection, monkeypatch):
+        from houdini_mcp.connection import Link
+
+        monkeypatch.setattr(Link, "sync_timeout", property(lambda link: 0.2))
+        with conftest.served_namespace(self._PLUGINS) as plugins:
+            self._served(monkeypatch, plugins, "never_answering")
+            started = time.monotonic()
+            result = create_node("geo", "/obj", "made", host="localhost", port=18811)
+            took = time.monotonic() - started
+
+        assert took < 1.5
+        assert result["kind"] == "timeout", result

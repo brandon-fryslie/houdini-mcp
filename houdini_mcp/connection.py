@@ -185,6 +185,12 @@ class Link:
     def alive(self) -> bool:
         return not self.conn.closed
 
+    @property
+    def sync_timeout(self) -> float:
+        """Seconds each request on the link may wait for its reply: rpyc's own setting."""
+        timeout: float = self.conn._config["sync_request_timeout"]
+        return timeout
+
     def close(self) -> None:
         try:
             self.conn.close()

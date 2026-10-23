@@ -19,19 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns, and its error message ends with `Its changes to the scene were
   undone.` A call that failed before changing anything undoes nothing, so the
   artist's last step stays on top. Houdini 22 records undo groups only on its
-  main thread, so these calls run their Houdini work there, which has three
-  consequences. They need the houdini_mcp plugin installed in that Houdini,
-  whether the listener was started from the plugin or with bare `hrpyc`;
-  without it they fail saying to install the plugin, and reads still work. A
-  headless `hython` script, after starting the listener, must run
-  `from houdini_mcp_plugin import main_thread; main_thread.serve()` on its main
-  thread; with nothing serving, these calls are refused at once with a message
-  naming `houdini_mcp_plugin.main_thread.serve()`. A graphical Houdini's
-  interface does not redraw while such a call runs, usually a fraction of a
-  second. Reads that arrive while one of these calls runs wait for it and
-  report the wait in `scene_wait`; they still run beside renders and
-  `execute_code` programs. `execute_code`'s own undo group still records
-  nothing (houdini-laws-etg.lbc).
+  main thread, so these calls run their Houdini work there (see Changed). A
+  graphical Houdini's interface does not redraw while such a call runs,
+  usually a fraction of a second; its main thread gives a call up once the
+  MCP server has sent nothing for 60 seconds, so a dropped network link
+  cannot hold the interface frozen. Reads that arrive while one of these
+  calls runs wait for it and report the wait in `scene_wait`; they still run
+  beside renders and `execute_code` programs. `execute_code`'s own undo group
+  still records nothing (houdini-laws-etg.lbc).
 
 - `reload_hrpyc_server()` with a config that is admitted but fails to start
   (its port is taken, say) no longer leaves nothing serving
@@ -48,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (deployment)**: the fifteen editing tools listed under Fixed need
+  the houdini_mcp plugin installed in the Houdini they reach, whether its
+  listener was started from the plugin or with bare `hrpyc`
+  (houdini-laws-etg.4ve); without it they fail saying to install the plugin,
+  and reads still work. A headless `hython` script, after starting the
+  listener, must run `from houdini_mcp_plugin import main_thread;
+  main_thread.serve()` on its main thread; with nothing serving, these calls
+  are refused at once with a message naming
+  `houdini_mcp_plugin.main_thread.serve()`.
 
 - **BREAKING (wire)**: `create_material`, `assign_material`,
   `set_render_settings` and `create_render_node` are all or nothing

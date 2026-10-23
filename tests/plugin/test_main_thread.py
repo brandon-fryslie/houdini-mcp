@@ -125,6 +125,14 @@ class TestHeadless:
             assert serving_main_thread(lambda: call_on_main(conn, fn)) == []
         assert ran == [True]
 
+    def test_a_client_gone_silent_is_given_up_on(self, houdini, monkeypatch):
+        """The main thread is freed; how long the client's call may run while it
+        is heard from is the client's own."""
+        monkeypatch.setattr(main_thread, "CLIENT_SILENCE_TIMEOUT", 0.3)
+        with houdini() as conn:
+            (raised,) = serving_main_thread(lambda: call_on_main(conn, lambda: time.sleep(1.0)))
+        assert "The client sent nothing for 0.3s" in str(raised)
+
     def test_a_call_raises_what_the_function_raised(self, houdini):
         with houdini() as conn:
 

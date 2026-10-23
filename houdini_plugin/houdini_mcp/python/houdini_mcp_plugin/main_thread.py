@@ -23,11 +23,15 @@ from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
+__all__ = ["CLIENT_SILENCE_TIMEOUT", "PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
 not run late, once they pass. How long the call then runs is the call's own."""
+
+CLIENT_SILENCE_TIMEOUT = 60.0
+"""Seconds the main thread waits, while a call is out to its client, for the
+client to send anything before it gives the call up."""
 
 
 class _State(Enum):
@@ -103,18 +107,30 @@ class _Call:
         return self._refusal
 
 
-def _call_unbounded(fn: Callable[[], Any]) -> Any:
-    """Call ``fn`` with no expiry on its reply.
+def _call_while_heard(fn: Callable[[], Any]) -> Any:
+    """Call ``fn`` for as long as its client is heard from.
 
     ``fn`` is the client's function, a netref: called plainly, its reply would
     be bounded by this connection's sync timeout, which bounds one request and
-    would here bound the client's whole call. Each request the client's
-    function makes keeps the client's own bound.
+    would here bound the client's whole call. Instead the main thread serves
+    the connection until the reply comes, and gives up only on a client that
+    sends nothing for ``CLIENT_SILENCE_TIMEOUT``: one whose link is half-open
+    would otherwise hold the main thread, and a graphical Houdini's
+    interface, for good. A request the client sends is served inside that
+    wait, so a long cook it asks for is not silence.
     """
     import rpyc
 
-    # ``value``, not ``wait()``: an async result raises what the call raised only when read.
-    return rpyc.async_(fn)().value
+    reply = rpyc.async_(fn)()
+    conn = object.__getattribute__(fn, "____conn__")
+    while not reply.ready:
+        if not conn.serve(CLIENT_SILENCE_TIMEOUT):
+            raise TimeoutError(
+                f"The client sent nothing for {CLIENT_SILENCE_TIMEOUT}s while its call was "
+                "out on Houdini's main thread, so the main thread gave the call up."
+            )
+    # ``value``: an async result raises what the call raised only when read.
+    return reply.value
 
 
 class _Drain:
@@ -182,7 +198,7 @@ def call(fn: Callable[[], Any]) -> str | None:
     Raises:
         Exception: whatever calling ``fn`` raised.
     """
-    return _posted(_Call(lambda: _call_unbounded(fn)))
+    return _posted(_Call(lambda: _call_while_heard(fn)))
 
 
 def call_as_step(fn: Callable[[], Any], label: str) -> str | None:
@@ -199,7 +215,7 @@ def call_as_step(fn: Callable[[], Any], label: str) -> str | None:
         import hou
 
         with hou.undos.group(label):
-            _call_unbounded(fn)
+            _call_while_heard(fn)
 
     return _posted(_Call(as_step))
 

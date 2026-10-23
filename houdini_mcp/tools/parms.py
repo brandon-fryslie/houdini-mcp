@@ -141,11 +141,6 @@ class Writes:
         has no "partial": a write that failed fails the call, carrying the same
         report, and the tool boundary undoes what the call did before it.
         """
-        logger.info(
-            "writes outcome updated=%d failed=%s",
-            len(self.updated),
-            [(f["name"], f["kind"]) for f in self.failed],
-        )
         report = {"updated": self.updated, "failed": self.failed, **report}
         if self.failed:
             raise items_failed(

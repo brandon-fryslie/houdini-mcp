@@ -698,6 +698,8 @@ class MockHouNode:
 _MAIN_THREAD = """
 def main_thread_of(undos):
     class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
         @staticmethod
         def call(fn):
             undos.enter_main_thread()
@@ -772,7 +774,7 @@ class MockRpycConnection:
 
     def __init__(self, hou_module: "MockHouModule"):
         self.modules = MockModuleNamespace(hou_module)
-        self._config: dict[str, Any] = {}
+        self._config: dict[str, Any] = {"sync_request_timeout": 30.0}
         self.closed = False
 
     def close(self) -> None:
