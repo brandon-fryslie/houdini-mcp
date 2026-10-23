@@ -483,6 +483,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docker Compose passes the container every setting the server reads**
+  (houdini-tuneup-ef3.d72): it passed only `HOUDINI_HOST`, `HOUDINI_PORT`,
+  `HOUDINI_RPC_TOKEN`, `MCP_PORT` and `LOG_LEVEL`, and dropped every other setting
+  set in `.env`, the shell or an `--env-file` without a message:
+  `SUMMARIZATION_ENABLED`, `SUMMARIZATION_BASE_URL`, `SUMMARIZATION_API_KEY`,
+  `SUMMARIZATION_MODEL`, `HOUDINI_MCP_ALLOW_BYPASS`, `HOUDINI_MCP_RESULTS_DIR` and
+  `MCP_TRANSPORT`. So the container always summarized with the built-in defaults.
+  compose.yaml now passes every setting in the table in README's Configuration
+  section. A setting left unset everywhere stays unset in the container, so the
+  server's own default applies, and compose.yaml no longer restates 18811, 3055 and
+  `INFO`. A setting set to an empty value, such as `HOUDINI_PORT=` or `LOG_LEVEL=`,
+  used to become compose's default and now reaches the server empty, which refuses
+  it at start and names the variable; an empty `HOUDINI_RPC_TOKEN=` still means no
+  token. A test fails when the server reads a setting compose.yaml does not pass.
+
 - **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
   it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
   because MCP is served at `/mcp`. README and examples/README.md now give

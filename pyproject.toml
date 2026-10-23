@@ -58,6 +58,8 @@ dev = [
     "bandit[toml]>=1.9",
     # `twine check` on the wheel/sdist in the CI build job
     "twine>=7",
+    # The entry-point tests read compose.yaml
+    "pyyaml>=6",
 ]
 
 [tool.uv]
