@@ -255,6 +255,45 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
     assert houdini().link() is None
 
 
+def test_capture_multiple_panes_whose_main_thread_refused_fails_the_call(
+    mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal from Houdini's main thread is Houdini's, not the pane's: no later
+    pane is sent to wait out the same refusal, and the call fails saying why."""
+    from tests import conftest
+
+    for name, pane_type in (
+        ("panetab1", MockPaneTabType.NetworkEditor),
+        ("panetab2", MockPaneTabType.SceneViewer),
+    ):
+        mock_connection.ui.curDesktop().paneTabs().append(MockPaneTab(name, pane_type, 800, 600))
+    plugin = """
+asked = []
+
+def refusing(undos):
+    class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
+        @staticmethod
+        def call(fn):
+            asked.append(True)
+            return "Houdini's main thread did not begin the call within 30.0s"
+    return main_thread
+"""
+    with served_namespace(plugin) as plugins:
+        monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
+        with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
+            from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+            result = capture_multiple_panes(["NetworkEditor", "SceneViewer"])
+        asked = len(plugins["asked"])
+
+    assert result["kind"] == "operation_failed", result
+    assert result["message"] == "Houdini's main thread did not begin the call within 30.0s"
+    assert asked == 1
+    assert mock_connection.ui.grabs == []
+
+
 def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     mock_connection: MockHouModule, tmp_path: Path
 ) -> None:
@@ -564,6 +603,31 @@ def test_a_capture_refused_before_the_grab_leaves_the_view_unframed(
     assert result["kind"] == "operation_failed", result
     assert "invalid geometry" in result["message"]
     assert events == []
+
+
+def test_a_capture_holds_houdinis_main_thread_for_the_grab_not_the_encoding(
+    mock_connection: MockHouModule,
+) -> None:
+    """The PNG is encoded off Houdini's main thread, so Houdini's UI waits only for the grab."""
+    mock_connection.ui.curDesktop().paneTabs().append(
+        MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
+    )
+    QtCore = _qt_core_double()
+    buffer = QtCore.QBuffer()
+    encoded_on_main_thread: list[bool] = []
+
+    def encoding() -> MagicMock:
+        encoded_on_main_thread.append(mock_connection.undos.on_main_thread)
+        return buffer
+
+    QtCore.QBuffer = encoding
+
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
+        result = capture_pane_screenshot("NetworkEditor")
+
+    assert result["status"] == "success", result
+    assert len(mock_connection.ui.grabs) == 1
+    assert encoded_on_main_thread == [False]
 
 
 def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(

@@ -182,6 +182,12 @@ def recovering(
         return recover(operation, link, body)
 
 
+class MainThreadRefused(OperationFailed):
+    """Houdini's main thread refused a call, which never ran: Houdini's state
+    (nothing serving, or a main thread that did not begin it in time), not the
+    call's own failure, so the next call there meets it too."""
+
+
 @dataclass(frozen=True)
 class _Returned(Generic[Result]):
     value: Result
@@ -220,7 +226,7 @@ def _on_main_thread(
     out drops the link while the main thread is still calling ``work``.
 
     Raises:
-        OperationFailed: the main thread refused the call, which never ran.
+        MainThreadRefused: the main thread refused the call, which never ran.
     """
     main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     outcomes: list[_Returned[Result] | _Raised] = []
@@ -247,7 +253,7 @@ def _on_main_thread(
         logger.info("The link failed before the reply to a call Houdini ran: %r", raised)
     else:
         if refusal is not None:
-            raise OperationFailed(refusal)
+            raise MainThreadRefused(refusal)
     (outcome,) = outcomes
     return outcome
 
@@ -267,7 +273,7 @@ class MainThread:
         request it makes; whatever it raised, raised here.
 
         Raises:
-            OperationFailed: the main thread refused the call, which never ran.
+            MainThreadRefused: the main thread refused the call, which never ran.
         """
         return _on_main_thread(link, "call", work).result()
 

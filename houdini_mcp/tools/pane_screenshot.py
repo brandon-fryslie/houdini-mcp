@@ -35,7 +35,7 @@ from ._common import (
 )
 from .failure import LinkLost
 from .reads import Unread, is_unread, read
-from .transactions import MainThread
+from .transactions import MainThread, MainThreadRefused
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -231,19 +231,20 @@ def _capture_pane_to_bytes(
     # viewport event says so, and no draw call makes a grab in the same call
     # current). So the grab is the next main-thread call, which Houdini begins
     # only when its event loop is idle again, after that drawing.
-    raw_bytes = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
+    image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
 
     return {
         "status": "success",
         "pane_type": pane_type_name,
         "pane_name": read("pane name", lambda: str(pane.name())),
         "geometry": geometry,
-        "raw_bytes": raw_bytes,
+        # Encoded here, off the main thread, so Houdini's UI is held only for the grab.
+        "raw_bytes": png_bytes(image, QtCore, pane_type_name),
     }
 
 
-def _drawn(pane: Any, geometry: dict[str, int], QtCore: Any, pane_type_name: str) -> bytes:
-    """The pane as its own window last drew it, encoded as PNG.
+def _drawn(pane: Any, geometry: dict[str, int], QtCore: Any, pane_type_name: str) -> Any:
+    """The pane as its own window last drew it, as a QImage.
 
     The window renders its widgets into the picture, so what the screen shows
     in front of the pane (another app, a Houdini menu) is not in it, and no
@@ -259,7 +260,7 @@ def _drawn(pane: Any, geometry: dict[str, int], QtCore: Any, pane_type_name: str
         raise OperationFailed(
             f"Houdini's window drew no picture of {pane_type_name}.", pane_type=pane_type_name
         )
-    return png_bytes(pixmap.toImage(), QtCore, pane_type_name)
+    return pixmap.toImage()
 
 
 def png_bytes(image: Any, QtCore: Any, pane_type_name: str) -> bytes:
@@ -576,6 +577,10 @@ def capture_multiple_panes(
             try:
                 result = _capture_pane_to_bytes(link, main_thread, pane_type_name, QtCore)
                 result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
+            except MainThreadRefused:
+                # Houdini's main thread refused, not this pane: every later pane
+                # would wait out the same refusal, so the call fails here.
+                raise
             except ToolError as e:
                 judged = failed_on(houdini(), link, e)
                 # The link this pane failed on is dropped, so no later pane can be
