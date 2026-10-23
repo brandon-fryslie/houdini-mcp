@@ -519,6 +519,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Prompts ask the agent for five of the removed workflows: building a SOP chain,
   inserting a node, setting a parameter from its schema, checking a node for cook
   errors, and reading a node's point count and bounding box.
+- `docs/reference/` and six `docs/implementation/` notes: `overview`,
+  `network-introspection`, `node-wiring`, `parameter-schema`,
+  `error-introspection` and `geometry-summary` (houdini-tuneup-ef3.6yb). They
+  were earlier agents' completion reports, restating tools' arguments and results
+  by hand, and they had drifted: one typed `get_node_info`'s `cook_info` as a
+  bool, which the server refuses for a parameter that takes `"none"`,
+  `"inspect"` or `"force_cook"`. `docs/README.md` now indexes the four documents
+  that remain.
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin
@@ -544,6 +552,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `docs/tool-contracts.md` claims only what the tools return
+  (houdini-tuneup-ef3.6yb). Its render example read `image_base64` from the
+  result, but a render's image is usually over the 16KB bound and arrives in the
+  result file; its `import hou` refusal now shows `kind` and `retry`; and an
+  out-of-range resolution is refused by the schema before the tool runs, with
+  `isError` set and no `status` or `kind`. The doc now says its `tool(arg=value)`
+  calls are MCP arguments.
 - The plugin installed as README describes now loads (houdini-tuneup-ef3.0ho). The
   package JSON set the plugin root to the packages directory itself, so Houdini
   found neither `houdini_mcp_plugin`, `houdini_mcp_handshake` nor

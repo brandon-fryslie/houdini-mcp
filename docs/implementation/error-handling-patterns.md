@@ -44,7 +44,7 @@ The primary error handling mechanism. Wraps tool functions with a three-tier err
 
 ```python
 @handle_connection_errors("get_scene_info")
-def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
+def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     hou = ensure_connected(host, port)
     # ... actual logic without try/except boilerplate
     return {"status": "success", ...}
@@ -241,29 +241,34 @@ MCP boundary before the call reaches Houdini. The render inputs are the model
 (`houdini_mcp/tools/_common.py`, `Resolution` and `Vec3`): a pair of integers in
 64–4096 and a triple of numbers. The server validates strictly
 (`strict_input_validation` in `houdini_mcp/server.py`), so it refuses exactly
-what the published schema refuses. A call that fails the schema is a protocol
-error to the client, never an error result. `tests/test_tool_contracts.py`
+what the published schema refuses. A call that fails the schema never reaches the
+tool: the client gets a result with MCP's `isError` set and the validation message
+as its text, not one of the arms under Key Components. `tests/test_tool_contracts.py`
 asserts the schema and the server's refusals agree.
 
 ## Usage Patterns
 
 ### Pattern 1: Simple Tool with Decorator
 
+`delete_node` (`houdini_mcp/tools/nodes.py`) is the whole shape: the decorator,
+`ensure_connected`, `node_at` raising `invalid_input` for a path with no node,
+and a body that returns only success.
+
 ```python
-@handle_connection_errors("list_children")
-def list_children(
-    node_path: str,
-    host: str = "localhost",
-    port: int = 18811,
-) -> Dict[str, Any]:
+@handle_connection_errors("delete_node")
+def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
-    children = [child.name() for child in node.children()]
-    return {"status": "success", "children": children}
+    node_name = node.name()
+    node.destroy()
+
+    return {
+        "status": "success",
+        "message": f"Deleted node: {node_name}",
+        "deleted_path": node_path,
+    }
 ```
 
 ### Pattern 2: Tool with Constrained Input
@@ -281,43 +286,15 @@ def render_viewport(
 
 ### Pattern 3: Tool with Multiple Error Sources
 
-```python
-@handle_connection_errors("execute_code")
-def execute_code(
-    code: str,
-    host: str = "localhost",
-    port: int = 18811,
-) -> Dict[str, Any]:
-    # Parse once; a program the gates cannot read is a program that does not run
-    try:
-        tree = parse_code(code)
-    except SyntaxError as exc:
-        return {
-            "status": "error",
-            "message": f"Code does not parse: {exc.msg} (line {exc.lineno})",
-        }
-
-    # Judge the parsed program BEFORE connecting
-    dangerous = _detect_dangerous_code(tree)
-    if dangerous:
-        return {
-            "status": "error",
-            "message": f"Dangerous code pattern detected: {dangerous}",
-        }
-
-    hou = ensure_connected(host, port)
-
-    try:
-        exec(code, {"hou": hou})
-        return {"status": "success"}
-    except Exception as e:
-        # Decorator handles connection errors
-        # This catches code execution errors specifically
-        return {
-            "status": "error",
-            "message": f"Code execution failed: {e}",
-        }
-```
+`execute_code` (`houdini_mcp/tools/code.py`) refuses a program before it
+connects: it raises `_blocked(...)`, which builds the `InvalidInput`, for a program
+that does not parse, an `import hou`, a mutation under `read-only`, or a rail the
+caller did not unlock.
+Once the program runs, it raises `OperationFailed` when the program raised,
+`ProgramStillRunning` when the program outlived its timeout, and, as it came, the
+exception from a scene read that failed before the program ran or from a worker
+that died. Every failure is
+raised; none is a dict the body builds.
 
 ## Testing Error Handling
 
@@ -337,19 +314,10 @@ def test_reads_my_double(self, connected_to):
 
 ### Testing Connection Errors
 
-```python
-def test_handles_connection_timeout(self, mock_connection):
-    from houdini_mcp.tools import get_scene_info
-
-    # Simulate timeout
-    mock_connection.node.side_effect = TimeoutError("Connection timed out")
-
-    result = get_scene_info()
-
-    assert result["status"] == "error"
-    assert result["kind"] == "timeout"
-    assert result["connection_reset"] is True
-```
+`TestConnectionErrorHandling` in `tests/test_tools.py` raises each exception from a
+stub tool under the decorator and reads the arm it returns, including the errors
+that leave the connection standing. `test_get_scene_info_handles_timeout` raises a
+timeout from a real tool's patched `ensure_connected`.
 
 `tests/test_failure.py` parses every arm the boundary emits back through `FAILURE`
 and refuses a response relabelled as another kind or as success.
@@ -364,8 +332,10 @@ MCP client, not by calling the tool function. See
 ## Best Practices
 
 1. **Always use the decorator** - Don't write try/except for connection errors in tool functions
-2. **Validate early** - Check inputs before connecting to Houdini
-3. **Raise, don't build error dicts** - `InvalidInput`, `OperationFailed` or `TimedOut`
+2. **Refuse before connecting** - a check that needs no Houdini, like `execute_code`'s
+   program gates, runs before `ensure_connected`; input shape belongs in the
+   parameter types (see Input Validation)
+3. **Raise, don't build error dicts** - one of the exceptions under Key Components,
    with the fields the caller needs; the boundary shapes the response, so every
    tool's failure reads the same and a new tool cannot invent a shape
 4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you
@@ -383,5 +353,4 @@ MCP client, not by calling the tool function. See
 
 ## Related Documentation
 
-- [Error Introspection](./error-introspection.md) - Node-level error/warning detection
-- [Connection Module](../reference/quick-reference.md) - Connection API reference
+- [Tool Contracts](../tool-contracts.md) - what a caller sees of these failures

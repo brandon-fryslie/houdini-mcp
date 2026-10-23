@@ -2,6 +2,12 @@
 
 This document clarifies the input/output contracts for Houdini MCP tools and documents common mistakes discovered through usage.
 
+A call written here as `render_viewport(resolution=[512, 512])` stands for an MCP
+call with the arguments `{"resolution": [512, 512]}`; it is not Python a client
+runs. `tests/test_tool_contracts.py` sends every call in this document's python
+blocks to the server, so each one is accepted, or refused when it sits under a ❌
+heading.
+
 ## Every Tool: Large Results Arrive as a File
 
 A result whose text (the shorthand below) is over 16KB is not returned inline,
@@ -50,7 +56,7 @@ it reads back as exactly the JSON.
 ```python
 execute_code(
     code="""
-import hou  # This will fail with ModuleNotFoundError
+import hou  # execute_code refuses this program before it runs
 node = hou.node('/obj')
 """
 )
@@ -69,13 +75,13 @@ geo = node.createNode('geo', 'my_geo')
 
 ### Why This Happens
 
-The `execute_code` tool runs your code remotely in Houdini via RPyC. It injects the remote `hou` object directly into your execution namespace. The `hou` module is not installed in the Python environment where the MCP server runs, so attempting to import it will fail.
-
-If you try to import `hou`, you'll now receive a helpful error message:
+`execute_code` puts the remote `hou` object in your program's globals over RPyC, so the program needs no import. `execute_code` refuses a program that imports `hou` before connecting to Houdini, and nothing in it runs. The refusal, without its `operation`, `policy` and `audit` fields:
 
 ```json
 {
   "status": "error",
+  "kind": "invalid_input",
+  "retry": "fix_input",
   "message": "Code attempts to import hou module, but hou is already available",
   "hint": "The 'hou' module is pre-injected as a global variable by execute_code via RPyC. You can use 'hou' directly without importing it...",
   "suggested_fix": "# import hou  # Not needed - hou is pre-injected\n..."
@@ -89,7 +95,7 @@ undo group open. The response is the `worker_still_running` arm, since waiting
 for that worker is the remedy, with `timeout`, a `warning`,
 `rollback.scene_consistency: "unknown"`, and the `worker` block:
 
-```python
+```json
 {
     "status": "error",
     "kind": "worker_still_running",
@@ -99,9 +105,9 @@ for that worker is the remedy, with `timeout`, a `warning`,
         "operation": "execute_code",
         "code_sha256": "...",
         "timeout": 30,
-        "running_for_seconds": 30.0,
+        "running_for_seconds": 30.0
     },
-    "audit": {"timed_out": True, "code_sha256": "..."},
+    "audit": {"timed_out": true, "code_sha256": "..."}
 }
 ```
 
@@ -121,7 +127,7 @@ finish, then runs. Its response, success or error, carries `scene_wait`,
 which names the calls that held the scene while it waited (in the order they
 held it) and how long it waited:
 
-```python
+```json
 {"status": "success", "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
 ```
 
@@ -245,7 +251,9 @@ Both `render_viewport` and `render_quad_view` enforce resolution limits:
 - **Minimum:** 64x64 pixels
 - **Maximum:** 4096x4096 pixels
 
-Attempting to render outside these bounds will return an error immediately.
+The served schema refuses a resolution outside them before the tool runs. The
+result has MCP's `isError` set and the validation message as its text, and none of
+the `status` or `kind` fields a tool's own failure carries.
 
 ## Common Patterns
 
@@ -254,14 +262,14 @@ Attempting to render outside these bounds will return an error immediately.
 When other tools don't cover your use case, `execute_code` is the escape hatch. Remember:
 
 1. `hou` is pre-injected - don't import it
-2. Use `print()` for output - it will appear in `result["stdout"]`
+2. Use `print()` for output - it arrives in the result's `stdout` field
 3. Heavy geometry operations are blocked by default; `allow_heavy_geometry=True` unlocks them only under policy "normal" with `HOUDINI_MCP_ALLOW_BYPASS` set server-side (prefer `get_geo_summary`)
 4. Dangerous operations are blocked by default; `allow_dangerous=True` unlocks only them, under the same two conditions
 5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
 6. A refusal for either flag lists `unmet_requirements` - each of `policy`, `request` (the flag), `config` (`HOUDINI_MCP_ALLOW_BYPASS`), or `source` (a server-authored program, which no input admits) still missing - and the `hint` asks for exactly those; `audit.unmet` reports the same per capability on every run
 
 ```python
-result = execute_code(
+execute_code(
     code="""
 # Create a complete SOP chain
 obj = hou.node('/obj')
@@ -272,9 +280,9 @@ xform.setFirstInput(sphere)
 print(f"Created: {xform.path()}")
 """
 )
-
-print(result["stdout"])  # "Created: /obj/my_network/xform"
 ```
+
+Its result's `stdout` is `Created: /obj/my_network/xform`.
 
 ### Rendering the Current Scene
 
@@ -282,25 +290,26 @@ For quick previews, just call `render_viewport()` with defaults:
 
 ```python
 # Auto-frame and render with defaults
-result = render_viewport()
-if result["status"] == "success":
-    image_data = result["image_base64"]
-    # Use the base64-encoded image
+render_viewport()
 ```
+
+The image is base64 in `image_base64`. It is usually over the 16KB bound, so the
+result carries `result_file` and `result_uri` in its place and the image is in
+the file (see [Large Results Arrive as a File](#every-tool-large-results-arrive-as-a-file)).
 
 ### Focusing on Specific Geometry
 
 Use `look_at`, without `camera_position`, to center the camera on a specific node:
 
 ```python
-result = render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080])
+render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080])
 ```
 
 ## Testing Your Code
 
 Before using a tool, check:
 
-1. **Parameter names** - Use the exact names from the tool signature
+1. **Parameter names** - Use the exact names from the tool's published schema
 2. **Parameter types** - Lists for resolution/position/rotation, not separate arguments
 3. **Parameter values** - Within valid ranges (e.g., resolution 64-4096)
 

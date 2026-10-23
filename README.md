@@ -439,7 +439,7 @@ houdini_plugin/            # Houdini plugin, laid out as a packages directory
     └── toolbar/           # Shelf tools
 
 tests/                     # pytest suite
-docs/                      # Implementation documentation
+docs/                      # Tool contracts, remote listener setup, design notes
 ```
 
 ## Credits
