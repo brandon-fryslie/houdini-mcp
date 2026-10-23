@@ -34,7 +34,7 @@ from ._common import (
     using,
 )
 from .failure import LinkLost
-from .reads import Unread, is_unread, read
+from .reads import Unread, is_unread, read, reason
 from .transactions import MainThread, MainThreadRefused
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
@@ -231,7 +231,7 @@ def _capture_pane_to_bytes(
             raise
         except Exception as e:
             raise OperationFailed(
-                f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
+                f"Failed to frame {pane_type_name}: {reason(e)}", pane_type=pane_type_name
             ) from e
         return shown
 
@@ -497,28 +497,28 @@ def render_node_network(
         render_node_network("/stage")  # Capture LOPs/Solaris network
     """
     with using(host, port) as link:
-        hou = link.hou
+        # [LAW:parse-dont-validate] a NetworkEditor told to cd into a node that is
+        # not a network stays where it was and says nothing (Houdini 22.0.466), so
+        # such a node is refused here, before the editor is touched.
+        network = network_at(link.hou, node_path)
 
-        # [LAW:no-ambient-temporal-coupling] the network is resolved and counted in
-        # the main-thread call that takes the editor into it, so nothing in Houdini
-        # replaces or edits it in between.
+        # [LAW:no-ambient-temporal-coupling] the editor is taken into the network
+        # through its own handle, on Houdini's main thread: a network renamed since
+        # is entered where it now is, and one deleted since fails the capture, so
+        # no other node is ever entered.
         def into_network(pane: Any) -> dict[str, Any]:
-            # [LAW:parse-dont-validate] a NetworkEditor told to cd into a node that
-            # is not a network stays where it was and says nothing (Houdini
-            # 22.0.466), so such a node is refused before the editor is touched.
-            network = network_at(hou, node_path)
-            # [LAW:one-source-of-truth] the editor shows the network's own path,
-            # which a caller's spelling of it ("/obj/geo1/") is not.
-            path = network.path()
             try:
+                # [LAW:one-source-of-truth] the network's own path, which a
+                # caller's spelling of it ("/obj/geo1/") is not.
+                path = network.path()
                 pane.cd(path)
             except Exception as e:
-                raise OperationFailed(f"Failed to navigate to {path}: {e}", path=path) from e
-            logger.info("Took %s into %s", pane.name(), path)
-            return {
-                "node_path": path,
-                "child_count": read(f"children of {path}", lambda: len(network.children())),
-            }
+                raise OperationFailed(
+                    f"Failed to navigate to {node_path}: {reason(e)}", path=node_path
+                ) from e
+            child_count = read(f"children of {path}", lambda: len(network.children()))
+            logger.info("Took %s into %s, child_count=%s", pane.name(), path, child_count)
+            return {"node_path": path, "child_count": child_count}
 
         result = _capture_pane_to_bytes(
             link, main_thread, "NetworkEditor", _qt_core(link), fit_contents, into_network

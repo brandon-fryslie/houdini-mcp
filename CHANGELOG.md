@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where it is when told to enter such a node. The `node_path` it reports is
   Houdini's path for the network, so `/obj/geo1/` reports `/obj/geo1`. A
   capture refused for its pane leaves the network editor where the user
-  left it.
+  left it. A capture that fails framing its pane gives Houdini's reason, where
+  it gave Houdini's whole remote traceback.
 
 - `capture_pane_screenshot`, `capture_multiple_panes` and `render_node_network`
   return the pane as its own window draws it, where they copied whatever the

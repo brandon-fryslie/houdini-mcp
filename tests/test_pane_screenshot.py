@@ -499,7 +499,7 @@ def test_render_node_network_frames_the_network_it_navigated_to(
     assert result["status"] == "success", result
     assert (result["node_path"], result["child_count"]) == ("/obj/geo1", 1)
     assert events == [("cd", "/obj/geo1", True), ("/obj/geo1/box1",)]
-    assert "Took panetab1 into /obj/geo1" in caplog.messages
+    assert "Took panetab1 into /obj/geo1, child_count=1" in caplog.messages
     assert mock_connection.ui.grabs == [("panetab1", "framed", (0, 0, 800, 600))]
 
 
@@ -524,10 +524,7 @@ def test_render_node_network_refuses_a_node_that_is_not_a_network(
     refused, naming the network the node sits in, and the editor stays put."""
     editor = _network_editor(mock_connection)
 
-    with (
-        caplog.at_level(logging.INFO),
-        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),
-    ):
+    with caplog.at_level(logging.INFO):
         result = render_node_network("/obj/geo1/box1")
 
     assert result["kind"] == "invalid_input", result
@@ -539,6 +536,21 @@ def test_render_node_network_refuses_a_node_that_is_not_a_network(
     assert mock_connection.ui.grabs == []
     assert f"render_node_network failed (invalid_input): {result['message']}" in caplog.messages
     assert not [m for m in caplog.messages if m.startswith("Took ")]
+
+
+def test_render_node_network_refuses_a_path_that_names_no_node(
+    mock_connection: MockHouModule,
+) -> None:
+    """A path naming no node is the caller's to fix: refused as such before the
+    editor is touched, whatever the layout."""
+    editor = _network_editor(mock_connection, width=-1)
+
+    result = render_node_network("/obj/typo")
+
+    assert result["kind"] == "invalid_input", result
+    assert result["message"] == "Node not found: /obj/typo"
+    assert (editor.network_path, editor.view) == ("/obj", "as left")
+    assert mock_connection.ui.grabs == []
 
 
 def test_render_node_network_refused_by_its_pane_leaves_the_editor_where_it_was(
@@ -569,10 +581,12 @@ def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
     editor.cd = refuse  # type: ignore[method-assign]
 
     with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
-        result = render_node_network("/obj/geo1/")
+        result = render_node_network("/obj/geo1")
 
     assert result["kind"] == "operation_failed", result
-    assert result["message"] == "Failed to navigate to /obj/geo1: The attempted operation failed."
+    assert result["message"] == (
+        "Failed to navigate to /obj/geo1: hou.OperationFailed: The attempted operation failed."
+    )
     assert result["path"] == "/obj/geo1"
     assert (editor.network_path, editor.view) == ("/obj", "as left")
     assert mock_connection.ui.grabs == []
@@ -662,7 +676,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
-    assert result["message"] == "Failed to frame SceneViewer: viewport is gone"
+    assert result["message"] == "Failed to frame SceneViewer: RuntimeError: viewport is gone"
     assert "traceback" not in result
     assert events == []
 
