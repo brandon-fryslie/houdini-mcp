@@ -782,7 +782,7 @@ class TestCapBoundaries:
         [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
         assert event.getMessage() == (
             f"execute_code output stdout={written} stderr={written} characters "
-            f"truncated={['stdout', 'stderr'] if cut else []}"
+            f"truncated={['stdout', 'stderr'] if cut else []} closed=[]"
         )
 
     @pytest.mark.parametrize(
@@ -801,24 +801,29 @@ class TestCapBoundaries:
         ids=["success", "exception", "timeout"],
     )
     def test_a_program_that_closes_its_stdout_reports_how_it_ended(
-        self, mock_connection, request, ending, outcome
+        self, mock_connection, request, caplog, ending, outcome
     ):
         """Closing sys.stdout ends the program's writes, not the call's read of them."""
+        import logging
+
         from houdini_mcp.tools import execute_code
 
-        result = execute_code(
-            f"import sys; print('hi'); sys.stdout.close()\n{ending(request)}",
-            timeout=1,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                f"import sys; print('hi'); sys.stdout.close()\n{ending(request)}",
+                timeout=1,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
 
         assert {key: result.get(key) for key in (*outcome, "stdout", "stdout_truncated")} == {
             **outcome,
             "stdout": "hi\n",
             "stdout_truncated": False,
         }
+        [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
+        assert event.getMessage().endswith("closed=['stdout']")
 
     def test_the_bound_counts_characters_not_bytes(self, mock_connection):
         from houdini_mcp.tools import execute_code

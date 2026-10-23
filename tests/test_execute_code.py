@@ -377,54 +377,37 @@ class TestExecuteCodeOutputCapture:
         assert capture.written() == Written("abcde", 8)
         assert capture.written().truncated
 
-    def test_a_capture_is_read_while_a_write_never_finishes(self):
-        """A timed-out program may be stuck inside a write; the call's read still answers."""
-        import threading
-
+    def test_a_write_takes_the_strings_value_and_runs_none_of_its_code(self):
+        """A program's str subclass cannot write, block, or lie about its length
+        inside a write: the capture reads the value, as any stream does."""
         from houdini_mcp.tools.program_output import Capture, Written
 
-        capture = Capture(5)
-        capture.write("ab")
-        inside, release = threading.Event(), threading.Event()
+        capture = Capture(10)
+        ran: list[str] = []
 
-        class Stuck(str):
+        class Hooked(str):
+            def __len__(self) -> int:
+                ran.append("__len__")
+                capture.write("F")
+                return 0
+
             def __getitem__(self, key: object) -> str:
-                inside.set()
-                release.wait()
-                return str.__getitem__(self, key)  # type: ignore[index]
+                ran.append("__getitem__")
+                capture.write("F")
+                return ""
 
-        writer = threading.Thread(target=capture.write, args=(Stuck("cdefgh"),), daemon=True)
-        writer.start()
-        inside.wait()
-        reads: list[Written] = []
-        reader = threading.Thread(target=lambda: reads.append(capture.written()), daemon=True)
-        reader.start()
-        reader.join(timeout=5)
-        release.set()
-        writer.join(timeout=5)
+        assert capture.write(Hooked("abc")) == 3
+        assert (capture.written(), ran) == (Written("abc", 3), [])
 
-        assert reads == [Written("ab", 2)]
-        assert capture.written() == Written("abcde", 8)
-
-    def test_a_write_from_inside_a_write_is_kept(self):
-        """A write a write sets off on its own thread (a finalizer that prints) completes."""
-        import threading
+    def test_a_write_refuses_what_is_not_a_str(self):
+        import pytest
 
         from houdini_mcp.tools.program_output import Capture, Written
 
         capture = Capture(10)
-
-        class Reentrant(str):
-            def __getitem__(self, key: object) -> str:
-                capture.write("F")
-                return str.__getitem__(self, key)  # type: ignore[index]
-
-        writer = threading.Thread(target=capture.write, args=(Reentrant("abc"),), daemon=True)
-        writer.start()
-        writer.join(timeout=5)
-
-        assert not writer.is_alive()
-        assert capture.written() == Written("Fabc", 4)
+        with pytest.raises(TypeError):
+            capture.write(42)  # type: ignore[arg-type]
+        assert capture.written() == Written("", 0)
 
     def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
         """A write from another thread while a program runs reaches its own stream, not the capture."""

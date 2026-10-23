@@ -56,13 +56,15 @@ class Capture(TextIOBase):
         return True
 
     def write(self, text: str) -> int:
-        if self.closed:
-            raise ValueError("I/O operation on closed file.")
+        self._checkClosed()
+        # [LAW:parse-dont-validate] The string's value, as any stream takes it: none
+        # of a str subclass's own code runs between reading the state and setting it.
+        value = str.__str__(text)
         # [LAW:no-ambient-temporal-coupling] Kept before counted: a read takes the
         # count first, so every character it counts is already kept.
-        self._kept.write(text[: max(0, self._bound - self._length)])
-        self._length += len(text)
-        return len(text)
+        self._kept.write(value[: max(0, self._bound - self._kept.tell())])
+        self._length += len(value)
+        return len(value)
 
     def written(self) -> Written:
         """What was written as of one moment, without waiting on a write: a program

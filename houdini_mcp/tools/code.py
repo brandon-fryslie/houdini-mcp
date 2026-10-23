@@ -468,11 +468,12 @@ def _reported_output(operation: str, stdout: Capture, stderr: Capture) -> _Repor
     """Each capture's text beside whether its bound cut it."""
     out, err = stdout.written(), stderr.written()
     logger.info(
-        "%s output stdout=%d stderr=%d characters truncated=%s",
+        "%s output stdout=%d stderr=%d characters truncated=%s closed=%s",
         operation,
         out.length,
         err.length,
         [name for name, written in (("stdout", out), ("stderr", err)) if written.truncated],
+        [name for name, capture in (("stdout", stdout), ("stderr", stderr)) if capture.closed],
     )
     return {
         "stdout": out.text,
