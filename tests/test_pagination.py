@@ -194,7 +194,8 @@ class TestPagingEnforcer:
 
         from houdini_mcp.tools._common import PAGE_LIMIT_MAX, PageRequest
 
-        for offset, limit in ((-1, 10), (0, 0), (0, PAGE_LIMIT_MAX + 1)):
+        # A bool or a numeric string is refused, not coerced into a page.
+        for offset, limit in ((-1, 10), (0, 0), (0, PAGE_LIMIT_MAX + 1), (0, True), ("0", 10)):
             with pytest.raises(ValueError):
                 PageRequest(offset=offset, limit=limit)
 
@@ -223,3 +224,13 @@ class TestLegacyPaginationCompatibility:
             list_children("/obj", False, 10, 1000, True, "localhost", 18811)["status"] == "success"
         )
         assert find_nodes("/obj", "*", None, "localhost", 18811)["status"] == "success"
+
+    def test_find_nodes_default_call_finds_obj_children(self, mock_connection):
+        from houdini_mcp.tools.nodes import find_nodes
+        from tests.conftest import MockHouNode
+
+        child = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mock_connection.add_node(child)
+        result = find_nodes(host="localhost", port=18811)
+        assert result["returned"] == 1
+        assert result["matches"][0]["path"] == "/obj/geo1"
