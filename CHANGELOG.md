@@ -16,10 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   integer. Before, the value was the item's token (`"poly"`), so the current
   value and the default could not be found among the offered values. The items
   are read from the node's parameter, so a script-generated menu lists its
-  items, where it listed none; separators are no longer offered as items. A
-  whole-node listing's multiparm template (attribcreate's `type#`) names no
-  parameter on the node, so its `menu_items` are unread, where they were the
-  template's items.
+  items, where it listed none; separators are no longer offered as items.
 
 - **BREAKING (wire)**: the counts and timeout a caller passes to
   `list_children`, `execute_code`, `get_parameter_schema` and `get_geo_summary`
@@ -610,6 +607,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"cooked"` otherwise. Without the node's errors a failed cook and a stale one
   look the same, so when Houdini will not give the errors, `cook_state` is
   unread with the same reason.
+
+- A whole-node `get_parameter_schema` lists the parameters the node has
+  (houdini-laws-etg.6z0). It walked the node's parameter templates, so a
+  multiparm listed its instance templates (attribcreate's `type#`, `class#`),
+  which name no parameter on the node, with `current_value: null`. It now lists
+  the node's parameters, so a multiparm lists each instance (`type1`, `type2`)
+  with its value, and a ramp lists its point parameters (`ramp1pos`, `ramp1c`)
+  beside the ramp. A multiparm's count (`numattr`), the parameter that makes
+  the instances, is listed with type `"multiparm"`; it was dropped as a folder.
+  Naming a folder tab, separator or label is refused as `invalid_input`; it
+  returned a success listing nothing.
 
 - `fit_contents` frames the pane it captures (houdini-laws-etg.9o0). No pane
   type in Houdini 22 has `homeAll()`, so `capture_pane_screenshot(fit_contents=True)`

@@ -4,7 +4,8 @@
 how a Houdini value becomes a JSON value, and how a write failure is reported
 are decided here and nowhere else.
 Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
-``parmTuple("t")`` is the vector, and neither name answers the other call.
+``parmTuple("t")`` is the vector, and ``parm("t")`` finds nothing. A scalar's
+name answers both calls, ``parmTuple`` giving it as a one-component tuple.
 """
 
 import logging
@@ -24,8 +25,10 @@ __all__ = [
     "Writes",
     "evaluated",
     "json_safe_hou_value",
+    "of_tuple",
     "read_present",
     "resolve",
+    "value",
     "write",
     "write_all",
 ]
@@ -56,8 +59,9 @@ class Parm:
     target: Any
     is_tuple: bool
 
-    def template(self) -> Any:
-        return self.target.parmTemplate()
+    def parm_tuple(self) -> Any:
+        """The ``hou.ParmTuple`` this parameter is, or is a component of."""
+        return self.target if self.is_tuple else self.target.tuple()
 
 
 def resolve(node: Any, name: str) -> Parm:
@@ -69,6 +73,17 @@ def resolve(node: Any, name: str) -> Parm:
     if parm_tuple is not None:
         return Parm(name, parm_tuple, is_tuple=True)
     raise ParmNotFound(node.path(), name)
+
+
+def of_tuple(parm_tuple: Any) -> Parm:
+    """A ``hou.ParmTuple`` as ``resolve`` names it: one component is its parm.
+
+    Houdini names a one-component tuple's parm as it names the tuple, so this
+    is the ``Parm`` that ``resolve(node, parm_tuple.name())`` finds.
+    """
+    if len(parm_tuple) == 1:
+        return Parm(parm_tuple.name(), parm_tuple[0], is_tuple=False)
+    return Parm(parm_tuple.name(), parm_tuple, is_tuple=True)
 
 
 def write(parm: Parm, value: Any) -> None:
@@ -90,8 +105,13 @@ def read_present(hou: Any, node: Any, names: list[str]) -> dict[str, Any]:
             parm = resolve(node, name)
         except ParmNotFound:
             continue
-        values[name] = _evaluated(hou, name, parm.target)
+        values[name] = value(hou, parm)
     return values
+
+
+def value(hou: Any, parm: Parm) -> Any | Unread:
+    """The parameter's JSON value, ``Unread`` where it fails to evaluate."""
+    return _evaluated(hou, parm.name, parm.target)
 
 
 def evaluated(hou: Any, parms: Iterable[Any]) -> Iterator[tuple[str, Any]]:

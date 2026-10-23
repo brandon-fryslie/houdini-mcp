@@ -74,6 +74,13 @@ def give_menu(parm: Any, tokens: list[str], labels: list[str]) -> None:
     parm.menuLabels = MagicMock(return_value=tuple(labels))
 
 
+def give_templates(node: MockHouNode, templates: list[MockParmTemplate]) -> None:
+    """Give each of the fake node's parameters its template, by name."""
+    for template in templates:
+        target = node.parm(template.name()) or node.parmTuple(template.name())
+        target.parmTemplate = MagicMock(return_value=template)
+
+
 def create_mock_hou_with_parm_types():
     """Create a mock hou module with parmTemplateType enum."""
     mock_hou = MockHouModule()
@@ -126,9 +133,6 @@ class TestGetParameterSchema:
             max_val=None,
         )
 
-        # Mock parmTemplates method
-        sphere.parmTemplates = MagicMock(return_value=[radx_template])
-
         # Mock parm to return parmTemplate
         mock_parm = sphere.parm("radx")
         mock_parm.parmTemplate = MagicMock(return_value=radx_template)
@@ -174,8 +178,6 @@ class TestGetParameterSchema:
             max_val=None,
         )
 
-        geo.parmTemplates = MagicMock(return_value=[t_template])
-
         # Mock parmTuple for vector parameter
         mock_parm_tuple = geo.parmTuple("t")
         mock_parm_tuple.parmTemplate = MagicMock(return_value=t_template)
@@ -217,8 +219,6 @@ class TestGetParameterSchema:
             num_components=1,
             default_value=0,
         )
-
-        sphere.parmTemplates = MagicMock(return_value=[type_template])
 
         mock_parm = sphere.parm("type")
         mock_parm.parmTemplate = MagicMock(return_value=type_template)
@@ -290,14 +290,7 @@ class TestGetParameterSchema:
             ),
         ]
 
-        sphere.parmTemplates = MagicMock(return_value=templates)
-
-        # Mock individual parms
-        for template in templates:
-            mock_parm = sphere.parm(template.name())
-            if mock_parm:
-                mock_parm.parmTemplate = MagicMock(return_value=template)
-                mock_parm.eval = MagicMock(return_value=sphere._params.get(template.name()))
+        give_templates(sphere, templates)
         give_menu(sphere.parm("type"), ["poly", "mesh"], ["Polygon", "Mesh"])
 
         connected_to(mock_hou)
@@ -343,7 +336,7 @@ class TestGetParameterSchema:
             for i in range(20)
         ]
 
-        sphere.parmTemplates = MagicMock(return_value=templates)
+        give_templates(sphere, templates)
 
         connected_to(mock_hou)
         with caplog.at_level("INFO", logger="houdini_mcp.tools.parameters"):
@@ -367,20 +360,22 @@ class TestGetParameterSchema:
             path="/obj/geo1/sphere1",
             name="sphere1",
             node_type="sphere",
-            params={f"parm{i}": 0.0 for i in range(3)},
+            # A separator is a parm tuple of no components, as in Houdini.
+            params={"folder0": 0, "sep1": [], **{f"parm{i}": 0.0 for i in range(3)}, "sep2": []},
         )
         mock_hou.add_node(sphere)
         layout = mock_hou.parmTemplateType
-        sphere.parmTemplates = MagicMock(
-            return_value=[
-                MockParmTemplate("folder1", "Folder", layout.Folder),
+        give_templates(
+            sphere,
+            [
+                MockParmTemplate("folder0", "Tabs", layout.FolderSet),
                 MockParmTemplate("sep1", "Separator", layout.Separator),
                 *(
                     MockParmTemplate(f"parm{i}", f"P{i}", layout.Float, default_value=[0.0])
                     for i in range(3)
                 ),
                 MockParmTemplate("sep2", "Separator", layout.Separator),
-            ]
+            ],
         )
 
         connected_to(mock_hou)
@@ -397,25 +392,23 @@ class TestGetParameterSchema:
 
         mock_hou.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(
-            path="/obj/geo1/sphere1", name="sphere1", node_type="sphere", params={"radx": 1.0}
+            path="/obj/geo1/sphere1",
+            name="sphere1",
+            node_type="sphere",
+            params={"folder0": 0, "radx": 1.0, "sep1": []},
         )
         mock_hou.add_node(sphere)
 
         # Mix of real parameters and folders
         templates = [
-            MockParmTemplate("folder1", "Folder", mock_hou.parmTemplateType.Folder),
+            MockParmTemplate("folder0", "Tabs", mock_hou.parmTemplateType.FolderSet),
             MockParmTemplate(
                 "radx", "Radius X", mock_hou.parmTemplateType.Float, default_value=[1.0]
             ),
             MockParmTemplate("sep1", "Separator", mock_hou.parmTemplateType.Separator),
         ]
 
-        sphere.parmTemplates = MagicMock(return_value=templates)
-
-        # Mock the radx parm
-        mock_parm = sphere.parm("radx")
-        mock_parm.parmTemplate = MagicMock(return_value=templates[1])
-        mock_parm.eval = MagicMock(return_value=1.0)
+        give_templates(sphere, templates)
 
         connected_to(mock_hou)
         result = get_parameter_schema("/obj/geo1/sphere1")
@@ -424,6 +417,22 @@ class TestGetParameterSchema:
         # Should only return radx, not folder or separator
         assert result["count"] == 1
         assert result["parameters"][0]["name"] == "radx"
+
+    def test_a_named_separator_is_refused_not_listed_as_nothing(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        sphere = MockHouNode(path="/obj/s", name="s", node_type="sphere", params={"sep1": []})
+        mock_hou.add_node(sphere)
+        give_templates(
+            sphere, [MockParmTemplate("sep1", "Separator", mock_hou.parmTemplateType.Separator)]
+        )
+
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/s", "sep1")
+
+        assert (result["status"], result["kind"]) == ("error", "invalid_input")
+        assert "sep1 on /obj/s is layout (Separator)" in result["message"]
 
     def test_get_parameter_schema_toggle_parameter(self, connected_to):
         """Test getting schema for a toggle parameter."""
@@ -443,8 +452,6 @@ class TestGetParameterSchema:
             parm_type=mock_hou.parmTemplateType.Toggle,
             default_value=[False],
         )
-
-        node.parmTemplates = MagicMock(return_value=[toggle_template])
 
         mock_parm = node.parm("consolidatepts")
         mock_parm.parmTemplate = MagicMock(return_value=toggle_template)
@@ -512,8 +519,6 @@ class TestGetParameterSchema:
             max_val=1000,
         )
 
-        grid.parmTemplates = MagicMock(return_value=[rows_template])
-
         mock_parm = grid.parm("rows")
         mock_parm.parmTemplate = MagicMock(return_value=rows_template)
         mock_parm.eval = MagicMock(return_value=10)
@@ -552,8 +557,6 @@ class TestGetParameterSchema:
             parm_type=mock_hou.parmTemplateType.String,
             default_value=[""],
         )
-
-        node.parmTemplates = MagicMock(return_value=[file_template])
 
         mock_parm = node.parm("file")
         mock_parm.parmTemplate = MagicMock(return_value=file_template)
@@ -694,50 +697,76 @@ class TestMenuValueDomain:
             "unread": "ValueError: invalid literal for int() with base 10: 'b'"
         }
 
-    def test_a_listed_menu_template_that_names_no_parm_is_unread(self, connected_to):
-        # A whole-node listing walks into multiparm blocks: attribcreate's
-        # type# is a template with no parm of that name on the node.
+
+class TestMultiparmInstances:
+    """A multiparm's instances are listed as the parameters the node has."""
+
+    def _attribcreate(self) -> tuple[MockHouModule, MockHouNode]:
+        # As Houdini 22 lists attribcreate with numattr=2: the count is a
+        # multiparm folder, each instance's parms carry its number, and no
+        # parm is named by its template's type#.
+        mock_hou = create_mock_hou_with_parm_types()
+        node = MockHouNode(
+            path="/obj/n",
+            name="n",
+            node_type="attribcreate",
+            params={"numattr": 2, "type1": 0, "value1v": [1.0, 0.0], "type2": 2},
+        )
+        mock_hou.add_node(node)
+        give_templates(
+            node,
+            [
+                MockParmTemplate("numattr", "Attributes", "Folder", default_value=1),
+                MockParmTemplate("type1", "Type", "Menu", default_value=0),
+                MockParmTemplate("value1v", "Value", "Float", num_components=2),
+                MockParmTemplate("type2", "Type", "Menu", default_value=0),
+            ],
+        )
+        for name in ("type1", "type2"):
+            give_menu(node.parm(name), ["float", "int", "string"], ["Float", "Integer", "String"])
+        return mock_hou, node
+
+    def test_the_listing_holds_each_instance_with_its_value(self, connected_to):
         from houdini_mcp.tools import get_parameter_schema
 
-        mock_hou = create_mock_hou_with_parm_types()
-        node = MockHouNode(path="/obj/n", name="n", node_type="attribcreate", params={})
-        mock_hou.add_node(node)
-        node.parmTemplates = MagicMock(  # type: ignore[method-assign]
-            return_value=[MockParmTemplate("type#", "Type", "Menu", default_value=0)]
-        )
+        mock_hou, _ = self._attribcreate()
         connected_to(mock_hou)
         result = get_parameter_schema("/obj/n")
-        assert result["status"] == "success"
-        [param] = result["parameters"]
-        assert param["menu_items"] == {
-            "unread": "houdini_mcp.tools.parms.ParmNotFound: Parameter not found: type# on /obj/n"
+
+        assert [(p["name"], p["current_value"]) for p in result["parameters"]] == [
+            ("numattr", 2),
+            ("type1", 0),
+            ("value1v", [1.0, 0.0]),
+            ("type2", 2),
+        ]
+        assert result["parameters"][3]["menu_items"] == [
+            {"label": "Float", "value": 0},
+            {"label": "Integer", "value": 1},
+            {"label": "String", "value": 2},
+        ]
+
+    def test_a_named_instance_is_the_entry_the_listing_holds(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou, _ = self._attribcreate()
+        connected_to(mock_hou)
+        listed = get_parameter_schema("/obj/n")["parameters"]
+
+        assert get_parameter_schema("/obj/n", "type2")["parameters"] == [listed[3]]
+        assert get_parameter_schema("/obj/n", "value1v")["parameters"] == [listed[2]]
+
+    def test_the_count_is_listed_as_the_parameter_that_makes_instances(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou, _ = self._attribcreate()
+        connected_to(mock_hou)
+        [count] = get_parameter_schema("/obj/n", "numattr")["parameters"]
+
+        assert count == {
+            "name": "numattr",
+            "label": "Attributes",
+            "current_value": 2,
+            "type": "multiparm",
+            "is_animatable": False,
+            "default": 1,
         }
-
-
-class TestFlattenParmTemplates:
-    def test_every_nested_template_is_reached_folder_first(self):
-        from houdini_mcp.tools._common import _flatten_parm_templates
-
-        mock_hou = create_mock_hou_with_parm_types()
-        leaf = MockParmTemplate("bind#", "Bind", "String")
-        multiparm = MockParmTemplate("bindings", "Bindings", "Folder")
-        multiparm.parmTemplates = MagicMock(return_value=[leaf])  # type: ignore[attr-defined]
-        tabs = MockParmTemplate("folder0", "Code", "Folder")
-        tabs.parmTemplates = MagicMock(return_value=[multiparm])  # type: ignore[attr-defined]
-        top = MockParmTemplate("top", "Top", "Float")
-
-        flat = _flatten_parm_templates(mock_hou, [tabs, top])
-
-        assert [t.name() for t in flat] == ["folder0", "bindings", "bind#", "top"]
-
-    def test_a_folder_set_is_listed_and_not_descended(self):
-        from houdini_mcp.tools._common import _flatten_parm_templates
-
-        mock_hou = create_mock_hou_with_parm_types()
-        # hou.FolderSetParmTemplate holds folder names only: it has no parmTemplates()
-        folder_set = MockParmTemplate("fs", "Tabs", "FolderSet")
-        top = MockParmTemplate("top", "Top", "Float")
-
-        flat = _flatten_parm_templates(mock_hou, [folder_set, top])
-
-        assert [t.name() for t in flat] == ["fs", "top"]

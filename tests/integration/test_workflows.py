@@ -259,19 +259,34 @@ class TestParameterWorkflow:
             assert set_parameter(node_path, menu, value, **at)["status"] == "success"
             assert schema()["current_value"] == value
 
-    def test_a_multiparm_menu_template_lists_its_items_unread(self, at: dict[str, Any]) -> None:
-        """attribcreate's type# is a template, not a parm: its items are unread, the rest listed."""
+    def test_a_multiparm_lists_its_instances_as_parameters(self, at: dict[str, Any]) -> None:
+        """attribcreate's type# is a template; type1 and type2 are the parameters it lists."""
         geo = create_node("geo", "/obj", "test_menu", **at)["node_path"]
         node_path = create_node("attribcreate", geo, "attribs", **at)["node_path"]
+        assert set_parameter(node_path, "numattr", 2, **at)["status"] == "success"
 
         result = get_parameter_schema(node_path, max_parms=1000, **at)
 
         assert result["status"] == "success"
-        [instance] = [p for p in result["parameters"] if p["name"] == "type#"]
-        assert instance["menu_items"] == {
-            "unread": "houdini_mcp.tools.parms.ParmNotFound: "
-            f"Parameter not found: type# on {node_path}"
-        }
+        listed = {p["name"]: p for p in result["parameters"]}
+        assert not [name for name in listed if "#" in name]
+        assert (listed["numattr"]["type"], listed["numattr"]["current_value"]) == ("multiparm", 2)
+        for name in ("type1", "type2"):
+            # An Unread value is a dict; a read menu value is its int.
+            assert isinstance(listed[name]["current_value"], int)
+            assert isinstance(listed[name]["menu_items"], list)
+        # Every listed name is a parameter the node has, read as the listing read it.
+        for name, entry in listed.items():
+            assert get_parameter_schema(node_path, parm_name=name, **at)["parameters"] == [entry]
+
+    def test_a_named_component_is_its_vector(self, at: dict[str, Any]) -> None:
+        geo = create_node("geo", "/obj", "test_component", **at)["node_path"]
+        sphere = create_node("sphere", geo, "s", **at)["node_path"]
+
+        [rad] = get_parameter_schema(sphere, parm_name="rad", **at)["parameters"]
+
+        assert rad["name"] == "rad"
+        assert get_parameter_schema(sphere, parm_name="radx", **at)["parameters"] == [rad]
 
 
 class TestErrorHandling:
