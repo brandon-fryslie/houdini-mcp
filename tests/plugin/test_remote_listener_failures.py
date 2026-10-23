@@ -21,6 +21,7 @@ from houdini_mcp_plugin.listener import (
     RemoteListener,
     SecurityError,
     firewall_guidance,
+    own_executable,
 )
 from rpyc.utils.authenticators import AuthenticationError
 
@@ -326,7 +327,12 @@ class TestSelfTestAndStatus:
         assert f"--add {shlex.quote(app)}" in macos
 
     def test_own_executable_is_the_os_answer_not_what_python_was_told(self, tmp_path):
-        """PYTHONEXECUTABLE rewrites sys.executable, not the program the OS runs."""
+        """PYTHONEXECUTABLE rewrites sys.executable, not the program the OS runs.
+
+        The child runs this interpreter's program, so the OS names the same
+        image in both, whatever sys.executable says - a framework or venv stub
+        included, whose image is not realpath(sys.executable).
+        """
         decoy = str(tmp_path / "decoy")
         named = subprocess.run(
             [
@@ -341,7 +347,7 @@ class TestSelfTestAndStatus:
             check=True,
         ).stdout.splitlines()
 
-        assert named == [decoy, os.path.realpath(sys.executable)]
+        assert named == [decoy, own_executable()]
 
     def test_macos_guidance_allows_the_executable_whatever_its_path_holds(self):
         app = (
