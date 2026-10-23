@@ -23,7 +23,7 @@ from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["PICKUP_TIMEOUT", "call", "serve", "stop"]
+__all__ = ["PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
@@ -44,8 +44,8 @@ class _Call:
     while it is pending, so a call given up on can never run late.
     """
 
-    def __init__(self, fn: Callable[[], Any]) -> None:
-        self._fn = fn
+    def __init__(self, work: Callable[[], object]) -> None:
+        self._work = work
         self._lock = threading.Lock()
         self._state = _State.PENDING
         self._posted_at = time.monotonic()
@@ -67,7 +67,7 @@ class _Call:
             time.monotonic() - self._posted_at,
         )
         try:
-            _call_unbounded(self._fn)
+            self._work()
         except BaseException as failure:  # noqa: BLE001
             self._failure = failure
         finally:
@@ -182,9 +182,32 @@ def call(fn: Callable[[], Any]) -> str | None:
     Raises:
         Exception: whatever calling ``fn`` raised.
     """
+    return _posted(_Call(lambda: _call_unbounded(fn)))
+
+
+def call_as_step(fn: Callable[[], Any], label: str) -> str | None:
+    """As :func:`call`, ``fn``'s edits one undo step labelled ``label``.
+
+    The undo group is Houdini's own, opened and closed on the main thread
+    around the call to ``fn``, so it closes whatever becomes of the client's
+    connection: a group the client held as a netref would be closed, if at
+    all, on the thread that drops the connection, and Houdini leaves a group
+    closed off its main thread open (houdini-laws-etg.4ve).
+    """
+
+    def as_step() -> None:
+        import hou
+
+        with hou.undos.group(label):
+            _call_unbounded(fn)
+
+    return _posted(_Call(as_step))
+
+
+def _posted(pending: _Call) -> str | None:
+    """``pending``, handed to the main thread and waited for."""
     import hou
 
-    pending = _Call(fn)
     # [LAW:dataflow-not-control-flow] The one difference between a graphical and a
     # headless Houdini is who hands the main thread its calls.
     if hou.isUIAvailable():

@@ -1,10 +1,12 @@
 """Tool round trips against a live Houdini."""
 
+from collections.abc import Callable
 from typing import Any
 
 from houdini_mcp import tools
 from houdini_mcp.tools._common import using
 from houdini_mcp.tools.pane_screenshot import _get_qt_modules, png_bytes
+from houdini_mcp.tools.plugin import plugin_module
 from houdini_mcp.tools.transactions import _on_main_thread
 
 
@@ -134,10 +136,16 @@ async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
     assert lost["point_count"] == 3 and "bounding_box" not in lost
 
 
+def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:
+    """What ``work`` returns, run with its requests served on Houdini's main thread."""
+    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
+    return _on_main_thread(main_thread.call, work).result()
+
+
 def _undo_labels(at: dict[str, Any]) -> tuple[str, ...]:
     """Houdini's undo stack, newest first, read on its main thread, where it is kept."""
     with using(**at) as link:
-        return tuple(_on_main_thread(link, lambda: tuple(link.hou.undos.undoLabels())))
+        return _on_houdinis_main_thread(link, lambda: tuple(link.hou.undos.undoLabels()))
 
 
 def test_a_scene_write_is_one_undo_step_labelled_as_the_call(at: dict[str, Any]) -> None:
@@ -149,7 +157,7 @@ def test_a_scene_write_is_one_undo_step_labelled_as_the_call(at: dict[str, Any])
     (label, *_) = _undo_labels(at)
     assert label.startswith("houdini-mcp create_material ")
     with using(**at) as link:
-        _on_main_thread(link, link.hou.undos.performUndo)
+        _on_houdinis_main_thread(link, link.hou.undos.performUndo)
     assert tools.list_children("/mat", **at)["returned"] == 0
 
 

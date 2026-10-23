@@ -705,6 +705,15 @@ def main_thread_of(undos):
                 fn()
             finally:
                 undos.leave_main_thread()
+
+        @staticmethod
+        def call_as_step(fn, label):
+            undos.enter_main_thread()
+            try:
+                with undos.group(label):
+                    fn()
+            finally:
+                undos.leave_main_thread()
     return main_thread
 """
 

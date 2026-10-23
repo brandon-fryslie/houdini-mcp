@@ -352,14 +352,18 @@ class WorkerLedger:
         # an exclusive call (a render) keeps no read waiting meanwhile.
         next_in_line: list[_Waiter] = []
         for waiter in list(self._queue):
-            behind = [o for o in (*self._holders(), *next_in_line) if waiter.waits_behind(o)]
+            # A read runs beside a worker; an exclusive call never does, and once no
+            # call holds the slot, only the worker's end could admit it: it is
+            # refused now, whatever reads are in flight, and keeps no read waiting.
+            worker = None if waiter.admission is Admission.SHARED else self._worker
+            refused_now = worker is not None and self._call is None
+            others = () if refused_now else (*self._holders(), *next_in_line)
+            behind = [o for o in others if waiter.waits_behind(o)]
             if behind:
                 if all(o.admission is Admission.SHARED for o in behind):
                     next_in_line.append(waiter)
                 continue
             self._queue.remove(waiter)
-            # A read runs beside a worker; an exclusive call never does.
-            worker = None if waiter.admission is Admission.SHARED else self._worker
             waiter.outcome = waiter.wait() if worker is None else _Refused(worker, waiter.wait())
             try:
                 waiter.wake()

@@ -497,6 +497,28 @@ class TestReadsBesideTheMainThread:
         ):
             assert wait.waited_for == ()
 
+    async def test_an_undoable_call_a_worker_refuses_keeps_no_read_waiting(self):
+        ledger = WorkerLedger()
+        gate = threading.Event()
+        worker = ledger.launch(gate.wait, operation="execute_code", code_sha256="a" * 64, timeout=1)
+        try:
+            async with ledger.hold("first_read", Admission.SHARED):
+                with pytest.raises(WorkerStillRunning) as refused:
+                    async with (
+                        asyncio.timeout(5),
+                        ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD),
+                    ):
+                        pass
+                assert refused.value.wait.seconds < 1
+                async with (
+                    asyncio.timeout(5),
+                    ledger.hold("second_read", Admission.SHARED) as wait,
+                ):
+                    assert wait.waited_for == ()
+        finally:
+            gate.set()
+            worker.thread.join(5)
+
     async def test_a_read_runs_beside_a_running_worker(self):
         ledger = WorkerLedger()
         gate = threading.Event()

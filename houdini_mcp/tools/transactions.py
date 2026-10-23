@@ -18,7 +18,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from types import ModuleType
-from typing import Any, Generic, TypeVar, assert_never
+from typing import Any, Generic, NoReturn, TypeVar, assert_never
 
 import rpyc
 
@@ -81,19 +81,11 @@ class ToolPolicy:
         return self.recovery in _SCENE_WRITERS
 
     @property
-    def on_main_thread(self) -> bool:
-        """Whether the call's Houdini work runs on Houdini's main thread, the one
-        thread whose undo groups Houdini records: an undoable call's does.
-
-        [LAW:single-enforcer] Read twice and derived once: the ledger admits the
-        call by it, and :func:`recovering` runs the call by it.
-        """
-        return self.recovery is TransactionPolicy.UNDOABLE
-
-    @property
     def admission(self) -> Admission:
-        """How the ledger admits the call: its access, and whether it runs on the main thread."""
-        if self.on_main_thread:
+        """How the ledger admits the call: its access, and whether its Houdini work
+        runs on Houdini's main thread, as an undoable call's does
+        (:func:`_undone_on_failure`)."""
+        if self.recovery is TransactionPolicy.UNDOABLE:
             return Admission.EXCLUSIVE_ON_MAIN_THREAD
         return Admission.EXCLUSIVE if self.access is SceneAccess.EXCLUSIVE else Admission.SHARED
 
@@ -175,42 +167,47 @@ def recovering(
         case _:
             assert_never(policy.recovery)
     with houdini() as link:
-
-        def recovered() -> dict[str, Any]:
-            return recover(operation, link.hou, body)
-
-        # [LAW:single-enforcer] Where the call runs is the fact the ledger
-        # admitted it by, so no read is waiting on the link while it runs there.
-        return _on_main_thread(link, recovered) if policy.on_main_thread else recovered()
+        return recover(operation, link, body)
 
 
 @dataclass(frozen=True)
 class _Returned(Generic[Result]):
     value: Result
 
+    def result(self) -> Result:
+        return self.value
+
 
 @dataclass(frozen=True)
 class _Raised:
     failure: BaseException
 
+    def result(self) -> NoReturn:
+        raise self.failure
 
-def _on_main_thread(link: Link, work: Callable[[], Result]) -> Result:
-    """``work``, run here while Houdini's main thread serves every request it makes.
 
-    The plugin's ``main_thread.call`` has the main thread call back into this
-    process; while that call is out, the main thread serves the link, so each
-    ``hou`` request ``work`` makes runs there. The call is made with no expiry
-    on its reply, since it lasts as long as ``work``, whose own requests each
-    keep the link's sync timeout.
+def _on_main_thread(
+    entry: Any, work: Callable[[], Result], *args: Any
+) -> _Returned[Result] | _Raised:
+    """How ``work`` ended, run here while Houdini's main thread, calling it through
+    the plugin's ``entry``, serves every request it makes.
+
+    The plugin's entry has the main thread call back into this process; while
+    that call is out, the main thread serves the link, so each ``hou`` request
+    ``work`` makes runs there. The call is made with no expiry on its reply,
+    since it lasts as long as ``work``, whose own requests each keep the link's
+    sync timeout.
 
     [LAW:effects-at-boundaries] ``work``'s outcome stays in this process: the
-    function Houdini calls back never raises, so a failure is raised here with
-    its own type, fields and notes, not rebuilt by rpyc from a copy that
-    crossed to Houdini and back. That outcome is the call's even when the
-    reply saying ``work`` ended is lost: a request ``work`` made that timed
-    out drops the link while the main thread is still calling ``work``.
+    function Houdini calls back never raises, so a failure keeps its own type,
+    fields and notes, not rebuilt by rpyc from a copy that crossed to Houdini
+    and back. That outcome is the call's even when the reply saying ``work``
+    ended is lost: a request ``work`` made that timed out drops the link while
+    the main thread is still calling ``work``.
+
+    Raises:
+        OperationFailed: the main thread refused the call, which never ran.
     """
-    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     outcomes: list[_Returned[Result] | _Raised] = []
 
     def run() -> None:
@@ -221,7 +218,7 @@ def _on_main_thread(link: Link, work: Callable[[], Result]) -> Result:
 
     try:
         # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
-        refusal: str | None = rpyc.async_(main_thread.call)(run).value
+        refusal: str | None = rpyc.async_(entry)(run, *args).value
     except Exception as lost:
         if not outcomes:
             raise
@@ -230,33 +227,36 @@ def _on_main_thread(link: Link, work: Callable[[], Result]) -> Result:
         if refusal is not None:
             raise OperationFailed(refusal)
     (outcome,) = outcomes
-    if isinstance(outcome, _Raised):
-        raise outcome.failure
-    return outcome.value
+    return outcome
 
 
 def _undone_on_failure(
-    operation: str, hou: Any, body: Callable[[], dict[str, Any]]
+    operation: str, link: Link, body: Callable[[], dict[str, Any]]
 ) -> dict[str, Any]:
     """The body as one Houdini undo step, undone if the body fails.
 
-    The step's label is the call's own: a call that changed nothing leaves no
-    step, so a label shared with an earlier call could undo that call instead.
+    Both run on Houdini's main thread, the one thread whose undo groups Houdini
+    records, and the step's group is opened and closed there by the plugin,
+    whatever becomes of the link. The step's label is the call's own: a call
+    that changed nothing leaves no step, so a label shared with an earlier
+    call could undo that call instead.
     """
+    main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     label = f"houdini-mcp {operation} {uuid.uuid4().hex[:8]}"
     logger.info("%s runs as undo group %r", operation, label)
+    # A call the main thread refused never ran: nothing to undo.
+    outcome = _on_main_thread(main_thread.call_as_step, body, label)
+    if isinstance(outcome, _Returned):
+        return outcome.value
+    failure = outcome.failure
     try:
-        with hou.undos.group(label):
-            return body()
-    except Exception as failure:
-        try:
-            told = _undo_step(hou.undos, label)
-        except Exception as error:
-            told = (f"Undoing its changes failed ({error!r}), so the scene may hold part of them.",)
-        logger.info("%s failed; its undo group %r: %s", operation, label, told or "no step")
-        for note in told:
-            add_note(failure, note)
-        raise
+        told = _on_main_thread(main_thread.call, lambda: _undo_step(link.hou.undos, label)).result()
+    except Exception as error:
+        told = (f"Undoing its changes failed ({error!r}), so the scene may hold part of them.",)
+    logger.info("%s failed; its undo group %r: %s", operation, label, told or "no step")
+    for note in told:
+        add_note(failure, note)
+    raise failure
 
 
 def _undo_step(undos: Any, label: str) -> tuple[str, ...]:
@@ -284,10 +284,10 @@ def _undo_step(undos: Any, label: str) -> tuple[str, ...]:
 
 
 def _backed_up_first(
-    operation: str, hou: Any, body: Callable[[], dict[str, Any]]
+    operation: str, link: Link, body: Callable[[], dict[str, Any]]
 ) -> dict[str, Any]:
     """The body, once the scene it is about to replace has its unsaved work backed up."""
-    with _backup_then_body(operation, hou) as recovered:
+    with _backup_then_body(operation, link.hou) as recovered:
         return {**body(), **recovered}
 
 

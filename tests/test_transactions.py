@@ -348,12 +348,22 @@ class TestOnMainThread:
 def refusing(undos):
     class main_thread:
         @staticmethod
-        def call(fn):
+        def call_as_step(fn, label):
             return "Houdini's main thread is not taking calls"
     return main_thread
 
 def losing_the_reply(undos):
     class main_thread:
+        @staticmethod
+        def call_as_step(fn, label):
+            undos.enter_main_thread()
+            try:
+                with undos.group(label):
+                    fn()
+            finally:
+                undos.leave_main_thread()
+            raise EOFError("the link closed before the reply")
+
         @staticmethod
         def call(fn):
             undos.enter_main_thread()
@@ -361,7 +371,6 @@ def losing_the_reply(undos):
                 fn()
             finally:
                 undos.leave_main_thread()
-            raise EOFError("the link closed before the reply")
     return main_thread
 """
 

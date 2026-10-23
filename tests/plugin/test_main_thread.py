@@ -187,6 +187,31 @@ class TestHeadless:
             assert serving_main_thread(lambda: call_on_main(conn, lambda: ran.append(True))) == []
         assert ran == [True]
 
+    def test_a_step_opens_and_closes_its_group_on_the_main_thread(self, houdini, monkeypatch):
+        """Houdini closes the group itself, there, even when the call fails."""
+        seen: list[tuple[str, str, str]] = []
+
+        @contextmanager
+        def group(label: str) -> Iterator[None]:
+            seen.append(("open", label, threading.current_thread().name))
+            try:
+                yield
+            finally:
+                seen.append(("close", label, threading.current_thread().name))
+
+        monkeypatch.setattr(
+            sys.modules["hou"], "undos", SimpleNamespace(group=group), raising=False
+        )
+        with houdini() as conn:
+
+            def fn() -> None:
+                raise ValueError("the client's own failure")
+
+            step = conn.modules["houdini_mcp_plugin.main_thread"].call_as_step
+            (raised,) = serving_main_thread(lambda: rpyc.async_(step)(fn, "the call").value)
+        assert "the client's own failure" in str(raised)
+        assert seen == [("open", "the call", "MainThread"), ("close", "the call", "MainThread")]
+
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []
 
