@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end of a client's connection with the client's address and which side ended
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
+- **Stop Remote** ends the thread serving each connected client within a second
+  (houdini-laws-etg.dht). On macOS the thread could sleep on the closed
+  connection for the rest of the Houdini session, and the end of that client's
+  connection was never logged: 11 of 30 stops with an idle client on Houdini 22.
+
 ### Changed
 
 - **BREAKING (deployment)**: `get_parameter_schema` needs the houdini_mcp plugin
