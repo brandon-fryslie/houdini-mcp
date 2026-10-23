@@ -35,7 +35,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture(scope="session")
 def houdini_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
-    """The Houdini this session started, until the session ends."""
+    """The Houdini this session started, until the session ends.
+
+    Tests ask for ``houdini``, which empties the scene; this leaves it as the last test did.
+    """
     command = hython_listener(hython_executable(os.environ))
     log_path = tmp_path_factory.mktemp("hython") / "hython.log"
     with pytest.MonkeyPatch.context() as mp:

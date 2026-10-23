@@ -200,8 +200,8 @@ From your clone of this repository:
 ### Windows and Linux
 
 The steps above work on Windows and Linux with your platform's paths; on
-Windows, copy the plugin with your shell's own commands in place of `mkdir -p`
-and `cp`.
+Windows, copy the plugin with your shell's own commands in place of `mkdir -p`,
+`rm -rf` and `cp`.
 Houdini's preferences directory, which holds `packages` and `python3.13libs`, is
 `%USERPROFILE%\Documents\houdini22.0` on Windows and `~/houdini22.0` on Linux,
 in place of macOS's `~/Library/Preferences/houdini/22.0`. On Windows the client

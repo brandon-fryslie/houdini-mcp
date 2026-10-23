@@ -22,8 +22,9 @@ open(sys.argv[1], "w").write(json.dumps({
 }))
 """
 # Where a Houdini finds packages and Python besides the packages directory this test
-# installs into: a site install or the checkout's plugin there would load in its place.
-_OTHER_SOURCES = {"PYTHONPATH", "HOUDINI_PATH", "HSITE"}
+# installs into: a site install or the checkout's plugin there would load in its place,
+# and any HOUDINI_* search path in the caller's shell changes what the package resolves to.
+_OTHER_SOURCES = {"PYTHONPATH", "HSITE"}
 
 
 def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -> None:
@@ -34,7 +35,11 @@ def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path
     # Packages are read only at startup, so this needs a Houdini of its own. It reads
     # packages from here alone: not the user's preferences, whose packages directory
     # may hold a real install, and none of the other places a plugin could load from.
-    environ = {name: value for name, value in os.environ.items() if name not in _OTHER_SOURCES}
+    environ = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _OTHER_SOURCES and not name.startswith("HOUDINI_")
+    }
     environ |= {
         "HOUDINI_PACKAGE_DIR": str(packages),
         "HOUDINI_USER_PREF_DIR": str(tmp_path / "pref" / "houdini__HVER__"),
@@ -48,10 +53,11 @@ def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path
         text=True,
         timeout=300,
     )
-    assert probe.returncode == 0, probe.stderr
+    assert probe.returncode == 0 and report.exists(), probe.stdout + probe.stderr
     loaded = json.loads(report.read_text())
 
     assert loaded["root"] == str(plugin)
     for name, file in loaded["modules"].items():
         assert Path(file).is_relative_to(plugin / "python"), name
-    assert loaded["shelves"]["houdini_mcp"] == str(plugin / "toolbar" / "houdini_mcp.shelf")
+    shelf = str(plugin / "toolbar" / "houdini_mcp.shelf")
+    assert loaded["shelves"].get("houdini_mcp") == shelf, loaded["shelves"]
