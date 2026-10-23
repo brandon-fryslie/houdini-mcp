@@ -262,11 +262,12 @@ print(json.dumps(result))
         port=port,
     )
     # [LAW:no-silent-failure] a cut-off read is not malformed data: name the
-    # ceiling it hit and the knob that lowers it, rather than a parse error.
+    # ceiling it hit and the knobs that shrink the read, rather than a parse error.
     if exec_result.get("stdout_truncated"):
         raise OperationFailed(
-            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters; "
-            f"ask for fewer than {max_sample_points} max_sample_points"
+            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters "
+            f"(max_sample_points={max_sample_points}, include_attributes={include_attributes}, "
+            f"include_groups={include_groups}); lower or turn off one of them"
         )
 
     # Parse the JSON output from stdout

@@ -380,23 +380,27 @@ class TestServedSchemas:
             assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
 
-    async def test_execute_code_waits_at_least_a_second(
+    async def test_execute_code_waits_between_a_second_and_a_day(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
-        """A timeout of zero would report the program still running before it began."""
+        """Zero would give up before the program began; past a day the wait itself raises."""
         arguments = {"code": "pass"}
-        assert await accepts(client, served, "execute_code", {**arguments, "timeout": 1})
-        assert not await accepts(client, served, "execute_code", {**arguments, "timeout": 0})
+        for timeout in (1, 86400):
+            assert await accepts(client, served, "execute_code", {**arguments, "timeout": timeout})
+        for timeout in (0, 86401):
+            assert not await accepts(
+                client, served, "execute_code", {**arguments, "timeout": timeout}
+            )
 
-    async def test_geo_summary_samples_at_most_ten_thousand_points(
+    async def test_geo_summary_samples_at_most_a_thousand_points(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
         arguments = {"node_path": "/obj/geo1/box1"}
         assert await accepts(
-            client, served, "get_geo_summary", {**arguments, "max_sample_points": 10000}
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 1000}
         )
         assert not await accepts(
-            client, served, "get_geo_summary", {**arguments, "max_sample_points": 10001}
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 1001}
         )
 
     @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])

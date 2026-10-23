@@ -295,10 +295,12 @@ RGB = tuple[Channel, Channel, Channel]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
-SampleCount = Annotated[Count, Field(le=10000)]
-"""How many points a geometry read samples, at most 10000, so the read's size has a ceiling."""
-Seconds = Annotated[int, Field(ge=1)]
-"""How long a call may wait; a wait of zero or less would give up before it began."""
+SampleCount = Annotated[Count, Field(le=1000)]
+"""How many points a geometry read samples; a thousand points with a few attributes
+fit the read's output ceiling, where ten thousand never do."""
+Seconds = Annotated[int, Field(ge=1, le=86400)]
+"""How long a call may wait, at most a day: zero would give up before it began, and a
+wait past threading.TIMEOUT_MAX raises after the program has started."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:

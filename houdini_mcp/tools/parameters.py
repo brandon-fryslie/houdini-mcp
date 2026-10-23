@@ -137,8 +137,8 @@ def get_parameter_schema(
             else:
                 parm_templates = []
 
-        # Folders, separators and labels are layout, not parameters: dropped before
-        # the cut, so max_parms, count and the warning all count parameters.
+        # Templates this tool does not list are dropped before the cut, so
+        # max_parms, count and the warning all count what is listed.
         unlisted = _unlisted_types(hou)
         listed = [t for t in parm_templates if t.type() not in unlisted]
         # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
@@ -164,7 +164,7 @@ def get_parameter_schema(
 
 
 def _unlisted_types(hou: Any) -> tuple[Any, ...]:
-    """The template types that lay out a parameter dialog without being parameters."""
+    """The template types this tool does not list."""
     return (
         hou.parmTemplateType.Folder,
         hou.parmTemplateType.FolderSet,

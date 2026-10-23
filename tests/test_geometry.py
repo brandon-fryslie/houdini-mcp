@@ -653,7 +653,7 @@ class TestGetGeoSummary:
 
         result = await get_geo_summary(
             "/obj/geo1/sphere1",
-            max_sample_points=10000,
+            max_sample_points=1000,
             host="localhost",
             port=18811,
             summarizer=SUMMARIZER,
@@ -663,8 +663,9 @@ class TestGetGeoSummary:
         assert result["status"] == "error"
         assert result["kind"] == "operation_failed"
         assert result["message"] == (
-            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters; "
-            "ask for fewer than 10000 max_sample_points"
+            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters "
+            "(max_sample_points=1000, include_attributes=True, include_groups=True); "
+            "lower or turn off one of them"
         )
 
 
