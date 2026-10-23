@@ -432,7 +432,7 @@ class TestGetParameterSchema:
         result = get_parameter_schema("/obj/s", "sep1")
 
         assert (result["status"], result["kind"]) == ("error", "invalid_input")
-        assert "sep1 on /obj/s is a folder tab, separator or label" in result["message"]
+        assert "sep1 on /obj/s is layout (Separator)" in result["message"]
 
     def test_get_parameter_schema_toggle_parameter(self, connected_to):
         """Test getting schema for a toggle parameter."""

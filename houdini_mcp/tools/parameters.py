@@ -133,11 +133,8 @@ def get_parameter_schema(
         # Parameters this tool does not list are dropped before the cut, so
         # max_parms, count and the warning all count what is listed.
         unlisted = _unlisted_types(hou)
-        listed = [
-            (pt, template)
-            for pt in parm_tuples
-            if (template := pt.parmTemplate()).type() not in unlisted
-        ]
+        templated = [(pt, pt.parmTemplate()) for pt in parm_tuples]
+        listed = [(pt, template) for pt, template in templated if template.type() not in unlisted]
         # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
         # tuple, and max_parms is at least 1.
         parameters = [
@@ -147,8 +144,9 @@ def get_parameter_schema(
         if parm_name is not None and not listed:
             # [LAW:no-silent-failure] a named folder tab, separator or label is no
             # parameter listed here; an empty success would read as "none".
+            [(_, template)] = templated
             raise InvalidInput(
-                f"{parm_name} on {node_path} is a folder tab, separator or label, "
+                f"{parm_name} on {node_path} is layout ({template.type()}), "
                 "not a parameter with a schema",
                 parm_name=parm_name,
             )
@@ -216,7 +214,7 @@ def _extract_parameter_info(hou: Any, parm: Parm, parm_template: Any) -> dict[st
         "is_animatable": type_str not in ("menu", "toggle", "button", "string", "multiparm"),
     }
     if is_tuple:
-        param_info["tuple_size"] = parm_template.numComponents()
+        param_info["tuple_size"] = len(parm.target)
 
     # A button has no default. A ramp's defaultValue() is its count of default
     # points, not a value it holds, so it has none here either.
