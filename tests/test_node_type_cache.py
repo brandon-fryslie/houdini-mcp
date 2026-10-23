@@ -136,7 +136,7 @@ class TestNodeTypeCacheReadsThroughTheProxy:
 
         connection.execute.assert_not_called()
         assert cache.is_valid()
-        assert {t["category"] for t in types.all} == set(hou.nodeTypeCategories())
+        assert set(types.categories) == set(hou.nodeTypeCategories())
         assert types.filter(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]

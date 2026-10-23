@@ -1298,7 +1298,7 @@ class TestRenderFraming:
         assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
     @pytest.mark.parametrize(
-        "path", ["/out", "/stage/sopcreate1/stray_box", "/obj/cube_b/dopnet1/solver"]
+        "path", ["/out", "/stage/sopnet1/stray_box", "/obj/cube_b/dopnet1/solver"]
     )
     def test_look_at_anything_but_an_object_or_a_sop_in_one_is_an_error(
         self, frames: list[dict[str, Any]], framed_scene: Any, path: str
@@ -1307,9 +1307,7 @@ class TestRenderFraming:
         object, are refused rather than framed where some object stands."""
         from houdini_mcp.tools import render_viewport
 
-        framed_scene.node("/stage").createNode("sopcreate", "sopcreate1").createNode(
-            "box", "stray_box"
-        )
+        framed_scene.node("/stage").createNode("sopnet", "sopnet1").createNode("box", "stray_box")
         dopnet = framed_scene.node("/obj/cube_b").createNode("dopnet", "dopnet1")
         dopnet.createNode("pyrosolver", "solver")
 

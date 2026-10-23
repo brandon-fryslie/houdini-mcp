@@ -82,8 +82,8 @@ NODE_TYPES: dict[str, dict[str, str | None]] = {
         "tasks": "TopNet",
     },
     "Object": {
-        **dict.fromkeys(("null", "cam", "light", "instance", "fetch")),
-        "geo": "Sop",
+        # every object holds SOPs in Houdini, a camera or a light as much as a geo
+        **dict.fromkeys(("geo", "null", "cam", "light", "instance", "fetch"), "Sop"),
         "subnet": "Object",
         "dopnet": "Dop",
         "ropnet": "Driver",
@@ -93,7 +93,8 @@ NODE_TYPES: dict[str, dict[str, str | None]] = {
     "Dop": {"pyrosolver": None, "subnet": "Dop"},
     "Vop": {"principledshader": None, "subnet": "Vop"},
     "Driver": {"opengl": None, "karma": None, "subnet": "Driver"},
-    "Lop": {"sopcreate": "Sop"},
+    "Lop": {"sopnet": "Sop"},
+    **{category: {} for category in ("ChopNet", "Chop", "Shop", "CopNet", "VopNet", "TopNet")},
 }
 
 
@@ -683,7 +684,7 @@ def _admit(
         raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
     if any(sibling.name() == name for sibling in siblings):
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
-    offered = {} if held is None else NODE_TYPES.get(held, {})
+    offered = {} if held is None else NODE_TYPES[held]
     if node._node_type not in offered:
         refused = OperationFailed("The attempted operation failed.\nInvalid node type name")
         refused.add_note(f"{node._node_type!r} in {network.path()!r}, which holds {held}")

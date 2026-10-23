@@ -1134,7 +1134,9 @@ class TestSerializeScene:
             "/obj", False, 1, host="localhost", port=18811, summarizer=SUMMARIZER
         )
 
-        assert result["status"] == "success"
+        level1_tree = result["structure"]["children"][0]
+        assert level1_tree["path"] == "/obj/level1"
+        assert level1_tree["children"] == [{"path": "/obj/level1/level2", "truncated": True}]
 
 
 class TestSceneDiff:

@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.conftest import HOUDINI_TURNED_MATRIX, MockHouModule, MockHouNode
+from tests.conftest import HOUDINI_TURNED_MATRIX, NODE_TYPES, MockHouModule, MockHouNode
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -192,7 +192,14 @@ def test_a_node_is_of_the_category_its_network_holds(mock_hou: MockHouModule) ->
     assert object_subnet.childTypeCategory().name() == "Object"
     assert sop_subnet.type().category().name() == "Sop"
     assert sop_subnet.childTypeCategory().name() == "Sop"
+    assert mock_hou.node("/obj").createNode("cam", "cam1").childTypeCategory().name() == "Sop"
     assert mock_hou.node("/").type().category().name() == "Director"
+
+
+def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
+    held = {category for offered in NODE_TYPES.values() for category in offered.values()}
+
+    assert held - {None} <= NODE_TYPES.keys()
 
 
 @pytest.mark.parametrize(
