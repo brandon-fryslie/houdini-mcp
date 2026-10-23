@@ -609,6 +609,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `timeout` against a Houdini that was up. A call now drops only the link it
   used.
 
+- `capture_pane_screenshot`, `capture_multiple_panes` and `render_node_network`
+  work in Houdini 22 (houdini-laws-etg.5q8). They asked Houdini for PySide2,
+  which Houdini 22 does not ship, so every capture failed with "Failed to access
+  PySide2 modules". They now take Qt from Houdini's `hutil.PySide`, which names
+  the binding Houdini's build runs, and log which binding and Qt version a
+  capture ran through. A grab Qt cannot encode as PNG now fails the capture as
+  `operation_failed` naming the pane, where it returned an empty image as
+  success.
+
 - `docs/tool-contracts.md` claims only what the tools return
   (houdini-tuneup-ef3.6yb). Its render example read `image_base64` from the
   result, but a render's image is usually over the 16KB bound and arrives in the

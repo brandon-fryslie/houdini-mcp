@@ -181,7 +181,7 @@ class TestEveryFailureIsOneArm:
             try:
                 raise HoudiniConnectionError("gone", target="farm:1")
             except HoudiniConnectionError as e:
-                raise OperationFailed("Failed to access PySide2 modules") from e
+                raise OperationFailed("Failed to access Houdini's Qt (hutil.PySide)") from e
 
         result = arm(failing_tool(tool))
         assert (result.kind, result.retry, result.target) == (

@@ -3,6 +3,8 @@
 from typing import Any
 
 from houdini_mcp import tools
+from houdini_mcp.tools._common import using
+from houdini_mcp.tools.pane_screenshot import _get_qt_modules, png_bytes
 
 
 def test_check_connection_round_trip(at: dict[str, Any]) -> None:
@@ -56,3 +58,14 @@ def test_get_node_info_serializes_ramp_parameter(at: dict[str, Any]) -> None:
     assert remapramp.get("type") == "hou.Ramp"
     assert "keys" in remapramp
     assert "values" in remapramp
+
+
+def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, Any]) -> None:
+    """Every capture ends by encoding its grab as PNG through the Qt the tools read from Houdini."""
+    with using(**at) as link:
+        _, QtCore = _get_qt_modules(link)
+        QImage = link.conn.modules["hutil.PySide"].QtGui.QImage
+        image = QImage(4, 4, QImage.Format.Format_RGB32)
+        image.fill(0)
+
+        assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")

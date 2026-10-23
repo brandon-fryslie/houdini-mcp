@@ -622,7 +622,7 @@ class MockModuleNamespace:
 
     Any other name imports here - the plugin tree is on this interpreter's path as
     it is on Houdini's - so Houdini-side modules run against the double. Like rpyc's
-    module namespace, it answers both ``modules.hou`` and ``modules["PySide2.QtWidgets"]``.
+    module namespace, it answers both ``modules.hou`` and ``modules["hutil.PySide"]``.
     """
 
     def __init__(self, hou_module: "MockHouModule"):
