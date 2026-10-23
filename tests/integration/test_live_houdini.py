@@ -77,7 +77,11 @@ def test_a_parameter_schema_costs_the_link_the_same_requests_whatever_the_node(
 
     whole = {requests_of(path, None) for path in (geo, shader["node_path"])}
     named = {requests_of(geo, "t"), requests_of(shader["node_path"], "basecolor")}
-    assert len(whole) == len(named) == 1 and max(whole | named) < 20, (whole, named)
+    # [LAW:verifiable-goals] at least one request, or the count measured nothing
+    assert len(whole) == len(named) == 1 and min(whole) > 0 and max(whole | named) < 20, (
+        whole,
+        named,
+    )
 
 
 def test_get_node_info_serializes_ramp_parameter(at: dict[str, Any]) -> None:

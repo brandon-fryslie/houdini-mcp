@@ -805,7 +805,9 @@ class TestTheReadRunsInsideHoudini:
         parameters = [{"name": "p0", "type": "float", "current_value": 0.0}]
         schema = SimpleNamespace(
             parameter_schema=MagicMock(
-                return_value=json.dumps({"parameters": parameters, "listed": 3, "menus": []})
+                return_value=json.dumps(
+                    {"parameters": parameters, "listed": 3, "menus": [], "refused_reads": []}
+                )
             )
         )
         monkeypatch.setitem(sys.modules, "houdini_mcp_schema", schema)
@@ -850,6 +852,54 @@ class TestTheReadRunsInsideHoudini:
 
         assert "unread default of p0 reason=RuntimeError: no default" in caplog.messages
 
+    def test_a_value_refused_is_logged_under_the_name_every_parameter_read_uses(
+        self, connected_to, caplog
+    ):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = self._node_of(mock_hou, "n", 1)
+        node.parm("p0").eval = MagicMock(side_effect=RuntimeError("cook failed"))
+        connected_to(mock_hou)
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            result = get_parameter_schema("/obj/n")
+
+        assert result["parameters"][0]["current_value"] == {"unread": "RuntimeError: cook failed"}
+        assert caplog.messages == ["unread parameter p0 reason=RuntimeError: cook failed"]
+
+    def test_a_value_shaped_like_an_unread_is_a_value_and_no_refusal(self, connected_to, caplog):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = self._node_of(mock_hou, "n", 1)
+        node.parm("p0").set({"unread": "a key the user set"})
+        connected_to(mock_hou)
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            result = get_parameter_schema("/obj/n")
+
+        assert result["parameters"][0]["current_value"] == {"unread": "a key the user set"}
+        assert caplog.messages == []
+
+    def test_a_template_value_with_no_json_form_is_converted_as_a_parm_value_is(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = self._node_of(mock_hou, "n", 1)
+        template = node.parm("p0").parmTemplate()
+        template.defaultValue = MagicMock(return_value=(SimpleNamespace(path=lambda: "/obj/d"),))
+        template.minValue = MagicMock(return_value=SimpleNamespace(path=lambda: "/obj/lo"))
+        connected_to(mock_hou)
+
+        result = get_parameter_schema("/obj/n")
+
+        assert result["status"] == "success", result
+        assert (result["parameters"][0]["default"], result["parameters"][0]["min"]) == (
+            "/obj/d",
+            "/obj/lo",
+        )
+
     def test_the_read_costs_the_link_the_same_requests_whatever_the_parameter_count(
         self, monkeypatch, reset_connection_state
     ):
@@ -881,12 +931,17 @@ class TestTheReadRunsInsideHoudini:
                     return send(*request)
 
                 conn.sync_request = counted
-                result = get_parameter_schema(path, max_parms=100)
-                conn.sync_request = send
+                try:
+                    result = get_parameter_schema(path, max_parms=100)
+                finally:
+                    conn.sync_request = send
                 assert result["status"] == "success", result
                 return len(sent)
 
-            few, many = requests_of("/obj/few"), requests_of("/obj/many")
-            houdini().close()
+            try:
+                few, many = requests_of("/obj/few"), requests_of("/obj/many")
+            finally:
+                houdini().close()
 
-        assert few == many < 20
+        # [LAW:verifiable-goals] at least one request, or the count measured nothing
+        assert 0 < few == many < 20

@@ -14,9 +14,23 @@ Houdini's path, and nowhere else - the server only ever reaches it inside Houdin
 from __future__ import annotations
 
 import json
-from typing import Any, TypedDict, final
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, TypedDict, TypeVar, final
 
-from houdini_mcp_read import Parm, ParmNotFound, evaluated_json, of_tuple, read, resolve
+from houdini_mcp_read import (
+    Parm,
+    ParmNotFound,
+    Unread,
+    evaluated_json,
+    format_reason,
+    json_safe_hou_value,
+    of_tuple,
+    read,
+    resolve,
+)
+
+T = TypeVar("T")
 
 
 class Menu(TypedDict):
@@ -26,6 +40,13 @@ class Menu(TypedDict):
     use_token: bool
     offered: int
     separators: int
+
+
+class RefusedRead(TypedDict):
+    """A read Houdini refused: the facts its log event carries."""
+
+    what: str
+    reason: str
 
 
 # final, so a reader tells the two answers apart by their keys
@@ -43,6 +64,7 @@ class Schema(TypedDict):
     parameters: list[dict[str, Any]]
     listed: int
     menus: list[Menu]
+    refused_reads: list[RefusedRead]
 
 
 Answer = Refused | Schema
@@ -54,6 +76,29 @@ def parameter_schema(hou: Any, node: Any, parm_name: str | None, max_parms: int)
     A string because rpyc sends it by value: one round trip for the whole answer.
     """
     return json.dumps(_answer(hou, node, parm_name, max_parms))
+
+
+@dataclass
+class _Events:
+    """What this read reports for the server to log: the log is the server's."""
+
+    menus: list[Menu] = field(default_factory=list)
+    refused_reads: list[RefusedRead] = field(default_factory=list)
+
+    def read(self, what: str, fetch: Callable[[], T]) -> T | Unread:
+        """``fetch()``'s value, or ``Unread``, its refusal kept as ``what``.
+
+        [LAW:one-source-of-truth] the read that is refused records it, as the
+        server's ``reads.read(what, fetch)`` logs it; nothing infers it later
+        from a value's shape.
+        """
+
+        def explain(e: Exception) -> str:
+            why = format_reason(e)
+            self.refused_reads.append(RefusedRead(what=what, reason=why))
+            return why
+
+        return read(fetch, explain)
 
 
 def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answer:
@@ -81,13 +126,18 @@ def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answe
             refused=f"{parm_name} on {node.path()} is layout ({template.type()}), "
             "not a parameter with a schema"
         )
-    menus: list[Menu] = []
+    events = _Events()
     # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
     # tuple, and max_parms is at least 1.
     parameters = [
-        _parameter(hou, of_tuple(pt), template, menus) for pt, template in listed[:max_parms]
+        _parameter(hou, of_tuple(pt), template, events) for pt, template in listed[:max_parms]
     ]
-    return Schema(parameters=parameters, listed=len(listed), menus=menus)
+    return Schema(
+        parameters=parameters,
+        listed=len(listed),
+        menus=events.menus,
+        refused_reads=events.refused_reads,
+    )
 
 
 def _unlisted_types(hou: Any) -> tuple[Any, ...]:
@@ -103,21 +153,24 @@ def _unlisted_types(hou: Any) -> tuple[Any, ...]:
     )
 
 
-def _parameter(hou: Any, parm: Parm, parm_template: Any, menus: list[Menu]) -> dict[str, Any]:
+def _parameter(hou: Any, parm: Parm, parm_template: Any, events: _Events) -> dict[str, Any]:
     """The schema entry of one parameter: its name, shape and value from the parm,
-    the rest from its template. A menu's read is added to ``menus``.
+    the rest from its template. Its reads' events are added to ``events``.
 
     [LAW:no-silent-failure] A part of the template Houdini will not give reads
-    as ``Unread``; nothing is filled in with a guess.
+    as ``Unread``; nothing is filled in with a guess. Every value read passes
+    through ``json_safe_hou_value``, so one with no JSON form is that value's
+    own, not the whole answer's.
     """
+    name = parm.name
     # [LAW:one-source-of-truth] the shape evaluated is the shape described.
     is_tuple = parm.is_tuple
     type_str = _type_name(hou, parm_template.type(), is_tuple)
 
     param_info: dict[str, Any] = {
-        "name": parm.name,
+        "name": name,
         "label": parm_template.label(),
-        "current_value": read(lambda: evaluated_json(hou, parm.target)),
+        "current_value": events.read(f"parameter {name}", lambda: evaluated_json(hou, parm.target)),
         "type": type_str,
         # Most parameters are animatable except menus, toggles, buttons
         "is_animatable": type_str not in ("menu", "toggle", "button", "string", "multiparm"),
@@ -128,14 +181,23 @@ def _parameter(hou: Any, parm: Parm, parm_template: Any, menus: list[Menu]) -> d
     # A button has no default. A ramp's defaultValue() is its count of default
     # points, not a value it holds, so it has none here either.
     if hasattr(parm_template, "defaultValue") and type_str != "ramp":
-        param_info["default"] = read(lambda: _default(parm_template.defaultValue(), is_tuple))
+        param_info["default"] = events.read(
+            f"default of {name}",
+            lambda: json_safe_hou_value(hou, _default(parm_template.defaultValue(), is_tuple)),
+        )
 
     if type_str in ("float", "int", "vector"):
-        param_info["min"] = read(parm_template.minValue)
-        param_info["max"] = read(parm_template.maxValue)
+        param_info["min"] = events.read(
+            f"min of {name}", lambda: json_safe_hou_value(hou, parm_template.minValue())
+        )
+        param_info["max"] = events.read(
+            f"max of {name}", lambda: json_safe_hou_value(hou, parm_template.maxValue())
+        )
 
     if type_str == "menu":
-        param_info["menu_items"] = read(lambda: _menu_items(parm, parm_template, menus))
+        param_info["menu_items"] = events.read(
+            f"menu items of {name}", lambda: _menu_items(parm, parm_template, events.menus)
+        )
 
     return param_info
 
@@ -143,9 +205,7 @@ def _parameter(hou: Any, parm: Parm, parm_template: Any, menus: list[Menu]) -> d
 def _default(value: Any, is_tuple: bool) -> Any:
     # Float, Int and String templates give a tuple of per-component defaults;
     # Toggle, Menu and Ramp give one value.
-    if not isinstance(value, tuple):
-        return value
-    return list(value) if is_tuple else value[0]
+    return value[0] if isinstance(value, tuple) and not is_tuple else value
 
 
 _MENU_SEPARATOR = "_separator_"
