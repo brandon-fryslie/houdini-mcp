@@ -6,7 +6,7 @@ the SideFX website. It does NOT require a Houdini connection.
 
 from typing import Any, Literal
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
 from ._common import (
@@ -36,6 +36,15 @@ _HELP_PATHS: dict[HelpType, str] = {
     "vex_function": "vex/functions",
     "python_hou": "hom/hou",
 }
+
+
+# [LAW:effects-at-boundaries] The one place the docs site's HTTP client is built. Tests
+# replace it with a client over a fake transport, so the request put on the wire is
+# what gets asserted.
+def docs_client(timeout: int) -> httpx.Client:
+    """Build the client a docs page is fetched through, ``timeout`` seconds a phase."""
+    # A page the site moves is still the page asked for; httpx follows only when told.
+    return httpx.Client(timeout=timeout, follow_redirects=True)
 
 
 @handle_connection_errors("get_houdini_help")
@@ -91,7 +100,8 @@ def get_houdini_help(
     full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{item_name}.html"
 
     try:
-        response = requests.get(full_url, timeout=timeout)
+        with docs_client(timeout) as client:
+            response = client.get(full_url)
 
         if response.status_code == 404:
             raise InvalidInput(
@@ -243,7 +253,7 @@ def get_houdini_help(
 
         return result
 
-    except requests.exceptions.Timeout as e:
+    except httpx.TimeoutException as e:
         raise TimedOut(f"Request timed out after {timeout} seconds", url=full_url) from e
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         raise OperationFailed(f"Network error: {str(e)}", url=full_url) from e

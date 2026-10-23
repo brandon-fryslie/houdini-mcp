@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import get_args
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
@@ -2471,31 +2472,31 @@ class TestReorderInputs:
         assert merge._inputs[2] == grid
 
 
+def docs_page(section: str, item: str) -> str:
+    """The URL of ``item``'s page in ``section`` of the Houdini docs."""
+    return f"https://www.sidefx.com/docs/houdini/{section}/{item}.html"
+
+
+BOX_PAGE = docs_page("nodes/sop", "box")
+
+
 class TestGetHoudiniHelp:
     """Tests for get_houdini_help web scraping function."""
 
-    @patch("requests.get")
-    def test_get_houdini_help_network_error(self, mock_get):
+    def test_get_houdini_help_network_error(self, docs_site):
         """Test handling of network connection errors."""
-        import requests
-
         from houdini_mcp.tools import get_houdini_help
 
-        mock_get.side_effect = requests.exceptions.ConnectionError("Network unreachable")
+        docs_site.pages[BOX_PAGE] = httpx.ConnectError
 
         result = get_houdini_help("sop", "box")
 
         assert result["status"] == "error"
         assert "Network error" in result["message"]
 
-    @patch("requests.get")
-    def test_get_houdini_help_404_error(self, mock_get):
+    def test_get_houdini_help_404_error(self, docs_site):
         """Test handling of 404 Not Found."""
         from houdini_mcp.tools import get_houdini_help
-
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_get.return_value = mock_response
 
         result = get_houdini_help("sop", "nonexistent_node_xyz")
 
@@ -2503,41 +2504,52 @@ class TestGetHoudiniHelp:
         assert "not found" in result["message"].lower()
         assert "url" in result
 
-    @patch("requests.get")
-    def test_get_houdini_help_server_error(self, mock_get):
+    def test_get_houdini_help_server_error(self, docs_site):
         """Test handling of server errors."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_get.return_value = mock_response
+        docs_site.pages[BOX_PAGE] = httpx.Response(500)
 
         result = get_houdini_help("sop", "box")
 
         assert result["status"] == "error"
         assert "500" in result["message"]
 
-    @patch("requests.get")
-    def test_get_houdini_help_timeout(self, mock_get):
-        """Test handling of request timeout."""
-        import requests
-
+    def test_get_houdini_help_timeout(self, docs_site):
+        """A fetch is bounded by the call's timeout, and running out of it is a timeout."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
+        docs_site.pages[BOX_PAGE] = httpx.ReadTimeout
 
         result = get_houdini_help("sop", "box", timeout=5)
 
         assert result["status"] == "error"
         assert "timed out" in result["message"].lower()
+        assert docs_site.sent[0].extensions["timeout"] == dict.fromkeys(
+            ("connect", "read", "write", "pool"), 5
+        )
 
-    @patch("requests.get")
-    def test_get_houdini_help_success_sop(self, mock_get):
+    def test_get_houdini_help_follows_a_moved_page(self, docs_site):
+        """A page the site has moved is fetched from where it moved to."""
+        from houdini_mcp.tools import get_houdini_help
+
+        moved = docs_page("nodes/sop", "box-2.0")
+        docs_site.pages[BOX_PAGE] = httpx.Response(301, headers={"Location": moved})
+        docs_site.pages[moved] = httpx.Response(
+            200, text='<html><body><h1 class="title">Box</h1></body></html>'
+        )
+
+        result = get_houdini_help("sop", "box")
+
+        assert (result["status"], result["title"]) == ("success", "Box")
+        assert [str(request.url) for request in docs_site.sent] == [BOX_PAGE, moved]
+
+    def test_get_houdini_help_success_sop(self, docs_site):
         """Test successful parsing of SOP node documentation."""
         from houdini_mcp.tools import get_houdini_help
 
-        # Mock HTML response similar to real SideFX docs
-        mock_html = """
+        # HTML shaped like the real SideFX docs
+        html = """
         <html>
         <body>
             <h1 class="title">Box <span class="subtitle">SOP</span></h1>
@@ -2563,10 +2575,7 @@ class TestGetHoudiniHelp:
         </body>
         </html>
         """
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = mock_html
-        mock_get.return_value = mock_response
+        docs_site.pages[BOX_PAGE] = httpx.Response(200, text=html)
 
         result = get_houdini_help("sop", "box")
 
@@ -2598,21 +2607,21 @@ class TestGetHoudiniHelp:
         ],
         ids=["hou-supertitle", "labs-version"],
     )
-    @patch("requests.get")
-    def test_get_houdini_help_title_keeps_the_pages_spacing(self, mock_get, h1, title):
+    def test_get_houdini_help_title_keeps_the_pages_spacing(self, docs_site, h1, title):
         """The title is the h1's text without its subtitle, spaced as the page spaces it."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_get.return_value = MagicMock(status_code=200, text=f"<html><body>{h1}</body></html>")
+        docs_site.pages[docs_page("nodes/sop", "item")] = httpx.Response(
+            200, text=f"<html><body>{h1}</body></html>"
+        )
 
         assert get_houdini_help("sop", "item")["title"] == title
 
-    @patch("requests.get")
-    def test_get_houdini_help_vex_function(self, mock_get):
+    def test_get_houdini_help_vex_function(self, docs_site):
         """Test parsing of VEX function documentation."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_html = """
+        html = """
         <html>
         <body>
             <h1 class="title">noise <span class="subtitle">VEX function</span></h1>
@@ -2628,10 +2637,7 @@ class TestGetHoudiniHelp:
         </body>
         </html>
         """
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = mock_html
-        mock_get.return_value = mock_response
+        docs_site.pages[docs_page("vex/functions", "noise")] = httpx.Response(200, text=html)
 
         result = get_houdini_help("vex_function", "noise")
 
@@ -2641,12 +2647,11 @@ class TestGetHoudiniHelp:
         assert "vex_info" in result
         assert "float noise" in result["vex_info"]["signature"]
 
-    @patch("requests.get")
-    def test_get_houdini_help_parameter_with_options(self, mock_get):
+    def test_get_houdini_help_parameter_with_options(self, docs_site):
         """Test parsing parameters with menu options."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_html = """
+        html = """
         <html>
         <body>
             <h1 class="title">Copy to Points <span class="subtitle">SOP</span></h1>
@@ -2670,10 +2675,7 @@ class TestGetHoudiniHelp:
         </body>
         </html>
         """
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = mock_html
-        mock_get.return_value = mock_response
+        docs_site.pages[docs_page("nodes/sop", "copytopoints")] = httpx.Response(200, text=html)
 
         result = get_houdini_help("sop", "copytopoints")
 
@@ -2685,33 +2687,31 @@ class TestGetHoudiniHelp:
         assert param["options"][0]["name"] == "Off"
         assert param["options"][1]["name"] == "Pack"
 
-    @patch("requests.get")
-    def test_get_houdini_help_fetches_the_page_of_its_type(self, mock_get):
+    def test_get_houdini_help_fetches_the_page_of_its_type(self, docs_site):
         """Each help type reads its own section of the docs; ROPs live under /out/."""
         from houdini_mcp.tools import get_houdini_help
 
-        mock_get.return_value = MagicMock(status_code=404)
-        for help_type, section in (
-            ("sop", "nodes/sop"),
-            ("rop", "nodes/out"),
-            ("vex_function", "vex/functions"),
-            ("python_hou", "hom/hou"),
-        ):
+        sections = {
+            "sop": "nodes/sop",
+            "rop": "nodes/out",
+            "vex_function": "vex/functions",
+            "python_hou": "hom/hou",
+        }
+        for help_type in sections:
             get_houdini_help(help_type, "test_item")
-            assert mock_get.call_args.args[0] == (
-                f"https://www.sidefx.com/docs/houdini/{section}/test_item.html"
-            )
 
-    @patch("requests.get")
-    def test_every_advertised_help_type_has_a_page(self, mock_get):
+        assert [str(request.url) for request in docs_site.sent] == [
+            docs_page(section, "test_item") for section in sections.values()
+        ]
+
+    def test_every_advertised_help_type_has_a_page(self, docs_site):
         """A help type the schema accepts is one the docs can be fetched for."""
         from houdini_mcp.tools import get_houdini_help
         from houdini_mcp.tools.help import HelpType
 
-        mock_get.return_value = MagicMock(status_code=404)
         for help_type in get_args(HelpType):
             assert get_houdini_help(help_type, "test_item")["kind"] != "operation_failed"
-        assert mock_get.call_count == len(get_args(HelpType))
+        assert len(docs_site.sent) == len(get_args(HelpType))
 
 
 class TestMaterialTools:

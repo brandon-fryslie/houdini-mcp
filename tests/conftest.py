@@ -946,6 +946,70 @@ def no_wire(monkeypatch: pytest.MonkeyPatch, production_summarizer_client: Clien
     )
 
 
+DocsClientBuilder = Callable[[int], httpx.Client]
+
+
+def docs_through(
+    production: DocsClientBuilder, handler: Callable[[httpx.Request], httpx.Response]
+) -> DocsClientBuilder:
+    """The clients ``production`` builds - their timeout and redirect policy - with
+    ``handler`` answering in place of the docs site."""
+
+    def build(timeout: int) -> httpx.Client:
+        with production(timeout) as real:
+            return httpx.Client(
+                timeout=real.timeout,
+                follow_redirects=real.follow_redirects,
+                transport=httpx.MockTransport(handler),
+            )
+
+    return build
+
+
+@pytest.fixture(autouse=True)
+def production_docs_client(monkeypatch: pytest.MonkeyPatch) -> DocsClientBuilder:
+    """The docs site's production client builder, which a test reaches the site
+    through only by routing its own: in its place is a site that refuses every
+    connection, so no test fetches from sidefx.com."""
+    from houdini_mcp.tools import help
+
+    production = help.docs_client
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("tests reach no docs site", request=request)
+
+    monkeypatch.setattr(help, "docs_client", docs_through(production, refuse))
+    return production
+
+
+class DocsSite:
+    """The fake docs site: every request sent, and the page or failure at each URL.
+    A URL it has no page for is a 404, as on the real site."""
+
+    def __init__(self) -> None:
+        self.sent: list[httpx.Request] = []
+        self.pages: dict[str, httpx.Response | type[Exception]] = {}
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.sent.append(request)
+        page = self.pages.get(str(request.url), httpx.Response(404))
+        if isinstance(page, type):
+            raise page("boom")
+        return page
+
+
+@pytest.fixture
+def docs_site(
+    monkeypatch: pytest.MonkeyPatch, production_docs_client: DocsClientBuilder
+) -> DocsSite:
+    """Route the docs fetch through a fake site that serves only the pages a test gives it."""
+    from houdini_mcp.tools import help
+
+    site = DocsSite()
+    monkeypatch.setattr(help, "docs_client", docs_through(production_docs_client, site.handle))
+    return site
+
+
 @pytest.fixture
 def results(tmp_path: pathlib.Path) -> Generator[Results, None, None]:
     """A results directory of this test's own, as a running server holds one."""

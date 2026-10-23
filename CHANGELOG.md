@@ -464,6 +464,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `requests` as a dependency (houdini-tuneup-ef3.vrw): `get_houdini_help`
+  fetches over httpx, which the server already used. Code that got `requests`
+  from houdini-mcp's install now has to install it itself.
+
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin
