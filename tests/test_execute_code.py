@@ -705,3 +705,144 @@ print(hou.applicationVersionString())
                 "pre-inject" in result.get("hint", "").lower()
                 or "already available" in result.get("hint", result["message"]).lower()
             )
+
+
+def _run(program: str) -> dict:
+    from houdini_mcp.tools import execute_code
+
+    return execute_code(program, host="localhost", port=18811, bypass_config_enabled=False)
+
+
+class TestAProgramThatFailedOnTheLink:
+    """(houdini-laws-etg.il8) A program whose link failed under it reads as the link's
+    failure, keeps what it left behind, and leaves no dead link installed; a program
+    that failed on its own leaves the link alone, whatever type it raised."""
+
+    def test_a_real_sync_timeout_resets_the_connection_and_keeps_the_programs_output(
+        self, connected_to
+    ):
+        from types import SimpleNamespace
+
+        from houdini_mcp.connection import houdini
+        from tests.conftest import served_connection
+
+        with served_connection("import time\ndef slow(): time.sleep(1)\n") as conn:
+            conn._config["sync_request_timeout"] = 0.2
+            connected_to(SimpleNamespace(slow=conn.namespace["slow"]))
+            link = houdini().link()
+            result = _run("print('before')\nhou.slow()")
+
+        assert (result["kind"], result["retry"]) == ("timeout", "call_again")
+        assert result["connection_reset"] is True
+        assert result["exception"] == "TimeoutError"
+        assert result["stdout"] == "before\n"
+        assert 'File "<string>", line 2' in result["traceback"]
+        assert "TimeoutError: result expired" in result["message"]
+        assert result["policy"] == "normal"
+        assert result["audit"]["code_sha256"]
+        assert link.conn.closed and houdini().link() is None
+
+    def test_a_closed_link_is_connection_lost(self, mock_connection, monkeypatch):
+        from houdini_mcp.connection import houdini
+        from tests.conftest import link_failure
+
+        def lose() -> None:
+            raise link_failure(EOFError("stream has been closed"))
+
+        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
+        link = houdini().link()
+        result = _run("print('before')\nhou.lose()")
+
+        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
+        assert result["stdout"] == "before\n"
+        assert link.conn.closed and houdini().link() is None
+
+    def test_a_program_raising_a_timeout_itself_is_its_own_failure(self, mock_connection):
+        from houdini_mcp.connection import houdini
+
+        link = houdini().link()
+        result = _run("raise TimeoutError('my own deadline')")
+
+        assert (result["kind"], result["retry"]) == ("operation_failed", "none")
+        assert result["message"] == "TimeoutError: my own deadline"
+        assert houdini().link() is link and not link.conn.closed
+
+    def test_a_note_on_a_lost_link_is_told_once(self, mock_connection, monkeypatch):
+        from tests.conftest import link_failure
+
+        def lose() -> None:
+            raise link_failure(TimeoutError("result expired"))
+
+        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
+        result = _run(
+            "try:\n    hou.lose()\nexcept TimeoutError as e:\n"
+            "    e.add_note('while framing')\n    raise\n"
+        )
+
+        assert result["kind"] == "timeout"
+        assert result["message"].count("while framing") == 1
+        assert result["message"].count("TimeoutError: result expired") == 1
+
+    def test_an_undo_group_that_failed_to_close_on_the_link_resets_the_connection(
+        self, mock_connection, monkeypatch
+    ):
+        """The program caught the link's timeout and raised its own error; the undo
+        group's close then failed on the same link."""
+        from houdini_mcp.connection import houdini
+        from tests.conftest import MockUndoGroupContext, link_failure
+
+        def lose() -> None:
+            raise link_failure(TimeoutError("result expired"))
+
+        def close(self, *exc_info) -> bool:
+            raise link_failure(TimeoutError("result expired"))
+
+        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
+        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        link = houdini().link()
+        result = _run(
+            "try:\n    hou.lose()\nexcept TimeoutError:\n    raise RuntimeError('gave up')"
+        )
+
+        assert (result["kind"], result["connection_reset"]) == ("timeout", True)
+        assert "RuntimeError: gave up" in result["message"]
+        assert "The undo group did not open or close: TimeoutError" in result["message"]
+        assert link.conn.closed and houdini().link() is None
+
+    def test_an_undo_group_that_failed_to_close_is_told_after_the_programs_failure(
+        self, mock_connection, monkeypatch
+    ):
+        from houdini_mcp.connection import houdini
+        from tests.conftest import MockUndoGroupContext
+
+        def close(self, *exc_info) -> bool:
+            raise ValueError("undo stack locked")
+
+        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        link = houdini().link()
+        result = _run("raise RuntimeError('gave up')")
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == (
+            "RuntimeError: gave up\n"
+            "The undo group did not open or close: ValueError: undo stack locked"
+        )
+        assert "undo stack locked" in result["traceback"]
+        assert houdini().link() is link and not link.conn.closed
+
+    def test_an_undo_group_that_failed_after_a_completed_program_is_the_groups(
+        self, mock_connection, monkeypatch
+    ):
+        from tests.conftest import MockUndoGroupContext
+
+        def close(self, *exc_info) -> bool:
+            raise ValueError("undo stack locked")
+
+        monkeypatch.setattr(MockUndoGroupContext, "__exit__", close)
+        result = _run("print('done')")
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == (
+            "The undo group did not open or close: ValueError: undo stack locked"
+        )
+        assert result["stdout"] == "done\n"

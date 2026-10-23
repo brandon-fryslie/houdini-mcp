@@ -44,6 +44,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from io import StringIO
 from typing import Any, Literal
@@ -68,7 +69,7 @@ from .code_policy import (
     _detect_non_inspection_code,
     parse_code,
 )
-from .failure import failed_on, failure_for
+from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
@@ -379,15 +380,46 @@ def _resolve_undo_primitive(hou: Any) -> Any | None:
     return undos
 
 
+# What a program's run raised in: the program itself, or the undo group around it.
+_Step = Literal["program", "undo group"]
+
+# How each step's failure reads to the caller.
+_TOLD: dict[_Step, str] = {
+    "program": "{}",
+    "undo group": "The undo group did not open or close: {}",
+}
+
+
+@dataclass(frozen=True)
+class _Fault:
+    """One exception a program's run raised: the step it raised in, and its traceback
+    as Python prints it."""
+
+    step: _Step
+    error: BaseException
+    traceback: str
+
+    def told(self) -> str:
+        """The exception's line, its type leading (some say nothing else: SystemExit(0)
+        is "0"). Its notes are in ``traceback``, and a link's loss carries its own."""
+        line = traceback.TracebackException.from_exception(self.error)
+        line.__notes__ = None
+        return _TOLD[self.step].format("".join(line.format_exception_only()).strip())
+
+
+@dataclass(frozen=True)
+class _Ended:
+    """How a program's run ended: every exception it raised, in order (none when it
+    completed), and the link's loss when one of them was that."""
+
+    faults: tuple[_Fault, ...]
+    lost: LinkLost | None
+
+
 def _run_code_thread(
-    code: str,
-    hou: Any,
-    stdout_capture: StringIO,
-    stderr_capture: StringIO,
-    exec_exception: list[BaseException | None],
-    exec_traceback: list[str],
-) -> None:
-    """Execute user code, capturing stdout/stderr and whatever it raised."""
+    code: str, hou: Any, stdout_capture: StringIO, stderr_capture: StringIO
+) -> tuple[_Fault, ...]:
+    """Execute user code, capturing stdout/stderr; what it raised, if it raised."""
     try:
         exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
         # [LAW:effects-at-boundaries] Only this thread's writes are captured;
@@ -397,8 +429,8 @@ def _run_code_thread(
     # Whatever the program raises - SystemExit and KeyboardInterrupt too - is how
     # it ended, not the worker's own failure: the caller reports it.
     except BaseException as e:  # noqa: BLE001 - surfaced to caller as an error result
-        exec_exception[0] = e
-        exec_traceback[0] = traceback.format_exc()
+        return (_Fault("program", e, traceback.format_exc()),)
+    return ()
 
 
 @dataclass(frozen=True)
@@ -411,14 +443,16 @@ class _Diff:
 
 @dataclass(frozen=True)
 class _DiffFailed:
-    """Why a program that ran has no diff."""
+    """Why a program that ran has no diff: the link's loss, already dropped, when
+    that is what failed."""
 
     error: Exception
 
 
 @dataclass(frozen=True)
 class _NeverRan:
-    """Why a program never ran: the scene before it could not be read."""
+    """Why a program never ran: the scene before it could not be read (the link's
+    loss, already dropped, when that is what failed)."""
 
     error: Exception
 
@@ -575,6 +609,9 @@ def execute_code(
         and audit.unmet what each bypass capability still lacked.
         On timeout, a rollback block says whether an undo was attempted and
         whether the scene is known to be consistent.
+        A program that failed because the link to Houdini did reads as that
+        failure (timeout with connection_reset, or connection_lost) with the
+        same stdout, stderr, traceback and audit; the next call reconnects.
     """
     grant = ExecutionGrant.resolve(
         policy=policy,
@@ -732,8 +769,8 @@ def _execute_with_grant(
 
         stdout_capture = StringIO()
         stderr_capture = StringIO()
-        exec_exception: list[BaseException | None] = [None]
-        exec_traceback: list[str] = [""]
+        # The worker writes this once the program and its undo group have ended.
+        ended = _Ended((), None)
         # With capture_diff, the worker writes this on every way out: the program's
         # diff, why it has none, or why the program never ran. Its first value
         # stands only if the worker died without writing it. Without capture_diff,
@@ -754,11 +791,10 @@ def _execute_with_grant(
                 changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
             except Exception as error:  # noqa: BLE001
                 # [LAW:no-silent-failure] The program ran; only its diff is missing.
-                # [LAW:effects-at-boundaries] Classifying the error is the caller's,
-                # which drops this call's link when the link is what failed. A worker
-                # that outlived its call has no caller left (houdini-laws-etg.il8).
+                # [LAW:single-enforcer] Judged here, where the link was used: a worker
+                # that outlived its call has no caller left to drop a link that failed.
                 logger.warning("%s ran but its scene diff failed: %r", operation, error)
-                return _DiffFailed(error)
+                return _DiffFailed(failed_on(houdini(), link, error))
             lists = ("added", "removed", "modified", "added_nodes")
             over = [key for key in lists if len(changes[key]) > max_diff_nodes]
             logger.info(
@@ -782,7 +818,7 @@ def _execute_with_grant(
             # first is not written. Every way out, SystemExit included, leaves
             # through the finally, so the caller's clock never waits on a program
             # that is not running.
-            nonlocal scene
+            nonlocal scene, ended
             before: SceneSnapshot | None = None
             try:
                 if capture_diff:
@@ -797,50 +833,39 @@ def _execute_with_grant(
                             operation,
                             error,
                         )
-                        scene = _NeverRan(error)
+                        scene = _NeverRan(failed_on(houdini(), link, error))
                         return
                 started = time.monotonic()
                 program_starts.set()
-                run_program()
+                faults = run_program()
+                # [LAW:single-enforcer] Judged once the undo group has closed, so its
+                # close still reached Houdini, and here, where the link was used, so a
+                # program that outlived its call still drops the link it failed on. The
+                # first fault that is the link's drops it; none after is judged.
+                lost = (link_lost(houdini(), link, f.error) for f in faults)
+                ended = _Ended(faults, next((x for x in lost if x is not None), None))
             finally:
                 program_starts.set()
                 program_ends.set()
                 if before is not None:
                     # A program that raised has no diff; its scene is not read again.
-                    scene = (
-                        None
-                        if exec_exception[0] is not None
-                        else diff_since(before, time.monotonic() - started)
-                    )
+                    scene = None if ended.faults else diff_since(before, time.monotonic() - started)
 
-        def run_program() -> None:
+        def run_program() -> tuple[_Fault, ...]:
             # Never retry user code if the undo context fails: __exit__ may raise
             # after the body already mutated the scene, so fallback would execute it
-            # twice. Fail closed and surface the context error instead.
-            if undos is not None:
-                try:
-                    with undos.group(_UNDO_GROUP_LABEL):
-                        _run_code_thread(
-                            code,
-                            hou,
-                            stdout_capture,
-                            stderr_capture,
-                            exec_exception,
-                            exec_traceback,
-                        )
-                except Exception as error:  # noqa: BLE001
-                    if exec_exception[0] is None:
-                        exec_exception[0] = error
-                        exec_traceback[0] = traceback.format_exc()
-                return
-            _run_code_thread(
-                code,
-                hou,
-                stdout_capture,
-                stderr_capture,
-                exec_exception,
-                exec_traceback,
-            )
+            # twice. Fail closed and surface the context error instead, after
+            # whatever the program raised.
+            # [LAW:dataflow-not-control-flow] Without an undo primitive the group is
+            # one that does nothing, so the program runs inside a group either way.
+            group = undos.group(_UNDO_GROUP_LABEL) if undos is not None else nullcontext()
+            faults: tuple[_Fault, ...] = ()
+            try:
+                with group:
+                    faults = _run_code_thread(code, hou, stdout_capture, stderr_capture)
+            except Exception as error:  # noqa: BLE001
+                return (*faults, _Fault("undo group", error, traceback.format_exc()))
+            return faults
 
         # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
         # starts the thread inside this call's hold on the scene, the thread clears
@@ -914,7 +939,7 @@ def _execute_with_grant(
         audit = _build_audit(code=code, grant=grant, detected=detected, woke_early=woke_early)
 
         # --- Exception during execution -----------------------------------------
-        if exec_exception[0] is not None:
+        if ended.faults:
             stdout_val, stdout_truncated = _truncate_output(
                 stdout_capture.getvalue(), max_stdout_size
             )
@@ -922,7 +947,7 @@ def _execute_with_grant(
                 stderr_capture.getvalue(), max_stderr_size
             )
             error_fields: dict[str, Any] = {
-                "traceback": exec_traceback[0],
+                "traceback": "".join(fault.traceback for fault in ended.faults),
                 "stdout": stdout_val,
                 "stderr": stderr_val,
                 "policy": grant.policy,
@@ -932,9 +957,13 @@ def _execute_with_grant(
                 error_fields["stdout_truncated"] = True
             if stderr_truncated:
                 error_fields["stderr_truncated"] = True
-            # The exception's type leads, for some say nothing else: SystemExit(0) is "0".
-            told = traceback.format_exception_only(exec_exception[0])
-            raise OperationFailed("".join(told).strip(), **error_fields)
+            first, *later = ended.faults
+            failure = OperationFailed(first.told(), **error_fields)
+            for fault in later:
+                add_note(failure, fault.told())
+            # A program that failed because its link did reads as the link's failure,
+            # carrying all of the above; its own failure has no cause to be judged by.
+            raise failure from ended.lost
 
         # [LAW:no-silent-failure] A scene that could not be read before the program
         # is raised: the program never ran on it.
@@ -964,10 +993,7 @@ def _execute_with_grant(
             result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
         if isinstance(scene, _DiffFailed):
-            # A diff that failed on the link drops this call's own link, as a
-            # failure leaving the scope would.
-            lost = failed_on(houdini(), link, scene.error)
-            result["scene_changes_error"] = failure_for(lost, operation).model_dump()
+            result["scene_changes_error"] = failure_for(scene.error, operation).model_dump()
         if isinstance(scene, _Diff):
             if scene.truncated:
                 result["diff_truncated"] = True

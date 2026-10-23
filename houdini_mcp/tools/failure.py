@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import traceback
 from collections.abc import Sequence, Sized
-from typing import Annotated, Any, Literal, NamedTuple, get_args, get_origin
+from typing import Annotated, Any, Literal, NamedTuple, TypeVar, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -57,6 +57,7 @@ __all__ = [
     "failure_for",
     "failure_response",
     "LinkLost",
+    "link_lost",
     "failed_on",
     "BatchStatus",
     "Undone",
@@ -312,17 +313,41 @@ def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
 # =============================================================================
 
 
-class LinkLost(Exception):
-    """Proof that the link a call used failed in use and has been dropped.
+_LINK_ARM_FIELDS: frozenset[str] = frozenset(
+    {*TimeoutFailure.model_fields, *ConnectionLostFailure.model_fields}
+)
 
-    Only :func:`failed_on` builds one, after the drop, so the failure a caller
-    reads says the connection was reset exactly when it was.
+
+class LinkLost(Exception):
+    """Proof that the link a call used failed in use and has been dropped, with the
+    payload of the tool failure that reported it.
+
+    Only :func:`link_lost` builds one, after the drop, so the failure a caller
+    reads says the connection was reset exactly when it was. ``fields`` ride beside
+    the link arm's own, which they cannot redefine: refused here, as
+    :class:`ToolError` refuses at the raise, so the enforcer that shapes the arm
+    never has a clash to meet.
     """
 
-    def __init__(self, link: Link, lost: TransportFailure) -> None:
+    def __init__(self, link: Link, lost: TransportFailure, fields: dict[str, Any]) -> None:
+        redefined = fields.keys() & _LINK_ARM_FIELDS
+        if redefined:
+            raise TypeError(f"LinkLost fields redefine the link arm's: {sorted(redefined)}")
         super().__init__(f"link to Houdini at {link.name} failed: {type(lost.exc).__name__}")
         self.link = link
         self.lost = lost
+        self.fields = fields
+
+    def reported_by(self, e: BaseException) -> LinkLost:
+        """This loss as ``e`` reported it: what this loss carries, then a tool
+        failure's fields and its message as a note, then ``e``'s notes."""
+        fields, told = (e.fields, [e.message]) if isinstance(e, ToolError) else ({}, [])
+        found = LinkLost(self.link, self.lost, {**self.fields, **fields})
+        found.__notes__ = [*getattr(self, "__notes__", ()), *told, *getattr(e, "__notes__", ())]
+        return found
+
+
+Failed = TypeVar("Failed", bound=BaseException)
 
 
 def _cause(e: BaseException) -> BaseException:
@@ -331,25 +356,32 @@ def _cause(e: BaseException) -> BaseException:
     return e.__cause__ if isinstance(e, ToolError) and e.__cause__ is not None else e
 
 
-def failed_on(owner: HoudiniConnection, link: Link, e: Exception) -> Exception:
-    """The failure ``e`` raised while a call held ``link``, once the link's own
-    failure has dropped that link.
+def link_lost(owner: HoudiniConnection, link: Link, e: BaseException) -> LinkLost | None:
+    """The link's failure ``e`` is, raised while a call held ``link``, once that link
+    is dropped; ``None`` when ``e`` is not the link's.
 
-    [LAW:single-enforcer] The one place a failure is judged the link's and the
-    link torn down: ``LinkLost`` when it is, ``e`` itself when it is not. A
-    ``LinkLost`` from a scope nested inside this one passes through: its link is
-    already dropped. The notes ``e`` gathered on its way out (where the scene's
-    unsaved work was backed up) are the ``LinkLost``'s, for the caller still to read.
+    [LAW:single-enforcer] The one place a failure is judged the link's and the link
+    torn down. A ``LinkLost`` from a scope nested inside this one passes through: its
+    link is already dropped and it already carries what it was told. A tool failure
+    raised ``from`` one adds its payload to it and drops nothing. A transport failure,
+    raw or a tool failure's cause, drops ``link`` and is reported by ``e``.
     """
     if isinstance(e, LinkLost):
         return e
-    lost = transport_failure(_cause(e))
-    if lost is None:
-        return e
+    cause = _cause(e)
+    if isinstance(cause, LinkLost):
+        return cause.reported_by(e)
+    transport = transport_failure(cause)
+    if transport is None:
+        return None
     owner.drop(link)
-    failure = LinkLost(link, lost)
-    failure.__notes__ = list(getattr(e, "__notes__", ()))
-    return failure
+    return LinkLost(link, transport, {}).reported_by(e)
+
+
+def failed_on(owner: HoudiniConnection, link: Link, e: Failed) -> Failed | LinkLost:
+    """What a call that held ``link`` raises for ``e``: the :func:`link_lost` it is,
+    else ``e`` itself."""
+    return link_lost(owner, link, e) or e
 
 
 # =============================================================================
@@ -380,7 +412,7 @@ def _classify(e: Exception, operation: str) -> _Failure:
     """The arm an exception raised during ``operation`` is.
 
     [LAW:effects-at-boundaries] Classification tears nothing down: connection
-    loss is a ``LinkLost``, whose link :func:`failed_on` already dropped. A
+    loss is a ``LinkLost``, whose link :func:`link_lost` already dropped. A
     tool body that wrapped an exception in a ``ToolError`` with ``from`` stated
     its cause, and the link's own failures outrank the body's label: the cause
     is what is classified. A transport failure here, raw or wrapped, came from
@@ -408,7 +440,7 @@ def _classify(e: Exception, operation: str) -> _Failure:
         )
     if isinstance(cause, LinkLost):
         lost = cause.lost
-        exception: dict[str, Any] = {"exception": type(lost.exc).__name__}
+        exception: dict[str, Any] = {**cause.fields, "exception": type(lost.exc).__name__}
         if isinstance(lost.exc, TimeoutError):
             return TimeoutFailure(
                 operation=operation,

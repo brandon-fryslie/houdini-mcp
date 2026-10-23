@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An `execute_code` program that failed because the link to Houdini did (a `hou`
+  call that timed out, a connection that closed) is now reported as the link's
+  failure, `timeout` with `connection_reset: true` or `connection_lost`, instead of
+  `operation_failed` (houdini-laws-etg.il8). The response still carries the
+  program's stdout, stderr, traceback, policy and audit, and the dead link is
+  dropped, so the next call reconnects. This holds for a program that outlived
+  its timeout too, and for a scene diff that failed on the link after it.
+  - A program that raises `TimeoutError` or `EOFError` itself is no longer
+    mistaken for a failed link: only rpyc's own failures count, for every tool.
+  - When the undo group around a program fails to close, the response says so
+    beside the program's own failure, where before the close's failure was
+    discarded.
+  - A tool failure reported over a lost link keeps its fields (a pane capture's
+    `path`, for one) and its message.
+
 - `reload_hrpyc_server()` with a config that is admitted but fails to start
   (its port is taken, say) no longer leaves nothing serving
   (houdini-laws-etg.qeo). The listener that was serving before is started again

@@ -11,7 +11,7 @@ from houdini_mcp.connection import houdini
 from houdini_mcp.tools import list_node_types
 from houdini_mcp.tools.cache import NodeType, NodeTypeCache, invalidate_all_caches
 from houdini_mcp.tools.failure import OperationFailed
-from tests.conftest import MockHouModule
+from tests.conftest import MockHouModule, link_failure
 
 
 def _hou_with_types(*names: str) -> MagicMock:
@@ -249,7 +249,7 @@ class TestListNodeTypesReportsAFailedRead:
         self, mock_connection: MockHouModule
     ) -> None:
         mock_connection.nodeTypeCategories = MagicMock(  # type: ignore[method-assign]
-            side_effect=EOFError("stream has been closed")
+            side_effect=link_failure(EOFError("stream has been closed"))
         )
 
         result = list_node_types()

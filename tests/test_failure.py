@@ -28,7 +28,7 @@ from houdini_mcp.tools._common import (
     tool,
     using,
 )
-from tests.conftest import raised_inside_houdini
+from tests.conftest import link_failure, raised_inside_houdini
 
 KINDS = {
     "connection_unavailable",
@@ -83,8 +83,8 @@ class TestEveryFailureIsOneArm:
                 "connection_mismatch",
                 "none",
             ),
-            (EOFError("stream closed"), "connection_lost", "call_again"),
-            (TimeoutError("no answer"), "timeout", "call_again"),
+            (link_failure(EOFError("stream closed")), "connection_lost", "call_again"),
+            (link_failure(TimeoutError("no answer")), "timeout", "call_again"),
             (InvalidInput("Node not found: /obj/x", path="/obj/x"), "invalid_input", "fix_input"),
             (OperationFailed("cook failed"), "operation_failed", "none"),
             (TimedOut("request timed out", url="https://x"), "timeout", "call_again"),
@@ -111,7 +111,7 @@ class TestEveryFailureIsOneArm:
     def test_no_two_kinds_share_a_shape(self) -> None:
         """A failure of one kind re-labelled as another is refused: kind and the
         fields it requires travel together, so no arm can pose as another."""
-        lost = failing(EOFError("closed"))
+        lost = failing(link_failure(EOFError("closed")))
         relabelled = {**lost, "kind": "connection_unavailable"}
         with pytest.raises(ValidationError):
             FAILURE.validate_python(relabelled)
@@ -168,7 +168,7 @@ class TestEveryFailureIsOneArm:
         def body() -> dict[str, Any]:
             with using("localhost", 18811):
                 try:
-                    raise EOFError("stream closed")
+                    raise link_failure(EOFError("stream closed"))
                 except EOFError as e:
                     raise OperationFailed("Failed to enumerate panes", hint="x") from e
 
@@ -213,7 +213,7 @@ class TestEveryFailureIsOneArm:
         @tool(HOLDS_SCENE)
         def body() -> dict[str, Any]:
             with using("localhost", 18811):
-                raise TimeoutError("no answer")
+                raise link_failure(TimeoutError("no answer"))
 
         link = houdini().link()
         result = arm(body())

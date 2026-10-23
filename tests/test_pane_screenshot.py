@@ -21,7 +21,13 @@ from houdini_mcp.tools.pane_screenshot import (
     png_bytes,
     render_node_network,
 )
-from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, served_namespace
+from tests.conftest import (
+    MockHouModule,
+    MockPaneTab,
+    MockPaneTabType,
+    link_failure,
+    served_namespace,
+)
 
 MOCK_PANE_TYPES = ["NetworkEditor", "Parm", "SceneViewer"]
 
@@ -251,7 +257,7 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
 
     def capture(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
         attempts.append(name)
-        raise OperationFailed(f"{name} not captured") from EOFError("stream closed")
+        raise OperationFailed(f"{name} not captured") from link_failure(EOFError("stream closed"))
 
     with (
         patch(
