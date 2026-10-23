@@ -78,14 +78,14 @@ async def get_geo_summary(
     Edge Cases:
         - Uncooked or out-of-date geometry: Houdini cooks the node before the
           read, except in its Manual update mode, which cooks nothing
-        - A node whose cook fails: Returns error status (a failed cook leaves
-          the node no geometry)
         - Empty geometry: Returns zeros for counts and no bounding_box, not an error
         - Points all at NaN: Returns their count and no bounding_box
         - Massive geometry (>1M points): a warning names the point count; the
           samples are still the first max_sample_points
-        - No geometry/Not a SOP: Returns error status; when the node exists,
-          errors lists the errors Houdini lists on it
+        - Not a SOP: Returns error status
+        - A SOP Houdini gives no geometry (a failed cook leaves it none):
+          Returns error status, with errors listing the errors Houdini lists
+          on the node
         - Anything Houdini will not read (the bounding box, an attribute's
           name/type/size, a group, a sample value, the node's errors) is
           {"unread": "<why>"} in its place
@@ -183,23 +183,22 @@ else:
     # no cook state of its own beside get_node_info's.
     geo = None
     if not isinstance(node, hou.SopNode):
-        failure = ("invalid_input", "it is not a SOP node")
+        result = {{"status": "error", "kind": "invalid_input", "message": f"Node {{node_path}} has no geometry: it is not a SOP node"}}
     else:
         try:
             geo = node.geometry()
+            reason = "geometry() returned None"
         except Exception as e:
-            failure = ("operation_failed", format_reason(e))
-        else:
-            failure = None if geo is not None else ("operation_failed", "geometry() returned None")
-    if failure is not None:
-        # a failed cook raises nothing; why it failed is in the errors Houdini
-        # lists on the node, which every failure of a node that exists carries
-        result = {{
-            "status": "error",
-            "kind": failure[0],
-            "message": f"Node {{node_path}} has no geometry: {{failure[1]}}",
-            "errors": _read(lambda: list(node.errors())),
-        }}
+            reason = format_reason(e)
+        if geo is None:
+            # a failed cook raises nothing; why it failed is in the errors
+            # Houdini lists on the node
+            result = {{
+                "status": "error",
+                "kind": "operation_failed",
+                "message": f"Node {{node_path}} has no geometry: {{reason}}",
+                "errors": _read(lambda: list(node.errors())),
+            }}
 
     if geo is not None:
         # Counts - these are fast native calls

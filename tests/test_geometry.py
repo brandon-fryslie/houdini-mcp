@@ -243,6 +243,7 @@ class TestGetGeoSummary:
             "status": "error",
             "kind": "operation_failed",
             "message": "Node /obj/cam1 has no geometry: geometry() returned None",
+            "errors": ["boom"],
         }
         mock_execute_code.return_value = {
             "status": "success",
@@ -265,6 +266,7 @@ class TestGetGeoSummary:
         assert (result["kind"], result["retry"]) == ("operation_failed", "none")
         assert "has no geometry" in result["message"]
         assert result["path"] == "/obj/cam1"
+        assert result["errors"] == ["boom"]
 
     async def test_get_geo_summary_node_not_found(self, mock_execute_code):
         """Test error when node doesn't exist."""
@@ -781,12 +783,22 @@ class TestTheProgramHoudiniRuns:
         assert result["errors"] == ["Invalid source /obj/geo1/box1/attribvop1."]
         assert f"get_geo_summary failed (operation_failed): {message}" in caplog.messages
 
-    async def test_a_node_that_is_not_a_sop_carries_the_errors_on_it(self):
-        node = SimpleNamespace(errors=lambda: ())
+    async def test_a_geometry_read_that_raises_carries_the_errors_on_it(self):
+        node = self._node(None, geometry=_Raises("cook failed"), errors=lambda: ("boom",))
 
         result = await self._run(node)
 
-        assert (result["kind"], result["errors"]) == ("invalid_input", [])
+        assert result["message"] == "Node /obj/geo1/box1 has no geometry: RuntimeError: cook failed"
+        assert (result["kind"], result["errors"]) == ("operation_failed", ["boom"])
+
+    async def test_a_node_that_is_not_a_sop_is_the_callers_path_not_its_errors(self):
+        # a path to fix: the node's errors say nothing of why it has no geometry
+        node = SimpleNamespace(errors=_Raises("never read"))
+
+        result = await self._run(node)
+
+        assert result["kind"] == "invalid_input"
+        assert "errors" not in result
 
     async def test_errors_houdini_will_not_read_are_unread_in_the_failure(self, caplog):
         node = self._node(None, errors=_Raises("locked"))

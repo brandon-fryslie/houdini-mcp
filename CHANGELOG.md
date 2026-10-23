@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A `get_geo_summary` of a node whose cook failed says why (houdini-laws-etg.216).
   On Houdini 22 such a node has no geometry, and the reason is only in the errors
-  Houdini lists on it. Every failure of a node that exists now carries those
+  Houdini lists on it. The failure of a SOP with no geometry now carries those
   under `errors`, where it used to say only `geometry() returned None`.
 
 - `get_parameter_schema` reads a node's parameters inside Houdini, in the same
