@@ -61,12 +61,12 @@ dev = [
 ]
 
 [tool.uv]
-# The one declaration of the uv line this lock is written by. setup-uv reads it
-# (no version-file input needed) and uv refuses to run outside it, so the Docker
-# image tag below either matches this or fails the build.
-# Held at 0.13.2 or newer: 0.12 pins out every documented command once 0.13
-# ships, and 0.13.2 is the release this lock was last written by.
-required-version = ">=0.13.2"
+# The one declaration of which uv runs this project: the oldest release this lock
+# was written and checked with. uv refuses to run below it; setup-uv reads it and
+# installs the newest release above it, and the Docker image takes the newest too.
+# No ceiling: a ceiling refuses every uv released after it, which is the one a new
+# user installs.
+required-version = ">=0.12.15"
 
 [project.urls]
 Homepage = "https://github.com/brandon-fryslie/houdini-mcp"
