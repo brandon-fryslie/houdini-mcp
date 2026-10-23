@@ -69,3 +69,22 @@ def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, 
         image.fill(0)
 
         assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")
+
+
+def test_cook_state_reads_what_houdini_22_can_tell(at: dict[str, Any]) -> None:
+    def cook_info(path: str, how: str) -> dict[str, Any]:
+        return tools.get_node_info(path, cook_info=how, **at)["cook_info"]
+
+    geo = tools.create_node("geo", "/obj", "mcp_it_cook", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+    failing = tools.create_node("python", geo, "failing1", **at)["node_path"]
+    planted = tools.set_parameter(failing, "python", "raise RuntimeError('planted')", **at)
+    assert planted["status"] == "success"
+
+    assert cook_info(box, "inspect")["cook_state"] == "uncooked"
+    assert cook_info(box, "force_cook")["cook_state"] == "cooked"
+
+    failed = cook_info(failing, "force_cook")
+    assert failed["cook_state"] == "error"
+    assert "planted" in failed["errors"][0]["message"]
+    assert failed["last_cook_time"]["unread"].startswith("hou.OperationFailed")
