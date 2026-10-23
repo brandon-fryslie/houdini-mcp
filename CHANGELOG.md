@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `reload_hrpyc_server()` with a config that is admitted but fails to start
+  (its port is taken, say) no longer leaves nothing serving
+  (houdini-laws-etg.qeo). The listener that was serving before is started again
+  on its old config; the result is an error whose message says why the reload
+  failed and where the listener serves now, with the failed start under
+  `attempt` and the restart under `restore`. A listener started on port 0
+  comes back on the port it was bound to. If the old config cannot start again
+  either, `running` is false and the message says nothing is serving and why.
+
 - **Stop Remote** with a client connected no longer logs a traceback from the
   thread serving that client (houdini-laws-etg.j33). Houdini's log records the
   end of a client's connection with the client's address and which side ended
