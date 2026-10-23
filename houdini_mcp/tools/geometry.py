@@ -68,7 +68,6 @@ async def get_geo_summary(
         - bounding_box: {min, max, size, center} vectors in the SOP's own space;
           absent for geometry with no point that has a position (no points, or
           only points at NaN), which occupies no place
-        - cook_state: "cooked" (the node is cooked first if it needs it)
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
         - sample_points: Optional array of first N points with their attribute values
@@ -77,15 +76,17 @@ async def get_geo_summary(
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
-        - Uncooked geometry: Tool will attempt to cook the node first
+        - Uncooked or out-of-date geometry: Houdini cooks the node before the read
+        - A node whose cook fails: Returns error status naming the errors
+          Houdini lists on the node (a failed cook leaves it no geometry)
         - Empty geometry: Returns zeros for counts and no bounding_box, not an error
         - Points all at NaN: Returns their count and no bounding_box
         - Massive geometry (>1M points): a warning names the point count; the
           samples are still the first max_sample_points
         - No geometry/Not a SOP: Returns error status
-        - Anything Houdini will not read (the cook, the bounding box, an
-          attribute's name/type/size, a group, a sample value) is
-          {"unread": "<why>"} in its place
+        - Anything Houdini will not read (the bounding box, an attribute's
+          name/type/size, a group, a sample value) is {"unread": "<why>"} in
+          its place
 
     Examples:
         # Basic geometry summary with 50 sample points
@@ -150,12 +151,6 @@ def _read(fetch):
         return {{{UNREAD!r}: format_reason(e)}}
 
 
-def _cook():
-    if node.needsToCook():
-        node.cook(force=True)
-    return "cooked"
-
-
 def _attrib(attrib):
     # each part is its own read, so an attribute whose type will not read still
     # says which attribute it is
@@ -179,10 +174,11 @@ node = hou.node(node_path)
 if node is None:
     result = {{"status": "error", "kind": "invalid_input", "message": f"Node not found: {{node_path}}"}}
 else:
-    result["cook_state"] = _read(_cook)
-
     # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
     # that raises or yields nothing is Houdini's. The program says which.
+    # [LAW:one-source-of-truth] geometry() cooks the node when it needs to, and a
+    # cook that fails leaves it None, so a summary is only ever of a node that
+    # cooked: the summary carries no cook state of its own beside get_node_info's.
     geo = None
     if not isinstance(node, hou.SopNode):
         failure = ("invalid_input", "it is not a SOP node")
@@ -192,7 +188,12 @@ else:
         except Exception as e:
             failure = ("operation_failed", format_reason(e))
         else:
-            failure = None if geo is not None else ("operation_failed", "geometry() returned None")
+            # a failed cook raises nothing here; why it failed is in the errors
+            # Houdini lists on the node
+            failure = None if geo is not None else (
+                "operation_failed",
+                f"geometry() returned None; errors on the node: {{_read(lambda: list(node.errors()))}}",
+            )
     if failure is not None:
         result = {{"status": "error", "kind": failure[0], "message": f"Node {{node_path}} has no geometry: {{failure[1]}}"}}
 

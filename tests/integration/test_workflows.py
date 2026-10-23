@@ -85,7 +85,6 @@ class TestBuildFromScratch:
         # Verify with get_geo_summary
         summary = await get_geo_summary(out_path, max_sample_points=10, **bound)
         assert summary["status"] == "success"
-        assert summary["cook_state"] == "cooked"
         assert summary["point_count"] > 0
 
         # Verify bounding box reflects translation (Y center ≈ 3.0)

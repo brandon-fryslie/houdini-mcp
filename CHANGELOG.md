@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_geo_summary` no longer returns `cook_state` (houdini-laws-etg.216). Its
+  `cook_state` could only ever say `"cooked"`, and it meant something different
+  from `get_node_info`'s field of the same name. On Houdini 22, `geometry()`
+  cooks a node when it needs to, and a node whose cook fails has no geometry, so
+  any summary that comes back is already of a node that cooked.
+  `get_node_info`'s `cook_state` is now the only one. A summary of a node whose
+  cook failed now names the errors Houdini lists on that node, where it used to
+  say only `geometry() returned None`.
+
 - `get_parameter_schema` reads a node's parameters inside Houdini, in the same
   few requests whatever the node's parameter count (houdini-laws-etg.foj). It
   read each parameter's template, type, value, default, range and menu over the

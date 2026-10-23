@@ -35,7 +35,6 @@ class TestGetGeoSummary:
         response = {
             "status": "success",
             "node_path": kwargs.get("node_path", "/obj/geo1/sphere1"),
-            "cook_state": kwargs.get("cook_state", "cooked"),
             "point_count": kwargs.get("point_count", 0),
             "primitive_count": kwargs.get("primitive_count", 0),
             "vertex_count": kwargs.get("vertex_count", 0),
@@ -79,7 +78,6 @@ class TestGetGeoSummary:
         # Mock response with sphere geometry data
         geo_data = self._make_geo_response(
             node_path="/obj/geo1/sphere1",
-            cook_state="cooked",
             point_count=3,
             primitive_count=2,
             vertex_count=8,
@@ -123,7 +121,6 @@ class TestGetGeoSummary:
 
         assert result["status"] == "success"
         assert result["node_path"] == "/obj/geo1/sphere1"
-        assert result["cook_state"] == "cooked"
         assert result["point_count"] == 3
         assert result["primitive_count"] == 2
         assert result["vertex_count"] == 8
@@ -238,35 +235,6 @@ class TestGetGeoSummary:
         # Sample points should be limited
         assert len(result["sample_points"]) == 100
 
-    async def test_get_geo_summary_uncooked_geometry(self, mock_execute_code):
-        """Test geometry summary for uncooked/dirty node."""
-        from houdini_mcp.tools import get_geo_summary
-
-        geo_data = self._make_geo_response(
-            node_path="/obj/geo1/noise1",
-            cook_state="cooked",  # After cook
-            point_count=1,
-        )
-        mock_execute_code.return_value = {
-            "status": "success",
-            "stdout": json.dumps(geo_data),
-            "stdout_truncated": False,
-            "stderr": "",
-            "stderr_truncated": False,
-        }
-
-        result = await get_geo_summary(
-            "/obj/geo1/noise1",
-            host="localhost",
-            port=18811,
-            summarizer=SUMMARIZER,
-            bypass_config_enabled=False,
-        )
-
-        assert result["status"] == "success"
-        assert result["cook_state"] == "cooked"
-        assert result["point_count"] == 1
-
     async def test_get_geo_summary_no_geometry(self, mock_execute_code):
         """Test error when node has no geometry."""
         from houdini_mcp.tools import get_geo_summary
@@ -368,7 +336,6 @@ class TestGetGeoSummary:
         geo_data = {
             "status": "success",
             "node_path": "/obj/geo1/sphere1",
-            "cook_state": "cooked",
             "point_count": 1,
             "primitive_count": 1,
             "vertex_count": 4,
@@ -767,7 +734,7 @@ class TestTheProgramHoudiniRuns:
         return geo
 
     def _node(self, geo: Any, **overrides: Any) -> "_SopNode":
-        node = _SopNode(needsToCook=lambda: False, cook=lambda **_kw: None, geometry=lambda: geo)
+        node = _SopNode(geometry=lambda: geo, errors=lambda: ())
         for key, value in overrides.items():
             setattr(node, key, value)
         return node
@@ -776,7 +743,8 @@ class TestTheProgramHoudiniRuns:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.geometry"):
             result = await self._run(self._node(self._geo()), max_sample_points=1)
 
-        assert result["cook_state"] == "cooked"
+        # [LAW:one-source-of-truth] get_node_info's is the one cook_state field
+        assert "cook_state" not in result
         box = {
             "min": [0.0, 0.0, 0.0],
             "max": [1.0, 1.0, 1.0],
@@ -800,13 +768,30 @@ class TestTheProgramHoudiniRuns:
         assert result["warning"] == "Geometry has 1500000 points (>1M); samples are its first 2."
         assert [p["index"] for p in result["sample_points"]] == [0, 1]
 
-    async def test_a_cook_that_raises_is_unread_not_a_state(self):
-        node = self._node(self._geo(), needsToCook=lambda: True, cook=_Raises("cook failed"))
+    async def test_a_node_whose_cook_failed_names_the_errors_on_it(self, caplog):
+        # Houdini 22: a failed cook leaves geometry() None, its reason only in errors()
+        node = self._node(None, errors=lambda: ("Invalid source /obj/geo1/box1/attribvop1.",))
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            result = await self._run(node)
+
+        assert (result["kind"], result["path"]) == ("operation_failed", "/obj/geo1/box1")
+        message = (
+            "Node /obj/geo1/box1 has no geometry: geometry() returned None; "
+            "errors on the node: ['Invalid source /obj/geo1/box1/attribvop1.']"
+        )
+        assert result["message"] == message
+        assert f"get_geo_summary failed (operation_failed): {message}" in caplog.messages
+
+    async def test_errors_houdini_will_not_read_are_unread_in_the_failure(self):
+        node = self._node(None, errors=_Raises("locked"))
 
         result = await self._run(node)
 
-        assert result["cook_state"] == {"unread": "RuntimeError: cook failed"}
-        assert result["point_count"] == 1
+        assert result["message"] == (
+            "Node /obj/geo1/box1 has no geometry: geometry() returned None; "
+            "errors on the node: {'unread': 'RuntimeError: locked'}"
+        )
 
     async def test_a_geometry_with_no_points_has_no_bounding_box(self, caplog):
         geo = self._geo(bounds=lambda: tuple(NO_POINTS_BOUNDS), counts={"pointcount": 0})
