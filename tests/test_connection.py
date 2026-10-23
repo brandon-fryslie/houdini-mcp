@@ -763,6 +763,24 @@ class TestATeardownDropsTheLinkThatFailed:
         )
         assert owner.ensure("localhost", 18811) is not lost.value.link
 
+    def test_a_link_failure_keeps_the_notes_it_gathered_on_its_way_out(self):
+        """A recovery's note (where the unsaved work was backed up) still reaches the
+        caller when the failure it rides on turns out to be the link's."""
+        from houdini_mcp.tools._common import held_link
+        from houdini_mcp.tools.failure import add_note, failure_for
+
+        owner = _owner()
+        with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811):
+            closed = EOFError("stream closed")
+            add_note(closed, "The scene's unsaved work is backed up at /tmp/backup.hip.")
+            raise closed
+
+        failure = failure_for(lost.value, "load_scene")
+        assert failure.kind == "connection_lost"
+        assert failure.message.endswith(
+            "\nThe scene's unsaved work is backed up at /tmp/backup.hip."
+        )
+
     def test_a_failure_that_is_not_the_links_drops_nothing(self):
         from houdini_mcp.tools._common import held_link
 

@@ -338,7 +338,8 @@ def failed_on(owner: HoudiniConnection, link: Link, e: Exception) -> Exception:
     [LAW:single-enforcer] The one place a failure is judged the link's and the
     link torn down: ``LinkLost`` when it is, ``e`` itself when it is not. A
     ``LinkLost`` from a scope nested inside this one passes through: its link is
-    already dropped.
+    already dropped. The notes ``e`` gathered on its way out (where the scene's
+    unsaved work was backed up) are the ``LinkLost``'s, for the caller still to read.
     """
     if isinstance(e, LinkLost):
         return e
@@ -346,7 +347,9 @@ def failed_on(owner: HoudiniConnection, link: Link, e: Exception) -> Exception:
     if lost is None:
         return e
     owner.drop(link)
-    return LinkLost(link, lost)
+    failure = LinkLost(link, lost)
+    failure.__notes__ = list(getattr(e, "__notes__", ()))
+    return failure
 
 
 # =============================================================================

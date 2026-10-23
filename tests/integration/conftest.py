@@ -50,9 +50,7 @@ def houdini_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target
             try:
                 yield Target(host=HOUDINI_LISTENER_HOST, port=port)
             finally:
-                # The owner's own API drops the session's link, as the unit suite's
-                # reset_connection_state does.
-                connection.use_houdini(connection.remote_houdini(None))
+                connection.houdini().close()
 
 
 @pytest.fixture

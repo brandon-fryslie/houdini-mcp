@@ -28,6 +28,7 @@ from ._common import (
     node_at,
     using,
 )
+from .failure import LinkLost
 from .reads import Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
@@ -513,7 +514,12 @@ def capture_multiple_panes(
                 result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
                 result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
             except ToolError as e:
-                failure = failure_for(failed_on(houdini(), link, e), "capture_multiple_panes")
+                judged = failed_on(houdini(), link, e)
+                # The link this pane failed on is dropped, so no later pane can be
+                # captured over it: the call fails, as a torn link above does.
+                if isinstance(judged, LinkLost):
+                    raise judged from e
+                failure = failure_for(judged, "capture_multiple_panes")
                 logger.warning(
                     "%s not captured (%s): %s", pane_type_name, failure.kind, failure.message
                 )

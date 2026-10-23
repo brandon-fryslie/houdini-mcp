@@ -209,6 +209,34 @@ def test_capture_multiple_panes_captures_a_pane_named_twice_once(
     assert "batch outcome operation=capture_multiple_panes done=2 failed=[]" in caplog.text
 
 
+def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
+    mock_connection: MockHouModule,
+) -> None:
+    """A pane whose failure is the link's drops that link, and no later pane is
+    tried over it: the call is the connection's failure, not a partial batch."""
+    from houdini_mcp.tools._common import OperationFailed
+    from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+    attempts: list[str] = []
+
+    def capture(hou, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+        attempts.append(name)
+        raise OperationFailed(f"{name} not captured") from EOFError("stream closed")
+
+    with (
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(object(), object(), object()),
+        ),
+        patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
+    ):
+        result = capture_multiple_panes(["SceneViewer", "NetworkEditor"])
+
+    assert attempts == ["SceneViewer"]
+    assert result["kind"] == "connection_lost", result
+    assert houdini().link() is None
+
+
 def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     mock_connection: MockHouModule, tmp_path: Path
 ) -> None:
