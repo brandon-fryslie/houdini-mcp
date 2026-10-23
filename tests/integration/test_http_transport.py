@@ -19,12 +19,10 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def documented_url() -> str:
-    """The one URL README.md's client configurations give, which examples/README.md gives too."""
+    """The one URL README.md's client configurations give."""
     urls: set[str] = set(re.findall(r'"url":\s*"([^"]+)"', (REPO / "README.md").read_text()))
     assert len(urls) == 1, f"README.md's client configurations give {urls or 'no URL'}"
     (url,) = urls
-    examples_give_it = f"`{url}`" in (REPO / "examples" / "README.md").read_text()
-    assert examples_give_it, f"examples/README.md does not give {url}"
     return url
 
 

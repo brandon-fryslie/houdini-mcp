@@ -1,11 +1,9 @@
-"""
-Integration tests for the workflow examples.
+"""Multi-tool SOP workflows against a live Houdini, calling the tool functions directly.
 
-These tests verify that the example workflows function correctly:
 1. Build from scratch (sphere → xform → color → OUT)
-2. Augment existing scene (insert mountain between grid → noise)
-3. Parameter workflow (discover → set → verify)
-4. Error handling (detect → fix → verify)
+2. Augment an existing scene (insert mountain between grid → noise)
+3. Parameters (discover → set → verify)
+4. Errors (detect → fix → verify)
 """
 
 from typing import Any
@@ -26,7 +24,7 @@ from houdini_mcp.tools import (
 
 
 class TestBuildFromScratch:
-    """Test Example 1: Building a complete SOP network from scratch."""
+    """Building a complete SOP network from scratch."""
 
     async def test_build_sphere_xform_color_out_chain(
         self, at: dict[str, Any], bound: dict[str, Any]
@@ -97,7 +95,7 @@ class TestBuildFromScratch:
 
 
 class TestAugmentExistingScene:
-    """Test Example 2: Augmenting an existing network by inserting a node."""
+    """Augmenting an existing network by inserting a node."""
 
     async def test_insert_mountain_between_grid_and_noise(
         self, at: dict[str, Any], bound: dict[str, Any]
@@ -170,7 +168,7 @@ class TestAugmentExistingScene:
 
 
 class TestParameterWorkflow:
-    """Test Example 3: Parameter schema discovery and intelligent setting."""
+    """Parameter schema discovery and intelligent setting."""
 
     async def test_parameter_schema_discovery_and_setting(
         self, at: dict[str, Any], bound: dict[str, Any]
@@ -254,7 +252,7 @@ class TestParameterWorkflow:
 
 
 class TestErrorHandling:
-    """Test Example 4: Error detection, diagnosis, and fixing."""
+    """Error detection, diagnosis, and fixing."""
 
     async def test_detect_missing_input_error(
         self, at: dict[str, Any], bound: dict[str, Any]

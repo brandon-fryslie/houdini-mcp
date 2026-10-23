@@ -495,6 +495,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `examples/`, `docs/implementation/examples-docs.md` and
+  `docs/reference/examples-ref.md` (houdini-tuneup-ef3.bl1). Every example script
+  POSTed to `/tools/<name>`, a route the server has never served, so none of them
+  ever ran. A client calls the tools over MCP, as README's client configurations
+  show. The live workflow tests they were said to be tested by remain, as
+  `tests/integration/test_workflows.py`; they call the tool functions directly.
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin
