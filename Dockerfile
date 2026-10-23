@@ -21,8 +21,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # (non-editable) install into the same .venv.
 COPY README.md ./
 COPY houdini_mcp/ ./houdini_mcp/
-# The token handshake is defined once, in the plugin tree; pyproject ships it from there.
-COPY houdini_plugin/houdini_mcp/python/houdini_mcp_handshake/ ./houdini_plugin/houdini_mcp/python/houdini_mcp_handshake/
+# The modules both sides share are defined once, in the plugin tree; pyproject's
+# package find is the one list of which of them ship.
+COPY houdini_plugin/houdini_mcp/python/ ./houdini_plugin/houdini_mcp/python/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 

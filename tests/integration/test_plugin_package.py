@@ -16,7 +16,13 @@ open(sys.argv[1], "w").write(json.dumps({
     "root": hou.getenv("HOUDINI_MCP_ROOT"),
     "modules": {
         name: importlib.import_module(name).__file__
-        for name in ("houdini_mcp_plugin", "houdini_mcp_handshake", "houdini_mcp_search")
+        for name in (
+            "houdini_mcp_plugin",
+            "houdini_mcp_handshake",
+            "houdini_mcp_read",
+            "houdini_mcp_schema",
+            "houdini_mcp_search",
+        )
     },
     "shelves": {name: shelf.filePath() for name, shelf in hou.shelves.shelves().items()},
 }))

@@ -129,6 +129,12 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: houdini-mcp:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The image ships the modules the server shares with the plugin from the plugin
+      # tree; a server that cannot import them fails here, not in a published container.
+      - name: Import the server in the image
+        run: docker run --rm houdini-mcp:${{ github.sha }} python -c "import houdini_mcp.server"

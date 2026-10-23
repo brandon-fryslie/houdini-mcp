@@ -291,14 +291,14 @@ class TestToolsShareTheOwner:
 
 class TestJsonSafeHouValue:
     def test_a_repeated_scalar_is_not_a_cycle(self):
-        from houdini_mcp.tools.parms import json_safe_hou_value
+        from houdini_mcp_read import json_safe_hou_value
 
         assert json_safe_hou_value(MagicMock(), (0.0, 0.0, 0.0)) == [0.0, 0.0, 0.0]
         shared = [1, 2]
         assert json_safe_hou_value(MagicMock(), [shared, shared]) == [[1, 2], [1, 2]]
 
     def test_a_container_that_contains_itself_raises(self):
-        from houdini_mcp.tools.parms import json_safe_hou_value
+        from houdini_mcp_read import json_safe_hou_value
 
         loop: list = [1]
         loop.append(loop)
