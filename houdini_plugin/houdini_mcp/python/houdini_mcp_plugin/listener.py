@@ -893,9 +893,10 @@ class RemoteListener:
         listener was serving before, it is started again on its config and the
         port it was bound to; the result is then an error whose ``running`` and
         message say what serves now, with the failed start under ``"attempt"``
-        and the restart under ``"restore"`` (see :func:`_failed_reload`). A config the policy refuses is refused as
-        start() refuses it, before anything is stopped, so the result has no
-        ``"stop"`` and the running listener keeps serving.
+        and the restart under ``"restore"`` (see :func:`_failed_reload`). A
+        config the policy refuses is refused as start() refuses it, before
+        anything is stopped, so the result has no ``"stop"`` and the running
+        listener keeps serving.
         """
         return self._admitted("reload", config, raise_on_policy, self._restart)
 
@@ -908,7 +909,7 @@ class RemoteListener:
             before = held if held is not None and held.serving else None
             stopped = self.stop()
             attempt = self._start(cfg, policy)
-            # [LAW:one-source-of-truth] whether the new config serves is the held
+            # [LAW:one-source-of-truth] whether the new config started is the held
             # record's to say; with nothing serving before, a reload is a start.
             if self._running is not None or before is None:
                 return {**attempt, "stop": stopped}
