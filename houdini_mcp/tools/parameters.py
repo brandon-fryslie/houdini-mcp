@@ -236,20 +236,33 @@ def _default(value: Any, is_tuple: bool) -> Any:
     return list(value) if is_tuple else value[0]
 
 
+_MENU_SEPARATOR = "_separator_"
+
+
 def _menu_items(node: Any, parm_template: Any) -> list[dict[str, Any]]:
     # [LAW:one-source-of-truth] The parm holds the items, a script-generated
     # menu's included; its template's own list is empty for those.
     parm = resolve(node, parm_template.name()).target
-    labels = parm.menuLabels()
+    use_token = parm_template.menuUseToken()
     # Houdini's own switch for the value domain: a use-token menu holds its
     # token's integer, any other menu the item's index. eval, the default and
     # set all speak it, so an offered value is one set_parameter selects.
-    values = (
-        [int(token) for token in parm.menuItems()]
-        if parm_template.menuUseToken()
-        else range(len(labels))
+    # A separator is no item to select, but it takes its index (boolean's
+    # "seam" is 6, after the separator at 5).
+    entries = list(zip(parm.menuItems(), parm.menuLabels(), strict=True))
+    items = [
+        {"label": label, "value": int(token) if use_token else index}
+        for index, (token, label) in enumerate(entries)
+        if token != _MENU_SEPARATOR
+    ]
+    logger.debug(
+        "menu items parm=%s use_token=%s offered=%d separators=%d",
+        parm_template.name(),
+        use_token,
+        len(items),
+        len(entries) - len(items),
     )
-    return [{"label": label, "value": value} for label, value in zip(labels, values, strict=True)]
+    return items
 
 
 def _map_parm_type_to_string(hou: Any, parm_type: Any, is_tuple: bool = False) -> str:

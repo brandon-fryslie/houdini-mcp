@@ -1,5 +1,6 @@
 """Tests for the get_parameter_schema function."""
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -297,12 +298,18 @@ class TestGetParameterSchema:
             if mock_parm:
                 mock_parm.parmTemplate = MagicMock(return_value=template)
                 mock_parm.eval = MagicMock(return_value=sphere._params.get(template.name()))
+        give_menu(sphere.parm("type"), ["poly", "mesh"], ["Polygon", "Mesh"])
 
         connected_to(mock_hou)
         result = get_parameter_schema("/obj/geo1/sphere1")
 
         assert result["status"] == "success"
         assert result["count"] == 4
+        [menu] = [p for p in result["parameters"] if p["name"] == "type"]
+        assert menu["menu_items"] == [
+            {"label": "Polygon", "value": 0},
+            {"label": "Mesh", "value": 1},
+        ]
         assert len(result["parameters"]) == 4
 
         # Check that all parameters are present
@@ -660,6 +667,26 @@ class TestMenuValueDomain:
         assert self._values(param) == [10, 9, 8]
         assert param["current_value"] in self._values(param)
         assert param["default"] in self._values(param)
+
+    def test_a_separator_is_not_offered_but_keeps_its_index(self, connected_to):
+        # boolean's operation: "seam" keeps index 2, after the separator at 1
+        param = self._menu(connected_to, ["union", "_separator_", "seam"], value=2, default=0)
+        assert param["menu_items"] == [
+            {"label": "UNION", "value": 0},
+            {"label": "SEAM", "value": 2},
+        ]
+
+    def test_a_use_token_menu_offers_no_separator(self, connected_to):
+        # TOP nameconflict separates its integer tokens
+        param = self._menu(
+            connected_to, ["0", "_separator_", "6"], value=6, default=0, use_token=True
+        )
+        assert self._values(param) == [0, 6]
+
+    def test_each_menu_read_logs_its_domain_and_what_it_offered(self, connected_to, caplog):
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.parameters"):
+            self._menu(connected_to, ["0", "_separator_", "6"], value=6, default=0, use_token=True)
+        assert "menu items parm=m use_token=True offered=2 separators=1" in caplog.messages
 
     def test_a_use_token_menu_with_a_non_integer_token_is_unread(self, connected_to):
         param = self._menu(connected_to, ["3", "b"], value=0, default=0, use_token=True)

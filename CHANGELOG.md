@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: each `get_parameter_schema` `menu_items` `value` is
+  the value `set_parameter` takes to select that item, the same value
+  `current_value` and `default` report (houdini-parameters-1nj). That is the
+  item's index, or for a menu whose template sets `menuUseToken()`, its token's
+  integer. Before, the value was the item's token (`"poly"`), so the current
+  value and the default could not be found among the offered values. The items
+  are read from the node's parameter, so a script-generated menu lists its
+  items, where it listed none; separators are no longer offered as items.
+
 - **BREAKING (wire)**: the counts and timeout a caller passes to
   `list_children`, `execute_code`, `get_parameter_schema` and `get_geo_summary`
   are bounded in the served schema and refused there

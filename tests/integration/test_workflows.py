@@ -233,6 +233,8 @@ class TestParameterWorkflow:
             ("geo", "fasciasolver", "femtristiffnessexp"),  # use-token menu
             ("geo", "agentaddmldeformer", "provider"),  # script-generated index menu
             ("topnet", "attributecreate", "pdg_workitemgeneration"),  # generated, use-token
+            ("geo", "boolean", "booleanop"),  # index menu with separators
+            ("topnet", "attributerandomize", "nameconflict"),  # use-token menu with separators
         ],
     )
     def test_every_offered_menu_value_is_one_set_parameter_selects(

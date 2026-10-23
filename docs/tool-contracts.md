@@ -232,10 +232,11 @@ render_quad_view(renderer="karma", karma_engine="gpu")
 ## get_parameter_schema: Menu Values
 
 A menu parameter's `menu_items` are `{label, value}` pairs. Each `value` is what
-`set_parameter` takes to select that item, and `current_value` and `default` are
-always one of them. For most menus the value is the item's index. A menu whose
-template sets `menuUseToken()` holds its token's integer, so its values are
-those integers:
+`set_parameter` takes to select that item, and `current_value` and `default`
+report the selected item by that same value. For most menus the value is the
+item's index, counting the menu's separators, which are not offered as items. A
+menu whose template sets `menuUseToken()` holds its token's integer, so its
+values are those integers:
 
 ```python
 get_parameter_schema(node_path="/obj/geo1/sphere1", parm_name="type")
