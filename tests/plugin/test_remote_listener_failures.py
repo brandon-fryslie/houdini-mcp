@@ -692,36 +692,51 @@ class TestReconnect:
 # ---------------------------------------------------------------------------
 
 
-# What poll() raises on a descriptor closed under it.
-_CLOSED_FD = OSError(errno.EBADF, "Bad file descriptor")
+def _closed_fd() -> OSError:
+    """What poll() raises on a descriptor closed under it."""
+    return OSError(errno.EBADF, "Bad file descriptor")
 
 
-# What one serve() round runs into, acting on the server the connection is served by.
-def _client_closes(server: SimpleNamespace) -> bool:
+# What one serve() round runs into, acting on the server and the connection it serves.
+def _client_closes(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     raise EOFError("connection closed by peer")
 
 
-def _listener_closes_unheard(server: SimpleNamespace) -> bool:
+def _client_end_read_on_another_thread(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    # A main-thread call's serve read the client's end and closed the
+    # connection; this round waited for it and returns with nothing to read.
+    conn.close()
+    return True
+
+
+def _client_end_read_on_another_thread_under_poll(
+    server: SimpleNamespace, conn: SimpleNamespace
+) -> bool:
+    conn.close()
+    raise _closed_fd()
+
+
+def _listener_closes_unheard(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     # stop() lands mid-round and its close never wakes the poll: the round ends
     # on its own bound with nothing served.
     server.active = False
     return False
 
 
-def _listener_closes_under_poll(server: SimpleNamespace) -> bool:
+def _listener_closes_under_poll(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     server.active = False
-    raise _CLOSED_FD
+    raise _closed_fd()
 
 
-def _fails_under_a_serving_listener(server: SimpleNamespace) -> bool:
-    raise _CLOSED_FD
+def _fails_under_a_serving_listener(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    raise _closed_fd()
 
 
 class TestClientDisconnect:
     """Who ended a connection is the listener's ``active`` once serving stops:
     the end is recorded with it, unless serving stopped on a socket error under
-    a listener still serving, which is raised instead. Either way the
-    connection is closed."""
+    a listener still serving on a connection still open, which is raised
+    instead. Either way the connection is closed."""
 
     PEER = ("127.0.0.1", 50123)
 
@@ -729,10 +744,21 @@ class TestClientDisconnect:
         ("round_", "record"),
         [
             (_client_closes, "by the client (end of stream)"),
+            (_client_end_read_on_another_thread, "by the client (between rounds)"),
+            (
+                _client_end_read_on_another_thread_under_poll,
+                "by the client ([Errno 9] Bad file descriptor)",
+            ),
             (_listener_closes_unheard, "by the listener (between rounds)"),
             (_listener_closes_under_poll, "by the listener ([Errno 9] Bad file descriptor)"),
         ],
-        ids=["client-closed", "listener-closed-unheard", "listener-closed-under-poll"],
+        ids=[
+            "client-closed",
+            "client-end-read-on-another-thread",
+            "client-end-read-on-another-thread-under-poll",
+            "listener-closed-unheard",
+            "listener-closed-under-poll",
+        ],
     )
     def test_a_clean_end_is_recorded_with_who_ended_it(self, caplog, round_, record):
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
@@ -750,17 +776,19 @@ class TestClientDisconnect:
         conn = self.connection(server, _fails_under_a_serving_listener)
         with pytest.raises(OSError) as caught:
             listener_module._serve_connection(server, conn)
-        assert caught.value is _CLOSED_FD
+        assert caught.value.errno == errno.EBADF
         assert caplog.messages == []
         assert conn.closed is True
 
     def connection(
-        self, server: SimpleNamespace, round_: Callable[[SimpleNamespace], bool]
+        self,
+        server: SimpleNamespace,
+        round_: Callable[[SimpleNamespace, SimpleNamespace], bool],
     ) -> SimpleNamespace:
-        """A connection whose every serve() round is *round_* acting on *server*."""
+        """A connection whose every serve() round is *round_* acting on *server* and it."""
         conn = SimpleNamespace(
             closed=False, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
         )
-        conn.serve = lambda _timeout: round_(server)
+        conn.serve = lambda _timeout: round_(server, conn)
         conn.close = lambda: setattr(conn, "closed", True)
         return conn

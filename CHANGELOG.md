@@ -115,7 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Houdini session, and the end of that client's connection was never logged:
   11 of 30 stops with an idle client on Houdini 22. The record of a
   connection's end now also says how its thread saw it: `(end of stream)`,
-  the socket error, or `(between rounds)` when the stop never woke it.
+  the socket error, or `(between rounds)` when a round ended with no error and
+  found it over, as when the stop never woke it.
 
 ### Changed
 

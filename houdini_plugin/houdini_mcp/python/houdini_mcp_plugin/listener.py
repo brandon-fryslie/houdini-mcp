@@ -439,12 +439,16 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     the first round that finds ``active`` cleared. A round that instead runs
     into the closed descriptor fails with an OSError, knowing the socket closed
     but not that it was closed on purpose. Either way it is the listener's own
-    disconnect, recorded as one, not as a traceback. A socket error while the
-    listener still serves is a real failure, and is raised.
+    disconnect, recorded as one, not as a traceback. So is a socket error on a
+    connection another thread serving it (a main-thread call's) already closed,
+    as ``serve_all()`` had it. Any other socket error while the listener still
+    serves is a real failure, and is raised.
 
     The record says who ended the connection and how serving saw it end: end
     of stream (a client's close request ends this way too), the socket error,
-    or between rounds: a stop whose close the round's poll never heard.
+    or between rounds, where a round ended with no error and found serving
+    over: a stop whose close the poll never heard, or the client's end read
+    by another thread serving the connection.
     """
     error: OSError | None = None
     ending = "between rounds"
@@ -457,7 +461,8 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     except EOFError:
         ending = "end of stream"
     except OSError as exc:
-        error, ending = exc, str(exc)
+        ending = str(exc)
+        error = None if conn.closed else exc
     finally:
         conn.close()
     # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,
