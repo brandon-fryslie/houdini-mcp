@@ -9,6 +9,7 @@ import logging
 import os
 import shlex
 import socket
+import subprocess
 import sys
 import threading
 
@@ -310,16 +311,37 @@ class TestSelfTestAndStatus:
         # Firewall guidance still present (the firewall must let clients through).
         assert report["guidance"]
 
-    def test_self_test_names_the_executable_that_owns_the_socket(self, fake_hrpyc, fake_hou):
+    def test_self_test_reports_and_allows_the_process_executable(
+        self, fake_hrpyc, fake_hou, monkeypatch
+    ):
         """macOS's firewall admits programs, so the report names this process's binary."""
+        app = "/Applications/Houdini FX.app/Contents/MacOS/houdini"
+        monkeypatch.setattr(listener_module, "own_executable", lambda: app)
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         started(listener.start(ListenerConfig(host="127.0.0.1", port=0)))
         report = listener.self_test()
 
-        executable = os.path.realpath(sys.executable)
-        assert report["executable"] == executable
+        assert report["executable"] == app
         (macos,) = (g for g in report["guidance"] if g.startswith("macOS:"))
-        assert f"--add {shlex.quote(executable)}" in macos
+        assert f"--add {shlex.quote(app)}" in macos
+
+    def test_own_executable_is_the_os_answer_not_what_python_was_told(self, tmp_path):
+        """PYTHONEXECUTABLE rewrites sys.executable, not the program the OS runs."""
+        decoy = str(tmp_path / "decoy")
+        named = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from houdini_mcp_plugin.listener import own_executable; "
+                "import sys; print(sys.executable); print(own_executable())",
+            ],
+            env={**os.environ, "PYTHONEXECUTABLE": decoy, "PYTHONPATH": os.pathsep.join(sys.path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+
+        assert named == [decoy, os.path.realpath(sys.executable)]
 
     def test_macos_guidance_allows_the_executable_whatever_its_path_holds(self):
         app = (

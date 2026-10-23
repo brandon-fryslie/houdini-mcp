@@ -24,6 +24,7 @@ so tests pass light-weight fakes and never need a real Houdini.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import shlex
@@ -397,6 +398,34 @@ def _serve(server: HrpycServer) -> None:
         # Any other exception still propagates to threading.excepthook; this is
         # the one record in the plugin's own log that the loop is gone.
         logger.info("hrpyc accept loop ended on port %s", server.port)
+
+
+# libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.
+_PROC_PIDPATHINFO_MAXSIZE = 4096
+
+
+def own_executable() -> str:
+    """The program the OS runs as this process, as the OS names it.
+
+    Not ``sys.executable``: Python derives that from argv[0] or
+    ``PYTHONEXECUTABLE``, so the environment can make it name another program,
+    or nothing.
+
+    Raises:
+        OSError: when the OS cannot name this process's executable.
+    """
+    if sys.platform == "darwin":
+        path = ctypes.create_string_buffer(_PROC_PIDPATHINFO_MAXSIZE)
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        if libproc.proc_pidpath(os.getpid(), path, len(path)) <= 0:
+            raise OSError(ctypes.get_errno(), "proc_pidpath could not name this process")
+        return os.fsdecode(path.value)
+    if sys.platform == "win32":
+        module = ctypes.create_unicode_buffer(32768)
+        if not ctypes.windll.kernel32.GetModuleFileNameW(None, module, len(module)):
+            raise ctypes.WinError()
+        return module.value
+    return os.readlink("/proc/self/exe")
 
 
 def firewall_guidance(host: str, port: int, executable: str) -> list[str]:
@@ -812,11 +841,9 @@ class RemoteListener:
             held.config.host, held.bound_port, timeout=1.0
         )
 
-        # The listener serves from inside this process, so this process's binary
-        # is the one owning the socket; realpath drops the launcher's
-        # bin/../.. segments and the Versions/Current symlink, leaving the path
-        # lsof names.
-        executable = os.path.realpath(sys.executable)
+        # The listener serves from inside this process, so this process's
+        # binary is the one owning the socket.
+        executable = own_executable()
         warnings: list[str] = []
         if held.policy.loopback_only:
             warnings.append(
