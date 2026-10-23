@@ -1,4 +1,5 @@
-"""The live tests: every test here runs against a headless Houdini the session starts.
+"""The live tests: every test here runs against a real Houdini, most against the headless
+one the session starts when a test first asks for ``houdini``.
 
 Run them with ``uv run pytest -m integration``.
 """

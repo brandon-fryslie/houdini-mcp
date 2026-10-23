@@ -8,10 +8,11 @@ from pathlib import Path
 
 from tests.live_houdini import PLUGIN_PACKAGES, hython_executable
 
-# What Houdini made of the installed package, as one JSON line on stdout.
+# What Houdini made of the installed package, written as JSON to the file argv[1] names,
+# where nothing hython prints can mix into it.
 _PROBE = """\
-import importlib, json, hou
-print(json.dumps({
+import importlib, json, sys, hou
+open(sys.argv[1], "w").write(json.dumps({
     "root": hou.getenv("HOUDINI_MCP_ROOT"),
     "modules": {
         name: importlib.import_module(name).__file__
@@ -20,6 +21,9 @@ print(json.dumps({
     "shelves": {name: shelf.filePath() for name, shelf in hou.shelves.shelves().items()},
 }))
 """
+# Where a Houdini finds packages and Python besides the packages directory this test
+# installs into: a site install or the checkout's plugin there would load in its place.
+_OTHER_SOURCES = {"PYTHONPATH", "HOUDINI_PATH", "HSITE"}
 
 
 def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -> None:
@@ -29,14 +33,15 @@ def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path
     plugin = packages / "houdini_mcp"
     # Packages are read only at startup, so this needs a Houdini of its own. It reads
     # packages from here alone: not the user's preferences, whose packages directory
-    # may hold a real install, and not a PYTHONPATH that could hold the checkout's plugin.
-    environ = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+    # may hold a real install, and none of the other places a plugin could load from.
+    environ = {name: value for name, value in os.environ.items() if name not in _OTHER_SOURCES}
     environ |= {
         "HOUDINI_PACKAGE_DIR": str(packages),
         "HOUDINI_USER_PREF_DIR": str(tmp_path / "pref" / "houdini__HVER__"),
     }
+    report = tmp_path / "loaded.json"
     probe = subprocess.run(
-        [str(hython_executable(os.environ)), "-c", _PROBE],
+        [str(hython_executable(os.environ)), "-c", _PROBE, str(report)],
         env=environ,
         cwd=tmp_path,
         capture_output=True,
@@ -44,7 +49,7 @@ def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path
         timeout=300,
     )
     assert probe.returncode == 0, probe.stderr
-    loaded = json.loads(probe.stdout.splitlines()[-1])
+    loaded = json.loads(report.read_text())
 
     assert loaded["root"] == str(plugin)
     for name, file in loaded["modules"].items():

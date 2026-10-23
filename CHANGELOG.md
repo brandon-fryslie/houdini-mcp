@@ -522,10 +522,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   found neither `houdini_mcp_plugin`, `houdini_mcp_handshake` nor
   `houdini_mcp_search`, and no "Houdini MCP" shelf. `houdini_plugin/` is now laid
   out as a packages directory (`houdini_mcp.json` beside `houdini_mcp/python` and
-  `houdini_mcp/toolbar`), and the install is one copy:
-  `cp -R houdini_plugin/. ~/Library/Preferences/houdini/22.0/packages/`. Running
-  it over an old install fixes it; the old install's
-  `packages/houdini_mcp/houdini_mcp.json` is unused and can be deleted.
+  `houdini_mcp/toolbar`), and the install copies that tree into the packages
+  directory in place of any earlier install; re-running README's install
+  fixes an old one.
   `tests/integration/test_plugin_package.py` installs into a scratch packages
   directory and checks the imports and the shelf in a fresh `hython`.
 

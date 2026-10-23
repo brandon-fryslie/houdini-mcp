@@ -185,9 +185,11 @@ hrpyc listener, and it holds the search `find_nodes` runs inside Houdini.
 From your clone of this repository:
 
 1. Copy the contents of `houdini_plugin`, which is laid out as a packages
-   directory, into your Houdini packages directory:
+   directory, into your Houdini packages directory, replacing any earlier
+   install of the plugin:
    ```bash
    mkdir -p ~/Library/Preferences/houdini/22.0/packages
+   rm -rf ~/Library/Preferences/houdini/22.0/packages/houdini_mcp
    cp -R houdini_plugin/. ~/Library/Preferences/houdini/22.0/packages/
    ```
    This puts `houdini_mcp.json` in `packages/` and the plugin beside it in
