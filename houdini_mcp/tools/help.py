@@ -4,16 +4,16 @@ This module provides tools for fetching Houdini documentation from
 the SideFX website. It does NOT require a Houdini connection.
 """
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
 from bs4 import BeautifulSoup
-from pydantic import Field
 
 from ._common import (
     InvalidInput,
     OperationFailed,
+    Seconds,
     TimedOut,
     handle_connection_errors,
 )
@@ -38,10 +38,6 @@ _HELP_PATHS: dict[HelpType, str] = {
     "vex_function": "vex/functions",
     "python_hou": "hom/hou",
 }
-
-# [LAW:types-are-the-program] httpx refuses a zero or negative timeout, so the served
-# schema refuses it first.
-Seconds = Annotated[int, Field(ge=1)]
 
 
 # [LAW:effects-at-boundaries] The one place the docs site's HTTP client is built. Tests

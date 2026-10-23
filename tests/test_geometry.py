@@ -640,6 +640,33 @@ class TestGetGeoSummary:
         assert result["status"] == "error"
         assert "Failed to parse" in result["message"]
 
+    async def test_get_geo_summary_output_past_its_ceiling(self, mock_execute_code):
+        """A cut-off read names the ceiling and the knob, not a parse error."""
+        from houdini_mcp.tools import get_geo_summary
+
+        mock_execute_code.return_value = {
+            "status": "success",
+            "stdout": '{"status": "success", "sample_points": [{"ind',
+            "stderr": "",
+            "stdout_truncated": True,
+        }
+
+        result = await get_geo_summary(
+            "/obj/geo1/sphere1",
+            max_sample_points=10000,
+            host="localhost",
+            port=18811,
+            summarizer=SUMMARIZER,
+            bypass_config_enabled=False,
+        )
+
+        assert result["status"] == "error"
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == (
+            "Geometry data for /obj/geo1/sphere1 exceeded 500000 characters; "
+            "ask for fewer than 10000 max_sample_points"
+        )
+
 
 class _Raises:
     """A hou call that raises inside Houdini."""

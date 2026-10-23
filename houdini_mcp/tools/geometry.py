@@ -22,6 +22,9 @@ from .summarization import GEOMETRY_BRIEF, summarized
 # [LAW:one-source-of-truth] the program run inside Houdini spells a reason
 # with reads.format_reason itself, so one failure reads the same from any tool
 _FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
+# The most output a geometry read may print; a sample of many points with many
+# attributes can pass it, and that read fails naming this ceiling.
+_GEOMETRY_OUTPUT_LIMIT = 500000
 
 
 @handle_connection_errors("get_geo_summary")
@@ -254,10 +257,17 @@ print(json.dumps(result))
         geo_analysis_code,
         ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=bypass_config_enabled),
         operation="get_geo_summary",
-        max_stdout_size=500000,  # Allow larger output for geo data
+        max_stdout_size=_GEOMETRY_OUTPUT_LIMIT,
         host=host,
         port=port,
     )
+    # [LAW:no-silent-failure] a cut-off read is not malformed data: name the
+    # ceiling it hit and the knob that lowers it, rather than a parse error.
+    if exec_result.get("stdout_truncated"):
+        raise OperationFailed(
+            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters; "
+            f"ask for fewer than {max_sample_points} max_sample_points"
+        )
 
     # Parse the JSON output from stdout
     stdout = exec_result["stdout"].strip()

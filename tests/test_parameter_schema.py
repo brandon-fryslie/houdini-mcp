@@ -310,7 +310,7 @@ class TestGetParameterSchema:
         assert "radz" in param_names
         assert "type" in param_names
 
-    def test_get_parameter_schema_max_parms_limit(self, connected_to):
+    def test_get_parameter_schema_max_parms_limit(self, connected_to, caplog):
         """Test that max_parms limits the number of returned parameters."""
         from houdini_mcp.tools import get_parameter_schema
 
@@ -337,14 +337,48 @@ class TestGetParameterSchema:
         sphere.parmTemplates = MagicMock(return_value=templates)
 
         connected_to(mock_hou)
-        result = get_parameter_schema("/obj/geo1/sphere1", max_parms=5)
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.parameters"):
+            result = get_parameter_schema("/obj/geo1/sphere1", max_parms=5)
 
         assert result["status"] == "success"
         assert result["count"] == 5
         assert len(result["parameters"]) == 5
-        assert result["warning"] == "Parameters limited to the first 5 of 20 parameter templates"
+        assert result["warning"] == "Parameters limited to the first 5 of 20 parameters"
+        assert "parameter schema node=/obj/geo1/sphere1 listed=5 of=20" in caplog.messages
 
         assert "warning" not in get_parameter_schema("/obj/geo1/sphere1", max_parms=20)
+
+    def test_max_parms_counts_parameters_not_layout(self, connected_to):
+        """Folders and separators neither use up max_parms nor make a listing look cut."""
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        mock_hou.node("/obj").createNode("geo", "geo1")
+        sphere = MockHouNode(
+            path="/obj/geo1/sphere1",
+            name="sphere1",
+            node_type="sphere",
+            params={f"parm{i}": 0.0 for i in range(3)},
+        )
+        mock_hou.add_node(sphere)
+        layout = mock_hou.parmTemplateType
+        sphere.parmTemplates = MagicMock(
+            return_value=[
+                MockParmTemplate("folder1", "Folder", layout.Folder),
+                MockParmTemplate("sep1", "Separator", layout.Separator),
+                *(
+                    MockParmTemplate(f"parm{i}", f"P{i}", layout.Float, default_value=[0.0])
+                    for i in range(3)
+                ),
+                MockParmTemplate("sep2", "Separator", layout.Separator),
+            ]
+        )
+
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/geo1/sphere1", max_parms=3)
+
+        assert [p["name"] for p in result["parameters"]] == ["parm0", "parm1", "parm2"]
+        assert "warning" not in result
 
     def test_get_parameter_schema_skip_folders(self, connected_to):
         """Test that folder/separator parameters are skipped."""

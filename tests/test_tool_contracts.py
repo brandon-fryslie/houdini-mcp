@@ -380,6 +380,14 @@ class TestServedSchemas:
             assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
 
+    async def test_execute_code_waits_at_least_a_second(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A timeout of zero would report the program still running before it began."""
+        arguments = {"code": "pass"}
+        assert await accepts(client, served, "execute_code", {**arguments, "timeout": 1})
+        assert not await accepts(client, served, "execute_code", {**arguments, "timeout": 0})
+
     async def test_geo_summary_samples_at_most_ten_thousand_points(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:

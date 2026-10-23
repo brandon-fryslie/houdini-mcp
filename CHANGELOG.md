@@ -15,13 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_stderr_size` or `max_diff_nodes`, or `get_geo_summary`
   `max_sample_points` is refused; before, the output and diff lists were sliced
   from the end, and the sample count was clamped to 0. `list_children`
-  `max_nodes` and `get_parameter_schema` `max_parms` must be at least 1, since a
-  limit of 0 listed nothing as success. `get_geo_summary` `max_sample_points`
-  over 10000 is refused, where it was clamped to 10000.
+  `max_nodes` and `get_parameter_schema` `max_parms` must be at least 1: a
+  limit of 0 listed no nodes, and no parameters as a plain success.
+  `get_geo_summary` `max_sample_points` over 10000 is refused, where it was
+  clamped to 10000. `execute_code` `timeout` must be at least 1; a timeout of 0
+  or less reported the program still running at once and held the scene.
 
-- `get_parameter_schema` reports a listing that `max_parms` cut short with
-  `warning: "Parameters limited to the first N of M parameter templates"`
+- `get_parameter_schema` `max_parms` counts parameters; folders, separators and
+  labels no longer use it up. A listing it cut short carries
+  `warning: "Parameters limited to the first N of M parameters"`
   (houdini-tool-contracts-14l). Before, the cut list was a plain success.
+
+- `get_geo_summary` whose output passes its 500000-character ceiling fails
+  naming that ceiling and `max_sample_points`, where it failed as unparseable
+  geometry data (houdini-tool-contracts-14l).
 
 - **BREAKING (Python API)**: `houdini_mcp.connection` no longer has `connect`,
   `get_connection`, `disconnect`, `ensure_link` or `ensure_connected`

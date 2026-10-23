@@ -4,6 +4,7 @@ This module provides tools for getting and setting parameters on Houdini nodes,
 including parameter schema introspection.
 """
 
+import logging
 from typing import Any
 
 from ._common import (
@@ -16,6 +17,8 @@ from ._common import (
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 from .reads import read
+
+logger = logging.getLogger("houdini_mcp.tools.parameters")
 
 
 @handle_connection_errors("set_parameter")
@@ -115,8 +118,6 @@ def get_parameter_schema(
 
         node = node_at(hou, node_path)
 
-        parameters: list[dict[str, Any]] = []
-
         # Get parameter templates - either specific one or all
         if parm_name is not None:
             try:
@@ -124,8 +125,6 @@ def get_parameter_schema(
             except ParmNotFound as e:
                 raise InvalidInput(str(e), parm_name=parm_name) from e
 
-            # When we only requested one parameter, we expect to include it even if
-            # its template is folder-like (rare but possible).
             parm_templates = [parm_template]
         else:
             # Get all parameter templates from node.
@@ -138,12 +137,16 @@ def get_parameter_schema(
             else:
                 parm_templates = []
 
+        # Folders, separators and labels are layout, not parameters: dropped before
+        # the cut, so max_parms, count and the warning all count parameters.
+        unlisted = _unlisted_types(hou)
+        listed = [t for t in parm_templates if t.type() not in unlisted]
         # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
         # template, and max_parms is at least 1.
-        for parm_template in parm_templates[:max_parms]:
-            param_info = _extract_parameter_info(hou, node, parm_template)
-            if param_info is not None:
-                parameters.append(param_info)
+        parameters = [_extract_parameter_info(hou, node, t) for t in listed[:max_parms]]
+        logger.info(
+            "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), len(listed)
+        )
 
         result: dict[str, Any] = {
             "status": "success",
@@ -151,17 +154,26 @@ def get_parameter_schema(
             "parameters": parameters,
             "count": len(parameters),
         }
-        if len(parm_templates) > max_parms:
+        if len(listed) > max_parms:
             # [LAW:no-silent-failure] a capped listing is not the node's whole schema.
             result["warning"] = (
-                f"Parameters limited to the first {max_parms} of "
-                f"{len(parm_templates)} parameter templates"
+                f"Parameters limited to the first {max_parms} of {len(listed)} parameters"
             )
 
         return result
 
 
-def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any] | None:
+def _unlisted_types(hou: Any) -> tuple[Any, ...]:
+    """The template types that lay out a parameter dialog without being parameters."""
+    return (
+        hou.parmTemplateType.Folder,
+        hou.parmTemplateType.FolderSet,
+        hou.parmTemplateType.Separator,
+        hou.parmTemplateType.Label,
+    )
+
+
+def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any]:
     """
     Extract parameter information from a parameter template.
 
@@ -174,18 +186,9 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
         parm_template: The parameter template to extract info from
 
     Returns:
-        Dict with parameter info, or None if parameter should be skipped
+        Dict with parameter info
     """
     parm_type = parm_template.type()
-
-    # Skip folder/separator parameters - they're not settable
-    if parm_type in (
-        hou.parmTemplateType.Folder,
-        hou.parmTemplateType.FolderSet,
-        hou.parmTemplateType.Separator,
-        hou.parmTemplateType.Label,
-    ):
-        return None
 
     param_name = parm_template.name()
     num_components = parm_template.numComponents()
