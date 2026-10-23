@@ -182,13 +182,17 @@ def run_server(settings: ServerSettings, results: Results, how: Serving, log_lev
             logger.info("Starting Houdini MCP Server on stdio")
             mcp.run(transport="stdio", show_banner=False)
         case Http(transport, listener):
+            logger.info(
+                f"Starting Houdini MCP Server over {transport} on {listener.host}:"
+                f"{listener.port}, answering loopback and {list(listener.allowed_hosts)}"
+            )
             # [LAW:single-enforcer] every request passes fastmcp's Host/Origin guard, the
             # one check a DNS-rebinding page cannot get past; the bind is what keeps the
             # LAN out, since a client that is not a browser sends whatever Host it likes.
             # Each guard argument is given, so no FASTMCP_HTTP_* setting can loosen it.
             mcp.run(
                 transport=transport,
-                host=listener.host,
+                host=str(listener.host),
                 port=listener.port,
                 host_origin_protection=True,
                 allowed_hosts=list(listener.allowed_hosts),

@@ -64,7 +64,10 @@ def test_loopback_and_a_listed_name_are_answered(port: int, host: str) -> None:
 def this_machines_lan_address() -> str:
     """The address this machine sends from toward the internet: a non-loopback one of its own."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.connect(("192.0.2.1", 9))  # UDP: names a route, sends nothing
+        try:
+            probe.connect(("192.0.2.1", 9))  # UDP: names a route, sends nothing
+        except OSError as e:
+            pytest.skip(f"this machine has no route off loopback, so no LAN to call from: {e}")
         address: str = probe.getsockname()[0]
     assert not ipaddress.ip_address(address).is_loopback, address
     return address

@@ -6,21 +6,19 @@ services:
     image: houdini-mcp:local
     container_name: houdini-mcp
     restart: unless-stopped
-    # MCP_HOST is the address on this machine the server answers at, as under `uv run`:
-    # compose publishes there. Inside, the server listens on all of the container's own
-    # interfaces, which nothing reaches but that publish.
+    # MCP_HOST and MCP_PORT say where on this machine the server answers, as under
+    # `uv run`: compose publishes there. Inside, the server listens where the image says.
     ports:
-      - "${MCP_HOST:-127.0.0.1}:3055:3055"
-    # Every setting the server reads. A bare name takes its value from the shell or the
-    # env file and is left unset when neither sets it, so the server's own default applies.
+      - "${MCP_HOST:-127.0.0.1}:${MCP_PORT:-3055}:3055"
+    # Every setting the server reads but the two the image fixes. A bare name takes its value
+    # from the shell or the env file and is left unset when neither sets it, so the server's
+    # own default applies.
     environment:
       - HOUDINI_HOST=${HOUDINI_HOST:?set HOUDINI_HOST in .env to the address of the machine running Houdini}
       - HOUDINI_PORT
       - HOUDINI_RPC_TOKEN
       - HOUDINI_MCP_ALLOW_BYPASS
       - HOUDINI_MCP_RESULTS_DIR
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT
       - MCP_ALLOWED_HOSTS
       - MCP_TRANSPORT
       - LOG_LEVEL

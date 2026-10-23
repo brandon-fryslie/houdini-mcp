@@ -9,13 +9,21 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import Annotated, Literal, TypeVar
 
 import houdini_mcp_handshake as handshake
 import httpx
 from fastmcp.server.server import Transport
-from pydantic import AfterValidator, BeforeValidator, Field, TypeAdapter, ValidationError
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    IPvAnyAddress,
+    TypeAdapter,
+    ValidationError,
+)
 
 T = TypeVar("T")
 
@@ -193,9 +201,13 @@ def log_level(environ: Mapping[str, str]) -> int:
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
 
 
-# A name or address as a Host header carries it, with fastmcp's * and ? wildcards: no
-# scheme, path or credentials, which would never match a Host and so admit nothing.
-AllowedHost = Annotated[str, Field(pattern=r"^[A-Za-z0-9._\-*?:\[\]]+$")]
+# The host part of the URL a client calls this server by: a name, an IPv4 address, or an
+# IPv6 address in brackets. [LAW:types-are-the-program] no port, which the guard ignores,
+# and no * or ?, which fastmcp would read as a wildcard: a bare * admits every Host and
+# reopens the server to a rebinding page.
+AllowedHost = Annotated[
+    str, Field(pattern=r"^(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|\[[0-9A-Fa-f:.]+\])$")
+]
 
 
 def _entries(raw: object) -> object:
@@ -211,7 +223,7 @@ class HttpListener:
     """Where an HTTP transport listens, and the names a request may call it by besides
     loopback and the address the request arrived at."""
 
-    host: str
+    host: IPv4Address | IPv6Address
     port: int
     allowed_hosts: tuple[str, ...]
 
@@ -243,7 +255,7 @@ def serving(environ: Mapping[str, str]) -> Serving:
     return Http(
         transport=transport,
         listener=HttpListener(
-            host=setting(environ, "MCP_HOST", TypeAdapter(Host), "127.0.0.1"),
+            host=setting(environ, "MCP_HOST", TypeAdapter(IPvAnyAddress), "127.0.0.1"),
             port=setting(environ, "MCP_PORT", TypeAdapter(Port), "3055"),
             allowed_hosts=setting(environ, "MCP_ALLOWED_HOSTS", TypeAdapter(AllowedHosts), ""),
         ),

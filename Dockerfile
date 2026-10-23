@@ -29,8 +29,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # The .venv is the only interpreter with the dependencies; every `python` in the image means it.
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Expose MCP server port
-EXPOSE 3055
+# Inside the container the server listens on the container's own interfaces, at the port
+# a publish (`docker run -p`, compose's `ports:`) forwards to: nothing else reaches them.
+# Where on the host it answers is the publish's choice.
+ENV MCP_HOST=0.0.0.0 MCP_PORT=3055
+EXPOSE $MCP_PORT
 
 # Run the server
 CMD ["python", "-m", "houdini_mcp"]

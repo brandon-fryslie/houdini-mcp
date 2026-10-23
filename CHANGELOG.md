@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not admit (houdini-tuneup-ef3.9q8). It used to listen on every interface and
   check neither the Host nor the Origin header, so any machine on the LAN, or a
   web page through DNS rebinding, could call every tool, `execute_code` included.
-  Now it listens on `MCP_HOST`, by default `127.0.0.1`, and Compose publishes the
-  port on that address of the host. A request is refused with 421 when its Host
+  Now it listens on `MCP_HOST`, by default `127.0.0.1`. The image listens on every
+  interface of its container, and Compose publishes it at `MCP_HOST` and `MCP_PORT`
+  of the host, so under Compose `MCP_PORT` is the host's port and the container's
+  stays 3055. A request is refused with 421 when its Host
   names neither loopback, an entry of `MCP_ALLOWED_HOSTS`, nor the address it
   arrived at, and with 403 when a browser sends an Origin that is neither the
   request's own nor loopback calling loopback, as the MCP transport spec requires.

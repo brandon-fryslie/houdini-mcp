@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any
 
@@ -55,6 +56,9 @@ STARTUP_SETTINGS = (
 # What a server reads of the environment, then: those, and where its results go (each
 # test names its own).
 READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR")
+ALLOWED_HOST = (
+    "String should match pattern '^(?:[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*|\\[[0-9A-Fa-f:.]+\\])$'"
+)
 
 # This process's environment with none of them set, so the developer's shell decides nothing.
 UNSET = {name: value for name, value in os.environ.items() if name not in STARTUP_SETTINGS}
@@ -82,9 +86,14 @@ def test_a_port_that_is_not_one_is_refused(port: str) -> None:
 
 
 def test_http_listens_on_loopback_and_admits_the_names_listed_unless_told_otherwise() -> None:
-    assert serving({}) == Http("http", HttpListener("127.0.0.1", 3055, ()))
-    listed = serving({"MCP_HOST": "0.0.0.0", "MCP_ALLOWED_HOSTS": " studio-box , 192.168.1.50 "})
-    assert listed == Http("http", HttpListener("0.0.0.0", 3055, ("studio-box", "192.168.1.50")))
+    assert serving({}) == Http("http", HttpListener(ip_address("127.0.0.1"), 3055, ()))
+    listed = serving(
+        {"MCP_HOST": "::", "MCP_ALLOWED_HOSTS": " studio-box.local , 192.168.1.50, [fe80::1] "}
+    )
+    assert listed == Http(
+        "http",
+        HttpListener(ip_address("::"), 3055, ("studio-box.local", "192.168.1.50", "[fe80::1]")),
+    )
 
 
 def test_stdio_reads_no_listener_setting() -> None:
@@ -209,9 +218,9 @@ async def test_a_started_server_reads_no_setting_again(
 def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], tmp_path: pathlib.Path
 ) -> None:
-    """A setting compose.yaml does not name never reaches the server in its container,
-    whatever .env says. Only the entry point's own environment records, so what a
-    library reads of the process's is not counted."""
+    """A setting neither compose.yaml nor the image names never reaches the server in its
+    container, whatever .env says. Only the entry point's own environment records, so
+    what a library reads of the process's is not counted."""
     monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(tmp_path))
     environ = Recording(os.environ)
     monkeypatch.setattr(entry_point, "os", SimpleNamespace(environ=environ))
@@ -221,7 +230,15 @@ def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     root = pathlib.Path(__file__).resolve().parents[1]
     compose = yaml.safe_load((root / "compose.yaml").read_text())
     named = {item.split("=")[0] for item in compose["services"]["houdini-mcp"]["environment"]}
-    assert environ.read == set(READ_AT_START) == named
+    image = set(READ_AT_START) & {
+        pair.split("=")[0]
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if line.startswith("ENV ")
+        for pair in line.split()[1:]
+    }
+    assert image == {"MCP_HOST", "MCP_PORT"}, "the image fixes where it listens, and only that"
+    assert not named & image, named & image
+    assert environ.read == set(READ_AT_START) == named | image
 
 
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
@@ -252,6 +269,9 @@ def test_starting_applies_and_logs_what_it_resolved(
 ) -> None:
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
+    monkeypatch.setenv("MCP_HOST", "192.168.1.10")
+    monkeypatch.setenv("MCP_PORT", "3100")
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "studio-box")
     monkeypatch.setenv("LOG_LEVEL", "debug")
 
     # the stubbed basicConfig applies nothing, so caplog admits what DEBUG would
@@ -259,8 +279,20 @@ def test_starting_applies_and_logs_what_it_resolved(
         main()
 
     assert started["config"]["level"] == logging.DEBUG
+    assert started["run"] == {
+        "transport": "http",
+        "host": "192.168.1.10",
+        "port": 3100,
+        "host_origin_protection": True,
+        "allowed_hosts": ["studio-box"],
+        "allowed_origins": [],
+    }
     logged = [r.getMessage() for r in caplog.records]
     assert "Log level: DEBUG" in logged
+    assert (
+        "Starting Houdini MCP Server over http on 192.168.1.10:3100, answering loopback and "
+        "['studio-box']"
+    ) in logged
     assert "Houdini connection target: studio-box:19000" in logged
     assert (
         "Summarization: enabled=True, mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit at "
@@ -282,17 +314,15 @@ def test_starting_applies_and_logs_what_it_resolved(
         ("HOUDINI_PORT", "99999", "Input should be less than or equal to 65535"),
         ("HOUDINI_HOST", "", "String should match pattern '^\\S+$'"),
         ("HOUDINI_HOST", "studio box", "String should match pattern '^\\S+$'"),
-        ("MCP_HOST", "", "String should match pattern '^\\S+$'"),
-        (
-            "MCP_ALLOWED_HOSTS",
-            "studio-box,http://evil.example",
-            "String should match pattern '^[A-Za-z0-9._\\-*?:\\[\\]]+$'",
-        ),
-        (
-            "MCP_ALLOWED_HOSTS",
-            "studio-box,,192.168.1.50",
-            "String should match pattern '^[A-Za-z0-9._\\-*?:\\[\\]]+$'",
-        ),
+        ("MCP_HOST", "", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_HOST", "localhost", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_HOST", "http://0.0.0.0", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_ALLOWED_HOSTS", "studio-box,http://evil.example", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,*", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,*:80", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,studio-box:3055", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,fe80::1", ALLOWED_HOST),
         (
             "LOG_LEVEL",
             "loud",
