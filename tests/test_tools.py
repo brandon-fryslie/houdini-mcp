@@ -2918,7 +2918,7 @@ class TestMaterialTools:
         self, mock_connection
     ):
         """An existing Material SOP that took no write was not changed: no material
-        was assigned, so the answer is an error, not "partial"."""
+        was assigned, so the answer is an error naming the writes that failed."""
         from houdini_mcp.tools import assign_material
         from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
 
@@ -2941,11 +2941,12 @@ class TestMaterialTools:
 
         failure = FAILURE.validate_python(result)
         assert isinstance(failure, InvalidInputFailure), result
-        assert failure.message.startswith("Nothing was done: shop_materialpath1: ")
+        assert failure.message.startswith("shop_materialpath1: ")
         assert [f["name"] for f in result["failed"]] == ["shop_materialpath1", "group1"]
 
-    def test_assign_material_partial_write_still_names_the_sop(self, mock_connection):
-        """A group the Material SOP cannot take is reported, not hidden behind an error."""
+    def test_assign_material_whose_group_fails_is_undone_naming_the_sop(self, mock_connection):
+        """A group the Material SOP cannot take fails the call: the material it
+        assigned is undone, and the failure names the SOP and each write."""
         from houdini_mcp.tools import assign_material
 
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
@@ -2970,11 +2971,13 @@ class TestMaterialTools:
             port=18811,
         )
 
-        assert result["status"] == "partial"
+        assert result["kind"] == "invalid_input", result
+        assert result["message"].endswith("Its changes to the scene were undone.")
         assert result["material_sop_path"] == "/obj/geo1/material1"
         assert result["updated"] == [{"name": "shop_materialpath1", "value": "/mat/test_mat"}]
         assert [f["name"] for f in result["failed"]] == ["group1"]
-        assert mat_sop._params["shop_materialpath1"] == "/mat/test_mat"
+        sop = mock_connection.node("/obj/geo1/material1")
+        assert sop.parm("shop_materialpath1").eval() == ""
 
 
 class TestLayoutTools:

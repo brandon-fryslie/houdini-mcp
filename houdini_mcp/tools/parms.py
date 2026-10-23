@@ -9,11 +9,11 @@ name answers both calls, ``parmTuple`` giving it as a one-component tuple.
 """
 
 import logging
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .failure import Undone, batch_status
+from .failure import tool_error
 from .reads import Unread, read, reraise_transport_failure
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
@@ -134,19 +134,26 @@ class Writes:
     updated: list[dict[str, Any]]
     failed: list[dict[str, Any]]
 
-    def fields(
-        self, operation: str, /, *, created: Sequence[Any] = (), **report: Any
-    ) -> dict[str, Any]:
-        """``operation``'s response: its status, these writes, and ``report``.
+    def fields(self, **report: Any) -> dict[str, Any]:
+        """The response of a call whose every write was done: these writes, and ``report``.
 
-        ``created`` is what the call created before writing, so every write
-        failing over a new node is ``partial``, and over nothing is raised with
-        the same report the response would have carried.
+        [LAW:types-are-the-program] A scene-writing call is all or nothing, so it
+        has no "partial": a write that failed fails the call, carrying the same
+        report, and the tool boundary undoes what the call did before it. A call
+        whose every failed write was refused as ``invalid_input`` is the caller's
+        to fix; any other is ``operation_failed``.
         """
         report = {"updated": self.updated, "failed": self.failed, **report}
-        undone = [Undone(f["name"], f["kind"], f["reason"]) for f in self.failed]
-        status = batch_status(operation, [*created, *self.updated], undone, **report)
-        return {"status": status, **report}
+        if self.failed:
+            first, *rest = self.failed
+            more = f" (and {len(rest)} more, listed in the response)" if rest else ""
+            refused = all(f["kind"] == "invalid_input" for f in self.failed)
+            raise tool_error(
+                "invalid_input" if refused else "operation_failed",
+                f"{first['name']}: {first['reason']}{more}",
+                **report,
+            )
+        return {"status": "success", **report}
 
 
 def write_all(node: Any, values: Mapping[str, Any]) -> Writes:

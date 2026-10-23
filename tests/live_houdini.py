@@ -58,6 +58,20 @@ os.write({fd}, b"%d\\n" % started["bound_port"])
 os.close({fd})
 """
 
+# A headless Houdini's main thread takes the calls undoable tools make, as the README's
+# headless setup has it, until stdin closes; a watcher thread then stops it. os.read,
+# not sys.stdin: the watcher holds no buffer lock when the process exits.
+_TAKE_MAIN_THREAD_CALLS_UNTIL_STDIN_CLOSES = """\
+import os, threading
+from houdini_mcp_plugin import main_thread
+def stop_once_stdin_closes():
+    while os.read(0, 4096):
+        pass
+    main_thread.stop()
+threading.Thread(target=stop_once_stdin_closes, daemon=True).start()
+main_thread.serve()
+"""
+
 # The last act of a child whose main thread is free once its listener serves: once
 # stdin closes, end what it started, then exit on its own.
 SERVE_UNTIL_STDIN_CLOSES = """\
@@ -165,7 +179,7 @@ def hython_executable(environ: Mapping[str, str]) -> Path:
 
 def hython_listener(hython: Path) -> Command:
     """The command that runs this checkout's plugin listener in a headless ``hython``."""
-    script = _SERVE_LISTENER + SERVE_UNTIL_STDIN_CLOSES
+    script = _SERVE_LISTENER + _TAKE_MAIN_THREAD_CALLS_UNTIL_STDIN_CLOSES + SERVE_UNTIL_STDIN_CLOSES
     return lambda fd: [
         str(hython),
         "-c",

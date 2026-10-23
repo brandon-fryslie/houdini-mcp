@@ -244,6 +244,40 @@ class MockHouNode:
         for child in children or []:
             self.attach(child)
 
+    # parm()/parmTuple() cache their mocks, whose setters write to this node; a
+    # copy rebuilds its own instead of writing through to the original.
+    _PARM_CACHES = frozenset({"_parm_objects", "_parm_tuple_objects", "_scalar_tuple_objects"})
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "MockHouNode":
+        clone = object.__new__(type(self))
+        memo[id(self)] = clone
+        for key, value in vars(self).items():
+            if key not in self._PARM_CACHES:
+                setattr(clone, key, copy.deepcopy(value, memo))
+        return clone
+
+    def state(self) -> tuple[Any, ...]:
+        """This node and its subtree as one comparable value: what an undo step restores."""
+        return (
+            self._name,
+            self._node_type,
+            repr(sorted(self._params.items())),
+            tuple(
+                (index, source.path(), self._input_output_indexes.get(index, 0))
+                for index, source in enumerate(self._inputs)
+                if source is not None
+            ),
+            (self._display_flag, self._render_flag, self._bypass),
+            self._position,
+            repr(self._color),
+            tuple(
+                (box._name, box._label, repr(box._color), tuple(n.path() for n in box._nodes))
+                for box in self._network_boxes
+            ),
+            tuple(self.layout_calls),
+            tuple(child.state() for child in self._children),
+        )
+
     def attach(self, child: "MockHouNode") -> None:
         """Place a prebuilt child in this network; the child's path must say so.
 
@@ -657,6 +691,45 @@ class MockHouNode:
         self.setInput(0, node)
 
 
+# The plugin's main_thread as a Houdini serves it: a real rpyc server, so the tool
+# boundary's call into it and its call back into this process are real round
+# trips. A call it runs is on the main thread of the fake hou whose undos it was
+# made for, where that hou records undo groups.
+_MAIN_THREAD = """
+def main_thread_of(undos):
+    class main_thread:
+        @staticmethod
+        def call(fn):
+            undos.enter_main_thread()
+            try:
+                fn()
+            finally:
+                undos.leave_main_thread()
+    return main_thread
+"""
+
+# [LAW:no-shared-mutable-globals] The session's one main_thread server: opened by
+# the first call that needs it, under the lock, and closed when the session ends.
+_main_thread_lock = threading.Lock()
+_main_thread_served = contextlib.ExitStack()
+_main_thread_conn: list[Any] = []
+
+
+def served_main_thread(undos: "MockUndos") -> Any:
+    """``houdini_mcp_plugin.main_thread``, served, running calls on ``undos``'s main thread."""
+    with _main_thread_lock:
+        if not _main_thread_conn:
+            _main_thread_conn.append(
+                _main_thread_served.enter_context(served_connection(_MAIN_THREAD))
+            )
+        conn = _main_thread_conn[0]
+    return conn.namespace["main_thread_of"](undos)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _main_thread_served.close()
+
+
 class MockModuleNamespace:
     """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
@@ -669,7 +742,11 @@ class MockModuleNamespace:
         self._hou = hou_module
 
     def __getitem__(self, name: str) -> Any:
-        return self._hou if name == "hou" else importlib.import_module(name)
+        if name == "hou":
+            return self._hou
+        if name == "houdini_mcp_plugin.main_thread":
+            return served_main_thread(self._hou.undos)
+        return importlib.import_module(name)
 
     def __getattr__(self, name: str) -> Any:
         try:
@@ -725,8 +802,7 @@ class MockHouModule:
         self.Ramp = MockRamp
         self.networkItemType = MockNetworkItemType
 
-        # Undo stack (used by execute_code rollback-on-timeout safety rail)
-        self.undos = MockUndos()
+        self.undos = MockUndos(self)
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
@@ -1140,25 +1216,6 @@ def mock_connection(mock_hou: MockHouModule, connected_to: Callable[[Any], Any])
     return connected_to(mock_hou)
 
 
-class MockUndoGroupContext:
-    """Context manager mimicking hou.undos.group()."""
-
-    def __init__(self, undos: "MockUndos", label: str):
-        self._undos = undos
-        self._label = label
-
-    def __enter__(self) -> "MockUndoGroupContext":
-        self._undos.open_groups.append(self._label)
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        # Mirror Houdini: leaving the group closes it and records it as undoable.
-        if self._undos.open_groups and self._undos.open_groups[-1] == self._label:
-            self._undos.open_groups.pop()
-        self._undos.closed_groups.append(self._label)
-        return False
-
-
 def await_clients_served(server: Server, timeout: float = 5.0) -> None:
     """Wait until ``server`` has finished serving every client it accepted.
 
@@ -1297,33 +1354,50 @@ class MockUi:
 
 
 class MockUndos:
-    """Mock hou.undos namespace for testing the rollback safety rail."""
+    """hou.undos over the fake scene, as Houdini 22 keeps it.
 
-    def __init__(self) -> None:
-        self.open_groups: list[str] = []
-        self.closed_groups: list[str] = []
-        self.performed_undos = 0
-        self.performed_redos = 0
-        self._enabled = True
+    A group that changed the scene is one undo step, a group that changed nothing
+    is no step at all, labels are listed newest first, and undoing a step puts
+    back the scene the group found. Nested groups are one step, the outermost's.
+    Houdini records a group only on its main thread: off it ``areEnabled()`` is
+    False and no group is a step, as for a Houdini with undo turned off (set
+    ``enabled`` False). A call is on the main thread while the plugin's
+    ``main_thread.call`` double runs it.
+    """
 
-    def group(self, label: str) -> MockUndoGroupContext:
-        return MockUndoGroupContext(self, label)
+    def __init__(self, hou: "MockHouModule") -> None:
+        self._hou = hou
+        self._steps: list[tuple[str, MockHouNode]] = []
+        self._depth = 0
+        self._main_thread_calls = 0
+        self.enabled = True
+
+    def enter_main_thread(self) -> None:
+        self._main_thread_calls += 1
+
+    def leave_main_thread(self) -> None:
+        self._main_thread_calls -= 1
+
+    @contextlib.contextmanager
+    def group(self, label: str) -> Generator[None, None, None]:
+        found = copy.deepcopy(self._hou._root) if self._depth == 0 else None
+        self._depth += 1
+        try:
+            yield
+        finally:
+            self._depth -= 1
+            if found is not None and self.areEnabled() and found.state() != self._hou._root.state():
+                self._steps.append((label, found))
+
+    def undoLabels(self) -> tuple[str, ...]:
+        return tuple(label for label, _ in reversed(self._steps))
 
     def performUndo(self) -> None:
-        self.performed_undos += 1
+        _, found = self._steps.pop()
+        self._hou._root = found
 
-    def performRedo(self) -> None:
-        self.performed_redos += 1
-
-    def undoLabels(self) -> list[str]:
-        available = len(self.closed_groups) - self.performed_undos
-        return list(reversed(self.closed_groups[:available]))
-
-    def isUndoAvailable(self) -> bool:
-        return bool(self.closed_groups) and self.performed_undos < len(self.closed_groups)
-
-    def areUndosEnabled(self) -> bool:
-        return self._enabled
+    def areEnabled(self) -> bool:
+        return self.enabled and self._main_thread_calls > 0
 
 
 class MockColor:

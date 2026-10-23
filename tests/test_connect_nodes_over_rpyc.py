@@ -97,6 +97,18 @@ items = {i.path(): i for i in [
     OpNetworkBox(),
 ]}
 
+# hou.undos for a test that reads no undo step: a group records nothing, and the
+# main-thread double's enter and leave mark nothing.
+class undos:
+    @staticmethod
+    def group(label):
+        import contextlib
+        return contextlib.nullcontext()
+    @staticmethod
+    def enter_main_thread(): pass
+    @staticmethod
+    def leave_main_thread(): pass
+
 def item(path): return items.get(path)
 def node(path):
     found = items.get(path)
@@ -110,7 +122,7 @@ def rpyc_hou(connected_to: Callable[[Any], Any]) -> Generator[Any, None, None]:
     with served_namespace(REMOTE_HOU) as remote:
         yield connected_to(
             SimpleNamespace(
-                **{name: remote[name] for name in ("item", "node", "networkItemType")},
+                **{name: remote[name] for name in ("item", "node", "networkItemType", "undos")},
                 # The base classes a real hou serves, which no item is an instance of.
                 Node=remote["Node"],
                 SubnetIndirectInput=remote["SubnetIndirectInput"],

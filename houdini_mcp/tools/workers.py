@@ -14,6 +14,12 @@ worker the call launched keeps the slot after the call returns, and a call that
 arrives then is refused, because a worker may never end. Nothing else starts a
 worker thread, and nothing else decides whether a mutation may proceed.
 
+Reads share the scene, with each other and with the slot's holder, except with
+a call whose Houdini work runs on Houdini's main thread. That call has the link
+to Houdini to itself: rpyc hands Houdini's call back into this process to
+whichever thread is waiting on the link, so a read waiting beside it could run
+it. The ledger admits reads too, so one owner decides who may use Houdini.
+
 A queued call waits on its event loop, not on a thread: waiting costs no thread
 from the pool that runs tool bodies, and a call cancelled while it waits - its
 client gave up - leaves the queue without ever running.
@@ -29,9 +35,22 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, NoReturn
 
 logger = logging.getLogger("houdini_mcp.tools.workers")
+
+
+class Admission(StrEnum):
+    """How a call holds Houdini while its Houdini work runs."""
+
+    SHARED = "shared"
+    """Beside any other call, but one on Houdini's main thread."""
+    EXCLUSIVE = "exclusive"
+    """With the scene to itself: no other such call, and no running worker."""
+    EXCLUSIVE_ON_MAIN_THREAD = "exclusive_on_main_thread"
+    """As exclusive, and its work runs on Houdini's main thread, so it has the
+    link to itself: no read is in flight beside it."""
 
 
 @dataclass(frozen=True)
@@ -135,33 +154,49 @@ class _Waiter:
     refuses it."""
 
     operation: str
+    admission: Admission
     held_by: list[str]
     arrived_at: float
     wake: Callable[[], object]
     outcome: SceneWait | _Refused | None = None
+
+    def waits_behind(self, holder: _Waiter) -> bool:
+        """Whether ``holder`` holding Houdini keeps this call waiting."""
+        if self.admission is Admission.SHARED:
+            return holder.admission is Admission.EXCLUSIVE_ON_MAIN_THREAD
+        return holder.admission is not Admission.SHARED or (
+            self.admission is Admission.EXCLUSIVE_ON_MAIN_THREAD
+        )
 
     def wait(self) -> SceneWait:
         return SceneWait(tuple(self.held_by), time.monotonic() - self.arrived_at)
 
 
 class WorkerLedger:
-    """Owns the one slot through which a call or its worker holds the scene.
+    """Owns the one slot through which a call or its worker holds the scene, and
+    the reads beside it.
 
-    [LAW:no-shared-mutable-globals] Invariants: at most one call and at most one
-    worker hold the slot; a call is queued only while another call holds it,
-    so when a call releases with its worker still running, every queued call
-    is refused naming that worker. The slot passes from a call straight to the
-    next queued one, so nothing can take the scene between them. A worker's
-    slot is filled before its thread starts and cleared by the thread itself
-    once its target has ended - the program, its undo group, and any scene
-    reads around it - so :meth:`running` is ``None`` exactly when no worker is
-    using Houdini. Callers ask the ledger, never the thread: the thread
-    outlives the slot by a log line.
+    [LAW:no-shared-mutable-globals] Invariants: at most one exclusive call and
+    at most one worker hold the slot; reads hold Houdini beside them, never
+    beside a call on Houdini's main thread, so while one holds the slot no
+    other call's Houdini work is in flight on the link. Exclusive calls are
+    admitted in arrival order, and a read queued behind a call on the main
+    thread waits for it, so neither starves. An exclusive call is queued only
+    while another holds the slot or reads it must outlast are in flight, so
+    when the slot frees with a worker still running, every queued exclusive
+    call is refused naming that worker. The slot passes from a call straight
+    to the next one admitted, so nothing can take the scene between them. A
+    worker's slot is filled before its thread starts and cleared by the thread
+    itself once its target has ended - the program, its undo group, and any
+    scene reads around it - so :meth:`running` is ``None`` exactly when no
+    worker is using Houdini. Callers ask the ledger, never the thread: the
+    thread outlives the slot by a log line.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._call: str | None = None
+        self._call: _Waiter | None = None
+        self._reads: list[_Waiter] = []
         self._worker: RunningWorker | None = None
         self._queue: deque[_Waiter] = deque()
 
@@ -170,17 +205,19 @@ class WorkerLedger:
             return self._worker
 
     @asynccontextmanager
-    async def hold(self, operation: str) -> AsyncIterator[SceneWait]:
-        """Hold the scene for ``operation`` until the block ends.
+    async def hold(self, operation: str, admission: Admission) -> AsyncIterator[SceneWait]:
+        """Hold Houdini for ``operation``, as ``admission`` says, until the block ends.
 
-        Waits on the running event loop while another call holds it, and raises
-        :class:`WorkerStillRunning` when a worker does. A call cancelled while
-        waiting gives up its place, or the scene it was handed as it was
-        cancelled.
+        Waits on the running event loop while a call it must not run beside
+        holds Houdini, and an exclusive call raises :class:`WorkerStillRunning`
+        when a worker does. A call cancelled while waiting gives up its place,
+        or the hold it was handed as it was cancelled.
         """
         loop = asyncio.get_running_loop()
         woken: asyncio.Future[None] = loop.create_future()
-        waiter = self._arrive(operation, lambda: loop.call_soon_threadsafe(_resolve, woken))
+        waiter = self._arrive(
+            operation, admission, lambda: loop.call_soon_threadsafe(_resolve, woken)
+        )
         try:
             await woken
         except BaseException:
@@ -239,21 +276,23 @@ class WorkerLedger:
         logger.info("%s worker started code_sha256=%s timeout=%ss", operation, code_sha256, timeout)
         return worker
 
-    def _arrive(self, operation: str, wake: Callable[[], object]) -> _Waiter:
+    def _arrive(self, operation: str, admission: Admission, wake: Callable[[], object]) -> _Waiter:
         with self._lock:
-            ahead = [queued.operation for queued in self._queue]
-            waiter = _Waiter(
-                operation,
-                held_by=[self._call] if self._call is not None else [],
-                arrived_at=time.monotonic(),
-                wake=wake,
+            waiter = _Waiter(operation, admission, [], time.monotonic(), wake)
+            waiter.held_by.extend(
+                holder.operation for holder in self._holders() if waiter.waits_behind(holder)
             )
+            ahead = [queued.operation for queued in self._queue]
             self._queue.append(waiter)
             self._settle_queue()
             behind = [*waiter.held_by, *ahead] if waiter.outcome is None else []
         if behind:
             logger.info("%s waits for the scene behind %s", operation, ", ".join(behind))
         return waiter
+
+    def _holders(self) -> list[_Waiter]:
+        """Every call holding Houdini now. Runs under the lock."""
+        return [*([self._call] if self._call is not None else []), *self._reads]
 
     @contextmanager
     def _held(self, waiter: _Waiter) -> Iterator[SceneWait]:
@@ -272,51 +311,68 @@ class WorkerLedger:
         try:
             yield outcome
         finally:
-            self._release()
+            self._release(waiter)
             logger.info(
                 "%s released the scene after holding it %.3fs",
                 waiter.operation,
                 time.monotonic() - taken_at,
             )
 
-    def _release(self) -> None:
+    def _release(self, holder: _Waiter) -> None:
         with self._lock:
-            self._release_locked()
+            self._release_locked(holder)
 
-    def _release_locked(self) -> None:
-        self._call = None
+    def _release_locked(self, holder: _Waiter) -> None:
+        if holder is self._call:
+            self._call = None
+        else:
+            self._reads.remove(holder)
         self._settle_queue()
 
     def _abandon(self, waiter: _Waiter) -> None:
         with self._lock:
             outcome = waiter.outcome
             if outcome is None:
+                # A call leaving the queue can free the reads queued behind it.
                 self._queue.remove(waiter)
+                self._settle_queue()
             elif isinstance(outcome, SceneWait):
-                self._release_locked()
+                self._release_locked(waiter)
         if outcome is None:
             logger.info("%s gave up its place in the queue for the scene", waiter.operation)
         elif isinstance(outcome, SceneWait):
             logger.info("%s was cancelled as it took the scene, and handed it on", waiter.operation)
 
     def _settle_queue(self) -> None:
-        """Settle queued calls while no call holds the slot: refused while a
-        worker holds it, else the first one takes it. Runs under the lock."""
-        while self._call is None and self._queue:
-            waiter = self._queue.popleft()
-            granted = self._worker is None
-            waiter.outcome = waiter.wait() if granted else _Refused(self._worker, waiter.wait())
+        """Admit, in arrival order, every queued call nothing keeps waiting: one
+        that waits behind no holder and no call queued ahead of it. An exclusive
+        call that would hold the slot while a worker does is refused instead.
+        Runs under the lock."""
+        ahead: list[_Waiter] = []
+        for waiter in list(self._queue):
+            if any(waiter.waits_behind(other) for other in (*self._holders(), *ahead)):
+                ahead.append(waiter)
+                continue
+            self._queue.remove(waiter)
+            # A read runs beside a worker; an exclusive call never does.
+            worker = None if waiter.admission is Admission.SHARED else self._worker
+            waiter.outcome = waiter.wait() if worker is None else _Refused(worker, waiter.wait())
             try:
                 waiter.wake()
             except RuntimeError as gone:
                 # [LAW:no-silent-failure] A waiter whose event loop has closed can
                 # never run or release, so it is dropped, loudly, rather than
-                # handed a slot no one would ever free.
+                # handed a hold no one would ever free.
                 logger.error("%s dropped from the queue for the scene: %s", waiter.operation, gone)
                 continue
-            if granted:
-                self._call = waiter.operation
-                for queued in self._queue:
+            if worker is not None:
+                continue
+            if waiter.admission is Admission.SHARED:
+                self._reads.append(waiter)
+            else:
+                self._call = waiter
+            for queued in self._queue:
+                if queued.waits_behind(waiter):
                     queued.held_by.append(waiter.operation)
 
 

@@ -47,7 +47,11 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
      hrpyc.start_server(port=18811)
      ```
      It listens on every interface with no authentication, so anyone who can
-     reach the port can run Python in your Houdini.
+     reach the port can run Python in your Houdini. The tools that edit the
+     scene as one undo step (`create_node`, `delete_node`, `set_parameter`, the
+     Wiring & Layout tools, `create_material`, `assign_material`,
+     `set_render_settings`, `create_render_node`) and `find_nodes` also need the
+     [plugin](#houdini-plugin) installed; the other tools need only the listener.
    - Or, with the [plugin](#houdini-plugin) installed, start its listener from
      `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
      runs in every graphical session once its UI is up:
@@ -71,14 +75,21 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
 Your MCP client starts the server from a clone of this repository and talks to it
 over stdio, and the server reaches Houdini over hrpyc. Any Houdini that runs the
-listener will do, a graphical session or a headless `hython`.
+listener will do, a graphical session or a headless `hython`. A `hython` script,
+after starting the listener, runs this on its main thread so the editing tools
+can work; it blocks until `main_thread.stop()` is called from another thread:
+
+```python
+from houdini_mcp_plugin import main_thread
+main_thread.serve()
+```
 
 **Step 1: Start the listener in Houdini**
 
 Click **"Start Remote"** on the Houdini MCP shelf, which the
 [plugin](#houdini-plugin) adds, or run `import hrpyc; hrpyc.start_server(port=18811)`
 in Houdini's Python Shell, as in [Prerequisites](#prerequisites). `find_nodes`
-needs the plugin installed either way.
+and the editing tools listed there need the plugin installed either way.
 
 **Step 2: Configure your MCP client**
 
@@ -131,10 +142,10 @@ If you have the Houdini MCP plugin installed:
   or `HOUDINI_RPC_TOKEN` (set the same token in the MCP server's environment).
   See [docs/remote-listener.md](docs/remote-listener.md).
 
-Or manually in Houdini's Python Shell. Every tool but `find_nodes` works this
-way; `find_nodes` runs its search inside Houdini, so it also needs the plugin
-[installed](#houdini-plugin), and its package JSON puts its modules on
-Houdini's path when Houdini starts:
+Or manually in Houdini's Python Shell. `find_nodes` and the editing tools listed
+under [Prerequisites](#prerequisites) also need the plugin
+[installed](#houdini-plugin): its package JSON puts its modules on Houdini's path
+when Houdini starts. The other tools need only the listener:
 ```python
 import hrpyc
 

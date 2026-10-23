@@ -5,6 +5,7 @@ from typing import Any
 from houdini_mcp import tools
 from houdini_mcp.tools._common import using
 from houdini_mcp.tools.pane_screenshot import _get_qt_modules, png_bytes
+from houdini_mcp.tools.transactions import _on_main_thread
 
 
 def test_check_connection_round_trip(at: dict[str, Any]) -> None:
@@ -131,3 +132,48 @@ async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
     assert stray["bounding_box"]["min"] == [1.0, 0.0, 0.0]
     assert stray["bounding_box"]["max"] == [2.0, 2.0, 2.0]
     assert lost["point_count"] == 3 and "bounding_box" not in lost
+
+
+def _undo_labels(at: dict[str, Any]) -> tuple[str, ...]:
+    """Houdini's undo stack, newest first, read on its main thread, where it is kept."""
+    with using(**at) as link:
+        return tuple(_on_main_thread(link, lambda: tuple(link.hou.undos.undoLabels())))
+
+
+def test_a_scene_write_is_one_undo_step_labelled_as_the_call(at: dict[str, Any]) -> None:
+    created = tools.create_material(
+        "principledshader", "it_red", parameters={"rough": 0.25, "metallic": 1.0}, **at
+    )
+    assert created["status"] == "success", created
+
+    (label, *_) = _undo_labels(at)
+    assert label.startswith("houdini-mcp create_material ")
+    with using(**at) as link:
+        _on_main_thread(link, link.hou.undos.performUndo)
+    assert tools.list_children("/mat", **at)["returned"] == 0
+
+
+def test_a_failed_scene_write_leaves_the_scene_as_it_found_it(at: dict[str, Any]) -> None:
+    failed = tools.create_material(
+        "principledshader", "it_half", parameters={"rough": 0.25, "nope": 1}, **at
+    )
+
+    assert failed["kind"] == "invalid_input", failed
+    assert failed["updated"] == [{"name": "rough", "value": 0.25}]
+    assert failed["message"].endswith("\nIts changes to the scene were undone.")
+    assert tools.list_children("/mat", **at)["returned"] == 0
+
+
+def test_a_failed_write_that_changed_nothing_leaves_the_last_step_on_top(
+    at: dict[str, Any],
+) -> None:
+    kept = tools.create_node("null", "/obj", "it_kept", **at)
+    assert kept["status"] == "success", kept
+    before = _undo_labels(at)
+
+    refused = tools.set_parameter("/obj/it_missing", "tx", 1.0, **at)
+
+    assert refused["kind"] == "invalid_input", refused
+    assert "undone" not in refused["message"]
+    assert _undo_labels(at) == before
+    assert tools.get_node_info("/obj/it_kept", **at)["status"] == "success"

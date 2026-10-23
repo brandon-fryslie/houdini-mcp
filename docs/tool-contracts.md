@@ -131,11 +131,34 @@ held it) and how long it waited:
 {"status": "success", "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
 ```
 
+A read runs beside any of them but a scene-writing tool that Houdini's undo
+can reverse (`set_parameter`, `create_node`, `connect_nodes`, `create_material`
+and the rest): those run on Houdini's main thread and have Houdini to
+themselves, so a read that arrives during one waits for it, and carries
+`scene_wait` the same way.
+
 A call that finds the scene free has no `scene_wait`. A call still waiting
 when a timed-out program takes over the scene is refused with
 `worker_still_running`, as above. A call cancelled while it waits (its client
 timed out or gave up) leaves the queue and never runs. A call cancelled after
 it started still finishes its write.
+
+## Every Scene Write: One Undo Step
+
+A scene-writing tool that Houdini's undo can reverse is one step on Houdini's
+undo stack, labelled `houdini-mcp <tool> <id>`, so one undo takes the whole call
+back. A call that fails is undone before it returns: the scene is as it found
+it, and its message ends `Its changes to the scene were undone.` A call that
+failed before it changed anything undoes nothing, so your last step stays on
+top. These tools are all or nothing: one parameter or setting of several that
+fails fails the call, with `updated` and `failed` beside its message saying
+which writes were made and undone, and which one failed and why.
+
+These calls run on Houdini's main thread, the one whose undo steps Houdini
+records, so they need the plugin [installed](../README.md#houdini-plugin) in
+that Houdini; a headless `hython` also runs
+`houdini_mcp_plugin.main_thread.serve()` on its main thread once its listener
+is started. A graphical Houdini's interface does not redraw while one runs.
 
 ## render_viewport
 

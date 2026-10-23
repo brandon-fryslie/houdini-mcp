@@ -44,7 +44,6 @@ from .transactions import (
     PROGRAM,
     READ,
     UNDOABLE,
-    SceneAccess,
     ToolPolicy,
     declare_policy,
     policy_of,
@@ -142,9 +141,10 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; the link a failed call used was already
-    dropped by its ``using`` scope. A sync tool's body runs inside
-    :func:`~houdini_mcp.tools.transactions.recovering`, so a call that replaces
-    the scene has backed it up first. Who holds the scene while the tool's
+    dropped by its ``using`` scope. A sync tool's body runs through
+    :func:`~houdini_mcp.tools.transactions.recovering`, so an undoable call is
+    one undo step, undone if it fails, and a call that replaces the scene has
+    backed it up first. Who holds the scene while the tool's
     Houdini work runs is :func:`on_the_scene`'s to arbitrate.
 
     Args:
@@ -266,13 +266,12 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
                 call = parsed(bound)
                 # Defaults applied, the call names the Houdini a recovery acts in.
                 call.apply_defaults()
-                with recovering(
+                return recovering(
                     operation_name,
-                    policy.recovery,
+                    policy,
                     lambda: using(call.arguments["host"], call.arguments["port"]),
-                ) as recovered:
-                    result: dict[str, Any] = func(*call.args, **call.kwargs)
-                return {**result, **recovered}
+                    lambda: func(*call.args, **call.kwargs),
+                )
             except Exception as e:
                 return failure_response(e, operation_name)
 
@@ -381,38 +380,30 @@ class ExecutionTimeoutError(Exception):
 # Parallel Execution Utilities
 # =============================================================================
 
-from contextlib import nullcontext
 
 import anyio
 
-from .workers import NO_WAIT, WORKERS, SceneWait
+from .workers import WORKERS
 
 
 async def on_the_scene(
     tool: Callable[..., Any], work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
 ) -> dict[str, Any]:
-    """Run ``tool``'s blocking Houdini work off the event loop, holding the
-    scene for it when its policy needs the scene to itself.
+    """Run ``tool``'s blocking Houdini work off the event loop, once the ledger
+    admits it as its policy says.
 
     [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
     tool's whole body comes through here (``server.held``), an async tool's
     Houdini read does, and whatever it finishes afterwards (a summary) runs
-    with the scene released. An ``SceneAccess.EXCLUSIVE`` operation waits on
-    the event loop for a call already holding the scene, so a waiting call
-    costs no thread and one its client cancels never runs, and it is refused
-    with :class:`WorkerStillRunning` while a program still runs against
-    Houdini. The result tells the wait in ``scene_wait``.
+    with Houdini released. A call waits on the event loop while one it must
+    not run beside holds Houdini, so a waiting call costs no thread and one
+    its client cancels never runs; one that needs the scene to itself is
+    refused with :class:`WorkerStillRunning` while a program still runs
+    against Houdini. The result tells the wait in ``scene_wait``.
     """
-    exclusive = policy_of(tool).access is SceneAccess.EXCLUSIVE
-    hold = WORKERS.hold if exclusive else _holds_nothing
-    async with hold(tool.__name__) as wait:
+    async with WORKERS.hold(tool.__name__, policy_of(tool).admission) as wait:
         result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
     return {**result, **wait.response_fields()}
-
-
-def _holds_nothing(operation: str) -> nullcontext[SceneWait]:
-    """The hold of an operation that shares the scene: it never waits."""
-    return nullcontext(NO_WAIT)
 
 
 async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:

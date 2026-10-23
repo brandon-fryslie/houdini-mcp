@@ -52,7 +52,8 @@ def create_material(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a parameter failed) or "error"
+        - status: "success", or "error" when a parameter failed: the call is
+          undone, and ``failed`` says why
         - material_path: Path to the created material node
         - material_name: Name of the material
         - material_type: Type of material created
@@ -84,8 +85,6 @@ def create_material(
             ) from e
 
         return write_all(mat_node, parameters or {}).fields(
-            create_material.__name__,
-            created=[mat_node],
             material_path=mat_node.path(),
             material_name=mat_node.name(),
             material_type=material_type,
@@ -113,8 +112,8 @@ def assign_material(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a write failed beside a write or a newly
-          created Material SOP) or "error" (nothing changed; the fields ride on it)
+        - status: "success", or "error" when a write failed: the call is undone,
+          and ``failed`` says why
         - geometry_path: Path to the geometry node
         - material_path: Path to the assigned material
         - material_sop_path: Path to the Material SOP that was created/modified
@@ -153,7 +152,6 @@ def assign_material(
                 pass
             else:
                 return write_all(geo_node, {"shop_materialpath": material_path}).fields(
-                    assign_material.__name__,
                     geometry_path=geometry_path,
                     material_path=material_path,
                     method="shop_materialpath",
@@ -178,7 +176,6 @@ def assign_material(
                 existing_mat_sop = child
                 break
 
-        created: list[Any] = []
         if existing_mat_sop:
             mat_sop = existing_mat_sop
         else:
@@ -187,16 +184,11 @@ def assign_material(
             mat_sop.setFirstInput(display_node)
             mat_sop.setDisplayFlag(True)
             mat_sop.setRenderFlag(True)
-            created.append(mat_sop)
 
         values = {"shop_materialpath1": material_path}
         if group:
             values["group1"] = group
-        # [LAW:no-silent-failure] a SOP created here exists and is wired whatever the
-        # writes did, so it counts as done; an existing one written nothing did nothing.
         return write_all(mat_sop, values).fields(
-            assign_material.__name__,
-            created=created,
             geometry_path=geometry_path,
             material_path=material_path,
             material_sop_path=mat_sop.path(),

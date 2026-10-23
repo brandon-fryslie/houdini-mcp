@@ -887,8 +887,8 @@ def set_render_settings(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a parameter failed) or "error" (none was
-          written; the fields ride on it)
+        - status: "success", or "error" when a parameter failed: the call is
+          undone, and ``failed`` says why
         - rop_path: Path to the ROP
         - updated: The parameters that were written, as {name, value}
         - failed: The parameters that were not, as {name, kind, reason}
@@ -902,7 +902,7 @@ def set_render_settings(
 
         node = node_at(hou, rop_path, "ROP")
 
-        return write_all(node, settings).fields(set_render_settings.__name__, rop_path=rop_path)
+        return write_all(node, settings).fields(rop_path=rop_path)
 
 
 @tool(UNDOABLE)
@@ -926,7 +926,8 @@ def create_render_node(
 
     Returns:
         Dict with:
-        - status: "success", "partial" (a setting failed) or "error"
+        - status: "success", or "error" when a setting failed: the call is
+          undone, and ``failed`` says why
         - rop_path: Path to the created ROP
         - rop_type: Type of ROP created
         - updated: The settings that were applied, as {name, value}
@@ -949,8 +950,6 @@ def create_render_node(
             raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
 
         return write_all(node, settings or {}).fields(
-            create_render_node.__name__,
-            created=[node],
             rop_path=node.path(),
             rop_name=node.name(),
             rop_type=rop_type,

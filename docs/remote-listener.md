@@ -8,9 +8,10 @@ This replaces the friction of manually running `import hrpyc;
 hrpyc.start_server()` in the Python shell and then discovering the listener is
 unreachable because of bind/firewall ambiguity.
 
-> The **manual/direct** workflow still works exactly as before. The activation
-> path described here is an additional, safer entry point — it does not change
-> or remove the manual mode.
+> The **manual/direct** workflow still serves every tool, though `find_nodes`
+> and the tools that edit the scene as one undo step need the plugin installed
+> either way. The activation path described here is an additional, safer entry
+> point — it does not change or remove the manual mode.
 
 ## Quick start (from the shelf)
 

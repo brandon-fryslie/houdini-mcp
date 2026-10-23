@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Each call to `set_parameter`, `create_node`, `delete_node`, `connect_nodes`,
+  `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
+  `set_node_color`, `set_node_position`, `layout_children`,
+  `create_network_box`, `create_material`, `assign_material`,
+  `set_render_settings` or `create_render_node` is one step on Houdini's undo
+  stack, labelled `houdini-mcp <tool> <8 hex chars>`, so one undo takes the
+  whole call back (houdini-laws-etg.4ve). A call that fails is undone before it
+  returns, and its error message ends with `Its changes to the scene were
+  undone.` A call that failed before changing anything undoes nothing, so the
+  artist's last step stays on top. Houdini 22 records undo groups only on its
+  main thread, so these calls run their Houdini work there, which has three
+  consequences. They need the houdini_mcp plugin installed in that Houdini,
+  whether the listener was started from the plugin or with bare `hrpyc`;
+  without it they fail saying to install the plugin, and reads still work. A
+  headless `hython` script, after starting the listener, must run
+  `from houdini_mcp_plugin import main_thread; main_thread.serve()` on its main
+  thread; with nothing serving, these calls are refused at once with a message
+  naming `houdini_mcp_plugin.main_thread.serve()`. A graphical Houdini's
+  interface does not redraw while such a call runs, usually a fraction of a
+  second. Reads that arrive while one of these calls runs wait for it and
+  report the wait in `scene_wait`; they still run beside renders and
+  `execute_code` programs. `execute_code`'s own undo group still records
+  nothing (houdini-laws-etg.lbc).
+
 - `reload_hrpyc_server()` with a config that is admitted but fails to start
   (its port is taken, say) no longer leaves nothing serving
   (houdini-laws-etg.qeo). The listener that was serving before is started again
@@ -24,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (wire)**: `create_material`, `assign_material`,
+  `set_render_settings` and `create_render_node` are all or nothing
+  (houdini-laws-etg.4ve). When one of their parameter writes fails, the call
+  fails and the whole call is undone, where it returned `status: "partial"`.
+  The error's kind is `invalid_input` when every failed write was the caller's
+  input, else `operation_failed`, and it still carries `updated`, the writes
+  that were made and then undone, and `failed`, a `{name, kind, reason}` for
+  each write that failed.
 
 - A tool's name has one source, its function's name (houdini-laws-etg.8vh). The
   tool boundary is `@tool(policy)`: it takes the tool's `ToolPolicy` and names

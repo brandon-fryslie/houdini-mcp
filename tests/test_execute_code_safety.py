@@ -637,14 +637,19 @@ class TestTimeoutRollback:
         """Undoing an open group can revert the previous human action."""
         from houdini_mcp.tools import execute_code
 
-        before = mock_connection.undos.performed_undos
+        undos = mock_connection.undos
+        undos.enter_main_thread()
+        with undos.group("artist's edit"):
+            mock_connection.node("/obj").createNode("null", "artist_null")
+        undos.leave_main_thread()
         result = execute_code(
             stalled_program, timeout=1, host="localhost", port=18811, bypass_config_enabled=False
         )
 
         assert result["status"] == "error"
         assert result.get("timeout") == 1
-        assert mock_connection.undos.performed_undos == before
+        assert undos.undoLabels() == ("artist's edit",)
+        assert mock_connection.node("/obj/artist_null") is not None
         assert result["audit"]["timed_out"] is True
         assert result["audit"]["rollback_attempted"] is False
         assert result["rollback"] == {
@@ -683,15 +688,23 @@ class TestTimeoutRollback:
         assert len(calls) == 1
         assert "undo exit failed" in result["message"]
 
-    def test_undo_group_opened_around_execution(self, mock_connection):
-        """Successful runs must be wrapped in a named undo group for later rollback."""
+    def test_undo_group_opened_around_execution(self, mock_connection, monkeypatch):
+        """The program runs inside execute_code's named undo group."""
         from houdini_mcp.tools import execute_code
 
+        undos = mock_connection.undos
+        group, opened = undos.group, []
+
+        def recording_group(label):
+            opened.append(label)
+            return group(label)
+
+        monkeypatch.setattr(undos, "group", recording_group)
         result = execute_code(
             "print('wrapped')", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "success"
-        assert mock_connection.undos.closed_groups, "expected a named undo group"
+        assert opened == ["houdini-mcp execute_code"]
 
     def test_fail_closed_when_no_undo_primitive(
         self, monkeypatch, mock_connection, stalled_program
