@@ -226,29 +226,50 @@ class TestParameterWorkflow:
                 f"Expected diameter ≈ {expected_diameter}"
             )
 
-    def test_menu_parameter_handling(self, at: dict[str, Any]) -> None:
-        """Test discovering and setting menu parameters."""
+    @pytest.mark.parametrize(
+        ("container", "node_type", "menu"),
+        [
+            ("geo", "sphere", "type"),  # index menu
+            ("geo", "fasciasolver", "femtristiffnessexp"),  # use-token menu
+            ("geo", "agentaddmldeformer", "provider"),  # script-generated index menu
+            ("topnet", "attributecreate", "pdg_workitemgeneration"),  # generated, use-token
+        ],
+    )
+    def test_every_offered_menu_value_is_one_set_parameter_selects(
+        self, at: dict[str, Any], container: str, node_type: str, menu: str
+    ) -> None:
+        """A menu's offered values, current value and default share set_parameter's domain."""
+        parent = create_node(container, "/obj", "test_menu", **at)["node_path"]
+        node_path = create_node(node_type, parent, "menu_node", **at)["node_path"]
 
-        geo_result = create_node("geo", "/obj", "test_menu", **at)
-        geo_path = geo_result["node_path"]
+        def schema() -> dict[str, Any]:
+            [param] = get_parameter_schema(node_path, parm_name=menu, **at)["parameters"]
+            assert param["type"] == "menu"
+            return param
 
-        sphere = create_node("sphere", geo_path, "sphere1", **at)
-        sphere_path = sphere["node_path"]
+        param = schema()
+        offered = [item["value"] for item in param["menu_items"]]
+        assert len(offered) > 1
+        assert param["current_value"] in offered
+        assert param["default"] in offered
 
-        # Get type parameter schema (menu parameter)
-        type_schema = get_parameter_schema(sphere_path, parm_name="type", **at)
-        assert type_schema["status"] == "success"
-        assert len(type_schema["parameters"]) == 1
+        for value in offered:
+            assert set_parameter(node_path, menu, value, **at)["status"] == "success"
+            assert schema()["current_value"] == value
 
-        type_param = type_schema["parameters"][0]
-        assert type_param["type"] == "menu"
-        assert "menu_items" in type_param
-        assert len(type_param["menu_items"]) > 0
+    def test_a_multiparm_menu_template_lists_its_items_unread(self, at: dict[str, Any]) -> None:
+        """attribcreate's type# is a template, not a parm: its items are unread, the rest listed."""
+        geo = create_node("geo", "/obj", "test_menu", **at)["node_path"]
+        node_path = create_node("attribcreate", geo, "attribs", **at)["node_path"]
 
-        # Set to first menu item
-        first_item = type_param["menu_items"][0]
-        set_result = set_parameter(sphere_path, "type", first_item["value"], **at)
-        assert set_result["status"] == "success"
+        result = get_parameter_schema(node_path, max_parms=1000, **at)
+
+        assert result["status"] == "success"
+        [instance] = [p for p in result["parameters"] if p["name"] == "type#"]
+        assert instance["menu_items"] == {
+            "unread": "houdini_mcp.tools.parms.ParmNotFound: "
+            f"Parameter not found: type# on {node_path}"
+        }
 
 
 class TestErrorHandling:

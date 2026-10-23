@@ -37,7 +37,8 @@ def set_parameter(
         param_name: Name of the parameter (e.g., "radx", "tx", "scale")
         value: Value to set - can be:
                - float/int for numeric parameters
-               - str for string/menu parameters
+               - str for string parameters
+               - for a menu, the value of one of its get_parameter_schema menu_items
                - bool for toggle parameters
                - List[float]/List[int] for vector parameters (e.g., translate, rotate, scale)
 
@@ -95,7 +96,9 @@ def get_parameter_schema(
         - type: Parameter type (float, int, string, menu, toggle, vector, ramp, etc.)
         - default: Default value(s)
         - min/max: Numeric ranges (if applicable)
-        - menu_items: List of {label, value} for menu parameters
+        - menu_items: List of {label, value} for menu parameters; each value is
+          what set_parameter takes to select the item, in the domain
+          current_value and default report
         - tuple_size: Size for vector parameters
         - is_animatable: Whether parameter can be keyframed
         - current_value: Current parameter value
@@ -219,7 +222,7 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
 
     if type_str == "menu":
         param_info["menu_items"] = read(
-            f"menu items of {param_name}", lambda: _menu_items(parm_template)
+            f"menu items of {param_name}", lambda: _menu_items(node, parm_template)
         )
 
     return param_info
@@ -233,20 +236,20 @@ def _default(value: Any, is_tuple: bool) -> Any:
     return list(value) if is_tuple else value[0]
 
 
-def _menu_items(parm_template: Any) -> list[dict[str, Any]]:
-    tokens = parm_template.menuItems()
-    return [
-        {"label": label, "value": _menu_value(tokens[idx]) if idx < len(tokens) else idx}
-        for idx, label in enumerate(parm_template.menuLabels())
-    ]
-
-
-def _menu_value(token: str) -> int | str:
-    # A numeric token is an index; any other is the token itself.
-    try:
-        return int(token)
-    except ValueError:
-        return token
+def _menu_items(node: Any, parm_template: Any) -> list[dict[str, Any]]:
+    # [LAW:one-source-of-truth] The parm holds the items, a script-generated
+    # menu's included; its template's own list is empty for those.
+    parm = resolve(node, parm_template.name()).target
+    labels = parm.menuLabels()
+    # Houdini's own switch for the value domain: a use-token menu holds its
+    # token's integer, any other menu the item's index. eval, the default and
+    # set all speak it, so an offered value is one set_parameter selects.
+    values = (
+        [int(token) for token in parm.menuItems()]
+        if parm_template.menuUseToken()
+        else range(len(labels))
+    )
+    return [{"label": label, "value": value} for label, value in zip(labels, values, strict=True)]
 
 
 def _map_parm_type_to_string(hou: Any, parm_type: Any, is_tuple: bool = False) -> str:

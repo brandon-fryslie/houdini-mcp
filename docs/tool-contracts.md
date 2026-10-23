@@ -229,6 +229,26 @@ render_quad_view(resolution=[1024, 1024], renderer="karma")
 render_quad_view(renderer="karma", karma_engine="gpu")
 ```
 
+## get_parameter_schema: Menu Values
+
+A menu parameter's `menu_items` are `{label, value}` pairs. Each `value` is what
+`set_parameter` takes to select that item, and `current_value` and `default` are
+always one of them. For most menus the value is the item's index. A menu whose
+template sets `menuUseToken()` holds its token's integer, so its values are
+those integers:
+
+```python
+get_parameter_schema(node_path="/obj/geo1/sphere1", parm_name="type")
+# menu_items: [{"label": "Primitive", "value": 0}, {"label": "Polygon", "value": 1}, ...]
+
+# Select "Polygon" by its offered value
+set_parameter(node_path="/obj/geo1/sphere1", param_name="type", value=1)
+```
+
+The items are read from the node's parameter, so a script-generated menu lists
+its items too. A listed menu template with no parameter of that name on the
+node, such as a multiparm's `type#`, has its `menu_items` unread.
+
 ## Values Houdini Would Not Read
 
 Any response field Houdini refused to supply holds `{"unread": "<ExcType>: <message>"}`
