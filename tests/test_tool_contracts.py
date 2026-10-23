@@ -342,8 +342,13 @@ class TestServedSchemas:
             ),
             # Where an integer is legal too, a huge one is that integer.
             *(
-                ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", [bad])
+                case
                 for bad in (math.nan, math.inf, -math.inf)
+                for case in (
+                    ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", [bad]),
+                    ("set_render_settings", {"rop_path": "/out"}, "settings", {"a": [bad]}),
+                    ("create_material", {}, "parameters", {"roughness": bad}),
+                )
             ),
         ],
     )

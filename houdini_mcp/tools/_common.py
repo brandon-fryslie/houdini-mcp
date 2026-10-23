@@ -106,17 +106,12 @@ import typing
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 
-from pydantic import ConfigDict, ValidationError, with_config
-from pydantic_core import PydanticSerializationError, to_json
+from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError, from_json, to_json
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
 ToolFn = TypeVar("ToolFn", bound=Callable[..., Any])
-
-# [LAW:single-enforcer] A number on the wire is a JSON number, which is never NaN or
-# an infinity, though JSON-RPC's parse admits both and a float parse of a huge
-# integer yields one. One switch, so no float type has to say so itself.
-_WIRE = ConfigDict(allow_inf_nan=False)
 
 
 def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
@@ -155,18 +150,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
         undeclared = sorted(signature.parameters.keys() - hints.keys())
         if undeclared:
             raise TypeError(f"{operation_name} parameters have no declared type: {undeclared}")
-        # One record of the call's parameters, each optional, so the one wire
-        # config reaches every number however deep: a dataclass parameter can
-        # take no config of its own here.
-        arguments = TypeAdapter(
-            with_config(_WIRE)(
-                typing.TypedDict(  # type: ignore[operator]  # fields read off the signature
-                    f"{operation_name}_arguments",
-                    {name: hints[name] for name in signature.parameters},
-                    total=False,
-                )
-            )
-        )
+        adapters = {name: TypeAdapter(hints[name]) for name in signature.parameters}
 
         def parsed(bound: inspect.BoundArguments) -> inspect.BoundArguments:
             """The call with every argument parsed as its parameter's type.
@@ -176,24 +160,36 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             A value is parsed as the JSON it would cross the wire as, strictly, as
             the server's ``strict_input_validation`` parses it: a tuple is the
             array it is sent as, and "yes" is not a boolean on either path.
+            What it parses to is JSON too, which has no NaN or infinity, though
+            JSON-RPC's parse admits both and a float parse of a huge integer makes
+            one: that holds of the parsed value, so no type has to say it, and a
+            number under ``Any`` cannot slip past it.
             """
             for name, value in bound.arguments.items():
                 try:
-                    wire = to_json({name: value})
+                    wire = to_json(value)
                 except PydanticSerializationError:
                     raise InvalidInput(
                         f"{name}: not expressible as JSON, got {reprlib.repr(value)}",
                         parameter=name,
                     ) from None
                 try:
-                    bound.arguments[name] = arguments.validate_json(wire, strict=True)[name]
+                    bound.arguments[name] = adapters[name].validate_json(wire, strict=True)
                 except ValidationError as e:
                     told = "; ".join(
-                        f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+                        f"{'.'.join(map(str, (name, *error['loc'])))}: {error['msg']}"
                         for error in e.errors()
                     )
                     raise InvalidInput(
                         f"{told}, got {reprlib.repr(value)}", parameter=name
+                    ) from None
+                again = to_json(bound.arguments[name])
+                try:
+                    from_json(again, allow_inf_nan=False)
+                except ValueError:
+                    raise InvalidInput(
+                        f"{name}: a number must be finite, got {reprlib.repr(value)}",
+                        parameter=name,
                     ) from None
             return bound
 
