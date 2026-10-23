@@ -70,10 +70,7 @@ jobs:
         run: uv sync --locked
 
       - name: Run mypy
-        run: uv run mypy houdini_mcp/
-
-      - name: Run mypy (plugin packages)
-        run: uv run mypy houdini_plugin/houdini_mcp/python/houdini_mcp_plugin houdini_plugin/houdini_mcp/python/houdini_mcp_handshake
+        run: uv run mypy
 
   security:
     name: Security Scan

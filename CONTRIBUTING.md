@@ -57,7 +57,7 @@ uv run ruff check .
 uv run ruff check --fix .
 
 # Type checking
-uv run mypy houdini_mcp/
+uv run mypy
 
 # Security scan
 uv run bandit -r houdini_mcp/ -c pyproject.toml
