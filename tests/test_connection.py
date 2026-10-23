@@ -34,7 +34,7 @@ class TestConnect:
 
         assert link.conn is not None
         assert link.hou is mock_hou
-        assert link.hou.applicationVersionString() == "20.5.123"
+        assert link.hou.applicationVersionString() == "22.0.466"
 
     def test_connect_replaces_and_closes_the_previous_link(self, mock_rpyc_with_reset, mock_hou):
         """At most one link is open: a fresh connect closes the one it replaces."""
@@ -353,7 +353,7 @@ class TestEnsureConnected:
         """Test ensure_connected returns hou when already connected."""
         hou = ensure_connected("localhost", 18811)
         assert hou is not None
-        assert hou.applicationVersionString() == "20.5.123"
+        assert hou.applicationVersionString() == "22.0.466"
 
     def test_ensure_connected_reconnects(self, mock_rpyc_with_reset):
         """Test ensure_connected reconnects when disconnected."""
@@ -474,10 +474,10 @@ class TestGetConnectionInfo:
         info = get_connection_info("localhost", 18811)
 
         assert info["connected"] is True
-        assert info["houdini_version"] == "20.5.123"
-        assert info["houdini_build"]["major"] == 20
-        assert info["houdini_build"]["minor"] == 5
-        assert info["houdini_build"]["build"] == 123
+        assert info["houdini_version"] == "22.0.466"
+        assert info["houdini_build"]["major"] == 22
+        assert info["houdini_build"]["minor"] == 0
+        assert info["houdini_build"]["build"] == 466
         assert info["hip_file"] == "/path/to/test.hip"
 
     def test_get_connection_info_disconnected(self, reset_connection_state):

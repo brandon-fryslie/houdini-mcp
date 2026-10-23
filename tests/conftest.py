@@ -60,6 +60,8 @@ ROOT_CONTEXTS = {
     "stage": "Lop",
     "tasks": "TopNet",
 }
+# The category of the nodes each network type holds, where it is not the network's own.
+CHILD_CATEGORIES = {"geo": "Sop", "root": "Manager", **ROOT_CONTEXTS}
 
 
 class MockSubnetIndirectInput:
@@ -328,7 +330,7 @@ class MockHouNode:
         for a node that is not a network, as hou.Node.childTypeCategory returns."""
         if self._node_type in ("cam", "light", "null"):
             return None
-        contained = {"geo": "Sop", "root": "Manager", **ROOT_CONTEXTS}.get(self._node_type)
+        contained = CHILD_CATEGORIES.get(self._node_type)
         return MockNodeTypeCategory(contained or self.type().category().name())
 
     def inputs(self) -> list[Any]:
@@ -658,8 +660,8 @@ class MockHouModule:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
         self._root = MockHouNode(path="/", name="", node_type="root")
         self._hip_file = "/path/to/test.hip"
-        self._version = "20.5.123"
-        self._version_tuple = (20, 5, 123)
+        self._version = "22.0.466"
+        self._version_tuple = (22, 0, 466)
 
         for context in ROOT_CONTEXTS:
             self.add_node(MockHouNode(path=f"/{context}", name=context, node_type=context))

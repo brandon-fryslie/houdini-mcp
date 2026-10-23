@@ -64,9 +64,7 @@ def create_material(
     """
     hou = ensure_connected(host, port)
 
-    parent = hou.node(parent_path)
-    if parent is None:
-        raise InvalidInput(f"Parent context not found: {parent_path}", path=parent_path)
+    parent = node_at(hou, parent_path, "Parent context")
 
     # Generate name if not provided
     if not name:

@@ -23,7 +23,7 @@ class TestGetSceneInfo:
 
         assert result["status"] == "success"
         assert result["hip_file"] == "/path/to/test.hip"
-        assert result["houdini_version"] == "20.5.123"
+        assert result["houdini_version"] == "22.0.466"
 
     def test_get_scene_info_reports_the_hip_file_houdini_reports(self, mock_connection):
         """``hip_file`` is Houdini's own answer, passed through as the connection
@@ -2765,9 +2765,10 @@ class TestMaterialTools:
             port=18811,
         )
 
-        assert result["status"] == "error"
-        assert (
-            "not found" in result["message"].lower() or "cannot find" in result["message"].lower()
+        assert (result["status"], result["kind"], result["message"]) == (
+            "error",
+            "invalid_input",
+            "Parent context not found: /nonexistent",
         )
 
     def test_assign_material_geometry_not_found(self, mock_connection):

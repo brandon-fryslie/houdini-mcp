@@ -766,8 +766,8 @@ class TestRenderLeavesSceneUnchanged:
     def _scene(hou: Any) -> dict[str, list[tuple[int, str]]]:
         """Every context's children by identity and name: the scene as a value."""
         return {
-            path: [(id(child), child.name()) for child in hou.node(path).children()]
-            for path in ("/obj", "/out")
+            context.path(): [(id(child), child.name()) for child in context.children()]
+            for context in hou.node("/").children()
         }
 
     @pytest.mark.parametrize("tool", TOOLS)
@@ -908,7 +908,7 @@ class TestRenderLeavesSceneUnchanged:
         ), result
         # The locked camera is the one node left behind; the ROP is gone.
         after = self._names(self._scene(rendering_scene))
-        assert after == {"/obj": [*before["/obj"], cam], "/out": before["/out"]}
+        assert after == {**before, "/obj": [*before["/obj"], cam]}
         events = [
             r
             for r in caplog.records
