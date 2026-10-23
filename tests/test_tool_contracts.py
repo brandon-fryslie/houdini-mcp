@@ -22,6 +22,7 @@ import ast
 import inspect
 import json
 import logging
+import math
 import pathlib
 import re
 import textwrap
@@ -40,7 +41,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
 from houdini_mcp.tools import summarization
-from houdini_mcp.tools._common import FAILURE
+from houdini_mcp.tools._common import FAILURE, Vec3, handle_connection_errors
 from houdini_mcp.tools.code import Policy
 from tests.conftest import DEFAULT_SETTINGS, Wire
 
@@ -325,6 +326,64 @@ class TestServedSchemas:
         assert rotation["default"] == [-30, 45, 0]
         assert not await accepts(client, served, "render_viewport", {"camera_rotation": None})
 
+    @pytest.mark.parametrize(
+        ("tool", "base", "name", "value"),
+        [
+            *(
+                case
+                # An integer past a float's range parses as an infinity.
+                for bad in (math.nan, math.inf, -math.inf, 10**400)
+                for case in (
+                    ("render_viewport", {}, "camera_position", [bad, 0.0, 0.0]),
+                    ("render_viewport", {}, "camera_rotation", [bad, 0.0, 0.0]),
+                    ("set_node_position", {"node_path": "/obj", "y": 0.0}, "x", bad),
+                    ("set_node_color", {"node_path": "/obj"}, "color", [bad, 0.0, 0.0]),
+                )
+            ),
+            # Where an integer is legal too, a huge one is that integer.
+            *(
+                case
+                for bad in (math.nan, math.inf, -math.inf)
+                for case in (
+                    ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", [bad]),
+                    ("set_render_settings", {"rop_path": "/out"}, "settings", {"a": [bad]}),
+                    ("create_material", {}, "parameters", {"roughness": bad}),
+                )
+            ),
+        ],
+    )
+    async def test_a_number_is_finite(
+        self,
+        mcp: FastMCP,
+        mock_rpyc_with_reset: Any,
+        tool: str,
+        base: dict[str, Any],
+        name: str,
+        value: Any,
+    ) -> None:
+        """A NaN would reach Houdini and the call report success: a render from a
+        camera that sees nothing, a color clamped to 1.0 as if it were asked for.
+        Served or called directly, the call is refused first.
+        Served through the server's own ``call_tool``: a client writes NaN as null,
+        where JSON-RPC's parse of a NaN on the wire hands the server NaN."""
+        arguments = {**base, name: value}
+        served = (await mcp.call_tool(tool, arguments)).structured_content
+        direct = getattr(tools, tool)(**arguments)
+        for result in (served, direct):
+            assert result is not None and (result["kind"], result["parameter"]) == (
+                "invalid_input",
+                name,
+            ), result
+
+    def test_a_default_outside_its_type_fails_the_tools_definition(self) -> None:
+        """A default is served and bound without a caller's parse, so it is parsed
+        where the tool is defined: a tool cannot serve a value it would refuse."""
+        with pytest.raises(TypeError, match=r"render_viewport default .*camera_rotation"):
+
+            @handle_connection_errors("render_viewport")
+            def tool(camera_rotation: Vec3 = (math.nan, 0.0, 0.0)) -> dict[str, Any]:
+                return {}
+
     async def test_a_color_is_three_finite_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
@@ -403,16 +462,6 @@ class TestServedSchemas:
         params = inspect.signature(getattr(tools, name)).parameters
         for keyword in ("summarize", "host", "port"):
             assert params[keyword].kind is inspect.Parameter.KEYWORD_ONLY, (name, keyword)
-
-    def test_a_color_channel_is_finite(self) -> None:
-        """NaN would clamp to 1.0 and be reported as if it were asked for."""
-        from pydantic import TypeAdapter, ValidationError
-
-        from houdini_mcp.tools._common import RGB
-
-        for bad in (float("nan"), float("inf")):
-            with pytest.raises(ValidationError):
-                TypeAdapter(RGB).validate_python([bad, 0, 0])
 
     async def test_render_quad_view_parameters(
         self, client: Client[Any], served: dict[str, Tool]

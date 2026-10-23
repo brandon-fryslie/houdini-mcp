@@ -604,6 +604,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Every tool refuses a number that is NaN or Infinity, or an integer too large
+  for a float parameter (houdini-laws-etg.xfj). The JSON-RPC parse admits NaN
+  and Infinity, a float parse turns such an integer into Infinity, and only a
+  color refused them, so a
+  `render_viewport` camera vector, a `set_node_position` coordinate or a
+  `set_parameter` value reached Houdini: a render either reported success from
+  a camera that sees nothing or failed inside as `operation_failed`
+  (`math domain error`). The call is now refused as `invalid_input`, naming the
+  parameter, before it reaches Houdini, served or called directly. Every tool's
+  parameter defaults are checked against their types when the tool is defined,
+  so a tool cannot serve a default it would refuse from a caller.
+
 - `get_node_info`'s `cook_state` reports a failed cook and a never-cooked node
   in Houdini 22 (houdini-laws-etg.86b). It asked for `cookState()`, which no
   Houdini 22 node has, so a live call could only answer `"cooked"` or

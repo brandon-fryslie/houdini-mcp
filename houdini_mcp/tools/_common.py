@@ -107,7 +107,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 
 from pydantic import ValidationError
-from pydantic_core import PydanticSerializationError, to_json
+from pydantic_core import PydanticSerializationError, from_json, to_json
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
@@ -160,6 +160,10 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             A value is parsed as the JSON it would cross the wire as, strictly, as
             the server's ``strict_input_validation`` parses it: a tuple is the
             array it is sent as, and "yes" is not a boolean on either path.
+            What it parses to is JSON too, which has no NaN or infinity, though
+            JSON-RPC's parse admits both and a float parse of a huge integer makes
+            one: that holds of the parsed value, so no type has to say it, and a
+            number under ``Any`` cannot slip past it.
             """
             for name, value in bound.arguments.items():
                 try:
@@ -179,7 +183,31 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                     raise InvalidInput(
                         f"{told}, got {reprlib.repr(value)}", parameter=name
                     ) from None
+                again = to_json(bound.arguments[name], inf_nan_mode="constants")
+                try:
+                    from_json(again, allow_inf_nan=False)
+                except ValueError:
+                    raise InvalidInput(
+                        f"{name}: a number must be finite, got {reprlib.repr(value)}",
+                        parameter=name,
+                    ) from None
             return bound
+
+        # [LAW:single-enforcer] A default is bound and served without passing
+        # through ``parsed``, so each is parsed once here, as a passed value is: a
+        # default outside its parameter's type fails the tool's definition.
+        try:
+            parsed(
+                signature.bind_partial(
+                    **{
+                        name: parameter.default
+                        for name, parameter in signature.parameters.items()
+                        if parameter.default is not parameter.empty
+                    }
+                )
+            )
+        except InvalidInput as e:
+            raise TypeError(f"{operation_name} default is not its parameter's type: {e}") from None
 
         # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
         # body, off the event loop, in the Houdini its host and port name.
@@ -285,11 +313,9 @@ ResultLimit = Annotated[int, Field(ge=1)]
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
-# [LAW:parse-dont-validate] parsed, since a default is served unchecked: out of bounds fails import.
-DEFAULT_RESOLUTION: Resolution = TypeAdapter(Resolution).validate_python((512, 512))
+DEFAULT_RESOLUTION: Resolution = (512, 512)
 Vec3 = tuple[float, float, float]
-Channel = Annotated[float, Field(allow_inf_nan=False)]
-RGB = tuple[Channel, Channel, Channel]
+RGB = tuple[float, float, float]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
