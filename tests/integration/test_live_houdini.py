@@ -88,3 +88,24 @@ def test_cook_state_reads_what_houdini_22_can_tell(at: dict[str, Any]) -> None:
     assert failed["cook_state"] == "error"
     assert "planted" in failed["errors"][0]["message"]
     assert failed["last_cook_time"]["unread"].startswith("hou.OperationFailed")
+
+
+async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
+    at: dict[str, Any], bound: dict[str, Any]
+) -> None:
+    """Houdini 22's boundingBox() of a SOP with no points is a box at the origin; the
+    summary reports no box for it, and the sphere's own box for a sphere."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_bounds", **at)["node_path"]
+    empty = tools.create_node("null", geo, "empty1", **at)["node_path"]
+    sphere = tools.create_node("sphere", geo, "sphere1", **at)["node_path"]
+
+    nothing = await tools.get_geo_summary(empty, max_sample_points=0, summarize=False, **bound)
+    ball = await tools.get_geo_summary(sphere, max_sample_points=0, summarize=False, **bound)
+
+    assert nothing["point_count"] == 0 and "bounding_box" not in nothing
+    assert ball["bounding_box"] == {
+        "min": [-1.0, -1.0, -1.0],
+        "max": [1.0, 1.0, 1.0],
+        "size": [2.0, 2.0, 2.0],
+        "center": [0.0, 0.0, 0.0],
+    }

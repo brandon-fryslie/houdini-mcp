@@ -6,6 +6,7 @@ including point/primitive counts, attributes, groups, and sampling.
 
 import inspect
 import json
+import logging
 from typing import Any
 
 from ..settings import Summarizer
@@ -16,8 +17,11 @@ from ._common import (
     on_the_scene,
     tool_error,
 )
-from .reads import UNREAD, format_reason, log_unread, unreads
+from .bounds import box_center, box_of_bounds, box_sides
+from .reads import UNREAD, format_reason, is_unread, log_unread, unreads
 from .summarization import GEOMETRY_BRIEF, summarized
+
+logger = logging.getLogger("houdini_mcp.tools.geometry")
 
 # [LAW:one-source-of-truth] the program run inside Houdini spells a reason
 # with reads.format_reason itself, so one failure reads the same from any tool
@@ -60,7 +64,8 @@ async def get_geo_summary(
     Returns:
         Dict with comprehensive geometry summary including:
         - point_count, primitive_count, vertex_count: Geometry topology stats
-        - bounding_box: {min, max, size, center} vectors in world space
+        - bounding_box: {min, max, size, center} vectors in the SOP's own space;
+          absent for geometry with no points, which occupies no place
         - cook_state: "cooked" (the node is cooked first if it needs it)
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
@@ -71,7 +76,7 @@ async def get_geo_summary(
 
     Edge Cases:
         - Uncooked geometry: Tool will attempt to cook the node first
-        - Empty geometry: Returns zeros for counts, not an error
+        - Empty geometry: Returns zeros for counts and no bounding_box, not an error
         - Massive geometry (>1M points): a warning names the point count; the
           samples are still the first max_sample_points
         - No geometry/Not a SOP: Returns error status
@@ -159,16 +164,6 @@ def _type_name(attrib):
     return (dt.name() if hasattr(dt, "name") else str(dt)).lower()
 
 
-def _bounding_box(geo):
-    bbox = geo.boundingBox()
-    return {{
-        "min": list(bbox.minvec()),
-        "max": list(bbox.maxvec()),
-        "size": list(bbox.sizevec()),
-        "center": list(bbox.center()),
-    }}
-
-
 def _point_value(pt, aname):
     val = pt.attribValue(aname)
     if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
@@ -204,7 +199,8 @@ else:
         result["primitive_count"] = geo.intrinsicValue("primitivecount")
         result["vertex_count"] = geo.intrinsicValue("vertexcount")
 
-        result["bounding_box"] = _read(lambda: _bounding_box(geo))
+        # [LAW:effects-at-boundaries] the raw read; the server makes it a box
+        result["bounds"] = _read(lambda: list(geo.intrinsicValue("bounds")))
 
         if include_attributes:
             result["attributes"] = {{
@@ -284,8 +280,35 @@ print(json.dumps(result))
     # crosses back into the one failure type here.
     if result["status"] == "error":
         raise tool_error(result["kind"], result["message"], path=node_path)
+    result |= _bounding_box(result.pop("bounds"))
+    logger.info(
+        "Read geometry of %s: %s points, bounding_box=%s",
+        node_path,
+        result["point_count"],
+        result.get("bounding_box", "none (no points)"),
+    )
     # the program cannot reach this log; each field it could not read is an
     # event here, as it would be had the server read it
     for where, found in unreads(result):
         log_unread(f"{where} of {node_path}", found)
     return result
+
+
+def _bounding_box(bounds: Any) -> dict[str, Any]:
+    """The bounding_box field the program's bounds read becomes: the box, the read
+    Houdini refused, or no field for geometry with no points, as the render tools
+    report a framing of nothing."""
+    if is_unread(bounds):
+        return {"bounding_box": bounds}
+    box = box_of_bounds(bounds)
+    if box is None:
+        return {}
+    lo, hi = box
+    return {
+        "bounding_box": {
+            "min": list(lo),
+            "max": list(hi),
+            "size": list(box_sides(box)),
+            "center": list(box_center(box)),
+        }
+    }

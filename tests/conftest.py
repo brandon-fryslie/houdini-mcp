@@ -1520,7 +1520,7 @@ HOUDINI_TURNED_BOX = (
 
 # Houdini 22's bounds intrinsic of geometry with no points is inverted: each min at
 # +this, each max at -this, a box no point has widened.
-_NO_POINTS_EXTENT = 1.7014117331926443e38
+NO_POINTS_EXTENT = 1.7014117331926443e38
 
 
 class MockGeometry:
@@ -1579,7 +1579,7 @@ class MockGeometry:
         bounds = tuple(
             end
             for axis in axes
-            for end in (min(axis, default=_NO_POINTS_EXTENT), max(axis, default=-_NO_POINTS_EXTENT))
+            for end in (min(axis, default=NO_POINTS_EXTENT), max(axis, default=-NO_POINTS_EXTENT))
         )
         return {"bounds": bounds}[name]
 
