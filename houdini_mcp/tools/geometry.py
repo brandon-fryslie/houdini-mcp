@@ -280,12 +280,18 @@ print(json.dumps(result))
     # crosses back into the one failure type here.
     if result["status"] == "error":
         raise tool_error(result["kind"], result["message"], path=node_path)
-    result |= _bounding_box(result.pop("bounds"))
+    # the box stands where the program read its bounds, ahead of the attributes
+    # and samples a summary's excerpt may cut off
+    result = {
+        name: value
+        for key, read in result.items()
+        for name, value in (_bounding_box(read) if key == "bounds" else {key: read}).items()
+    }
     logger.info(
         "Read geometry of %s: %s points, bounding_box=%s",
         node_path,
         result["point_count"],
-        result.get("bounding_box", "none (no points)"),
+        result.get("bounding_box", "none (no point has a position)"),
     )
     # the program cannot reach this log; each field it could not read is an
     # event here, as it would be had the server read it
@@ -296,8 +302,8 @@ print(json.dumps(result))
 
 def _bounding_box(bounds: Any) -> dict[str, Any]:
     """The bounding_box field the program's bounds read becomes: the box, the read
-    Houdini refused, or no field for geometry with no points, as the render tools
-    report a framing of nothing."""
+    Houdini refused, or no field for geometry with no point that has a position, as
+    the render tools report a framing of nothing."""
     if is_unread(bounds):
         return {"bounding_box": bounds}
     box = box_of_bounds(bounds)

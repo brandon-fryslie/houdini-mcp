@@ -9,12 +9,13 @@ Box = tuple[Vec3, Vec3]
 
 
 def box_of_bounds(bounds: Sequence[float]) -> Box | None:
-    """The box Houdini's bounds intrinsic describes; None for geometry with no points.
+    """The box Houdini's bounds intrinsic describes; None for geometry with no point
+    that has a position: none at all, or only points at NaN, which the bounds skip.
 
     [LAW:parse-dont-validate] [LAW:one-source-of-truth] the one reading of the
     intrinsic, (xmin, xmax, ymin, ymax, zmin, zmax), which Houdini inverts for
-    geometry with no points. Its boundingBox() of such geometry is a valid box of
-    no size at the origin, a place the geometry does not occupy, so no tool reads it.
+    such geometry. Its boundingBox() of such geometry is a valid box of no size at
+    the origin, a place the geometry does not occupy, so no tool reads it.
     """
     xmin, xmax, ymin, ymax, zmin, zmax = bounds
     lo, hi = (xmin, ymin, zmin), (xmax, ymax, zmax)

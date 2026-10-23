@@ -749,6 +749,9 @@ class TestTheProgramHoudiniRuns:
             "center": [0.5, 0.5, 0.5],
         }
         assert result["bounding_box"] == box
+        # a summary's excerpt is the result's start, which the box must be in
+        fields = list(result)
+        assert fields.index("bounding_box") < fields.index("attributes")
         assert f"Read geometry of /obj/geo1/box1: 1 points, bounding_box={box}" in caplog.text
         assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
         assert result["groups"]["point"] == ["top"]
@@ -779,7 +782,7 @@ class TestTheProgramHoudiniRuns:
         assert result["point_count"] == 0
         assert "bounding_box" not in result
         assert (
-            "Read geometry of /obj/geo1/box1: 0 points, bounding_box=none (no points)"
+            "Read geometry of /obj/geo1/box1: 0 points, bounding_box=none (no point has a position)"
             in caplog.text
         )
 
