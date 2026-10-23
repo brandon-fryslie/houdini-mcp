@@ -47,9 +47,11 @@ def _get_qt_modules(link: Link) -> tuple[Any, Any]:
     # attributes of the package, which serves the ones it loads lazily the same way.
     try:
         pyside = conn.modules["hutil.PySide"]
-        return pyside.QtWidgets, pyside.QtCore
+        QtWidgets, QtCore = pyside.QtWidgets, pyside.QtCore
     except (ImportError, AttributeError) as e:
         raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
+    logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
+    return QtWidgets, QtCore
 
 
 def pane_type_member(hou: Any, name: str) -> Any | None:

@@ -50,18 +50,24 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
 
 
 def test_qt_is_the_one_the_connected_houdini_names(
-    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+    monkeypatch: pytest.MonkeyPatch,
+    mock_connection: MockHouModule,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Houdini's hutil.PySide names the binding its build runs; the capture tools take that one."""
-    QtWidgets, QtCore = object(), object()
+    QtWidgets = object()
+    QtCore = SimpleNamespace(__name__="PySide6.QtCore", qVersion=lambda: "6.8.3")
     monkeypatch.setitem(
         sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=QtWidgets, QtCore=QtCore)
     )
 
-    assert _get_qt_modules(houdini().link()) == (QtWidgets, QtCore)
+    with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"):
+        assert _get_qt_modules(houdini().link()) == (QtWidgets, QtCore)
+
+    assert "Capturing through PySide6.QtCore, Qt 6.8.3" in caplog.messages
 
 
-def test_a_houdini_whose_pyside_lacks_a_qt_module_fails_every_capture_alike(
+def test_a_houdini_whose_pyside_lacks_a_qt_module_has_its_qt_refused_naming_hutil_pyside(
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
     """hutil.PySide skips a submodule its binding cannot import; the capture is refused naming hutil.PySide."""
