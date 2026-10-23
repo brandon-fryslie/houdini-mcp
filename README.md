@@ -508,24 +508,6 @@ if cook_info["warnings"]:
         print(f"  - {warning['message']}")
 ```
 
-## Example Workflows
-
-Complete working examples are available in the `examples/` directory:
-
-- **`build_from_scratch.py`** - Build sphere → xform → color → OUT from scratch
-- **`augment_existing_scene.py`** - Insert mountain between grid → noise
-- **`parameter_workflow.py`** - Discover → set → verify parameters
-- **`error_handling.py`** - Detect → fix → verify errors
-
-Run examples:
-
-```bash
-uv run python examples/build_from_scratch.py
-uv run python examples/augment_existing_scene.py
-uv run python examples/parameter_workflow.py
-uv run python examples/error_handling.py
-```
-
 ## Usage Examples
 
 ### With Claude/Cursor
@@ -620,7 +602,6 @@ houdini_plugin/            # Houdini plugin, laid out as a packages directory
 
 tests/                     # pytest suite
 docs/                      # Implementation documentation
-examples/                  # Working example scripts
 ```
 
 ## Credits

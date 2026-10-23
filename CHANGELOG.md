@@ -495,6 +495,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `examples/`, `docs/implementation/examples-docs.md` and
+  `docs/reference/examples-ref.md` (houdini-tuneup-ef3.bl1). Every example script
+  POSTed to `/tools/<name>`, a route the server has never served, so none of them
+  ever ran. A client calls the tools over MCP, as README's client configurations
+  show. The live workflow tests they were said to be tested by remain, as
+  `tests/integration/test_workflows.py`; they call the tool functions directly.
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin
@@ -549,14 +555,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
   it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
-  because MCP is served at `/mcp`. README and examples/README.md now give
-  `http://localhost:3055/mcp`. The server no longer logs its own pathless
-  `Starting Houdini MCP Server on http://0.0.0.0:3055`; fastmcp's startup line,
-  which names the path, stays. The live tests' server child watches for the test
-  ending from its first instant, imports this checkout's `houdini_mcp` first on the
-  path, and treats a slow `/health` answer as not serving yet rather than a failure.
-  The default `MCP_PORT` lives in one place the test reads, and README's
-  `MCP_TRANSPORT` row names the URL path each transport serves (`sse` serves `/sse`).
+  because MCP is served at `/mcp`. README now gives `http://localhost:3055/mcp`. The
+  server no longer logs its own pathless `Starting Houdini MCP Server on
+  http://0.0.0.0:3055`; fastmcp's startup line, which names the path, stays. The live
+  tests' server child watches for the test ending from its first instant, imports
+  this checkout's `houdini_mcp` first on the path, and treats a slow `/health` answer
+  as not serving yet rather than a failure. The default `MCP_PORT` lives in one place
+  the test reads, and README's `MCP_TRANSPORT` row names the URL path each transport
+  serves (`sse` serves `/sse`).
 
 - **`get_houdini_help` names the class on a hou page** (houdini-tuneup-ef3.avb):
   a `python_hou` title came back as ` - class`, because the parser read only the
