@@ -1209,28 +1209,6 @@ class TestListNodeTypes:
         assert result["returned"] <= 50
         assert len(result["node_types"]) <= 50
 
-    def test_list_node_types_limit_capped_at_500(self, mock_connection):
-        """Test that limit is capped at 500."""
-        from houdini_mcp.tools import list_node_types
-
-        # Request more than 500, should be capped
-        result = list_node_types(None, limit=1000, host="localhost", port=18811)
-
-        assert result["status"] == "success"
-        # Should be capped at 500
-        assert result["returned"] <= 500
-        assert len(result["node_types"]) <= 500
-
-    def test_list_node_types_limit_minimum(self, mock_connection):
-        """An invalid limit (< 1) pages one item, like every other list tool."""
-        from houdini_mcp.tools import list_node_types
-
-        result = list_node_types(None, limit=0, host="localhost", port=18811)
-
-        assert result["status"] == "success"
-        assert result["returned"] == 1
-        assert result["cursor"] == 1
-
     def test_list_node_types_name_filter(self, mock_connection):
         """Test name_filter parameter filters by substring."""
         from houdini_mcp.tools import list_node_types

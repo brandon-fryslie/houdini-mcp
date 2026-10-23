@@ -1,28 +1,15 @@
-"""Tests for response pagination (houdini-mcp-2t6): one paging contract, one clamp."""
+"""Tests for response pagination (houdini-mcp-2t6): one paging contract, one set of bounds."""
 
 
 def _page(items, limit, cursor=0):
-    from houdini_mcp.tools._common import paginate, paging_fields, parse_page_request
+    from houdini_mcp.tools._common import PageRequest, paginate, paging_fields
 
-    page = paginate(items, parse_page_request(limit=limit, cursor=cursor))
+    page = paginate(items, PageRequest(offset=cursor, limit=limit))
     return {"items": page.items, **paging_fields(page)}
 
 
 class TestResponsePagination:
     """Test pagination with limit/cursor controls."""
-
-    def test_invalid_inputs_are_clamped_without_repeating_cursor(self):
-        result = _page(list(range(5)), limit=0, cursor=-100)
-        assert result["items"] == [0]
-        assert result["cursor"] == 1
-        assert result["has_more"] is True
-
-    def test_limit_is_capped(self):
-        from houdini_mcp.tools._common import PAGE_LIMIT_MAX
-
-        result = _page(list(range(PAGE_LIMIT_MAX + 50)), limit=PAGE_LIMIT_MAX + 10)
-        assert result["returned"] == PAGE_LIMIT_MAX
-        assert result["cursor"] == PAGE_LIMIT_MAX
 
     def test_paginate_empty_list(self):
         """Paginating an empty list returns empty result with no cursor."""
@@ -134,15 +121,13 @@ class TestOnePagingContract:
     def _paging(self, result):
         return {k: v for k, v in result.items() if k in self.PAGING_KEYS}
 
-    def test_invalid_bounds_page_identically(self, mock_connection):
+    def test_out_of_bounds_page_is_refused_identically(self, mock_connection):
+        from houdini_mcp.tools._common import PAGE_LIMIT_MAX
+
         for tool in self._tools(mock_connection):
-            result = tool(limit=0, cursor=-7)
-            assert result["status"] == "success"
-            assert result["returned"] == 1
-            assert result["offset"] == 0
-            assert result["has_more"] is True
-            assert result["cursor"] == 1
-            assert "cursor=1" in result["warning"]
+            for parameter, value in (("limit", 0), ("limit", PAGE_LIMIT_MAX + 1), ("cursor", -7)):
+                result = tool(**{parameter: value})
+                assert (result["kind"], result["parameter"]) == ("invalid_input", parameter)
 
     def test_second_page_has_identical_contract_shape(self, mock_connection):
         pages = [self._paging(tool(limit=5, cursor=5)) for tool in self._tools(mock_connection)]
@@ -165,7 +150,7 @@ class TestOnePagingContract:
             assert result["has_more"] is False
             assert not ({"cursor", "warning"} & set(result))
 
-    def test_oversized_limit_is_capped_everywhere(self, mock_connection):
+    def test_largest_page_is_bounded_everywhere(self, mock_connection):
         from houdini_mcp.tools._common import PAGE_LIMIT_MAX
         from tests.conftest import MockHouNode
 
@@ -179,8 +164,10 @@ class TestOnePagingContract:
         from houdini_mcp.tools.nodes import find_nodes, list_children
 
         for result in (
-            list_children("/obj/big", limit=10_000, compact=True, host="localhost", port=18811),
-            find_nodes("/obj/big", "*", limit=10_000, host="localhost", port=18811),
+            list_children(
+                "/obj/big", limit=PAGE_LIMIT_MAX, compact=True, host="localhost", port=18811
+            ),
+            find_nodes("/obj/big", "*", limit=PAGE_LIMIT_MAX, host="localhost", port=18811),
         ):
             # The byte cap may shorten the page further; the cursor then still
             # advances by exactly what was returned.
@@ -200,27 +187,17 @@ class TestOnePagingContract:
 
 
 class TestPagingEnforcer:
-    """The parser is the one clamp, the type refuses what it does not clamp, and both log."""
+    """The page's types are its one set of bounds, and a served page is logged."""
 
     def test_page_request_refuses_illegal_bounds(self):
         import pytest
 
         from houdini_mcp.tools._common import PAGE_LIMIT_MAX, PageRequest
 
-        for offset, limit in ((-1, 10), (0, 0), (0, PAGE_LIMIT_MAX + 1)):
+        # A bool or a numeric string is refused, not coerced into a page.
+        for offset, limit in ((-1, 10), (0, 0), (0, PAGE_LIMIT_MAX + 1), (0, True), ("0", 10)):
             with pytest.raises(ValueError):
                 PageRequest(offset=offset, limit=limit)
-
-    def test_clamped_request_is_logged_with_raw_and_resolved_values(self, caplog):
-        import logging
-
-        from houdini_mcp.tools._common import parse_page_request
-
-        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools"):
-            parse_page_request(limit=0, cursor=-7)
-        assert any(
-            "limit=0 cursor=-7 -> offset=0 limit=1" in r.getMessage() for r in caplog.records
-        )
 
     def test_served_page_is_logged(self, caplog):
         import logging
@@ -248,12 +225,12 @@ class TestLegacyPaginationCompatibility:
         )
         assert find_nodes("/obj", "*", None, "localhost", 18811)["status"] == "success"
 
-    def test_find_nodes_clamps_zero_limit(self, mock_connection):
+    def test_find_nodes_default_call_finds_obj_children(self, mock_connection):
         from houdini_mcp.tools.nodes import find_nodes
         from tests.conftest import MockHouNode
 
         child = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(child)
-        result = find_nodes(limit=0, cursor=0, host="localhost", port=18811)
+        result = find_nodes(host="localhost", port=18811)
         assert result["returned"] == 1
         assert result["matches"][0]["path"] == "/obj/geo1"
