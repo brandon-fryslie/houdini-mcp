@@ -211,11 +211,13 @@ class MockHouNode:
         self._display_flag = True
         self._render_flag = True
         self._bypass = False
-        # Cook state tracking
-        self._cook_state = "Cooked"  # Cooked, CookFailed, Dirty, Uncooked
+        # Cook state, as Houdini 22 reads it: how many cooks were attempted,
+        # whether the node needs another, and the last cook's messages. A fake
+        # node has cooked once and is current.
+        self._cook_count = 1
+        self._needs_to_cook = False
         self._errors: list[str] = []
         self._warnings: list[str] = []
-        self._last_cook_time: float | None = None
         # Geometry
         self._geometry: MockGeometry | None = None
         # Network position
@@ -512,11 +514,11 @@ class MockHouNode:
         if source_node is not None and self not in source_node._outputs:
             source_node._outputs.append(self)
 
-    def cookState(self) -> MagicMock:
-        """Return cook state enum."""
-        mock_state = MagicMock()
-        mock_state.name.return_value = self._cook_state
-        return mock_state
+    def cookCount(self) -> int:
+        return self._cook_count
+
+    def needsToCook(self) -> bool:
+        return self._needs_to_cook
 
     def errors(self) -> list[str]:
         """Return list of error messages."""
@@ -527,19 +529,18 @@ class MockHouNode:
         return self._warnings.copy()
 
     def cook(self, force: bool = False) -> None:
-        """Simulate cooking the node."""
-        import time
-
-        self._last_cook_time = time.time()
-        # If there are errors, state becomes CookFailed
+        """Cook as Houdini 22 does: the attempt counts, and a node with errors
+        fails it, raising and still needing a cook."""
+        self._cook_count += 1
+        self._needs_to_cook = bool(self._errors)
         if self._errors:
-            self._cook_state = "CookFailed"
-        else:
-            self._cook_state = "Cooked"
+            raise raised_inside_houdini(RuntimeError("Error while cooking."))
 
-    def isCook(self) -> bool:
-        """Check if node is currently cooking."""
-        return False  # For mock, assume never actively cooking
+    def fail_cook(self, *errors: str) -> None:
+        """Leave the node as a cook that failed with ``errors`` leaves it."""
+        self._errors = list(errors)
+        self._cook_count += 1
+        self._needs_to_cook = True
 
     def geometry(self) -> Optional["MockGeometry"]:
         """Return geometry object if this is a SOP node."""
@@ -676,17 +677,6 @@ class MockHouModule:
         self.hipFile.saveAsBackup.return_value = "/path/to/backup/test_bak1.hip"
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
-
-        # Mock cookState enum
-        self.cookState = MagicMock()
-        self.cookState.Cooked = MagicMock()
-        self.cookState.Cooked.name.return_value = "Cooked"
-        self.cookState.CookFailed = MagicMock()
-        self.cookState.CookFailed.name.return_value = "CookFailed"
-        self.cookState.Dirty = MagicMock()
-        self.cookState.Dirty.name.return_value = "Dirty"
-        self.cookState.Uncooked = MagicMock()
-        self.cookState.Uncooked.name.return_value = "Uncooked"
 
         # Houdini types
         self.Color = MockColor

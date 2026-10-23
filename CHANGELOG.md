@@ -601,6 +601,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_node_info`'s `cook_state` reports a failed cook and a never-cooked node
+  in Houdini 22 (houdini-laws-etg.86b). It asked for `cookState()`, which no
+  Houdini 22 node has, so a live call could only answer `"cooked"` or
+  `"dirty"`: a node whose cook failed read as `"dirty"`, and one that had never
+  cooked read as `"dirty"` too. It now reads `"uncooked"` when the node has never
+  cooked, `"error"` when its last cook failed, and `"dirty"` or `"cooked"`
+  otherwise. Without the node's errors a failed cook and a stale one look the
+  same, so when Houdini will not give the errors, `cook_state` is unread too.
+
 - `fit_contents` frames the pane it captures (houdini-laws-etg.9o0). No pane
   type in Houdini 22 has `homeAll()`, so `capture_pane_screenshot(fit_contents=True)`
   and `render_node_network` captured the view unframed and reported success. A

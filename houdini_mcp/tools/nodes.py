@@ -106,7 +106,9 @@ def get_node_info(
     Returns:
         Node information at the requested detail. When cook_info is not "none",
         also includes cook_info with cook_state, errors, and warnings (and
-        last_cook_time after a forced cook).
+        last_cook_time after a forced cook). cook_state is "uncooked" (never
+        cooked), "error" (the last cook failed), "dirty" (cooked, then changed)
+        or "cooked".
 
     Example:
         # Check cook state and errors
@@ -207,10 +209,12 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     cook_info["warnings"] = read(
         f"warnings of {path}", lambda: _messages("warning", path, node.warnings())
     )
+    logger.debug("cook info path=%s force=%s cook_state=%s", path, force, cook_info["cook_state"])
     return cook_info
 
 
-_COOK_STATES = {"Cooked": "cooked", "CookFailed": "error", "Dirty": "dirty", "Uncooked": "uncooked"}
+CookState = Literal["uncooked", "error", "dirty", "cooked"]
+"""Never cooked; last cook failed; last cook worked but is stale; last cook worked and is current."""
 
 
 def _cook(node: Any) -> float:
@@ -218,11 +222,14 @@ def _cook(node: Any) -> float:
     return time.time()
 
 
-def _cook_state(node: Any) -> str:
-    # Houdini 20.5+ doesn't have cookState(), use needsToCook() instead
-    if hasattr(node, "cookState"):
-        name = node.cookState().name()
-        return _COOK_STATES.get(name, name.lower())
+def _cook_state(node: Any) -> CookState:
+    # [LAW:types-are-the-program] Houdini 22 has no cookState(). Only cookCount()
+    # tells a node that never cooked, and only errors() tells a failed cook from
+    # a stale one: a failed cook still counts, and still needs to cook.
+    if node.cookCount() == 0:
+        return "uncooked"
+    if node.errors():
+        return "error"
     return "dirty" if node.needsToCook() else "cooked"
 
 

@@ -373,12 +373,9 @@ class TestErrorHandling:
         assert node_info["status"] == "success"
         assert "cook_info" in node_info
 
-        cook_state = node_info["cook_info"]["cook_state"]
+        assert node_info["cook_info"]["cook_state"] == "cooked"
 
-        # Step 2: Only access geometry if cooked
-        if cook_state == "cooked":
-            geo = await get_geo_summary(box_path, max_sample_points=0, **bound)
-            assert geo["status"] == "success"
-            assert geo["point_count"] > 0
-        else:
-            pytest.skip(f"Node not cooked (state: {cook_state}), can't test geometry access")
+        # Step 2: a cooked node's geometry reads
+        geo = await get_geo_summary(box_path, max_sample_points=0, **bound)
+        assert geo["status"] == "success"
+        assert geo["point_count"] > 0
