@@ -508,9 +508,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cook_state` for a failure, but a failing `get_geo_summary` returns
   `status: "error"` with no `cook_state`. An agent reads each tool's arguments
   and result from the tool description the server serves. README's Example
-  Prompts ask the agent for four of the removed workflows: building a SOP chain,
-  inserting a node, setting a parameter from its schema, and checking a node for
-  cook errors.
+  Prompts ask the agent for five of the removed workflows: building a SOP chain,
+  inserting a node, setting a parameter from its schema, checking a node for cook
+  errors, and reading a node's point count and bounding box.
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin

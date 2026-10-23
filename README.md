@@ -368,6 +368,7 @@ Add to your MCP client configuration:
 - "Discover what parameters are available on the sphere node"
 - "Check if the noise node has any cook errors"
 - "Set the sphere radius to 3.0 using the parameter schema"
+- "Check the OUT node's point count and bounding box"
 
 ## Development
 
