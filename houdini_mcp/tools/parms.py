@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from houdini_mcp_read import Parm, ParmNotFound, evaluated_json, json_safe_hou_value, resolve
+from houdini_mcp_read import Parm, ParmNotFound, evaluated_json, resolve
 
 from .failure import Undone, items_failed
 from .reads import Unread, read, reraise_transport_failure
@@ -24,7 +24,6 @@ __all__ = [
     "ParmValueError",
     "Writes",
     "evaluated",
-    "json_safe_hou_value",
     "read_present",
     "resolve",
     "value",

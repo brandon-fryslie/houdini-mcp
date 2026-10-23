@@ -52,7 +52,7 @@ def format_reason(e: BaseException) -> str:
     return "".join(traceback.format_exception_only(type(e), e)).rstrip()
 
 
-def read(fetch: Callable[[], T], explain: Callable[[Exception], str] = format_reason) -> T | Unread:
+def read(fetch: Callable[[], T], explain: Callable[[Exception], str]) -> T | Unread:
     """``fetch()``'s value, or ``Unread`` saying why Houdini would not give it.
 
     [LAW:single-enforcer] The one place a refusal becomes ``Unread``. ``explain``

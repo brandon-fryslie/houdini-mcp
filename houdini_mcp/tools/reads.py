@@ -76,9 +76,9 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
 
     def explain(e: Exception) -> str:
         reraise_transport_failure(e)
-        why = reason(e)
-        log_unread(what, Unread(unread=why))
-        return why
+        found = unread(e)
+        log_unread(what, found)
+        return found["unread"]
 
     return houdini_mcp_read.read(fetch, explain)
 

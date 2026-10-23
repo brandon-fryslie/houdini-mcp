@@ -51,8 +51,12 @@ def test_a_parameter_schema_costs_the_link_the_same_requests_whatever_the_node(
     """A geo's 76 parameter tuples and a principled shader's 336 are read in the same
     requests, whole or by name: the read runs inside Houdini, and nothing crosses the
     link per parameter."""
-    geo = tools.create_node("geo", "/obj", "mcp_it_requests", **at)["node_path"]
-    shader = tools.create_node("principledshader::2.0", "/mat", "mcp_it_requests", **at)
+    created = [
+        tools.create_node("geo", "/obj", "mcp_it_requests", **at),
+        tools.create_node("principledshader::2.0", "/mat", "mcp_it_requests", **at),
+    ]
+    assert [c["status"] for c in created] == ["success", "success"], created
+    geo, shader = (c["node_path"] for c in created)
     with using(**at) as link:
         conn = link.conn
     # the plugin module's import and rpyc's first sight of each class are paid
@@ -75,8 +79,8 @@ def test_a_parameter_schema_costs_the_link_the_same_requests_whatever_the_node(
         assert schema["status"] == "success", schema
         return len(sent)
 
-    whole = {requests_of(path, None) for path in (geo, shader["node_path"])}
-    named = {requests_of(geo, "t"), requests_of(shader["node_path"], "basecolor")}
+    whole = {requests_of(path, None) for path in (geo, shader)}
+    named = {requests_of(geo, "t"), requests_of(shader, "basecolor")}
     # [LAW:verifiable-goals] at least one request, or the count measured nothing
     assert len(whole) == len(named) == 1 and min(whole) > 0 and max(whole | named) < 20, (
         whole,
