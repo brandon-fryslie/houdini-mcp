@@ -88,8 +88,6 @@ __all__ = [
     "batch_status",
     "node_at",
     "network_at",
-    # Output utilities
-    "_truncate_output",
     # Response pagination and bounds (houdini-mcp-2t6)
     "PAGE_LIMIT_MAX",
     "PageLimit",
@@ -396,23 +394,6 @@ Seconds = Annotated[int, Field(ge=1, le=86400)]
 """How long a call may wait: zero would give up before it began, and an unbounded wait
 can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is
 the ceiling."""
-
-
-def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:
-    """
-    Truncate output if it exceeds max_size.
-
-    Args:
-        output: The output string to potentially truncate
-        max_size: Maximum allowed size in bytes
-
-    Returns:
-        Tuple of (truncated_output, was_truncated)
-    """
-    if len(output) > max_size:
-        truncated = output[:max_size]
-        return truncated, True
-    return output, False
 
 
 class ExecutionTimeoutError(Exception):

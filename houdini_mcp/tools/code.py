@@ -46,8 +46,7 @@ import traceback
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-from io import StringIO
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from ..connection import houdini
 from ._common import (
@@ -58,7 +57,6 @@ from ._common import (
     OperationFailed,
     ProgramStillRunning,
     Seconds,
-    _truncate_output,
     tool,
     using,
 )
@@ -70,7 +68,7 @@ from .code_policy import (
     parse_code,
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
-from .program_output import captured
+from .program_output import Capture, captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
@@ -417,7 +415,7 @@ class _Ended:
 
 
 def _run_code_thread(
-    code: str, hou: Any, stdout_capture: StringIO, stderr_capture: StringIO
+    code: str, hou: Any, stdout_capture: Capture, stderr_capture: Capture
 ) -> tuple[_Fault, ...]:
     """Execute user code, capturing stdout/stderr; what it raised, if it raised."""
     try:
@@ -455,6 +453,34 @@ class _NeverRan:
     loss, already dropped, when that is what failed)."""
 
     error: Exception
+
+
+class _ReportedOutput(TypedDict):
+    """A program's output as every way out of execute_code reports it."""
+
+    stdout: str
+    stdout_truncated: bool
+    stderr: str
+    stderr_truncated: bool
+
+
+def _reported_output(operation: str, stdout: Capture, stderr: Capture) -> _ReportedOutput:
+    """Each capture's text beside whether its bound cut it."""
+    out, err = stdout.written(), stderr.written()
+    logger.info(
+        "%s output stdout=%d stderr=%d characters truncated=%s closed=%s",
+        operation,
+        out.length,
+        err.length,
+        [name for name, written in (("stdout", out), ("stderr", err)) if written.truncated],
+        [name for name, capture in (("stdout", stdout), ("stderr", stderr)) if capture.closed],
+    )
+    return {
+        "stdout": out.text,
+        "stdout_truncated": out.truncated,
+        "stderr": err.text,
+        "stderr_truncated": err.truncated,
+    }
 
 
 def _build_audit(
@@ -572,8 +598,8 @@ def execute_code(
     Args:
         code: Python code to execute
         capture_diff: If True, captures before/after scene state and returns changes (default: False)
-        max_stdout_size: Maximum stdout size in bytes (default: 100000 = 100KB)
-        max_stderr_size: Maximum stderr size in bytes (default: 100000 = 100KB)
+        max_stdout_size: Maximum stdout length in characters (default: 100000)
+        max_stderr_size: Maximum stderr length in characters (default: 100000)
         max_diff_nodes: Maximum nodes in each scene diff list (default: 1000)
         timeout: Execution timeout in seconds (default: 30)
         allow_dangerous: Request-side opt-in to run dangerous patterns.
@@ -598,8 +624,9 @@ def execute_code(
         the nodes under /obj added, removed, or replaced by another type, at any
         depth. When the scene could not be read after the code ran, the code's
         result stands and scene_changes_error says why in place of scene_changes.
-        May include truncation flags (stdout_truncated, stderr_truncated, diff_truncated)
-        if output exceeded size limits.
+        stdout_truncated and stderr_truncated, on every result that carries the
+        output, say whether each was cut to its max size; diff_truncated is set
+        when a diff list was cut to max_diff_nodes.
         If dangerous or heavy-geometry patterns are detected and not granted, returns
         error with the detected patterns and unmet_requirements: each of "policy"
         (re-run with policy='normal'), "request" (set the flag), "config" (enable
@@ -767,8 +794,10 @@ def _execute_with_grant(
         hou = link.hou
         undos = _resolve_undo_primitive(hou)
 
-        stdout_capture = StringIO()
-        stderr_capture = StringIO()
+        # [LAW:one-source-of-truth] Each capture holds its own bound, and every way
+        # out of the call reports them through _reported_output.
+        stdout_capture = Capture(max_stdout_size)
+        stderr_capture = Capture(max_stderr_size)
         # The worker writes this once the program and its undo group have ended.
         ended = _Ended((), None)
         # With capture_diff, the worker writes this on every way out: the program's
@@ -923,8 +952,7 @@ def _execute_with_grant(
             raise ProgramStillRunning(
                 f"Execution timeout: code did not complete within {timeout} seconds",
                 policy=grant.policy,
-                stdout=stdout_capture.getvalue()[:max_stdout_size],
-                stderr=stderr_capture.getvalue()[:max_stderr_size],
+                **_reported_output(operation, stdout_capture, stderr_capture),
                 timeout=timeout,
                 warning=(
                     "Execution timed out while its background thread and undo group are still active. "
@@ -961,25 +989,14 @@ def _execute_with_grant(
 
         # --- Exception during execution -----------------------------------------
         if ended.faults:
-            stdout_val, stdout_truncated = _truncate_output(
-                stdout_capture.getvalue(), max_stdout_size
-            )
-            stderr_val, stderr_truncated = _truncate_output(
-                stderr_capture.getvalue(), max_stderr_size
-            )
-            error_fields: dict[str, Any] = {
-                "traceback": "".join(fault.traceback for fault in ended.faults),
-                "stdout": stdout_val,
-                "stderr": stderr_val,
-                "policy": grant.policy,
-                "audit": audit,
-            }
-            if stdout_truncated:
-                error_fields["stdout_truncated"] = True
-            if stderr_truncated:
-                error_fields["stderr_truncated"] = True
             first, *later = ended.faults
-            failure = OperationFailed(first.told(), **error_fields)
+            failure = OperationFailed(
+                first.told(),
+                traceback="".join(fault.traceback for fault in ended.faults),
+                **_reported_output(operation, stdout_capture, stderr_capture),
+                policy=grant.policy,
+                audit=audit,
+            )
             for fault in later:
                 add_note(failure, fault.told())
             # A program that failed because its link did reads as the link's failure,
@@ -995,23 +1012,12 @@ def _execute_with_grant(
             raise scene
 
         # --- Success -------------------------------------------------------------
-        stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
-        stderr_val, stderr_truncated = _truncate_output(stderr_capture.getvalue(), max_stderr_size)
-
         result: dict[str, Any] = {
             "status": "success",
-            "stdout": stdout_val,
-            "stderr": stderr_val,
+            **_reported_output(operation, stdout_capture, stderr_capture),
             "policy": grant.policy,
             "audit": audit,
         }
-
-        if stdout_truncated:
-            result["stdout_truncated"] = True
-            result["stdout_warning"] = f"stdout truncated to {max_stdout_size} bytes"
-        if stderr_truncated:
-            result["stderr_truncated"] = True
-            result["stderr_warning"] = f"stderr truncated to {max_stderr_size} bytes"
 
         if isinstance(scene, _DiffFailed):
             result["scene_changes_error"] = failure_for(scene.error, operation).model_dump()

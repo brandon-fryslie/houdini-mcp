@@ -739,48 +739,104 @@ class TestTimeoutRollback:
 
 
 class TestCapBoundaries:
-    def test_stdout_exactly_at_limit_not_truncated(self, mock_connection):
+    @pytest.mark.parametrize(
+        "ending",
+        [
+            lambda _: "",
+            lambda _: "raise ValueError('boom')",
+            lambda request: request.getfixturevalue("stalled_program"),
+        ],
+        ids=["success", "exception", "timeout"],
+    )
+    @pytest.mark.parametrize("written", [50, 51])
+    def test_every_way_out_reports_its_output_the_same_way(
+        self, mock_connection, request, caplog, ending, written
+    ):
+        """A program that ends, raises, or outlives its timeout reports stdout and
+        stderr cut to their bounds, each beside whether it was cut."""
+        import logging
+
         from houdini_mcp.tools import execute_code
 
-        # Emit exactly 50 characters, cap at 50.
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                f"import sys; sys.stdout.write('x' * {written}); sys.stderr.write('y' * {written})\n"
+                f"{ending(request)}",
+                max_stdout_size=50,
+                max_stderr_size=50,
+                timeout=1,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
+
+        cut = written > 50
+        assert {
+            key: result[key] for key in ("stdout", "stdout_truncated", "stderr", "stderr_truncated")
+        } == {
+            "stdout": "x" * 50,
+            "stdout_truncated": cut,
+            "stderr": "y" * 50,
+            "stderr_truncated": cut,
+        }
+        [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
+        assert event.getMessage() == (
+            f"execute_code output stdout={written} stderr={written} characters "
+            f"truncated={['stdout', 'stderr'] if cut else []} closed=[]"
+        )
+
+    @pytest.mark.parametrize(
+        ("ending", "outcome"),
+        [
+            (lambda _: "", {"status": "success"}),
+            (
+                lambda _: "raise ValueError('mine')",
+                {"status": "error", "kind": "operation_failed", "message": "ValueError: mine"},
+            ),
+            (
+                lambda request: request.getfixturevalue("stalled_program"),
+                {"status": "error", "kind": "worker_still_running"},
+            ),
+        ],
+        ids=["success", "exception", "timeout"],
+    )
+    def test_a_program_that_closes_its_stdout_reports_how_it_ended(
+        self, mock_connection, request, caplog, ending, outcome
+    ):
+        """Closing sys.stdout ends the program's writes, not the call's read of them."""
+        import logging
+
+        from houdini_mcp.tools import execute_code
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                f"import sys; print('hi'); sys.stdout.close()\n{ending(request)}",
+                timeout=1,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
+
+        assert {key: result.get(key) for key in (*outcome, "stdout", "stdout_truncated")} == {
+            **outcome,
+            "stdout": "hi\n",
+            "stdout_truncated": False,
+        }
+        [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
+        assert event.getMessage().endswith("closed=['stdout']")
+
+    def test_the_bound_counts_characters_not_bytes(self, mock_connection):
+        from houdini_mcp.tools import execute_code
+
         result = execute_code(
-            "import sys; sys.stdout.write('x' * 50)",
-            max_stdout_size=50,
+            "import sys; sys.stdout.write('世界你好')",
+            max_stdout_size=2,
             host="localhost",
             port=18811,
             bypass_config_enabled=False,
         )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) == 50
-        assert result.get("stdout_truncated") is not True
-
-    def test_stdout_one_over_limit_truncated(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stdout.write('x' * 51)",
-            max_stdout_size=50,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) == 50
-        assert result.get("stdout_truncated") is True
-
-    def test_stderr_one_over_limit_truncated(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stderr.write('y' * 51)",
-            max_stderr_size=50,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stderr"]) == 50
-        assert result.get("stderr_truncated") is True
+        assert result["stdout"] == "世界"
+        assert result["stdout_truncated"] is True
 
     def test_diff_nodes_boundary(self, mock_connection):
         """added_nodes must be capped at exactly max_diff_nodes."""

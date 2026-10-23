@@ -16,9 +16,61 @@ import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from io import StringIO, TextIOBase
 from typing import TextIO
 
 logger = logging.getLogger("houdini_mcp.tools.program_output")
+
+
+@dataclass(frozen=True)
+class Written:
+    """What a program wrote to a capture: the first ``bound`` characters of it, and
+    how many it wrote in all."""
+
+    text: str
+    length: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.length > len(self.text)
+
+
+class Capture(TextIOBase):
+    """A program's stream that keeps the first ``bound`` characters written to it
+    and only counts the rest, so a program's output costs the server at most its
+    bound.
+
+    [LAW:types-are-the-program] The bound is the capture's, not its reader's: the
+    program writes to this, and the call reads ``written()``, so a program that
+    closes its stream ends its own writes - as on any file - and not the read.
+    """
+
+    def __init__(self, bound: int) -> None:
+        super().__init__()
+        self._bound = bound
+        self._kept = StringIO()
+        self._length = 0
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self._checkClosed()
+        # [LAW:parse-dont-validate] The string's value, as any stream takes it: none
+        # of a str subclass's own code runs between reading the state and setting it.
+        value = str.__str__(text)
+        # [LAW:no-ambient-temporal-coupling] Kept before counted: a read takes the
+        # count first, so every character it counts is already kept.
+        self._kept.write(value[: max(0, self._bound - self._kept.tell())])
+        self._length += len(value)
+        return len(value)
+
+    def written(self) -> Written:
+        """What was written as of one moment, without waiting on a write: a program
+        that outlived its timeout may be inside one, and may never leave it."""
+        length = self._length
+        return Written(self._kept.getvalue()[: min(length, self._bound)], length)
 
 
 class _ThreadRoutedStream:
@@ -29,7 +81,7 @@ class _ThreadRoutedStream:
     from a later thread that is handed the program thread's reused ident.
     """
 
-    def __init__(self, thread: int, capture: TextIO, past: TextIO) -> None:
+    def __init__(self, thread: int, capture: TextIOBase, past: TextIO) -> None:
         self._thread: int | None = thread
         self._capture = capture
         self._past = past
@@ -44,7 +96,7 @@ class _ThreadRoutedStream:
 
 
 @contextmanager
-def captured(stdout: TextIO, stderr: TextIO) -> Iterator[None]:
+def captured(stdout: TextIOBase, stderr: TextIOBase) -> Iterator[None]:
     """Send the calling thread's stdout and stderr writes to these captures."""
     thread = threading.get_ident()
     entered = (sys.stdout, sys.stderr)

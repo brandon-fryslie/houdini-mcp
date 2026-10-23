@@ -107,7 +107,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -170,7 +172,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -208,7 +212,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -244,7 +250,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -271,7 +279,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(error_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -300,7 +310,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(error_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -327,7 +339,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -364,7 +378,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -412,7 +428,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -468,7 +486,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -513,7 +533,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -546,7 +568,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": json.dumps(geo_data),
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -590,7 +614,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": "",
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -611,7 +637,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": "this is not valid json {",
+            "stdout_truncated": False,
             "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -632,8 +660,9 @@ class TestGetGeoSummary:
         mock_execute_code.return_value = {
             "status": "success",
             "stdout": '{"status": "success", "sample_points": [{"ind',
-            "stderr": "",
             "stdout_truncated": True,
+            "stderr": "",
+            "stderr_truncated": False,
         }
 
         result = await get_geo_summary(
@@ -699,7 +728,13 @@ class TestTheProgramHoudiniRuns:
             out = io.StringIO()
             with redirect_stdout(out):
                 exec(code, {"hou": hou})
-            return {"status": "success", "stdout": out.getvalue(), "stderr": ""}
+            return {
+                "status": "success",
+                "stdout": out.getvalue(),
+                "stdout_truncated": False,
+                "stderr": "",
+                "stderr_truncated": False,
+            }
 
         with patch("houdini_mcp.tools.code._execute_with_grant", side_effect=execute):
             return await get_geo_summary(

@@ -114,46 +114,6 @@ for point in geo.points():
         assert result == []
 
 
-class TestTruncateOutput:
-    """Tests for the _truncate_output helper."""
-
-    def test_no_truncation_needed(self):
-        """Test output under limit is not truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "Hello, World!"
-        result, was_truncated = _truncate_output(output, 1000)
-        assert result == output
-        assert was_truncated is False
-
-    def test_truncation_at_limit(self):
-        """Test output at exact limit is not truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "x" * 100
-        result, was_truncated = _truncate_output(output, 100)
-        assert result == output
-        assert was_truncated is False
-
-    def test_truncation_over_limit(self):
-        """Test output over limit is truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "x" * 200
-        result, was_truncated = _truncate_output(output, 100)
-        assert len(result) == 100
-        assert was_truncated is True
-
-    def test_empty_output(self):
-        """Test empty output handling."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = ""
-        result, was_truncated = _truncate_output(output, 100)
-        assert result == ""
-        assert was_truncated is False
-
-
 class TestExecuteCode:
     """Tests for the execute_code function."""
 
@@ -312,36 +272,6 @@ class TestExecuteCode:
         assert result["status"] == "success"
         assert "error message" in result["stderr"]
 
-    def test_execute_stdout_truncation(self, mock_connection):
-        """Test stdout is truncated when exceeds limit."""
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "print('x' * 1000)",
-            max_stdout_size=100,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) <= 100
-        assert result.get("stdout_truncated") is True
-
-    def test_execute_stderr_truncation(self, mock_connection):
-        """Test stderr is truncated when exceeds limit."""
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stderr.write('x' * 1000)",
-            max_stderr_size=100,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stderr"]) <= 100
-        assert result.get("stderr_truncated") is True
-
     def test_execute_connection_error(self, reset_connection_state):
         """Test handling of connection errors."""
         from houdini_mcp.tools import execute_code
@@ -431,6 +361,53 @@ class TestExecuteCodeTimeout:
 
 class TestExecuteCodeOutputCapture:
     """A program's capture holds what the program wrote and nothing else."""
+
+    def test_a_capture_keeps_its_bound_counts_the_rest_and_outlives_its_close(self):
+        import pytest
+
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(5)
+        capture.write("abc")
+        capture.write("defgh")
+        capture.close()
+
+        with pytest.raises(ValueError, match="closed file"):
+            capture.write("i")
+        assert capture.written() == Written("abcde", 8)
+        assert capture.written().truncated
+
+    def test_a_write_takes_the_strings_value_and_runs_none_of_its_code(self):
+        """A program's str subclass cannot write, block, or lie about its length
+        inside a write: the capture reads the value, as any stream does."""
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(10)
+        ran: list[str] = []
+
+        class Hooked(str):
+            def __len__(self) -> int:
+                ran.append("__len__")
+                capture.write("F")
+                return 0
+
+            def __getitem__(self, key: object) -> str:
+                ran.append("__getitem__")
+                capture.write("F")
+                return ""
+
+        assert capture.write(Hooked("abc")) == 3
+        assert (capture.written(), ran) == (Written("abc", 3), [])
+
+    def test_a_write_refuses_what_is_not_a_str(self):
+        import pytest
+
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(10)
+        with pytest.raises(TypeError):
+            capture.write(42)  # type: ignore[arg-type]
+        assert capture.written() == Written("", 0)
 
     def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
         """A write from another thread while a program runs reaches its own stream, not the capture."""
