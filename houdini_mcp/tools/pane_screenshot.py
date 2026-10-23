@@ -92,22 +92,30 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
     animates the view, and a capture taken mid-animation shows a view nobody
     asked for.
     """
+
+    def frame_network(pane: Any) -> None:
+        # Houdini's network-editor home (h.pane.wsheet.home), over every item in the network shown.
+        link.conn.modules["nodegraphview"].frameItems(pane, pane.pwd().allItems(), True)
+
+    def frame_every_viewport(pane: Any) -> None:
+        # The grab takes the whole pane, so every viewport of a split layout is framed.
+        for viewport in pane.viewports():
+            viewport.frameAll()
+
     hou = link.hou
     framers: dict[Any, Callable[[Any], None]] = {
-        # Houdini's network-editor home (h.pane.wsheet.home), over every item in the network shown.
-        hou.paneTabType.NetworkEditor: lambda pane: link.conn.modules["nodegraphview"].frameItems(
-            pane, pane.pwd().allItems(), True
-        ),
-        hou.paneTabType.SceneViewer: lambda pane: pane.curViewport().frameAll(),
+        hou.paneTabType.NetworkEditor: frame_network,
+        hou.paneTabType.SceneViewer: frame_every_viewport,
     }
-    if pane_type not in framers:
+    framer = framers.get(pane_type)
+    if framer is None:
         frameable = [member.name() for member in framers]
         raise InvalidInput(
             f"Houdini cannot frame a {pane_type_name} pane; fit_contents frames "
             f"{', '.join(frameable)}",
             frameable_types=frameable,
         )
-    return framers[pane_type]
+    return framer
 
 
 def _as_shown(pane: Any) -> None:
@@ -163,8 +171,6 @@ def _capture_pane_to_bytes(
             pane_type=pane_type_name,
         )
 
-    frame(pane)
-
     # Get geometry
     screen_geom = pane.qtScreenGeometry()
     geom_x: int = screen_geom.x()
@@ -188,6 +194,16 @@ def _capture_pane_to_bytes(
     screen = app.primaryScreen()
     if screen is None:
         raise OperationFailed("No primary screen found.")
+
+    # Framed only once nothing above can refuse the capture, so a refused
+    # capture leaves the user's view as it was.
+    try:
+        frame(pane)
+    except Exception as e:
+        raise OperationFailed(
+            f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
+        ) from e
+    logger.info("Capturing %s pane, view %s", pane_type_name, frame.__name__)
 
     # Capture screen region
     pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)

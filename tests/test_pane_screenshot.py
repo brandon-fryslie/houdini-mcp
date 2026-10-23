@@ -381,24 +381,31 @@ def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
     assert events == [("frameItems", editor, ("geo1", "dot1"), True), "grab"]
 
 
-def test_fit_contents_frames_a_scene_viewer_through_its_viewport(
-    mock_connection: MockHouModule,
+def test_fit_contents_frames_every_viewport_of_a_scene_viewer(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The grab takes the whole pane, so a split layout has every viewport framed."""
     events: list[object] = []
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
-    viewport = SimpleNamespace(frameAll=lambda: events.append("frameAll"))
-    viewer.curViewport = lambda: viewport  # type: ignore[attr-defined]
+    viewer.viewports = lambda: tuple(  # type: ignore[attr-defined]
+        SimpleNamespace(frameAll=lambda name=name: events.append(("frameAll", name)))  # type: ignore[func-returns-value]
+        for name in ("persp", "top")
+    )
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
     QtWidgets, QtCore = _qt_grabbing(events)
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+    with (
+        caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
+        patch(
+            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+            return_value=(QtWidgets, QtCore, object()),
+        ),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["status"] == "success", result
-    assert events == ["frameAll", "grab"]
+    assert events == [("frameAll", "persp"), ("frameAll", "top"), "grab"]
+    assert "Capturing SceneViewer pane, view frame_every_viewport" in caplog.messages
 
 
 def test_fit_contents_on_a_pane_houdini_cannot_frame_is_refused_naming_those_it_can(
@@ -432,7 +439,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
     def refuse() -> None:
         raise RuntimeError("viewport is gone")
 
-    viewer.curViewport = lambda: SimpleNamespace(frameAll=refuse)  # type: ignore[attr-defined]
+    viewer.viewports = lambda: (SimpleNamespace(frameAll=refuse),)  # type: ignore[attr-defined]
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
     QtWidgets, QtCore = _qt_grabbing(events)
 
@@ -442,8 +449,32 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
-    assert result["status"] == "error", result
-    assert "viewport is gone" in result["message"]
+    assert result["kind"] == "operation_failed", result
+    assert result["message"] == "Failed to frame SceneViewer: viewport is gone"
+    assert "traceback" not in result
+    assert events == []
+
+
+def test_a_capture_refused_before_the_grab_leaves_the_view_unframed(
+    mock_connection: MockHouModule,
+) -> None:
+    """A pane Houdini cannot measure is refused before its view is touched."""
+    events: list[object] = []
+    viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, -1, -1)
+    viewer.viewports = lambda: (  # type: ignore[attr-defined]
+        SimpleNamespace(frameAll=lambda: events.append("frameAll")),  # type: ignore[func-returns-value]
+    )
+    mock_connection.ui.curDesktop().paneTabs().append(viewer)
+    QtWidgets, QtCore = _qt_grabbing(events)
+
+    with patch(
+        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
+        return_value=(QtWidgets, QtCore, object()),
+    ):
+        result = capture_pane_screenshot("SceneViewer", fit_contents=True)
+
+    assert result["kind"] == "operation_failed", result
+    assert "invalid geometry" in result["message"]
     assert events == []
 
 
