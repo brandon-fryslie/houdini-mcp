@@ -2541,8 +2541,17 @@ class TestGetHoudiniHelp:
 
         result = get_houdini_help("sop", "box")
 
-        assert (result["status"], result["title"]) == ("success", "Box")
+        assert (result["status"], result["title"], result["url"]) == ("success", "Box", moved)
         assert [str(request.url) for request in docs_site.sent] == [BOX_PAGE, moved]
+
+    def test_get_houdini_help_refuses_a_name_no_url_can_carry(self, docs_site):
+        """A name that cannot be put in a URL is the caller's mistake, and nothing is sent."""
+        from houdini_mcp.tools import get_houdini_help
+
+        result = get_houdini_help("sop", "box\x00")
+
+        assert (result["status"], result["kind"]) == ("error", "invalid_input")
+        assert docs_site.sent == []
 
     def test_get_houdini_help_success_sop(self, docs_site):
         """Test successful parsing of SOP node documentation."""

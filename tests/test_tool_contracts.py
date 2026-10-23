@@ -303,6 +303,14 @@ class TestServedSchemas:
         assert not await accepts(client, served, "find_error_nodes", {"max_results": 0})
         assert await accepts(client, served, "find_error_nodes", {"max_results": 1})
 
+    async def test_a_docs_fetch_waits_at_least_a_second(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """httpx cannot wait zero seconds; the wire refuses the timeout before it gets there."""
+        arguments = {"help_type": "sop", "item_name": "box"}
+        assert not await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 0})
+        assert await accepts(client, served, "get_houdini_help", {**arguments, "timeout": 1})
+
     async def test_render_viewport_camera_vectors_are_three_numbers(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:
