@@ -459,7 +459,6 @@ x = 1 + 2
         assert result["status"] == "success"
         assert len(result["stdout"]) <= 100
         assert result["stdout_truncated"] is True
-        assert "stdout_warning" in result
 
     def test_stderr_truncation(self, mock_connection):
         """Test that large stderr is truncated."""
@@ -478,7 +477,6 @@ x = 1 + 2
         assert result["status"] == "success"
         assert len(result["stderr"]) <= 100
         assert result["stderr_truncated"] is True
-        assert "stderr_warning" in result
 
     def test_no_truncation_within_limits(self, mock_connection):
         """Test that output within limits is not truncated."""
@@ -495,8 +493,8 @@ x = 1 + 2
         )
 
         assert result["status"] == "success"
-        assert "stdout_truncated" not in result
-        assert "stderr_truncated" not in result
+        assert result["stdout_truncated"] is False
+        assert result["stderr_truncated"] is False
 
     def test_default_size_limits(self, mock_connection):
         """Test that default size limits are applied."""
@@ -730,57 +728,6 @@ subprocess.call(['cmd'])
         from houdini_mcp.tools import _detect_dangerous_code, parse_code
 
         assert _detect_dangerous_code(parse_code("x = 'hou.exit()'")) == []
-
-
-class TestTruncateOutput:
-    """Unit tests for the _truncate_output helper function."""
-
-    def test_truncate_function_exists(self):
-        """Test that _truncate_output function exists."""
-        from houdini_mcp.tools import _truncate_output
-
-        assert callable(_truncate_output)
-
-    def test_no_truncation_needed(self):
-        """Test when output is within limits."""
-        from houdini_mcp.tools import _truncate_output
-
-        output, truncated = _truncate_output("hello", 100)
-        assert output == "hello"
-        assert truncated is False
-
-    def test_truncation_at_limit(self):
-        """Test truncation exactly at limit."""
-        from houdini_mcp.tools import _truncate_output
-
-        output, truncated = _truncate_output("12345", 5)
-        assert output == "12345"
-        assert truncated is False
-
-    def test_truncation_over_limit(self):
-        """Test truncation when over limit."""
-        from houdini_mcp.tools import _truncate_output
-
-        output, truncated = _truncate_output("1234567890", 5)
-        assert output == "12345"
-        assert truncated is True
-
-    def test_truncation_empty_string(self):
-        """Test truncation with empty string."""
-        from houdini_mcp.tools import _truncate_output
-
-        output, truncated = _truncate_output("", 100)
-        assert output == ""
-        assert truncated is False
-
-    def test_truncation_unicode(self):
-        """Test truncation with unicode characters."""
-        from houdini_mcp.tools import _truncate_output
-
-        # Unicode characters may have different byte sizes
-        output, truncated = _truncate_output("世界你好", 2)
-        assert len(output) == 2
-        assert truncated is True
 
 
 class TestSetParameter:

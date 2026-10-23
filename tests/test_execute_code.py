@@ -114,46 +114,6 @@ for point in geo.points():
         assert result == []
 
 
-class TestTruncateOutput:
-    """Tests for the _truncate_output helper."""
-
-    def test_no_truncation_needed(self):
-        """Test output under limit is not truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "Hello, World!"
-        result, was_truncated = _truncate_output(output, 1000)
-        assert result == output
-        assert was_truncated is False
-
-    def test_truncation_at_limit(self):
-        """Test output at exact limit is not truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "x" * 100
-        result, was_truncated = _truncate_output(output, 100)
-        assert result == output
-        assert was_truncated is False
-
-    def test_truncation_over_limit(self):
-        """Test output over limit is truncated."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = "x" * 200
-        result, was_truncated = _truncate_output(output, 100)
-        assert len(result) == 100
-        assert was_truncated is True
-
-    def test_empty_output(self):
-        """Test empty output handling."""
-        from houdini_mcp.tools import _truncate_output
-
-        output = ""
-        result, was_truncated = _truncate_output(output, 100)
-        assert result == ""
-        assert was_truncated is False
-
-
 class TestExecuteCode:
     """Tests for the execute_code function."""
 

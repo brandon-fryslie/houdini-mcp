@@ -17,10 +17,7 @@ from typing import Any
 
 # Import from extracted modules
 # Import shared utilities from _common (needed by some tests)
-from ._common import (
-    _truncate_output,
-    using,
-)
+from ._common import using
 from .cache import (
     get_cache_stats,
     invalidate_all_caches,
@@ -130,6 +127,5 @@ __all__ = [
     "get_cache_stats",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
-    "_truncate_output",
     "using",
 ]

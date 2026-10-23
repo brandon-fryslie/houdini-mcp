@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `execute_code` reports `stdout_truncated` and `stderr_truncated` on every
+  result that carries the program's output, success, a program that raised,
+  and a program still running past its timeout, as `true` when the stream was
+  cut to `max_stdout_size` / `max_stderr_size` and `false` when it was not
+  (houdini-laws-etg.79x). A timed-out program's output was cut with no flag,
+  so a caller could not tell a program that printed little from one whose
+  output was cut, and the flags were absent rather than `false` on output that
+  fit. `stdout_warning` and `stderr_warning` are gone: they restated the flag
+  and the caller's own bound. The bounds count characters, as they always did;
+  the parameters said bytes.
+
 - `list_children` warns "Collection limited to N nodes" only when `max_nodes`
   left a node out (houdini-laws-etg.c76). It warned whenever the walk reached
   `max_nodes`, so a network with exactly `max_nodes` children was reported as
