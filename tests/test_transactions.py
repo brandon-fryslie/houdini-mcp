@@ -339,3 +339,55 @@ class TestUndoStep:
             "Its changes were not undone: Houdini's undo is off, so the scene may hold "
             "part of them.",
         )
+
+
+class TestOnMainThread:
+    """What the main thread's reply to an undoable call means for the call."""
+
+    _PLUGINS = """
+def refusing(undos):
+    class main_thread:
+        @staticmethod
+        def call(fn):
+            return "Houdini's main thread is not taking calls"
+    return main_thread
+
+def losing_the_reply(undos):
+    class main_thread:
+        @staticmethod
+        def call(fn):
+            undos.enter_main_thread()
+            try:
+                fn()
+            finally:
+                undos.leave_main_thread()
+            raise EOFError("the link closed before the reply")
+    return main_thread
+"""
+
+    def test_a_refused_call_fails_saying_why_and_never_ran(self, mock_connection, monkeypatch):
+        with conftest.served_namespace(self._PLUGINS) as plugins:
+            monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
+            result = create_node("geo", "/obj", "made", host="localhost", port=18811)
+
+        assert result["kind"] == "operation_failed", result
+        assert result["message"] == "Houdini's main thread is not taking calls"
+        assert "traceback" not in result
+        assert mock_connection.node("/obj/made") is None
+
+    def test_a_call_that_ran_is_its_own_outcome_when_the_reply_is_lost(
+        self, mock_connection, monkeypatch, caplog
+    ):
+        with (
+            conftest.served_namespace(self._PLUGINS) as plugins,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"),
+        ):
+            monkeypatch.setattr(conftest, "served_main_thread", plugins["losing_the_reply"])
+            result = _creates_then_fails()
+
+        assert result["kind"] == "invalid_input", result
+        assert result["message"] == (
+            "the second edit was refused\nIts changes to the scene were undone."
+        )
+        assert mock_connection.node("/obj/half_done") is None
+        assert "The reply to a call Houdini's main thread ran was lost" in caplog.text

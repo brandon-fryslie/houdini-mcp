@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .failure import tool_error
+from .failure import Undone, items_failed
 from .reads import Unread, read, reraise_transport_failure
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
@@ -139,19 +139,17 @@ class Writes:
 
         [LAW:types-are-the-program] A scene-writing call is all or nothing, so it
         has no "partial": a write that failed fails the call, carrying the same
-        report, and the tool boundary undoes what the call did before it. A call
-        whose every failed write was refused as ``invalid_input`` is the caller's
-        to fix; any other is ``operation_failed``.
+        report, and the tool boundary undoes what the call did before it.
         """
+        logger.info(
+            "writes outcome updated=%d failed=%s",
+            len(self.updated),
+            [(f["name"], f["kind"]) for f in self.failed],
+        )
         report = {"updated": self.updated, "failed": self.failed, **report}
         if self.failed:
-            first, *rest = self.failed
-            more = f" (and {len(rest)} more, listed in the response)" if rest else ""
-            refused = all(f["kind"] == "invalid_input" for f in self.failed)
-            raise tool_error(
-                "invalid_input" if refused else "operation_failed",
-                f"{first['name']}: {first['reason']}{more}",
-                **report,
+            raise items_failed(
+                [Undone(f["name"], f["kind"], f["reason"]) for f in self.failed], **report
             )
         return {"status": "success", **report}
 

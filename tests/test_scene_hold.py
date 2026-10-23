@@ -429,6 +429,27 @@ class TestReadsBesideTheMainThread:
         assert order == ["set_parameter", "second_read"]
         assert (await reading).waited_for == ("set_parameter",)
 
+    async def test_a_read_passes_an_undoable_call_waiting_on_a_render(self, heard):
+        """The undoable call waits for the render either way; the read need not."""
+        ledger = WorkerLedger()
+        order: list[str] = []
+        write_queued = heard("set_parameter waits for the scene behind render_viewport")
+
+        async def write():
+            async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD) as wait:
+                order.append("set_parameter")
+                return wait
+
+        async with ledger.hold("render_viewport", Admission.EXCLUSIVE):
+            writing = asyncio.create_task(write())
+            await _until(write_queued)
+            async with asyncio.timeout(5), ledger.hold("get_node_info", Admission.SHARED) as wait:
+                assert wait.waited_for == ()
+                order.append("get_node_info")
+
+        assert (await writing).waited_for == ("render_viewport", "get_node_info")
+        assert order == ["get_node_info", "set_parameter"]
+
     async def test_a_read_freed_when_the_undoable_call_ahead_gives_up(self, heard):
         ledger = WorkerLedger()
         write_queued = heard("set_parameter waits for the scene behind first_read")

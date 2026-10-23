@@ -180,8 +180,8 @@ class WorkerLedger:
     at most one worker hold the slot; reads hold Houdini beside them, never
     beside a call on Houdini's main thread, so while one holds the slot no
     other call's Houdini work is in flight on the link. Exclusive calls are
-    admitted in arrival order, and a read queued behind a call on the main
-    thread waits for it, so neither starves. An exclusive call is queued only
+    admitted in arrival order, and a read waits for a queued call on the main
+    thread once that call waits on reads alone, so neither starves. An exclusive call is queued only
     while another holds the slot or reads it must outlast are in flight, so
     when the slot frees with a worker still running, every queued exclusive
     call is refused naming that worker. The slot passes from a call straight
@@ -345,13 +345,17 @@ class WorkerLedger:
 
     def _settle_queue(self) -> None:
         """Admit, in arrival order, every queued call nothing keeps waiting: one
-        that waits behind no holder and no call queued ahead of it. An exclusive
-        call that would hold the slot while a worker does is refused instead.
-        Runs under the lock."""
-        ahead: list[_Waiter] = []
+        that waits behind no holder and no call next in line ahead of it. An
+        exclusive call that would hold the slot while a worker does is refused
+        instead. Runs under the lock."""
+        # Next in line: a queued call that waits on reads alone. One that waits on
+        # an exclusive call (a render) keeps no read waiting meanwhile.
+        next_in_line: list[_Waiter] = []
         for waiter in list(self._queue):
-            if any(waiter.waits_behind(other) for other in (*self._holders(), *ahead)):
-                ahead.append(waiter)
+            behind = [o for o in (*self._holders(), *next_in_line) if waiter.waits_behind(o)]
+            if behind:
+                if all(o.admission is Admission.SHARED for o in behind):
+                    next_in_line.append(waiter)
                 continue
             self._queue.remove(waiter)
             # A read runs beside a worker; an exclusive call never does.

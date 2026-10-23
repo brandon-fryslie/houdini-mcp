@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   input, else `operation_failed`, and it still carries `updated`, the writes
   that were made and then undone, and `failed`, a `{name, kind, reason}` for
   each write that failed.
+  `set_parameter` answers the same way: its response carries `updated` and
+  `failed`, and its error message opens with the parameter's name.
 
 - A tool's name has one source, its function's name (houdini-laws-etg.8vh). The
   tool boundary is `@tool(policy)`: it takes the tool's `ToolPolicy` and names

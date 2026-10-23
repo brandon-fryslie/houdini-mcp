@@ -206,7 +206,9 @@ def _on_main_thread(link: Link, work: Callable[[], Result]) -> Result:
     [LAW:effects-at-boundaries] ``work``'s outcome stays in this process: the
     function Houdini calls back never raises, so a failure is raised here with
     its own type, fields and notes, not rebuilt by rpyc from a copy that
-    crossed to Houdini and back.
+    crossed to Houdini and back. That outcome is the call's even when the
+    reply saying ``work`` ended is lost: a request ``work`` made that timed
+    out drops the link while the main thread is still calling ``work``.
     """
     main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")
     outcomes: list[_Returned[Result] | _Raised] = []
@@ -217,8 +219,16 @@ def _on_main_thread(link: Link, work: Callable[[], Result]) -> Result:
         except BaseException as failure:  # noqa: BLE001
             outcomes.append(_Raised(failure))
 
-    # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
-    _ = rpyc.async_(main_thread.call)(run).value
+    try:
+        # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
+        refusal: str | None = rpyc.async_(main_thread.call)(run).value
+    except Exception as lost:
+        if not outcomes:
+            raise
+        logger.info("The reply to a call Houdini's main thread ran was lost: %r", lost)
+    else:
+        if refusal is not None:
+            raise OperationFailed(refusal)
     (outcome,) = outcomes
     if isinstance(outcome, _Raised):
         raise outcome.failure

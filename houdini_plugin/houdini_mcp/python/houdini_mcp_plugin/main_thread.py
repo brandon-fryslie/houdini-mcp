@@ -16,44 +16,43 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["PICKUP_TIMEOUT", "MainThreadUnavailable", "call", "serve", "stop"]
+__all__ = ["PICKUP_TIMEOUT", "call", "serve", "stop"]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
 not run late, once they pass. How long the call then runs is the call's own."""
 
 
-class MainThreadUnavailable(RuntimeError):
-    """Houdini's main thread cannot take a call, so the call never ran."""
-
-
 class _State(Enum):
     PENDING = "pending"
     RUNNING = "running"
-    CANCELLED = "cancelled"
+    REFUSED = "refused"
 
 
 class _Call:
     """One client call on its way to the main thread.
 
     [LAW:no-ambient-temporal-coupling] Its state is one value under one lock:
-    the main thread starts it only while it is pending, and the caller cancels
-    it only while it is pending, so a call given up on can never run late.
+    the main thread starts it only while it is pending, and it is refused only
+    while it is pending, so a call given up on can never run late.
     """
 
     def __init__(self, fn: Callable[[], Any]) -> None:
         self._fn = fn
         self._lock = threading.Lock()
         self._state = _State.PENDING
-        self._started = threading.Event()
+        self._posted_at = time.monotonic()
+        self._settled = threading.Event()
         self._ended = threading.Event()
         self._failure: BaseException | None = None
+        self._refusal: str | None = None
 
     def run(self) -> None:
         """Run the call, on the main thread. Never raises: the main thread's
@@ -62,7 +61,11 @@ class _Call:
             if self._state is not _State.PENDING:
                 return
             self._state = _State.RUNNING
-        self._started.set()
+        self._settled.set()
+        logger.info(
+            "Houdini's main thread began a call %.3fs after it was posted",
+            time.monotonic() - self._posted_at,
+        )
         try:
             _call_unbounded(self._fn)
         except BaseException as failure:  # noqa: BLE001
@@ -70,23 +73,34 @@ class _Call:
         finally:
             self._ended.set()
 
-    def wait(self) -> None:
-        """Wait for the call to run to its end, or refuse it if it has not begun
-        within ``PICKUP_TIMEOUT``; raise what it raised."""
-        if not self._started.wait(PICKUP_TIMEOUT):
-            with self._lock:
-                gave_up = self._state is _State.PENDING
-                if gave_up:
-                    self._state = _State.CANCELLED
-            if gave_up:
-                raise MainThreadUnavailable(
-                    f"Houdini's main thread did not begin the call within {PICKUP_TIMEOUT}s, "
-                    "so it never ran: Houdini is busy (a cook, a modal dialog) or its main "
-                    "thread is not taking calls."
-                )
+    def refuse(self, why: str) -> None:
+        """Refuse the call for ``why``, unless the main thread has begun it."""
+        with self._lock:
+            if self._state is not _State.PENDING:
+                return
+            self._state = _State.REFUSED
+            self._refusal = why
+        logger.warning("Refused a call, which never ran: %s", why)
+        self._settled.set()
+        self._ended.set()
+
+    def wait(self) -> str | None:
+        """Wait for the call to end, refusing it if the main thread has not begun
+        it within ``PICKUP_TIMEOUT``; raise what it raised.
+
+        Returns:
+            None once the call has returned, or why it was refused.
+        """
+        if not self._settled.wait(PICKUP_TIMEOUT):
+            self.refuse(
+                f"Houdini's main thread did not begin the call within {PICKUP_TIMEOUT}s, "
+                "so it never ran: Houdini is busy (a cook, a modal dialog) or its main "
+                "thread is not taking calls."
+            )
         self._ended.wait()
         if self._failure is not None:
             raise self._failure
+        return self._refusal
 
 
 def _call_unbounded(fn: Callable[[], Any]) -> Any:
@@ -106,9 +120,10 @@ def _call_unbounded(fn: Callable[[], Any]) -> Any:
 class _Drain:
     """The calls a headless hython's main thread takes, and whether it is taking them.
 
-    [LAW:no-shared-mutable-globals] One owner of the queue and of ``serving``:
-    a call posted while nothing serves is refused at once rather than left
-    waiting for a main thread that will never take it.
+    [LAW:no-shared-mutable-globals] One owner of the queue and of ``serving``,
+    which change together under one lock: a call posted while nothing serves,
+    or once serving is stopping, is refused at once rather than left waiting
+    for a main thread that will never take it.
     """
 
     def __init__(self) -> None:
@@ -118,12 +133,13 @@ class _Drain:
 
     def post(self, pending: _Call) -> None:
         with self._lock:
-            if not self._serving:
-                raise MainThreadUnavailable(
-                    "This headless Houdini's main thread is not taking calls: run "
-                    "houdini_mcp_plugin.main_thread.serve() on it once the listener is started."
-                )
-            self._calls.put(pending)
+            if self._serving:
+                self._calls.put(pending)
+                return
+        pending.refuse(
+            "This headless Houdini's main thread is not taking calls: run "
+            "houdini_mcp_plugin.main_thread.serve() on it once the listener is started."
+        )
 
     def serve(self) -> None:
         if threading.current_thread() is not threading.main_thread():
@@ -144,18 +160,26 @@ class _Drain:
             logger.info("Houdini's main thread stopped taking calls")
 
     def stop(self) -> None:
-        self._calls.put(None)
+        # Every call posted before the end mark runs; none is posted after it.
+        with self._lock:
+            serving, self._serving = self._serving, False
+            if serving:
+                self._calls.put(None)
+        if not serving:
+            logger.info("stop(): Houdini's main thread was not taking calls")
 
 
 _drain = _Drain()
 
 
-def call(fn: Callable[[], Any]) -> None:
+def call(fn: Callable[[], Any]) -> str | None:
     """Call ``fn`` on Houdini's main thread and wait for it to return.
 
+    Returns:
+        None once ``fn`` has returned, or why the main thread refused the
+        call, which then never ran.
+
     Raises:
-        MainThreadUnavailable: the main thread did not begin the call, so it
-            never ran.
         Exception: whatever calling ``fn`` raised.
     """
     import hou
@@ -169,7 +193,7 @@ def call(fn: Callable[[], Any]) -> None:
         hdefereval.executeDeferred(pending.run)
     else:
         _drain.post(pending)
-    pending.wait()
+    return pending.wait()
 
 
 def serve() -> None:
@@ -182,5 +206,6 @@ def serve() -> None:
 
 
 def stop() -> None:
-    """End :func:`serve` once the call it is running, if any, returns."""
+    """End :func:`serve` once the calls posted to it have run; with nothing
+    serving, there is nothing to end."""
     _drain.stop()

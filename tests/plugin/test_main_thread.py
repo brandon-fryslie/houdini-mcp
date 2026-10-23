@@ -9,6 +9,7 @@ refusals are the ones a headless Houdini gives.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -133,20 +134,21 @@ class TestHeadless:
             (raised,) = serving_main_thread(lambda: call_on_main(conn, fn))
         assert "the client's own failure" in str(raised)
 
-    def test_a_call_while_nothing_serves_is_refused_at_once(self, houdini):
+    def test_a_call_while_nothing_serves_is_refused_at_once(self, houdini, caplog):
         ran: list[bool] = []
-        with houdini() as conn:
+        with houdini() as conn, caplog.at_level(logging.WARNING, "houdini_mcp_plugin.main_thread"):
             started = time.monotonic()
-            with pytest.raises(Exception, match=r"main_thread\.serve\(\)") as refused:
-                call_on_main(conn, lambda: ran.append(True))
+            refusal = call_on_main(conn, lambda: ran.append(True))
         assert time.monotonic() - started < 1
-        assert "MainThreadUnavailable" in type(refused.value).__name__
+        assert "houdini_mcp_plugin.main_thread.serve()" in refusal
+        assert f"Refused a call, which never ran: {refusal}" in caplog.text
         assert ran == []
 
     def test_a_call_the_main_thread_has_not_begun_in_time_never_runs(self, houdini, monkeypatch):
         monkeypatch.setattr(main_thread, "PICKUP_TIMEOUT", 0.3)
         busy, release = threading.Event(), threading.Event()
         late_ran: list[bool] = []
+        refusals: list[str | None] = []
         with houdini() as first, houdini() as second:
 
             def occupies_the_main_thread() -> None:
@@ -159,15 +161,31 @@ class TestHeadless:
             def arrives_late() -> None:
                 assert busy.wait(5)
                 try:
-                    call_on_main(second, lambda: late_ran.append(True))
+                    refusals.append(call_on_main(second, lambda: late_ran.append(True)))
                 finally:
                     release.set()
 
-            raised = serving_main_thread(holds, arrives_late)
-        (refused,) = raised
-        assert "did not begin the call within 0.3s" in str(refused)
+            assert serving_main_thread(holds, arrives_late) == []
+        (refusal,) = refusals
+        assert "did not begin the call within 0.3s" in refusal
         # The main thread reached the late call after the refusal, and left it.
         assert late_ran == []
+
+    def test_a_call_that_ran_tells_how_long_the_main_thread_took_to_begin_it(self, houdini, caplog):
+        with houdini() as conn, caplog.at_level(logging.INFO, "houdini_mcp_plugin.main_thread"):
+            assert serving_main_thread(lambda: call_on_main(conn, lambda: None)) == []
+        assert re.search(
+            r"Houdini's main thread began a call \d+\.\d{3}s after it was posted", caplog.text
+        )
+
+    def test_stop_with_nothing_serving_leaves_the_next_serve_taking_calls(self, houdini, caplog):
+        with caplog.at_level(logging.INFO, "houdini_mcp_plugin.main_thread"):
+            main_thread.stop()
+        assert "stop(): Houdini's main thread was not taking calls" in caplog.text
+        ran: list[bool] = []
+        with houdini() as conn:
+            assert serving_main_thread(lambda: call_on_main(conn, lambda: ran.append(True))) == []
+        assert ran == [True]
 
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []

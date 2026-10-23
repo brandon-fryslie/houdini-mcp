@@ -165,14 +165,16 @@ class TestWriteAll:
 class TestToolsShareTheOwner:
     """The same parm and value behave the same whichever tool the agent picks."""
 
-    def test_set_parameter_refuses_a_scalar_for_a_tuple(self, mock_connection):
+    def test_set_parameter_refuses_a_scalar_for_a_tuple(self, mock_connection, caplog):
         from houdini_mcp.tools import set_parameter
 
         mock_connection.add_node(node_with(t=[0.0, 0.0, 0.0]))
-        result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
+            result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
+        assert "writes outcome updated=0 failed=[('t', 'invalid_input')]" in caplog.text
         assert result["status"] == "error"
         assert result["kind"] == "invalid_input"
-        assert result["message"] == "Parameter t is a tuple, provide a list/tuple value"
+        assert result["message"] == "t: Parameter t is a tuple, provide a list/tuple value"
         assert result["failed"][0]["name"] == "t"
 
     def test_create_material_whose_parameter_fails_is_undone(self, mock_connection):
