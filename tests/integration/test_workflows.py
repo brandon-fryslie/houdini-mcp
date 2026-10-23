@@ -270,12 +270,23 @@ class TestParameterWorkflow:
         assert result["status"] == "success"
         listed = {p["name"]: p for p in result["parameters"]}
         assert not [name for name in listed if "#" in name]
+        assert (listed["numattr"]["type"], listed["numattr"]["current_value"]) == ("multiparm", 2)
         for name in ("type1", "type2"):
-            assert listed[name]["current_value"] is not None
+            # An Unread value is a dict; a read menu value is its int.
+            assert isinstance(listed[name]["current_value"], int)
             assert isinstance(listed[name]["menu_items"], list)
         # Every listed name is a parameter the node has, read as the listing read it.
         for name, entry in listed.items():
             assert get_parameter_schema(node_path, parm_name=name, **at)["parameters"] == [entry]
+
+    def test_a_named_component_is_its_vector(self, at: dict[str, Any]) -> None:
+        geo = create_node("geo", "/obj", "test_component", **at)["node_path"]
+        sphere = create_node("sphere", geo, "s", **at)["node_path"]
+
+        [rad] = get_parameter_schema(sphere, parm_name="rad", **at)["parameters"]
+
+        assert rad["name"] == "rad"
+        assert get_parameter_schema(sphere, parm_name="radx", **at)["parameters"] == [rad]
 
 
 class TestErrorHandling:

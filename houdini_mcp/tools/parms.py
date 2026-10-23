@@ -4,7 +4,8 @@
 how a Houdini value becomes a JSON value, and how a write failure is reported
 are decided here and nowhere else.
 Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
-``parmTuple("t")`` is the vector, and neither name answers the other call.
+``parmTuple("t")`` is the vector, and ``parm("t")`` finds nothing. A scalar's
+name answers both calls, ``parmTuple`` giving it as a one-component tuple.
 """
 
 import logging

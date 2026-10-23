@@ -93,7 +93,8 @@ def get_parameter_schema(
     Schema includes:
         - name: Parameter name
         - label: UI label
-        - type: Parameter type (float, int, string, menu, toggle, vector, ramp, etc.)
+        - type: Parameter type (float, int, string, menu, toggle, vector, ramp, etc.);
+          a multiparm's count is "multiparm", its value the number of instances
         - default: Default value(s)
         - min/max: Numeric ranges (if applicable)
         - menu_items: List of {label, value} for menu parameters; each value is
@@ -143,6 +144,14 @@ def get_parameter_schema(
             _extract_parameter_info(hou, of_tuple(pt), template)
             for pt, template in listed[:max_parms]
         ]
+        if parm_name is not None and not listed:
+            # [LAW:no-silent-failure] a named folder tab, separator or label is no
+            # parameter listed here; an empty success would read as "none".
+            raise InvalidInput(
+                f"{parm_name} on {node_path} is a folder tab, separator or label, "
+                "not a parameter with a schema",
+                parm_name=parm_name,
+            )
         logger.info(
             "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), len(listed)
         )
@@ -163,9 +172,12 @@ def get_parameter_schema(
 
 
 def _unlisted_types(hou: Any) -> tuple[Any, ...]:
-    """The template types this tool does not list."""
+    """The template types this tool does not list.
+
+    A node's folder tabs are one FolderSet parm, the tab shown. The only Folder
+    parm a node has is a multiparm's count, so Folder is listed.
+    """
     return (
-        hou.parmTemplateType.Folder,
         hou.parmTemplateType.FolderSet,
         hou.parmTemplateType.Separator,
         hou.parmTemplateType.Label,
@@ -174,7 +186,8 @@ def _unlisted_types(hou: Any) -> tuple[Any, ...]:
 
 def _extract_parameter_info(hou: Any, parm: Parm, parm_template: Any) -> dict[str, Any]:
     """
-    Extract parameter information from a parameter template.
+    The schema entry of one parameter: its name, shape and value from the parm,
+    the rest from its template.
 
     [LAW:no-silent-failure] A part of the template Houdini will not give reads
     as ``Unread``; nothing is filled in with a guess.
@@ -190,8 +203,8 @@ def _extract_parameter_info(hou: Any, parm: Parm, parm_template: Any) -> dict[st
     parm_type = parm_template.type()
 
     param_name = parm.name
-    num_components = parm_template.numComponents()
-    is_tuple = num_components > 1
+    # [LAW:one-source-of-truth] the shape value() evaluates is the shape described.
+    is_tuple = parm.is_tuple
     type_str = _map_parm_type_to_string(hou, parm_type, is_tuple)
 
     param_info: dict[str, Any] = {
@@ -200,10 +213,10 @@ def _extract_parameter_info(hou: Any, parm: Parm, parm_template: Any) -> dict[st
         "current_value": value(hou, parm),
         "type": type_str,
         # Most parameters are animatable except menus, toggles, buttons
-        "is_animatable": type_str not in ("menu", "toggle", "button", "string"),
+        "is_animatable": type_str not in ("menu", "toggle", "button", "string", "multiparm"),
     }
     if is_tuple:
-        param_info["tuple_size"] = num_components
+        param_info["tuple_size"] = parm_template.numComponents()
 
     # A button has no default. A ramp's defaultValue() is its count of default
     # points, not a value it holds, so it has none here either.
@@ -288,5 +301,7 @@ def _map_parm_type_to_string(hou: Any, parm_type: Any, is_tuple: bool = False) -
         return "ramp"
     elif parm_type == hou.parmTemplateType.Data:
         return "data"
+    elif parm_type == hou.parmTemplateType.Folder:
+        return "multiparm"
     else:
         return "unknown"

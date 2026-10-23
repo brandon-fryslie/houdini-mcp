@@ -361,14 +361,14 @@ class TestGetParameterSchema:
             name="sphere1",
             node_type="sphere",
             # A separator is a parm tuple of no components, as in Houdini.
-            params={"folder1": 0, "sep1": [], **{f"parm{i}": 0.0 for i in range(3)}, "sep2": []},
+            params={"folder0": 0, "sep1": [], **{f"parm{i}": 0.0 for i in range(3)}, "sep2": []},
         )
         mock_hou.add_node(sphere)
         layout = mock_hou.parmTemplateType
         give_templates(
             sphere,
             [
-                MockParmTemplate("folder1", "Folder", layout.Folder),
+                MockParmTemplate("folder0", "Tabs", layout.FolderSet),
                 MockParmTemplate("sep1", "Separator", layout.Separator),
                 *(
                     MockParmTemplate(f"parm{i}", f"P{i}", layout.Float, default_value=[0.0])
@@ -395,13 +395,13 @@ class TestGetParameterSchema:
             path="/obj/geo1/sphere1",
             name="sphere1",
             node_type="sphere",
-            params={"folder1": 0, "radx": 1.0, "sep1": []},
+            params={"folder0": 0, "radx": 1.0, "sep1": []},
         )
         mock_hou.add_node(sphere)
 
         # Mix of real parameters and folders
         templates = [
-            MockParmTemplate("folder1", "Folder", mock_hou.parmTemplateType.Folder),
+            MockParmTemplate("folder0", "Tabs", mock_hou.parmTemplateType.FolderSet),
             MockParmTemplate(
                 "radx", "Radius X", mock_hou.parmTemplateType.Float, default_value=[1.0]
             ),
@@ -417,6 +417,22 @@ class TestGetParameterSchema:
         # Should only return radx, not folder or separator
         assert result["count"] == 1
         assert result["parameters"][0]["name"] == "radx"
+
+    def test_a_named_separator_is_refused_not_listed_as_nothing(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        sphere = MockHouNode(path="/obj/s", name="s", node_type="sphere", params={"sep1": []})
+        mock_hou.add_node(sphere)
+        give_templates(
+            sphere, [MockParmTemplate("sep1", "Separator", mock_hou.parmTemplateType.Separator)]
+        )
+
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/s", "sep1")
+
+        assert (result["status"], result["kind"]) == ("error", "invalid_input")
+        assert "sep1 on /obj/s is a folder tab, separator or label" in result["message"]
 
     def test_get_parameter_schema_toggle_parameter(self, connected_to):
         """Test getting schema for a toggle parameter."""
@@ -700,7 +716,7 @@ class TestMultiparmInstances:
         give_templates(
             node,
             [
-                MockParmTemplate("numattr", "Attributes", "Folder"),
+                MockParmTemplate("numattr", "Attributes", "Folder", default_value=1),
                 MockParmTemplate("type1", "Type", "Menu", default_value=0),
                 MockParmTemplate("value1v", "Value", "Float", num_components=2),
                 MockParmTemplate("type2", "Type", "Menu", default_value=0),
@@ -718,11 +734,12 @@ class TestMultiparmInstances:
         result = get_parameter_schema("/obj/n")
 
         assert [(p["name"], p["current_value"]) for p in result["parameters"]] == [
+            ("numattr", 2),
             ("type1", 0),
             ("value1v", [1.0, 0.0]),
             ("type2", 2),
         ]
-        assert result["parameters"][2]["menu_items"] == [
+        assert result["parameters"][3]["menu_items"] == [
             {"label": "Float", "value": 0},
             {"label": "Integer", "value": 1},
             {"label": "String", "value": 2},
@@ -735,5 +752,21 @@ class TestMultiparmInstances:
         connected_to(mock_hou)
         listed = get_parameter_schema("/obj/n")["parameters"]
 
-        assert get_parameter_schema("/obj/n", "type2")["parameters"] == [listed[2]]
-        assert get_parameter_schema("/obj/n", "value1v")["parameters"] == [listed[1]]
+        assert get_parameter_schema("/obj/n", "type2")["parameters"] == [listed[3]]
+        assert get_parameter_schema("/obj/n", "value1v")["parameters"] == [listed[2]]
+
+    def test_the_count_is_listed_as_the_parameter_that_makes_instances(self, connected_to):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou, _ = self._attribcreate()
+        connected_to(mock_hou)
+        [count] = get_parameter_schema("/obj/n", "numattr")["parameters"]
+
+        assert count == {
+            "name": "numattr",
+            "label": "Attributes",
+            "current_value": 2,
+            "type": "multiparm",
+            "is_animatable": False,
+            "default": 1,
+        }
