@@ -180,7 +180,7 @@ else:
     # that raises or yields nothing is Houdini's. The program says which.
     # [LAW:one-source-of-truth] geometry() cooks the node when Houdini's update
     # mode cooks at all, and a cook that fails leaves it None: the summary carries
-    # no cook state of its own beside get_node_info's.
+    # no report of the cook of its own beside get_node_info's cook_info.
     geo = None
     if not isinstance(node, hou.SopNode):
         result = {{"status": "error", "kind": "invalid_input", "message": f"Node {{node_path}} has no geometry: it is not a SOP node"}}

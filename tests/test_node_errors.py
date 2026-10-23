@@ -3,6 +3,8 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from houdini_mcp.connection import houdini
 from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
@@ -26,7 +28,8 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "cooked"
+        assert result["cook_info"]["cook_count"] == 1
+        assert result["cook_info"]["needs_to_cook"] is False
         assert result["cook_info"]["errors"] == []
         assert result["cook_info"]["warnings"] == []
 
@@ -43,7 +46,6 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "error"
         assert len(result["cook_info"]["errors"]) == 2
         assert result["cook_info"]["errors"][0]["severity"] == "error"
         assert result["cook_info"]["errors"][0]["message"] == "Invalid parameter value"
@@ -63,7 +65,6 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "cooked"
         assert len(result["cook_info"]["warnings"]) == 2
         assert result["cook_info"]["warnings"][0]["severity"] == "warning"
         assert result["cook_info"]["warnings"][0]["message"] == "Deprecated parameter used"
@@ -83,42 +84,30 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "error"
         assert len(result["cook_info"]["errors"]) == 1
         assert len(result["cook_info"]["warnings"]) == 1
 
-    def test_get_node_info_dirty_state(self, mock_connection):
-        """Test getting node info for a dirty (needs recook) node."""
+    @pytest.mark.parametrize("cook_count", [0, 2])
+    @pytest.mark.parametrize("needs_to_cook", [False, True])
+    def test_cook_info_is_houdinis_cook_count_and_needs_to_cook(
+        self, mock_connection, cook_count, needs_to_cook
+    ):
         from houdini_mcp.tools import get_node_info
 
-        # Cooked, then changed: Houdini 22 says it needs to cook, and lists no errors
+        # whatever pair Houdini gives is reported as given, beside the errors it lists
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        geo1._needs_to_cook = True
+        geo1._cook_count = cook_count
+        geo1._needs_to_cook = needs_to_cook
+        geo1._errors = ["Undefined node type"]
         mock_connection.add_node(geo1)
 
-        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
+        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
 
-        assert result["status"] == "success"
-        assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "dirty"
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (cook_count, needs_to_cook)
+        assert [e["message"] for e in cook_info["errors"]] == ["Undefined node type"]
+        assert "cook_state" not in cook_info
 
-    def test_get_node_info_uncooked_state(self, mock_connection):
-        """Test getting node info for an uncooked node."""
-        from houdini_mcp.tools import get_node_info
-
-        # Never cooked: Houdini 22 counts no cook
-        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        geo1._cook_count = 0
-        geo1._needs_to_cook = True
-        mock_connection.add_node(geo1)
-
-        result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
-
-        assert result["status"] == "success"
-        assert "cook_info" in result
-        assert result["cook_info"]["cook_state"] == "uncooked"
-
-    def test_a_forced_cook_of_a_stale_node_leaves_it_cooked(self, mock_connection):
+    def test_a_forced_cook_of_a_stale_node_counts_and_needs_no_cook(self, mock_connection):
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
@@ -127,7 +116,7 @@ class TestGetNodeInfoWithErrors:
 
         cook_info = get_node_info("/obj/geo1", cook_info="force_cook")["cook_info"]
 
-        assert cook_info["cook_state"] == "cooked"
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (2, False)
         assert isinstance(cook_info["last_cook_time"], float)
 
     def test_get_node_info_backward_compatible(self, mock_connection):
@@ -231,38 +220,9 @@ class TestGetNodeInfoWithErrors:
 
         assert cook_info["errors"]["unread"].startswith("RuntimeError: no cook")
         assert [w["message"] for w in cook_info["warnings"]] == ["Low memory"]
-        # without its errors, not even a node that never counted a cook reads "uncooked"
-        assert cook_info["cook_state"] == cook_info["errors"]
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (0, False)
 
-    def test_errors_houdini_gives_on_a_second_ask_do_not_contradict_the_state(
-        self, mock_connection
-    ):
-        from houdini_mcp.tools import get_node_info
-
-        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        geo1.errors = MagicMock(  # type: ignore[method-assign]
-            side_effect=[raised_inside_houdini(RuntimeError("locked")), ["Invalid input"]]
-        )
-        mock_connection.add_node(geo1)
-
-        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
-
-        assert cook_info["errors"]["unread"].startswith("RuntimeError: locked")
-        assert cook_info["cook_state"] == cook_info["errors"]
-
-    def test_a_node_listing_errors_reads_error_whether_or_not_a_cook_counted(self, mock_connection):
-        from houdini_mcp.tools import get_node_info
-
-        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        geo1._errors = ["Undefined node type"]
-        geo1._cook_count = 0
-        mock_connection.add_node(geo1)
-
-        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
-
-        assert cook_info["cook_state"] == "error"
-
-    def test_a_cook_state_houdini_will_not_read_is_unread_not_unknown(self, mock_connection):
+    def test_a_needs_to_cook_houdini_will_not_read_is_unread_alone(self, mock_connection):
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
@@ -271,8 +231,21 @@ class TestGetNodeInfoWithErrors:
 
         cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
 
-        assert cook_info["cook_state"]["unread"].startswith("RuntimeError: locked")
+        assert cook_info["needs_to_cook"]["unread"].startswith("RuntimeError: locked")
+        assert cook_info["cook_count"] == 1
         assert cook_info["errors"] == []
+
+    def test_a_cook_count_houdini_will_not_read_is_unread_alone(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1.cookCount = MagicMock(side_effect=raised_inside_houdini(RuntimeError("locked")))  # type: ignore[method-assign]
+        mock_connection.add_node(geo1)
+
+        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
+
+        assert cook_info["cook_count"]["unread"].startswith("RuntimeError: locked")
+        assert cook_info["needs_to_cook"] is False
 
     def test_a_forced_cook_that_fails_reports_the_failure_and_its_errors(self, mock_connection):
         from houdini_mcp.tools import get_node_info
@@ -286,7 +259,8 @@ class TestGetNodeInfoWithErrors:
         assert cook_info["last_cook_time"]["unread"] == (
             "hou.OperationFailed: The attempted operation failed.\nError while cooking."
         )
-        assert cook_info["cook_state"] == "error"
+        # the failed cook counts, and the node still needs to cook
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (2, True)
         assert [e["message"] for e in cook_info["errors"]] == ["Invalid input"]
 
     def test_a_lost_link_while_reading_errors_fails_the_call(self, mock_connection):
@@ -759,7 +733,7 @@ class TestEdgeCases:
         )
         assert record.endswith(f"keys={sorted(result)}")
 
-    def test_the_cook_info_event_names_the_state_it_read(self, mock_connection, caplog):
+    def test_the_cook_info_event_names_the_answers_it_read(self, mock_connection, caplog):
         import logging
 
         from houdini_mcp.tools import get_node_info
@@ -770,7 +744,10 @@ class TestEdgeCases:
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
             get_node_info("/obj/geo1", cook_info="inspect")
 
-        assert "cook info path=/obj/geo1 force=False cook_state=error" in caplog.messages
+        assert (
+            "cook info path=/obj/geo1 force=False cook_count=2 needs_to_cook=True"
+            in caplog.messages
+        )
 
     def test_unknown_detail_or_cook_info_fails_loudly(self, mock_connection):
         from houdini_mcp.tools import get_node_info

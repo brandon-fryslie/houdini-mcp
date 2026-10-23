@@ -745,7 +745,7 @@ class TestTheProgramHoudiniRuns:
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.geometry"):
             result = await self._run(self._node(self._geo()), max_sample_points=1)
 
-        # [LAW:one-source-of-truth] get_node_info's is the one cook_state field
+        # [LAW:one-source-of-truth] get_node_info's cook_info is the one report of a cook
         assert "cook_state" not in result
         box = {
             "min": [0.0, 0.0, 0.0],

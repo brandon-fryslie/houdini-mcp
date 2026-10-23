@@ -280,7 +280,7 @@ node, such as a multiparm's `type#`, has its `menu_items` unread.
 ## Values Houdini Would Not Read
 
 Any response field Houdini refused to supply holds `{"unread": "<ExcType>: <message>"}`
-where its value would be: a parameter value, a cook state, a node's errors, a
+where its value would be: a parameter value, a cook count, a node's errors, a
 default, a bounding box, an attribute in its list. It is never `[]`, `0`, `null`,
 `"unknown"` or a placeholder string, so an empty error list means the node has
 no errors. A walk that could not enter part of the tree (`list_children`) lists
