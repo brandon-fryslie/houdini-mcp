@@ -41,7 +41,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
 from houdini_mcp.tools import summarization
-from houdini_mcp.tools._common import FAILURE, Vec3
+from houdini_mcp.tools._common import FAILURE, PAGE_LIMIT_MAX, Vec3
 from houdini_mcp.tools.code import Policy
 from tests.conftest import DEFAULT_SETTINGS, Wire
 
@@ -555,6 +555,23 @@ class TestServedSchemas:
         for (name, limit), base in calls.items():
             assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
+
+    async def test_a_page_is_in_bounds_or_refused(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """An out-of-range page was once clamped into range and reported as the page asked for."""
+        calls = {
+            "list_node_types": {},
+            "list_children": {"node_path": "/obj"},
+            "find_nodes": {},
+        }
+        for name, base in calls.items():
+            for limit in (1, PAGE_LIMIT_MAX):
+                assert await accepts(client, served, name, {**base, "limit": limit}), name
+            for limit in (0, PAGE_LIMIT_MAX + 1):
+                assert not await accepts(client, served, name, {**base, "limit": limit}), name
+            assert await accepts(client, served, name, {**base, "cursor": 0}), name
+            assert not await accepts(client, served, name, {**base, "cursor": -1}), name
 
     async def test_a_wait_is_between_a_second_and_a_day(
         self, client: Client[Any], served: dict[str, Tool]

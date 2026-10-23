@@ -12,7 +12,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Generic, TypeVar, cast
 
-from pydantic import Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
+from pydantic.dataclasses import dataclass as parsed_dataclass
 
 from ..connection import (
     HoudiniConnection,
@@ -91,8 +92,9 @@ __all__ = [
     "_truncate_output",
     # Response pagination and bounds (houdini-mcp-2t6)
     "PAGE_LIMIT_MAX",
+    "PageLimit",
+    "Cursor",
     "PageRequest",
-    "parse_page_request",
     "Page",
     "page_from",
     "paginate",
@@ -479,49 +481,26 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
 PAGE_LIMIT_MAX = 500
 
 
-@dataclass(frozen=True)
+# [LAW:types-are-the-program] [LAW:single-enforcer] A page's bounds are these two
+# types and nothing else: the served schema states them, the tool boundary refuses
+# a value outside them, and PageRequest holds only values inside them.
+PageLimit = Annotated[int, Field(ge=1, le=PAGE_LIMIT_MAX)]
+"""How many results one page may hold: an empty page would repeat its cursor forever."""
+Cursor = Annotated[int, Field(ge=0)]
+"""Where a page starts in the result set."""
+
+
+@parsed_dataclass(frozen=True, config=ConfigDict(strict=True))
 class PageRequest:
-    """Where a page starts and how long it may be: ``0 <= offset``, ``1 <= limit <= PAGE_LIMIT_MAX``.
+    """Where a page starts and how long it may be; holding one is proof both are in bounds."""
 
-    Construction refuses anything outside those bounds, so holding a PageRequest
-    is proof they hold; ``parse_page_request`` is the one place that clamps raw
-    arguments into them.
-    """
-
-    offset: int
-    limit: int
+    offset: Cursor
+    limit: PageLimit
 
     @property
     def window(self) -> slice:
         """The page's place in a result set, as a slice: it crosses to Houdini by value."""
         return slice(self.offset, self.offset + self.limit)
-
-    def __post_init__(self) -> None:
-        # [LAW:types-are-the-program] The type, not its callers, refuses the
-        # empty or negative window that would repeat a cursor forever.
-        if self.offset < 0 or not 1 <= self.limit <= PAGE_LIMIT_MAX:
-            raise ValueError(
-                f"PageRequest needs 0 <= offset and 1 <= limit <= {PAGE_LIMIT_MAX}, "
-                f"got offset={self.offset} limit={self.limit}"
-            )
-
-
-def parse_page_request(*, limit: int, cursor: int) -> PageRequest:
-    """Clamp a tool's raw limit/cursor arguments into a PageRequest."""
-    # [LAW:parse-dont-validate] [LAW:single-enforcer] The one checkpoint for page
-    # bounds: everything downstream takes a PageRequest, so nothing re-clamps.
-    request = PageRequest(
-        offset=max(0, int(cursor)),
-        limit=min(PAGE_LIMIT_MAX, max(1, int(limit))),
-    )
-    logger.debug(
-        "page request limit=%r cursor=%r -> offset=%d limit=%d",
-        limit,
-        cursor,
-        request.offset,
-        request.limit,
-    )
-    return request
 
 
 @dataclass(frozen=True)

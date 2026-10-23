@@ -20,13 +20,15 @@ from ._common import (
     READ,
     UNDOABLE,
     Count,
+    Cursor,
+    PageLimit,
+    PageRequest,
     ResultLimit,
     join_warnings,
     node_at,
     page_from,
     paginate,
     paging_fields,
-    parse_page_request,
     tool,
     using,
 )
@@ -285,8 +287,8 @@ def list_node_types(
     host: str = "localhost",
     port: int = 18811,
     *,
-    limit: int = 100,
-    cursor: int = 0,
+    limit: PageLimit = 100,
+    cursor: Cursor = 0,
 ) -> dict[str, Any]:
     """
     List available Houdini node types.
@@ -298,7 +300,7 @@ def list_node_types(
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
         name_filter: Optional substring filter for node type names (case-insensitive)
-        limit: Maximum number of results per page (default: 100, max: 500)
+        limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
@@ -318,7 +320,7 @@ def list_node_types(
     """
     with using(host, port) as link:
         hou = link.hou
-        request = parse_page_request(limit=limit, cursor=cursor)
+        request = PageRequest(offset=cursor, limit=limit)
 
         lookup = node_type_cache.lookup(hou)
 
@@ -351,8 +353,8 @@ def list_children(
     host: str = "localhost",
     port: int = 18811,
     *,
-    limit: int = 20,
-    cursor: int = 0,
+    limit: PageLimit = 20,
+    cursor: Cursor = 0,
 ) -> dict[str, Any]:
     """
     List child nodes with paths, types, and current input connections.
@@ -368,7 +370,7 @@ def list_children(
         max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
         max_nodes: Maximum number of nodes to return as safety limit (default: 1000)
         compact: When True, return only path/name/type without connection details (default: False)
-        limit: Maximum number of children per page (default: 20, max: 500)
+        limit: Maximum number of children per page (default: 20)
         cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
@@ -389,7 +391,7 @@ def list_children(
     """
     with using(host, port) as link:
         hou = link.hou
-        request = parse_page_request(limit=limit, cursor=cursor)
+        request = PageRequest(offset=cursor, limit=limit)
 
         parent = node_at(hou, node_path)
 
@@ -520,8 +522,8 @@ def find_nodes(
     host: str = "localhost",
     port: int = 18811,
     *,
-    limit: int = 100,
-    cursor: int = 0,
+    limit: PageLimit = 100,
+    cursor: Cursor = 0,
 ) -> dict[str, Any]:
     """
     Find nodes by name pattern or type using glob/substring matching.
@@ -534,7 +536,7 @@ def find_nodes(
         pattern: Glob pattern or substring to match node names (default: "*")
                 Examples: "noise*", "*grid*", "sphere"
         node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
-        limit: Maximum number of results per page (default: 100, max: 500)
+        limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
 
     Returns:
@@ -550,7 +552,7 @@ def find_nodes(
     with using(host, port) as link:
         root = node_at(link.hou, root_path, "Root node")
 
-        request = parse_page_request(limit=limit, cursor=cursor)
+        request = PageRequest(offset=cursor, limit=limit)
 
         # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
         # the scene size, answered with the match count and the page's strings.

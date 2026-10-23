@@ -85,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `list_node_types`, `list_children` and `find_nodes`
+  refuse a page `limit` outside 1 to 500 or a negative `cursor` as
+  `invalid_input`, and the served schema states both bounds
+  (houdini-laws-etg.dyr). Before, they were clamped into range and the call
+  reported success: a `limit` of 0 or less listed one item per page, one over
+  500 listed 500, and a negative `cursor` started at 0.
+
 - **BREAKING (deployment)**: `capture_pane_screenshot`, `capture_multiple_panes`
   and `render_node_network` need the houdini_mcp plugin installed in the
   Houdini they reach, as the editing tools below do (houdini-laws-etg.4k0):
