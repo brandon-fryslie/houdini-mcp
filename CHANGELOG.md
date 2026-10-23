@@ -16,7 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   integer. Before, the value was the item's token (`"poly"`), so the current
   value and the default could not be found among the offered values. The items
   are read from the node's parameter, so a script-generated menu lists its
-  items, where it listed none; separators are no longer offered as items.
+  items, where it listed none; separators are no longer offered as items. A
+  whole-node listing's multiparm template (attribcreate's `type#`) names no
+  parameter on the node, so its `menu_items` are unread, where they were the
+  template's items.
 
 - **BREAKING (wire)**: the counts and timeout a caller passes to
   `list_children`, `execute_code`, `get_parameter_schema` and `get_geo_summary`
