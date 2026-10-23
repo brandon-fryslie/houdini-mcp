@@ -26,7 +26,7 @@ import math
 import pathlib
 import re
 import textwrap
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, get_args
 
@@ -326,19 +326,40 @@ class TestServedSchemas:
         assert rotation["default"] == [-30, 45, 0]
         assert not await accepts(client, served, "render_viewport", {"camera_rotation": None})
 
-    @pytest.mark.parametrize("name", ["camera_position", "camera_rotation"])
+    @pytest.mark.parametrize(
+        ("tool", "base", "name", "shape"),
+        [
+            ("render_viewport", {}, "camera_position", lambda bad: [bad, 0.0, 0.0]),
+            ("render_viewport", {}, "camera_rotation", lambda bad: [bad, 0.0, 0.0]),
+            ("set_node_position", {"node_path": "/obj", "y": 0.0}, "x", lambda bad: bad),
+            ("set_parameter", {"node_path": "/obj", "param_name": "t"}, "value", lambda bad: [bad]),
+            ("set_node_color", {"node_path": "/obj"}, "color", lambda bad: [bad, 0.0, 0.0]),
+        ],
+    )
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
-    async def test_a_camera_vector_is_finite(
-        self, client: Client[Any], name: str, bad: float
+    async def test_a_number_is_finite(
+        self,
+        mcp: FastMCP,
+        mock_rpyc_with_reset: Any,
+        tool: str,
+        base: dict[str, Any],
+        name: str,
+        shape: Callable[[float], Any],
+        bad: float,
     ) -> None:
-        """A NaN would reach the render rig and the render report success from a
-        camera that sees nothing; served or called directly, the call is refused first.
-        JSON Schema has no NaN to refuse, so this is not ``accepts``' agreement check."""
-        vector = [bad, 0.0, 0.0]
-        result = await client.call_tool("render_viewport", {name: vector}, raise_on_error=False)
-        assert result.is_error and result.structured_content is None, result.content
-        direct = tools.render_viewport(**{name: tuple(vector)})
-        assert (direct["kind"], direct["parameter"]) == ("invalid_input", name), direct
+        """A NaN would reach Houdini and the call report success: a render from a
+        camera that sees nothing, a color clamped to 1.0 as if it were asked for.
+        Served or called directly, the call is refused first.
+        Served through the server's own ``call_tool``: a client writes NaN as null,
+        where JSON-RPC's parse of a NaN on the wire hands the server NaN."""
+        arguments = {**base, name: shape(bad)}
+        served = (await mcp.call_tool(tool, arguments)).structured_content
+        direct = getattr(tools, tool)(**arguments)
+        for result in (served, direct):
+            assert result is not None and (result["kind"], result["parameter"]) == (
+                "invalid_input",
+                name,
+            ), result
 
     def test_a_default_outside_its_type_fails_the_tools_definition(self) -> None:
         """A default is served and bound without a caller's parse, so it is parsed
@@ -427,16 +448,6 @@ class TestServedSchemas:
         params = inspect.signature(getattr(tools, name)).parameters
         for keyword in ("summarize", "host", "port"):
             assert params[keyword].kind is inspect.Parameter.KEYWORD_ONLY, (name, keyword)
-
-    def test_a_color_channel_is_finite(self) -> None:
-        """NaN would clamp to 1.0 and be reported as if it were asked for."""
-        from pydantic import TypeAdapter, ValidationError
-
-        from houdini_mcp.tools._common import RGB
-
-        for bad in (float("nan"), float("inf")):
-            with pytest.raises(ValidationError):
-                TypeAdapter(RGB).validate_python([bad, 0, 0])
 
     async def test_render_quad_view_parameters(
         self, client: Client[Any], served: dict[str, Tool]

@@ -107,7 +107,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 
 from pydantic import ValidationError
-from pydantic_core import PydanticSerializationError, to_json
+from pydantic_core import from_json, to_json
 
 # [LAW:types-are-the-program] the decorator is identity on the tool's type: callers
 # keep its signature and return type, not a bare Callable.
@@ -159,12 +159,15 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
             domain, so a body never re-checks what its signature already says.
             A value is parsed as the JSON it would cross the wire as, strictly, as
             the server's ``strict_input_validation`` parses it: a tuple is the
-            array it is sent as, and "yes" is not a boolean on either path.
+            array it is sent as, and "yes" is not a boolean on either path. JSON
+            has no NaN or infinity, though JSON-RPC's parse admits both, so no
+            float type has to refuse them itself.
             """
             for name, value in bound.arguments.items():
                 try:
                     wire = to_json(value)
-                except PydanticSerializationError:
+                    from_json(wire, allow_inf_nan=False)
+                except ValueError:
                     raise InvalidInput(
                         f"{name}: not expressible as JSON, got {reprlib.repr(value)}",
                         parameter=name,
@@ -302,10 +305,8 @@ Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
 DEFAULT_RESOLUTION: Resolution = (512, 512)
-Finite = Annotated[float, Field(allow_inf_nan=False)]
-"""A number the wire carries that is neither NaN nor an infinity, which JSON-RPC's parse admits."""
-Vec3 = tuple[Finite, Finite, Finite]
-RGB = tuple[Finite, Finite, Finite]
+Vec3 = tuple[float, float, float]
+RGB = tuple[float, float, float]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
