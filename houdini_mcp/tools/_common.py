@@ -181,6 +181,22 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                     ) from None
             return bound
 
+        # [LAW:single-enforcer] A default is bound and served without passing
+        # through ``parsed``, so each is parsed once here, as a passed value is: a
+        # default outside its parameter's type fails the tool's definition.
+        try:
+            parsed(
+                signature.bind_partial(
+                    **{
+                        name: parameter.default
+                        for name, parameter in signature.parameters.items()
+                        if parameter.default is not parameter.empty
+                    }
+                )
+            )
+        except InvalidInput as e:
+            raise TypeError(f"{operation_name} default is not its parameter's type: {e}") from None
+
         # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
         # body, off the event loop, in the Houdini its host and port name.
         if TOOL_POLICIES[operation_name].writes_scene and (
@@ -285,11 +301,11 @@ ResultLimit = Annotated[int, Field(ge=1)]
 Resolution = tuple[Dimension, Dimension]
 """(width, height) in pixels."""
 # An omitted resolution is this one; there is no second spelling of "the default".
-# [LAW:parse-dont-validate] parsed, since a default is served unchecked: out of bounds fails import.
-DEFAULT_RESOLUTION: Resolution = TypeAdapter(Resolution).validate_python((512, 512))
-Vec3 = tuple[float, float, float]
-Channel = Annotated[float, Field(allow_inf_nan=False)]
-RGB = tuple[Channel, Channel, Channel]
+DEFAULT_RESOLUTION: Resolution = (512, 512)
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+"""A number the wire carries that is neither NaN nor an infinity, which JSON-RPC's parse admits."""
+Vec3 = tuple[Finite, Finite, Finite]
+RGB = tuple[Finite, Finite, Finite]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""

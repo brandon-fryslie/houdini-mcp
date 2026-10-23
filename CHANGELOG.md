@@ -598,6 +598,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `render_viewport` refuses a `camera_position` or `camera_rotation` holding NaN
+  or Infinity (houdini-laws-etg.xfj). The JSON-RPC parse admits both, and the
+  camera vector accepted them, so a call either wrote them to the render rig and
+  reported the render as a success, or failed inside the render as
+  `operation_failed` (`math domain error`). The call is now refused before it
+  reaches Houdini, at the served schema or as `invalid_input` on a direct call,
+  as a color with a NaN channel already was. Every tool's parameter defaults are
+  checked against their types when the tool is defined, so a tool cannot serve a
+  default it would refuse from a caller.
+
 - `get_node_info`'s `cook_state` reports a failed cook and a never-cooked node
   in Houdini 22 (houdini-laws-etg.86b). It asked for `cookState()`, which no
   Houdini 22 node has, so a live call could only answer `"cooked"` or

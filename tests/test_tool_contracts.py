@@ -22,6 +22,7 @@ import ast
 import inspect
 import json
 import logging
+import math
 import pathlib
 import re
 import textwrap
@@ -40,7 +41,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
 from houdini_mcp.tools import summarization
-from houdini_mcp.tools._common import FAILURE
+from houdini_mcp.tools._common import FAILURE, Vec3, handle_connection_errors
 from houdini_mcp.tools.code import Policy
 from tests.conftest import DEFAULT_SETTINGS, Wire
 
@@ -324,6 +325,29 @@ class TestServedSchemas:
         rotation = served["render_viewport"].input_schema["properties"]["camera_rotation"]
         assert rotation["default"] == [-30, 45, 0]
         assert not await accepts(client, served, "render_viewport", {"camera_rotation": None})
+
+    @pytest.mark.parametrize("name", ["camera_position", "camera_rotation"])
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+    async def test_a_camera_vector_is_finite(
+        self, client: Client[Any], name: str, bad: float
+    ) -> None:
+        """A NaN would reach the render rig and the render report success from a
+        camera that sees nothing; served or called directly, the call is refused first.
+        JSON Schema has no NaN to refuse, so this is not ``accepts``' agreement check."""
+        vector = [bad, 0.0, 0.0]
+        result = await client.call_tool("render_viewport", {name: vector}, raise_on_error=False)
+        assert result.is_error and result.structured_content is None, result.content
+        direct = tools.render_viewport(**{name: tuple(vector)})
+        assert (direct["kind"], direct["parameter"]) == ("invalid_input", name), direct
+
+    def test_a_default_outside_its_type_fails_the_tools_definition(self) -> None:
+        """A default is served and bound without a caller's parse, so it is parsed
+        where the tool is defined: a tool cannot serve a value it would refuse."""
+        with pytest.raises(TypeError, match=r"render_viewport default .*camera_rotation"):
+
+            @handle_connection_errors("render_viewport")
+            def tool(camera_rotation: Vec3 = (math.nan, 0.0, 0.0)) -> dict[str, Any]:
+                return {}
 
     async def test_a_color_is_three_finite_numbers(
         self, client: Client[Any], served: dict[str, Tool]
