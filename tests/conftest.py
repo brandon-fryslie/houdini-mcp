@@ -1327,11 +1327,13 @@ class MockPaneTab:
 
     def cd(self, path: str) -> None:
         """hou.NetworkEditor.cd: into the network at ``path``, which it then shows. A
-        node that is not a network leaves the editor where it was, and says nothing,
-        as Houdini 22.0.466 does."""
+        node that is not a network leaves the editor where it was, and says nothing;
+        a path that names no node is refused, and the editor stays where it was, as
+        Houdini 22.0.466 does."""
         assert self.ui is not None, f"{self._name} was not handed out by hou.ui"
         node = self.ui.node(path)
-        assert node is not None, f"no node at {path}"
+        if node is None:
+            raise OperationFailed("The attempted operation failed.")
         if node.isNetwork():
             self.network_path = node.path()
             self.view = f"inside {self.network_path}"

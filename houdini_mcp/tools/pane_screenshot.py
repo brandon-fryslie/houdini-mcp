@@ -143,8 +143,8 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
 
 
 def _as_shown(pane: Any) -> None:
-    """Leaves the pane's view as the user left it."""
-    logger.info("Left %s as shown", pane.name())
+    """Frames nothing: the pane keeps the view it has."""
+    logger.info("Left %s unframed", pane.name())
 
 
 def _in_place(pane: Any) -> None:
@@ -231,8 +231,8 @@ def _capture_pane_to_bytes(
             ) from e
 
     # Navigated and framed only once the input and the pane are known good, so a
-    # capture refused for either leaves the user's view as it was; only the grab
-    # can fail after.
+    # capture refused for either leaves the user's view as it was; one that fails
+    # navigating, framing or grabbing leaves the view as far as it got.
     main_thread.call(link, framed)
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is

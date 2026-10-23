@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `render_node_network` refuses a node that is not a network, such as a SOP
+  or LOP node, as `invalid_input` naming the network the node sits in
+  (houdini-laws-etg.9wg). It returned success with a picture of whatever
+  network the editor already showed, since Houdini's network editor stays
+  where it is when told to enter such a node. The `node_path` it reports is
+  Houdini's path for the network, so `/obj/geo1/` reports `/obj/geo1`. A
+  capture refused for its pane leaves the network editor where the user
+  left it.
+
 - `capture_pane_screenshot`, `capture_multiple_panes` and `render_node_network`
   return the pane as its own window draws it, where they copied whatever the
   screen showed in the pane's rectangle (houdini-laws-etg.4k0). With another

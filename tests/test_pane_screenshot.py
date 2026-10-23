@@ -552,6 +552,28 @@ def test_render_node_network_refused_by_its_pane_leaves_the_editor_where_it_was(
     assert (editor.network_path, editor.view) == ("/obj", "as left")
 
 
+def test_render_node_network_whose_network_is_gone_before_the_editor_moves_fails(
+    mock_connection: MockHouModule,
+) -> None:
+    """A network deleted between the call's check and Houdini's main thread taking
+    the editor there fails the capture by its path; the editor stays put."""
+    editor = _network_editor(mock_connection)
+    navigate = editor.cd
+    editor.cd = lambda path: (  # type: ignore[method-assign]
+        mock_connection.node(path).destroy(),  # type: ignore[union-attr]
+        navigate(path),
+    )
+
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
+        result = render_node_network("/obj/geo1")
+
+    assert result["kind"] == "operation_failed", result
+    assert result["message"] == "Failed to navigate to /obj/geo1: The attempted operation failed."
+    assert result["path"] == "/obj/geo1"
+    assert (editor.network_path, editor.view) == ("/obj", "as left")
+    assert mock_connection.ui.grabs == []
+
+
 def _viewport(
     events: list[object],
     name: str,
@@ -726,5 +748,5 @@ def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
     assert result["status"] == "success", result
     assert events == []
     assert mock_connection.ui.grabs == [("panetab1", "as left", (0, 0, 800, 600))]
-    assert "Left panetab1 as shown" in caplog.messages
+    assert "Left panetab1 unframed" in caplog.messages
     assert "Grabbed Parm from its window: 3 PNG bytes" in caplog.messages
