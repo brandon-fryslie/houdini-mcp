@@ -25,6 +25,7 @@ from tests.conftest import (
     MockHouModule,
     MockPaneTab,
     MockPaneTabType,
+    OperationFailed as HouOperationFailed,
     link_failure,
     served_namespace,
 )
@@ -523,7 +524,10 @@ def test_render_node_network_refuses_a_node_that_is_not_a_network(
     refused, naming the network the node sits in, and the editor stays put."""
     editor = _network_editor(mock_connection)
 
-    with caplog.at_level(logging.INFO):
+    with (
+        caplog.at_level(logging.INFO),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),
+    ):
         result = render_node_network("/obj/geo1/box1")
 
     assert result["kind"] == "invalid_input", result
@@ -552,20 +556,20 @@ def test_render_node_network_refused_by_its_pane_leaves_the_editor_where_it_was(
     assert (editor.network_path, editor.view) == ("/obj", "as left")
 
 
-def test_render_node_network_whose_network_is_gone_before_the_editor_moves_fails(
+def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
     mock_connection: MockHouModule,
 ) -> None:
-    """A network deleted between the call's check and Houdini's main thread taking
-    the editor there fails the capture by its path; the editor stays put."""
+    """An editor that will not go into the network fails the capture, naming the
+    network; nothing is framed or grabbed."""
     editor = _network_editor(mock_connection)
-    navigate = editor.cd
-    editor.cd = lambda path: (  # type: ignore[method-assign]
-        mock_connection.node(path).destroy(),  # type: ignore[union-attr]
-        navigate(path),
-    )
+
+    def refuse(path: str) -> None:
+        raise HouOperationFailed("The attempted operation failed.")
+
+    editor.cd = refuse  # type: ignore[method-assign]
 
     with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
-        result = render_node_network("/obj/geo1")
+        result = render_node_network("/obj/geo1/")
 
     assert result["kind"] == "operation_failed", result
     assert result["message"] == "Failed to navigate to /obj/geo1: The attempted operation failed."

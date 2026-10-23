@@ -142,13 +142,14 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
     return framer
 
 
-def _as_shown(pane: Any) -> None:
+def _unframed(pane: Any) -> None:
     """Frames nothing: the pane keeps the view it has."""
     logger.info("Left %s unframed", pane.name())
 
 
-def _in_place(pane: Any) -> None:
-    """Leaves the pane on what it shows."""
+def _in_place(pane: Any) -> dict[str, Any]:
+    """Leaves the pane on what it shows, and reports nothing of it."""
+    return {}
 
 
 def _capture_pane_to_bytes(
@@ -157,7 +158,7 @@ def _capture_pane_to_bytes(
     pane_type_name: str,
     QtCore: Any,
     fit_contents: bool = False,
-    navigate: Callable[[Any], None] = _in_place,
+    navigate: Callable[[Any], dict[str, Any]] = _in_place,
 ) -> dict[str, Any]:
     """
     Internal function to capture a pane screenshot and return raw bytes.
@@ -168,17 +169,20 @@ def _capture_pane_to_bytes(
         pane_type_name: Name of the pane type to capture
         QtCore: Houdini's QtCore module
         fit_contents: If True, frame everything the pane shows before capture
-        navigate: Takes the pane to what it is captured showing, before it is
-            framed; by default it stays on what it shows
+        navigate: Takes the pane to what it is captured showing, on Houdini's
+            main thread before the pane is framed, and returns what the capture
+            reports of it; by default the pane stays on what it shows
 
     Returns:
-        Dict with the capture's data, including raw_bytes.
+        Dict with the capture's data, including raw_bytes and what navigate
+        returned.
 
     Raises:
         InvalidInput: the pane type is unknown here, or fit_contents asks to
             frame a pane type Houdini cannot frame.
         OperationFailed: no pane of that type is open in the layout, or the pane
             is open but could not be captured; a human changes the layout.
+        Whatever navigate raises, the pane not yet framed.
     """
     hou = link.hou
     # The list of names is read only to answer an unknown name, not on every capture.
@@ -193,7 +197,7 @@ def _capture_pane_to_bytes(
         raise InvalidInput(f"Unknown pane type: {pane_type_name}", available_types=names)
 
     # [LAW:dataflow-not-control-flow] every capture frames its pane; fit_contents picks how.
-    frame = _framer(link, pane_type, pane_type_name) if fit_contents else _as_shown
+    frame = _framer(link, pane_type, pane_type_name) if fit_contents else _unframed
 
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
@@ -219,8 +223,8 @@ def _capture_pane_to_bytes(
             pane_type=pane_type_name,
         )
 
-    def framed() -> None:
-        navigate(pane)
+    def framed() -> dict[str, Any]:
+        shown = navigate(pane)
         try:
             frame(pane)
         except ToolError:
@@ -229,11 +233,12 @@ def _capture_pane_to_bytes(
             raise OperationFailed(
                 f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
             ) from e
+        return shown
 
     # Navigated and framed only once the input and the pane are known good, so a
     # capture refused for either leaves the user's view as it was; one that fails
     # navigating, framing or grabbing leaves the view as far as it got.
-    main_thread.call(link, framed)
+    shown = main_thread.call(link, framed)
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is
     # back in its event loop; it offers no signal that it has (no viewer or
@@ -251,6 +256,7 @@ def _capture_pane_to_bytes(
         "pane_name": read("pane name", lambda: str(pane.name())),
         "geometry": geometry,
         "raw_bytes": raw_bytes,
+        **shown,
     }
 
 
@@ -491,30 +497,34 @@ def render_node_network(
         render_node_network("/stage")  # Capture LOPs/Solaris network
     """
     with using(host, port) as link:
-        # [LAW:parse-dont-validate] a NetworkEditor told to cd into a node that is
-        # not a network stays where it was and says nothing (Houdini 22.0.466), so
-        # such a node is refused here, before the editor is touched.
-        network = network_at(link.hou, node_path)
-        # [LAW:one-source-of-truth] the editor shows the network's own path, which
-        # a caller's spelling of it ("/obj/geo1/") is not.
-        path = network.path()
+        hou = link.hou
 
-        child_count = read(f"children of {path}", lambda: len(network.children()))
-
-        def into_network(pane: Any) -> None:
+        # [LAW:no-ambient-temporal-coupling] the network is resolved and counted in
+        # the main-thread call that takes the editor into it, so nothing in Houdini
+        # replaces or edits it in between.
+        def into_network(pane: Any) -> dict[str, Any]:
+            # [LAW:parse-dont-validate] a NetworkEditor told to cd into a node that
+            # is not a network stays where it was and says nothing (Houdini
+            # 22.0.466), so such a node is refused before the editor is touched.
+            network = network_at(hou, node_path)
+            # [LAW:one-source-of-truth] the editor shows the network's own path,
+            # which a caller's spelling of it ("/obj/geo1/") is not.
+            path = network.path()
             try:
                 pane.cd(path)
             except Exception as e:
                 raise OperationFailed(f"Failed to navigate to {path}: {e}", path=path) from e
             logger.info("Took %s into %s", pane.name(), path)
+            return {
+                "node_path": path,
+                "child_count": read(f"children of {path}", lambda: len(network.children())),
+            }
 
         result = _capture_pane_to_bytes(
             link, main_thread, "NetworkEditor", _qt_core(link), fit_contents, into_network
         )
 
         raw_bytes: bytes = result.pop("raw_bytes")
-        result["node_path"] = path
-        result["child_count"] = child_count
         result["image_format"] = "png"
         result["image_size_bytes"] = len(raw_bytes)
         result["image_base64"] = base64.b64encode(raw_bytes).decode("utf-8")
