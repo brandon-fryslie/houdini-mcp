@@ -536,10 +536,8 @@ class MockHouNode:
         return self._warnings.copy()
 
     def cook(self, force: bool = False) -> None:
-        """Cook as Houdini 22 does: the attempt counts, and a node with errors
-        fails it, raising and still needing a cook."""
-        self._cook_count += 1
-        self._needs_to_cook = bool(self._errors)
+        """Cook as Houdini 22 does: a node with errors fails the cook, raising."""
+        self._count_cook()
         if self._errors:
             raise raised_inside_houdini(
                 OperationFailed("The attempted operation failed.\nError while cooking.")
@@ -548,8 +546,13 @@ class MockHouNode:
     def fail_cook(self, *errors: str) -> None:
         """Leave the node as a cook that failed with ``errors`` leaves it."""
         self._errors = list(errors)
+        self._count_cook()
+
+    def _count_cook(self) -> None:
+        # [LAW:one-source-of-truth] what a cook leaves, failed or not: the attempt
+        # counts, and a node with errors still needs to cook
         self._cook_count += 1
-        self._needs_to_cook = True
+        self._needs_to_cook = bool(self._errors)
 
     def geometry(self) -> Optional["MockGeometry"]:
         """Return geometry object if this is a SOP node."""
