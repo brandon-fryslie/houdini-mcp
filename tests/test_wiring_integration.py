@@ -92,12 +92,14 @@ class TestWiringIntegration:
         mock_connection.add_node(geo1)
         mock_connection.add_node(grid)
 
-        # Create DOP node (dopnet)
-        dopnet = MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet")
-        mock_connection.add_node(dopnet)
+        # Create DOP node: a solver inside a DOP network, which is itself an Object
+        dopnet = mock_connection.node("/obj").createNode("dopnet", "dopnet1")
+        dopnet.createNode("pyrosolver", "pyrosolver1")
 
         # Try to connect SOP → DOP (should fail)
-        result = connect_nodes("/obj/geo1/grid1", "/obj/dopnet1", 0, 0, "localhost", 18811)
+        result = connect_nodes(
+            "/obj/geo1/grid1", "/obj/dopnet1/pyrosolver1", 0, 0, "localhost", 18811
+        )
 
         assert result["status"] == "error"
         assert "Incompatible node types" in result["message"]
