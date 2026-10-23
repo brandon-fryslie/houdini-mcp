@@ -17,7 +17,17 @@ from pydantic import TypeAdapter
 import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import main
-from houdini_mcp.settings import InvalidSetting, Port, log_level, results_dir, setting
+from houdini_mcp.settings import (
+    Http,
+    HttpListener,
+    InvalidSetting,
+    Port,
+    Stdio,
+    log_level,
+    results_dir,
+    serving,
+    setting,
+)
 from houdini_mcp.tools import link
 from tests.recording_environ import Recording
 
@@ -34,7 +44,9 @@ STARTUP_SETTINGS = (
     "HOUDINI_MCP_ALLOW_BYPASS",
     "LOG_LEVEL",
     "MCP_TRANSPORT",
+    "MCP_HOST",
     "MCP_PORT",
+    "MCP_ALLOWED_HOSTS",
     "SUMMARIZATION_ENABLED",
     "SUMMARIZATION_BASE_URL",
     "SUMMARIZATION_API_KEY",
@@ -67,6 +79,18 @@ def test_an_unset_setting_is_its_default() -> None:
 def test_a_port_that_is_not_one_is_refused(port: str) -> None:
     with pytest.raises(InvalidSetting, match=f"MCP_PORT: .*, got '{port}'"):
         setting({"MCP_PORT": port}, "MCP_PORT", TypeAdapter(Port), "3055")
+
+
+def test_http_listens_on_loopback_and_admits_the_names_listed_unless_told_otherwise() -> None:
+    assert serving({}) == Http("http", HttpListener("127.0.0.1", 3055, ()))
+    listed = serving({"MCP_HOST": "0.0.0.0", "MCP_ALLOWED_HOSTS": " studio-box , 192.168.1.50 "})
+    assert listed == Http("http", HttpListener("0.0.0.0", 3055, ("studio-box", "192.168.1.50")))
+
+
+def test_stdio_reads_no_listener_setting() -> None:
+    """A listener setting means nothing to stdio, so no value of one stops it."""
+    environ = {"MCP_TRANSPORT": "stdio", "MCP_HOST": "", "MCP_PORT": "abc"}
+    assert serving(environ) == Stdio()
 
 
 def test_results_land_where_named_or_in_the_users_own_cache(
@@ -228,7 +252,6 @@ def test_starting_applies_and_logs_what_it_resolved(
 ) -> None:
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
-    monkeypatch.setenv("MCP_PORT", "3100")
     monkeypatch.setenv("LOG_LEVEL", "debug")
 
     # the stubbed basicConfig applies nothing, so caplog admits what DEBUG would
@@ -236,7 +259,6 @@ def test_starting_applies_and_logs_what_it_resolved(
         main()
 
     assert started["config"]["level"] == logging.DEBUG
-    assert started["run"] == {"transport": "http", "host": "0.0.0.0", "port": 3100}
     logged = [r.getMessage() for r in caplog.records]
     assert "Log level: DEBUG" in logged
     assert "Houdini connection target: studio-box:19000" in logged
@@ -260,6 +282,17 @@ def test_starting_applies_and_logs_what_it_resolved(
         ("HOUDINI_PORT", "99999", "Input should be less than or equal to 65535"),
         ("HOUDINI_HOST", "", "String should match pattern '^\\S+$'"),
         ("HOUDINI_HOST", "studio box", "String should match pattern '^\\S+$'"),
+        ("MCP_HOST", "", "String should match pattern '^\\S+$'"),
+        (
+            "MCP_ALLOWED_HOSTS",
+            "studio-box,http://evil.example",
+            "String should match pattern '^[A-Za-z0-9._\\-*?:\\[\\]]+$'",
+        ),
+        (
+            "MCP_ALLOWED_HOSTS",
+            "studio-box,,192.168.1.50",
+            "String should match pattern '^[A-Za-z0-9._\\-*?:\\[\\]]+$'",
+        ),
         (
             "LOG_LEVEL",
             "loud",

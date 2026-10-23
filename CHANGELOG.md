@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (HTTP, Docker Compose, Python API)**: the HTTP server answers only
+  this machine by default, and refuses a request that calls it by a name it does
+  not admit (houdini-tuneup-ef3.9q8). It used to listen on every interface and
+  check neither the Host nor the Origin header, so any machine on the LAN, or a
+  web page through DNS rebinding, could call every tool, `execute_code` included.
+  Now it listens on `MCP_HOST`, by default `127.0.0.1`, and Compose publishes the
+  port on that address of the host. A request is refused with 421 when its Host
+  names neither loopback, an entry of `MCP_ALLOWED_HOSTS`, nor the address it
+  arrived at, and with 403 when a browser sends an Origin that is neither the
+  request's own nor loopback calling loopback, as the MCP transport spec requires.
+  A client on another machine that worked before is refused until `MCP_HOST` is
+  set to the interface it reaches and `MCP_ALLOWED_HOSTS` lists the name or
+  address in its URL, as README's Configuration shows; under Compose that
+  includes a client calling by this machine's IP. Under `MCP_TRANSPORT=stdio`,
+  `MCP_HOST`, `MCP_PORT` and `MCP_ALLOWED_HOSTS` are not read, so a bad
+  `MCP_PORT` no longer stops a stdio server. In the Python API,
+  `houdini_mcp.settings.mcp_port` is gone: `houdini_mcp.settings.serving(environ)`
+  returns `Stdio()` or `Http(transport, HttpListener(host, port, allowed_hosts))`,
+  and `run_server(settings, results, how, log_level)` takes that in place of
+  `transport, port`.
+
 - **BREAKING (plugin, Python API)**: the Houdini plugin no longer serves MCP over
   stdio (houdini-tuneup-ef3.9e3). A client configured to launch `hython` runs
   `uv run --directory <clone> houdini-mcp` with `MCP_TRANSPORT=stdio` instead, as

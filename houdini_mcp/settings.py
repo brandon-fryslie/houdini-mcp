@@ -10,10 +10,11 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 import houdini_mcp_handshake as handshake
 import httpx
+from fastmcp.server.server import Transport
 from pydantic import AfterValidator, BeforeValidator, Field, TypeAdapter, ValidationError
 
 T = TypeVar("T")
@@ -192,9 +193,61 @@ def log_level(environ: Mapping[str, str]) -> int:
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
 
 
-def mcp_port(environ: Mapping[str, str]) -> int:
-    """The HTTP port ``MCP_PORT`` names for the MCP server, by default 3055."""
-    return setting(environ, "MCP_PORT", TypeAdapter(Port), "3055")
+# A name or address as a Host header carries it, with fastmcp's * and ? wildcards: no
+# scheme, path or credentials, which would never match a Host and so admit nothing.
+AllowedHost = Annotated[str, Field(pattern=r"^[A-Za-z0-9._\-*?:\[\]]+$")]
+
+
+def _entries(raw: object) -> object:
+    """A comma-separated setting as its entries, with the spaces around each trimmed."""
+    return [entry.strip() for entry in raw.split(",")] if isinstance(raw, str) and raw else []
+
+
+AllowedHosts = Annotated[tuple[AllowedHost, ...], BeforeValidator(_entries)]
+
+
+@dataclass(frozen=True)
+class HttpListener:
+    """Where an HTTP transport listens, and the names a request may call it by besides
+    loopback and the address the request arrived at."""
+
+    host: str
+    port: int
+    allowed_hosts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Stdio:
+    """Serve on this process's stdin and stdout."""
+
+
+@dataclass(frozen=True)
+class Http:
+    """Serve one of fastmcp's HTTP transports, listening as ``listener`` says."""
+
+    transport: Literal["http", "sse", "streamable-http"]
+    listener: HttpListener
+
+
+# [LAW:types-are-the-program] only an HTTP transport has a listener, so stdio reads no
+# listener setting and no stdio branch holds one it ignores.
+Serving = Stdio | Http
+
+
+def serving(environ: Mapping[str, str]) -> Serving:
+    """The transport ``MCP_TRANSPORT`` names, and for HTTP, where ``MCP_HOST`` and
+    ``MCP_PORT`` say it listens and the further names ``MCP_ALLOWED_HOSTS`` admits."""
+    transport = setting(environ, "MCP_TRANSPORT", TypeAdapter(Transport), "http")
+    if transport == "stdio":
+        return Stdio()
+    return Http(
+        transport=transport,
+        listener=HttpListener(
+            host=setting(environ, "MCP_HOST", TypeAdapter(Host), "127.0.0.1"),
+            port=setting(environ, "MCP_PORT", TypeAdapter(Port), "3055"),
+            allowed_hosts=setting(environ, "MCP_ALLOWED_HOSTS", TypeAdapter(AllowedHosts), ""),
+        ),
+    )
 
 
 def results_dir(environ: Mapping[str, str]) -> Path:
