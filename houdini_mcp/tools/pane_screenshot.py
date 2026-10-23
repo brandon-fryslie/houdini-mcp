@@ -12,6 +12,7 @@ Note: Panes on inactive desktops may report -1x-1 geometry and cannot be capture
 
 import base64
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -81,43 +82,68 @@ def pane_type_names(hou: Any) -> list[str]:
     return [name for name in dir(hou.paneTabType) if pane_type_member(hou, name) is not None]
 
 
-def _fit_pane_contents(pane: Any, pane_type_name: str) -> str | None:
-    """
-    Fit/frame the contents of a pane to show all items.
+def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], None]:
+    """How Houdini frames everything a ``pane_type`` pane shows, or the refusal
+    when it cannot frame that pane type.
 
-    Args:
-        pane: The pane tab object
-        pane_type_name: Name of the pane type
-
-    Returns:
-        None on success, error message string on failure
+    [LAW:one-source-of-truth] Houdini has no one call that frames any pane, so
+    this table is the one place that says which pane types can be framed and
+    how; the refusal names its keys. Both frame at once: Houdini's own home
+    animates the view, and a capture taken mid-animation shows a view nobody
+    asked for.
     """
-    try:
-        if pane_type_name == "NetworkEditor":
-            # NetworkEditor has homeAll() to frame all nodes
-            # or homeToSelection() for selected nodes
-            if hasattr(pane, "homeAll"):
-                pane.homeAll()
-            else:
-                return "NetworkEditor does not support homeAll()"
-        elif pane_type_name == "SceneViewer":
-            # SceneViewer can frame geometry
-            if hasattr(pane, "homeAll"):
-                pane.homeAll()
-            elif hasattr(pane, "homeSelected"):
-                pane.homeSelected()
-        elif (
-            pane_type_name == "CompositorViewer" or pane_type_name == "ChannelEditor"
-        ) and hasattr(pane, "homeAll"):
-            pane.homeAll()
-        # Other pane types may not support fitting
-        return None
-    except Exception as e:
-        return f"Failed to fit contents: {e}"
+
+    def frame_network(pane: Any) -> None:
+        # Houdini's network-editor home (h.pane.wsheet.home), over every item in the network shown.
+        network = pane.pwd()
+        items = network.allItems()
+        link.conn.modules["nodegraphview"].frameItems(pane, items, immediate=True)
+        logger.info("Framed %d items of %s", len(items), network.path())
+
+    def frame_shown_viewports(pane: Any) -> None:
+        # The grab takes every viewport the layout shows, and only those. A
+        # viewport locked to the camera it looks through (an OBJ node or a USD
+        # prim) would have that camera moved, so a capture refuses rather than
+        # edit the scene.
+        shown = [viewport for viewport in pane.viewports() if viewport.isVisible()]
+        driven = [
+            path
+            for viewport in shown
+            if (path := viewport.cameraPath()) and viewport.isCameraLockedToView()
+        ]
+        if driven:
+            raise OperationFailed(
+                f"framing would move camera {', '.join(driven)}, whose viewport is locked "
+                "to it; capture with fit_contents=False or unlock the view",
+                cameras=driven,
+            )
+        for viewport in shown:
+            viewport.frameAll()
+        logger.info("Framed viewports %s", [viewport.name() for viewport in shown])
+
+    hou = link.hou
+    framers: dict[Any, Callable[[Any], None]] = {
+        hou.paneTabType.NetworkEditor: frame_network,
+        hou.paneTabType.SceneViewer: frame_shown_viewports,
+    }
+    framer = framers.get(pane_type)
+    if framer is None:
+        frameable = [member.name() for member in framers]
+        raise InvalidInput(
+            f"Houdini cannot frame a {pane_type_name} pane; fit_contents frames "
+            f"{', '.join(frameable)}",
+            frameable_types=frameable,
+        )
+    return framer
+
+
+def _as_shown(pane: Any) -> None:
+    """Leaves the pane's view as the user left it."""
+    logger.info("Left %s as shown", pane.name())
 
 
 def _capture_pane_to_bytes(
-    hou: Any,
+    link: Link,
     pane_type_name: str,
     QtWidgets: Any,
     QtCore: Any,
@@ -127,20 +153,22 @@ def _capture_pane_to_bytes(
     Internal function to capture a pane screenshot and return raw bytes.
 
     Args:
-        hou: The hou module reference
+        link: The link to the Houdini whose pane is captured
         pane_type_name: Name of the pane type to capture
         QtWidgets: PySide2.QtWidgets module reference
         QtCore: PySide2.QtCore module reference
-        fit_contents: If True, fit/frame contents before capture (for supported panes)
+        fit_contents: If True, frame everything the pane shows before capture
 
     Returns:
         Dict with the capture's data, including raw_bytes.
 
     Raises:
-        InvalidInput: the pane type is unknown here.
+        InvalidInput: the pane type is unknown here, or fit_contents asks to
+            frame a pane type Houdini cannot frame.
         OperationFailed: no pane of that type is open in the layout, or the pane
             is open but could not be captured; a human changes the layout.
     """
+    hou = link.hou
     # The list of names is read only to answer an unknown name, not on every capture.
     pane_type = pane_type_member(hou, pane_type_name)
     if pane_type is None:
@@ -152,6 +180,9 @@ def _capture_pane_to_bytes(
         )
         raise InvalidInput(f"Unknown pane type: {pane_type_name}", available_types=names)
 
+    # [LAW:dataflow-not-control-flow] every capture frames its pane; fit_contents picks how.
+    frame = _framer(link, pane_type, pane_type_name) if fit_contents else _as_shown
+
     pane = hou.ui.paneTabOfType(pane_type)
     if pane is None:
         raise OperationFailed(
@@ -159,12 +190,6 @@ def _capture_pane_to_bytes(
             "Make sure a pane of this type is visible in the UI.",
             pane_type=pane_type_name,
         )
-
-    # Fit contents if requested
-    if fit_contents:
-        fit_error = _fit_pane_contents(pane, pane_type_name)
-        if fit_error:
-            logger.warning(fit_error)
 
     # Get geometry
     screen_geom = pane.qtScreenGeometry()
@@ -189,6 +214,17 @@ def _capture_pane_to_bytes(
     screen = app.primaryScreen()
     if screen is None:
         raise OperationFailed("No primary screen found.")
+
+    # Framed only once nothing above can refuse the capture, so a refused
+    # capture leaves the user's view as it was.
+    try:
+        frame(pane)
+    except ToolError:
+        raise
+    except Exception as e:
+        raise OperationFailed(
+            f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
+        ) from e
 
     # Capture screen region
     pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)
@@ -235,9 +271,10 @@ def capture_pane_screenshot(
             (default: "NetworkEditor"). list_visible_panes() returns every name
             this Houdini has under ``available_types``.
         save_path: Optional path to save PNG file (returns base64 if not provided)
-        fit_contents: If True, fit/frame all contents before capture (default: False).
-            When False, captures the current view (what the user is looking at).
-            Supported for: NetworkEditor, SceneViewer, CompositorViewer, ChannelEditor.
+        fit_contents: If True, frame everything the pane shows before capture
+            (default: False). When False, captures the current view (what the
+            user is looking at). A pane type Houdini cannot frame is refused,
+            and the refusal names the pane types it can.
 
     Returns:
         Dict with status, geometry, and either image_base64 or file_path
@@ -247,12 +284,10 @@ def capture_pane_screenshot(
         Use list_visible_panes() to find capturable panes.
     """
     with using(host, port) as link:
-        hou = link.hou
-
         QtWidgets, QtCore, _ = _get_qt_modules(link)
 
         # Capture pane to bytes
-        result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore, fit_contents)
+        result = _capture_pane_to_bytes(link, pane_type_name, QtWidgets, QtCore, fit_contents)
 
         # Extract raw bytes and add format info
         raw_bytes: bytes = result.pop("raw_bytes")
@@ -438,7 +473,7 @@ def render_node_network(
             raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
 
         # Capture the pane
-        result = _capture_pane_to_bytes(hou, "NetworkEditor", QtWidgets, QtCore, fit_contents)
+        result = _capture_pane_to_bytes(link, "NetworkEditor", QtWidgets, QtCore, fit_contents)
 
         # Extract raw bytes and build response
         raw_bytes: bytes = result.pop("raw_bytes")
@@ -496,8 +531,6 @@ def capture_multiple_panes(
         - results: Per-pane results with image_base64 or file_path
     """
     with using(host, port) as link:
-        hou = link.hou
-
         QtWidgets, QtCore, _ = _get_qt_modules(link)
 
         # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
@@ -511,7 +544,7 @@ def capture_multiple_panes(
             # failure takes, and the next pane is still tried. Anything else - a torn
             # link, a bug - is the whole call's and reaches the boundary.
             try:
-                result = _capture_pane_to_bytes(hou, pane_type_name, QtWidgets, QtCore)
+                result = _capture_pane_to_bytes(link, pane_type_name, QtWidgets, QtCore)
                 result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
             except ToolError as e:
                 judged = failed_on(houdini(), link, e)

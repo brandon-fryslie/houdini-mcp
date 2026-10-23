@@ -564,6 +564,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `fit_contents` frames the pane it captures (houdini-laws-etg.9o0). No pane
+  type in Houdini 22 has `homeAll()`, so `capture_pane_screenshot(fit_contents=True)`
+  and `render_node_network` captured the view unframed and reported success. A
+  network editor is now framed as Houdini's own home frames it, over every item
+  in the network shown, and a scene viewer through `frameAll()` on every viewport
+  its layout shows. A viewport locked to the camera it looks through (an OBJ
+  camera or a USD camera prim) is refused as `operation_failed` naming the
+  camera, since framing it would move that camera. `fit_contents=True` on any other pane type is refused as
+  `invalid_input` naming the pane types that can be framed. A fit that fails
+  fails the capture as `operation_failed`, and a capture refused before the
+  grab leaves the view unframed.
+
 - **A failed call no longer drops another call's connection**
   (houdini-laws-etg.gxj): when calls ran at once and one's link to Houdini
   failed after another had already reconnected, the failing call closed
