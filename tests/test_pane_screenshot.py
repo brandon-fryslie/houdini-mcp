@@ -11,12 +11,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from houdini_mcp.connection import houdini
+from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.pane_screenshot import (
     _get_qt_modules,
     capture_pane_screenshot,
     list_visible_panes,
     pane_type_member,
     pane_type_names,
+    png_bytes,
     render_node_network,
 )
 from tests.conftest import MockHouModule, MockPaneTab, MockPaneTabType, served_namespace
@@ -51,11 +53,35 @@ def test_qt_is_the_one_the_connected_houdini_names(
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
     """Houdini's hutil.PySide names the binding its build runs; the capture tools take that one."""
-    fakes = {name: object() for name in ("QtWidgets", "QtCore")}
-    for name, module in fakes.items():
-        monkeypatch.setitem(sys.modules, f"hutil.PySide.{name}", module)
+    QtWidgets, QtCore = object(), object()
+    monkeypatch.setitem(
+        sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=QtWidgets, QtCore=QtCore)
+    )
 
-    assert _get_qt_modules(houdini().link()) == (fakes["QtWidgets"], fakes["QtCore"])
+    assert _get_qt_modules(houdini().link()) == (QtWidgets, QtCore)
+
+
+def test_a_houdini_whose_pyside_lacks_a_qt_module_fails_every_capture_alike(
+    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+) -> None:
+    """hutil.PySide skips a submodule its binding cannot import; the capture is refused naming hutil.PySide."""
+    monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtCore=object()))
+
+    with pytest.raises(OperationFailed, match=r"Houdini's Qt \(hutil\.PySide\).*QtWidgets"):
+        _get_qt_modules(houdini().link())
+
+
+@pytest.mark.parametrize("opened, saved", [(False, True), (True, False)])
+def test_an_image_qt_cannot_encode_fails_the_capture(opened: bool, saved: bool) -> None:
+    """Qt says it could not open the buffer or encode the image only by returning False."""
+    QtCore = MagicMock()
+    QtCore.QBuffer.return_value.open.return_value = opened
+    image = MagicMock(**{"save.return_value": saved})
+
+    with pytest.raises(OperationFailed, match="could not encode the capture of SceneViewer") as e:
+        png_bytes(image, QtCore, "SceneViewer")
+
+    assert e.value.fields["pane_type"] == "SceneViewer"
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:

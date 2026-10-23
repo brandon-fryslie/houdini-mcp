@@ -43,10 +43,12 @@ def _get_qt_modules(link: Link) -> tuple[Any, Any]:
     conn = link.conn
     # [LAW:one-source-of-truth] which PySide a Houdini runs is a fact of its build,
     # and hutil.PySide is where Houdini states it; a binding named here is a copy
-    # that goes stale the release SideFX moves to another one.
+    # that goes stale the release SideFX moves to another one. Its submodules are
+    # attributes of the package, which serves the ones it loads lazily the same way.
     try:
-        return conn.modules["hutil.PySide.QtWidgets"], conn.modules["hutil.PySide.QtCore"]
-    except ImportError as e:
+        pyside = conn.modules["hutil.PySide"]
+        return pyside.QtWidgets, pyside.QtCore
+    except (ImportError, AttributeError) as e:
         raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
 
 
@@ -232,21 +234,28 @@ def _capture_pane_to_bytes(
             pane_type=pane_type_name,
         )
 
-    # Convert to PNG bytes
-    image = pixmap.toImage()
-    buffer = QtCore.QBuffer()
-    buffer.open(QtCore.QIODevice.WriteOnly)
-    image.save(buffer, "PNG")
-    buffer.close()
-    raw_bytes = bytes(buffer.data().data())
-
     return {
         "status": "success",
         "pane_type": pane_type_name,
         "pane_name": read("pane name", lambda: str(pane.name())),
         "geometry": {"x": geom_x, "y": geom_y, "width": geom_width, "height": geom_height},
-        "raw_bytes": raw_bytes,
+        "raw_bytes": png_bytes(pixmap.toImage(), QtCore, pane_type_name),
     }
+
+
+def png_bytes(image: Any, QtCore: Any, pane_type_name: str) -> bytes:
+    """``image`` encoded as PNG through ``QtCore``, or the failure of a pane Qt could not encode."""
+    buffer = QtCore.QBuffer()
+    # [LAW:no-silent-failure] Qt reports a buffer it could not open, or an image it
+    # could not encode, only through these return values; unread, either is a
+    # capture of zero bytes reported as success.
+    if not (buffer.open(QtCore.QIODevice.WriteOnly) and image.save(buffer, "PNG")):
+        raise OperationFailed(
+            f"Qt could not encode the capture of {pane_type_name} as PNG.",
+            pane_type=pane_type_name,
+        )
+    buffer.close()
+    return bytes(buffer.data().data())
 
 
 @handle_connection_errors("capture_pane_screenshot")
