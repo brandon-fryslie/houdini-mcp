@@ -768,7 +768,7 @@ class TestTheProgramHoudiniRuns:
         assert result["warning"] == "Geometry has 1500000 points (>1M); samples are its first 2."
         assert [p["index"] for p in result["sample_points"]] == [0, 1]
 
-    async def test_a_node_whose_cook_failed_names_the_errors_on_it(self, caplog):
+    async def test_a_node_whose_cook_failed_carries_the_errors_on_it(self, caplog):
         # Houdini 22: a failed cook leaves geometry() None, its reason only in errors()
         node = self._node(None, errors=lambda: ("Invalid source /obj/geo1/box1/attribvop1.",))
 
@@ -776,22 +776,26 @@ class TestTheProgramHoudiniRuns:
             result = await self._run(node)
 
         assert (result["kind"], result["path"]) == ("operation_failed", "/obj/geo1/box1")
-        message = (
-            "Node /obj/geo1/box1 has no geometry: geometry() returned None; "
-            "errors on the node: ['Invalid source /obj/geo1/box1/attribvop1.']"
-        )
+        message = "Node /obj/geo1/box1 has no geometry: geometry() returned None"
         assert result["message"] == message
+        assert result["errors"] == ["Invalid source /obj/geo1/box1/attribvop1."]
         assert f"get_geo_summary failed (operation_failed): {message}" in caplog.messages
 
-    async def test_errors_houdini_will_not_read_are_unread_in_the_failure(self):
-        node = self._node(None, errors=_Raises("locked"))
+    async def test_a_node_that_is_not_a_sop_carries_the_errors_on_it(self):
+        node = SimpleNamespace(errors=lambda: ())
 
         result = await self._run(node)
 
-        assert result["message"] == (
-            "Node /obj/geo1/box1 has no geometry: geometry() returned None; "
-            "errors on the node: {'unread': 'RuntimeError: locked'}"
-        )
+        assert (result["kind"], result["errors"]) == ("invalid_input", [])
+
+    async def test_errors_houdini_will_not_read_are_unread_in_the_failure(self, caplog):
+        node = self._node(None, errors=_Raises("locked"))
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            result = await self._run(node)
+
+        assert result["errors"] == {"unread": "RuntimeError: locked"}
+        assert "unread errors of /obj/geo1/box1 reason=RuntimeError: locked" in caplog.messages
 
     async def test_a_geometry_with_no_points_has_no_bounding_box(self, caplog):
         geo = self._geo(bounds=lambda: tuple(NO_POINTS_BOUNDS), counts={"pointcount": 0})

@@ -156,7 +156,7 @@ async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
     }
 
 
-async def test_a_geometry_summary_of_a_failed_cook_names_the_errors_houdini_22_lists(
+async def test_a_geometry_summary_of_a_failed_cook_carries_the_errors_houdini_22_lists(
     at: dict[str, Any], bound: dict[str, Any]
 ) -> None:
     """Houdini 22 gives a SOP whose cook failed no geometry, and says why only in
@@ -169,8 +169,7 @@ async def test_a_geometry_summary_of_a_failed_cook_names_the_errors_houdini_22_l
     failed = await tools.get_geo_summary(failing, max_sample_points=0, summarize=False, **bound)
 
     assert failed["kind"] == "operation_failed", failed
-    assert "geometry() returned None; errors on the node: [" in failed["message"]
-    assert "planted" in failed["message"]
+    assert any("planted" in error for error in failed["errors"]), failed
 
 
 async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(

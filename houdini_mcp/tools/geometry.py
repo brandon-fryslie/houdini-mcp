@@ -76,17 +76,19 @@ async def get_geo_summary(
         - ai_summary_error: (in place of ai_summary) why no summary could be made
 
     Edge Cases:
-        - Uncooked or out-of-date geometry: Houdini cooks the node before the read
-        - A node whose cook fails: Returns error status naming the errors
-          Houdini lists on the node (a failed cook leaves it no geometry)
+        - Uncooked or out-of-date geometry: Houdini cooks the node before the
+          read, except in its Manual update mode, which cooks nothing
+        - A node whose cook fails: Returns error status (a failed cook leaves
+          the node no geometry)
         - Empty geometry: Returns zeros for counts and no bounding_box, not an error
         - Points all at NaN: Returns their count and no bounding_box
         - Massive geometry (>1M points): a warning names the point count; the
           samples are still the first max_sample_points
-        - No geometry/Not a SOP: Returns error status
+        - No geometry/Not a SOP: Returns error status; when the node exists,
+          errors lists the errors Houdini lists on it
         - Anything Houdini will not read (the bounding box, an attribute's
-          name/type/size, a group, a sample value) is {"unread": "<why>"} in
-          its place
+          name/type/size, a group, a sample value, the node's errors) is
+          {"unread": "<why>"} in its place
 
     Examples:
         # Basic geometry summary with 50 sample points
@@ -176,9 +178,9 @@ if node is None:
 else:
     # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
     # that raises or yields nothing is Houdini's. The program says which.
-    # [LAW:one-source-of-truth] geometry() cooks the node when it needs to, and a
-    # cook that fails leaves it None, so a summary is only ever of a node that
-    # cooked: the summary carries no cook state of its own beside get_node_info's.
+    # [LAW:one-source-of-truth] geometry() cooks the node when Houdini's update
+    # mode cooks at all, and a cook that fails leaves it None: the summary carries
+    # no cook state of its own beside get_node_info's.
     geo = None
     if not isinstance(node, hou.SopNode):
         failure = ("invalid_input", "it is not a SOP node")
@@ -188,14 +190,16 @@ else:
         except Exception as e:
             failure = ("operation_failed", format_reason(e))
         else:
-            # a failed cook raises nothing here; why it failed is in the errors
-            # Houdini lists on the node
-            failure = None if geo is not None else (
-                "operation_failed",
-                f"geometry() returned None; errors on the node: {{_read(lambda: list(node.errors()))}}",
-            )
+            failure = None if geo is not None else ("operation_failed", "geometry() returned None")
     if failure is not None:
-        result = {{"status": "error", "kind": failure[0], "message": f"Node {{node_path}} has no geometry: {{failure[1]}}"}}
+        # a failed cook raises nothing; why it failed is in the errors Houdini
+        # lists on the node, which every failure of a node that exists carries
+        result = {{
+            "status": "error",
+            "kind": failure[0],
+            "message": f"Node {{node_path}} has no geometry: {{failure[1]}}",
+            "errors": _read(lambda: list(node.errors())),
+        }}
 
     if geo is not None:
         # Counts - these are fast native calls
@@ -279,28 +283,30 @@ print(json.dumps(result))
         result: dict[str, Any] = json.loads(stdout)
     except json.JSONDecodeError as e:
         raise OperationFailed(f"Failed to parse geometry data: {e}", raw_output=stdout[:500]) from e
-    # The program names the kind of its own failure (no node there is the
-    # caller's path; a cook that yields no geometry is Houdini's), and that kind
-    # crosses back into the one failure type here.
-    if result["status"] == "error":
-        raise tool_error(result["kind"], result["message"], path=node_path)
     # the box stands where the program read its bounds, ahead of the attributes
-    # and samples a summary's excerpt may cut off
+    # and samples a summary's excerpt may cut off (a failure has no bounds)
     result = {
         name: value
         for key, read in result.items()
         for name, value in (_bounding_box(read) if key == "bounds" else {key: read}).items()
     }
+    # the program cannot reach this log; each field it could not read, a
+    # failure's errors among them, is an event here, as had the server read it
+    for where, found in unreads(result):
+        log_unread(f"{where} of {node_path}", found)
+    # The program names the kind of its own failure (no node there is the
+    # caller's path; a cook that yields no geometry is Houdini's), and the
+    # failure it wrote, kind and fields, crosses back into the one failure type.
+    if result["status"] == "error":
+        raise tool_error(
+            path=node_path, **{key: value for key, value in result.items() if key != "status"}
+        )
     logger.info(
         "Read geometry of %s: %s points, bounding_box=%s",
         node_path,
         result["point_count"],
         result.get("bounding_box", "none (no point has a position)"),
     )
-    # the program cannot reach this log; each field it could not read is an
-    # event here, as it would be had the server read it
-    for where, found in unreads(result):
-        log_unread(f"{where} of {node_path}", found)
     return result
 
 

@@ -9,14 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `get_geo_summary` no longer returns `cook_state` (houdini-laws-etg.216). Its
-  `cook_state` could only ever say `"cooked"`, and it meant something different
-  from `get_node_info`'s field of the same name. On Houdini 22, `geometry()`
-  cooks a node when it needs to, and a node whose cook fails has no geometry, so
-  any summary that comes back is already of a node that cooked.
-  `get_node_info`'s `cook_state` is now the only one. A summary of a node whose
-  cook failed now names the errors Houdini lists on that node, where it used to
-  say only `geometry() returned None`.
+- A `get_geo_summary` of a node whose cook failed says why (houdini-laws-etg.216).
+  On Houdini 22 such a node has no geometry, and the reason is only in the errors
+  Houdini lists on it. Every failure of a node that exists now carries those
+  under `errors`, where it used to say only `geometry() returned None`.
 
 - `get_parameter_schema` reads a node's parameters inside Houdini, in the same
   few requests whatever the node's parameter count (houdini-laws-etg.foj). It
@@ -769,6 +765,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `houdini_mcp.tools.VALID_PANE_TYPES`, the hand copy of `hou.paneTabType`
   (houdini-laws-etg.8tg). `list_visible_panes` returns the live list under
   `available_types`.
+
+- `get_geo_summary`'s `cook_state` (houdini-laws-etg.216). It could only ever say
+  `"cooked"`, and meant something different from `get_node_info`'s field of the
+  same name, which is now the only one. A node whose cook fails has no geometry,
+  so a summary is never of one, and the step that cooked the node first cooked
+  nothing `geometry()` would not.
 
 ### Fixed
 
