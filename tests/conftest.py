@@ -323,6 +323,9 @@ class MockHouNode:
             mock_category.name.return_value = "Sop"  # Default to Sop
 
         mock_type.category.return_value = mock_category
+        mock_type.nameWithCategory.return_value = (
+            f"{mock_category.name.return_value}/{self._node_type}"
+        )
         return mock_type
 
     def children(self) -> tuple["MockHouNode", ...]:

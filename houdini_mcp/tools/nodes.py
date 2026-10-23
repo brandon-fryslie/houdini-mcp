@@ -176,9 +176,10 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "path": path,
         "name": node.name(),
         "type": type_name,
-        # a broken HDA definition refuses its description; the node is still there
+        # a broken HDA definition refuses its description; the node is still there.
+        # [LAW:one-source-of-truth] labelled as list_node_types labels the same read
         "type_description": read(
-            f"description of type {type_name} of {path}", node_type.description
+            f"description of {node_type.nameWithCategory()}", node_type.description
         ),
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
