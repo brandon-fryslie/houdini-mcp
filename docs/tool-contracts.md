@@ -75,7 +75,7 @@ geo = node.createNode('geo', 'my_geo')
 
 ### Why This Happens
 
-`execute_code` puts the remote `hou` object in your program's globals over RPyC, so the program needs no import. `execute_code` refuses a program that imports `hou` before connecting to Houdini, and nothing in it runs:
+`execute_code` puts the remote `hou` object in your program's globals over RPyC, so the program needs no import. `execute_code` refuses a program that imports `hou` before connecting to Houdini, and nothing in it runs. The refusal, without its `operation`, `policy` and `audit` fields:
 
 ```json
 {
@@ -95,7 +95,7 @@ undo group open. The response is the `worker_still_running` arm, since waiting
 for that worker is the remedy, with `timeout`, a `warning`,
 `rollback.scene_consistency: "unknown"`, and the `worker` block:
 
-```python
+```json
 {
     "status": "error",
     "kind": "worker_still_running",
@@ -105,9 +105,9 @@ for that worker is the remedy, with `timeout`, a `warning`,
         "operation": "execute_code",
         "code_sha256": "...",
         "timeout": 30,
-        "running_for_seconds": 30.0,
+        "running_for_seconds": 30.0
     },
-    "audit": {"timed_out": True, "code_sha256": "..."},
+    "audit": {"timed_out": true, "code_sha256": "..."}
 }
 ```
 
@@ -127,7 +127,7 @@ finish, then runs. Its response, success or error, carries `scene_wait`,
 which names the calls that held the scene while it waited (in the order they
 held it) and how long it waited:
 
-```python
+```json
 {"status": "success", "scene_wait": {"waited_for": ["set_parameter"], "seconds": 0.42}}
 ```
 
@@ -309,7 +309,7 @@ render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080
 
 Before using a tool, check:
 
-1. **Parameter names** - Use the exact names from the tool signature
+1. **Parameter names** - Use the exact names from the tool's published schema
 2. **Parameter types** - Lists for resolution/position/rotation, not separate arguments
 3. **Parameter values** - Within valid ranges (e.g., resolution 64-4096)
 

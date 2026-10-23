@@ -44,7 +44,7 @@ The primary error handling mechanism. Wraps tool functions with a three-tier err
 
 ```python
 @handle_connection_errors("get_scene_info")
-def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
+def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     hou = ensure_connected(host, port)
     # ... actual logic without try/except boilerplate
     return {"status": "success", ...}
@@ -243,7 +243,7 @@ MCP boundary before the call reaches Houdini. The render inputs are the model
 (`strict_input_validation` in `houdini_mcp/server.py`), so it refuses exactly
 what the published schema refuses. A call that fails the schema never reaches the
 tool: the client gets a result with MCP's `isError` set and the validation message
-as its text, not one of the arms below. `tests/test_tool_contracts.py`
+as its text, not one of the arms under Key Components. `tests/test_tool_contracts.py`
 asserts the schema and the server's refusals agree.
 
 ## Usage Patterns
@@ -290,8 +290,10 @@ def render_viewport(
 connects: it raises `_blocked(...)`, which builds the `InvalidInput`, for a program
 that does not parse, an `import hou`, a mutation under `read-only`, or a rail the
 caller did not unlock.
-Once the program runs, it raises `OperationFailed` when the program raised, and
-`ProgramStillRunning` when the program outlived its timeout. Every failure is
+Once the program runs, it raises `OperationFailed` when the program raised,
+`ProgramStillRunning` when the program outlived its timeout, and, as it came, the
+exception from a scene read that failed before the program ran or from a worker
+that died. Every failure is
 raised; none is a dict the body builds.
 
 ## Testing Error Handling

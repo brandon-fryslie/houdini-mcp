@@ -87,6 +87,8 @@ async def call(
         arguments,
         result.content,
     )
+    # A refusal at the boundary is no tool failure: it carries no status or kind.
+    assert not result.is_error or result.structured_content is None, result.structured_content
     return None if result.is_error else result
 
 
