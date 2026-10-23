@@ -75,8 +75,6 @@ __all__ = [
     "paging_fields",
     "join_warnings",
     "WARNING_SEPARATOR",
-    # Serialization utilities
-    "_flatten_parm_templates",
     # Parallel execution utilities
     "run_in_executor",
     # Exceptions
@@ -325,36 +323,6 @@ class ExecutionTimeoutError(Exception):
     """Raised when code execution exceeds the timeout."""
 
     pass
-
-
-def _flatten_parm_templates(hou: Any, parm_templates: list[Any]) -> list[Any]:
-    """Every template in the tree, each folder before what it holds.
-
-    A multiparm block is a Folder too (its ``folderType`` says which), so
-    descending Folders reaches every template. A FolderSet holds only folder
-    names; it has no templates to descend.
-    """
-    flattened: list[Any] = []
-
-    def walk(templates: list[Any]) -> None:
-        for template in templates:
-            flattened.append(template)
-            if template.type() == hou.parmTemplateType.Folder:
-                walk(list(template.parmTemplates()))
-
-    walk(parm_templates)
-
-    # De-dup while preserving order (folders can appear in multiple lists)
-    seen_ids: set[int] = set()
-    unique: list[Any] = []
-    for template in flattened:
-        template_id = id(template)
-        if template_id in seen_ids:
-            continue
-        seen_ids.add(template_id)
-        unique.append(template)
-
-    return unique
 
 
 # =============================================================================

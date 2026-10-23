@@ -395,12 +395,19 @@ class MockHouNode:
             mock_parm.eval.return_value = v
 
         mock_parm.set = _setter
+        mock_parm.tuple = lambda n=name: self.parmTuple(n)
         self._parm_objects[name] = mock_parm
         return mock_parm
 
+    def parmTuples(self) -> list[MagicMock]:
+        """Every parameter as a tuple, in the order they were given."""
+        return [self.parmTuple(name) for name in self._params]
+
     def parmTuple(self, name: str) -> MagicMock | None:
-        if name not in self._params or not isinstance(self._params[name], (list, tuple)):
+        if name not in self._params:
             return None
+        if not isinstance(self._params[name], (list, tuple)):
+            return self._one_component_tuple(name)
 
         if not hasattr(self, "_parm_tuple_objects"):
             self._parm_tuple_objects = {}
@@ -410,6 +417,8 @@ class MockHouNode:
             return self._parm_tuple_objects[name]
 
         mock_parm = MagicMock()
+        mock_parm.name.return_value = name
+        mock_parm.__len__.return_value = len(self._params[name])
         mock_parm.eval.return_value = tuple(self._params[name])
 
         def _setter(v: Any, n: str = name) -> None:
@@ -419,6 +428,21 @@ class MockHouNode:
         mock_parm.set = _setter
         self._parm_tuple_objects[name] = mock_parm
         return mock_parm
+
+    def _one_component_tuple(self, name: str) -> MagicMock:
+        # As in Houdini: a scalar is a one-component tuple of the same name,
+        # and the two share one template.
+        if not hasattr(self, "_scalar_tuple_objects"):
+            self._scalar_tuple_objects = {}
+        if name not in self._scalar_tuple_objects:
+            parm = self.parm(name)
+            parm_tuple = MagicMock()
+            parm_tuple.name.return_value = name
+            parm_tuple.__len__.return_value = 1
+            parm_tuple.__getitem__.side_effect = [parm].__getitem__
+            parm_tuple.parmTemplate = lambda: parm.parmTemplate()
+            self._scalar_tuple_objects[name] = parm_tuple
+        return self._scalar_tuple_objects[name]
 
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
         # Houdini uniquifies a taken or omitted name: the first free number after

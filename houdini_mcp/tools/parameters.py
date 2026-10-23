@@ -15,7 +15,7 @@ from ._common import (
     tool_error,
     using,
 )
-from .parms import ParmNotFound, read_present, resolve, write_all
+from .parms import Parm, ParmNotFound, of_tuple, resolve, value, write_all
 from .reads import read
 
 logger = logging.getLogger("houdini_mcp.tools.parameters")
@@ -113,40 +113,36 @@ def get_parameter_schema(
         # Get info for translate parameter (vector)
         get_parameter_schema("/obj/geo1", parm_name="t")
     """
-    # Import helper to flatten parameter templates
-    from ._common import _flatten_parm_templates
-
     with using(host, port) as link:
         hou = link.hou
 
         node = node_at(hou, node_path)
 
-        # Get parameter templates - either specific one or all
-        if parm_name is not None:
+        # [LAW:one-source-of-truth] The node's parm tuples are its parameters.
+        # Its templates are not: a multiparm's template (type#) names no parm,
+        # where its instances (type1, type2) are parms the node has.
+        if parm_name is None:
+            parm_tuples = list(node.parmTuples())
+        else:
             try:
-                parm_template = resolve(node, parm_name).template()
+                parm_tuples = [resolve(node, parm_name).parm_tuple()]
             except ParmNotFound as e:
                 raise InvalidInput(str(e), parm_name=parm_name) from e
 
-            parm_templates = [parm_template]
-        else:
-            # Get all parameter templates from node.
-            # Prefer parmTemplates() if present since our unit tests mock that API.
-            if hasattr(node, "parmTemplates"):
-                parm_templates = list(node.parmTemplates())
-            elif hasattr(node, "parmTemplateGroup"):
-                ptg = node.parmTemplateGroup()
-                parm_templates = _flatten_parm_templates(hou, list(ptg.parmTemplates()))
-            else:
-                parm_templates = []
-
-        # Templates this tool does not list are dropped before the cut, so
+        # Parameters this tool does not list are dropped before the cut, so
         # max_parms, count and the warning all count what is listed.
         unlisted = _unlisted_types(hou)
-        listed = [t for t in parm_templates if t.type() not in unlisted]
+        listed = [
+            (pt, template)
+            for pt in parm_tuples
+            if (template := pt.parmTemplate()).type() not in unlisted
+        ]
         # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
-        # template, and max_parms is at least 1.
-        parameters = [_extract_parameter_info(hou, node, t) for t in listed[:max_parms]]
+        # tuple, and max_parms is at least 1.
+        parameters = [
+            _extract_parameter_info(hou, of_tuple(pt), template)
+            for pt, template in listed[:max_parms]
+        ]
         logger.info(
             "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), len(listed)
         )
@@ -176,7 +172,7 @@ def _unlisted_types(hou: Any) -> tuple[Any, ...]:
     )
 
 
-def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str, Any]:
+def _extract_parameter_info(hou: Any, parm: Parm, parm_template: Any) -> dict[str, Any]:
     """
     Extract parameter information from a parameter template.
 
@@ -185,15 +181,15 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
 
     Args:
         hou: The hou module
-        node: The node containing the parameter
-        parm_template: The parameter template to extract info from
+        parm: The parameter, resolved once; every field reads it
+        parm_template: Its template
 
     Returns:
         Dict with parameter info
     """
     parm_type = parm_template.type()
 
-    param_name = parm_template.name()
+    param_name = parm.name
     num_components = parm_template.numComponents()
     is_tuple = num_components > 1
     type_str = _map_parm_type_to_string(hou, parm_type, is_tuple)
@@ -201,7 +197,7 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
     param_info: dict[str, Any] = {
         "name": param_name,
         "label": parm_template.label(),
-        "current_value": read_present(hou, node, [param_name]).get(param_name),
+        "current_value": value(hou, parm),
         "type": type_str,
         # Most parameters are animatable except menus, toggles, buttons
         "is_animatable": type_str not in ("menu", "toggle", "button", "string"),
@@ -222,7 +218,7 @@ def _extract_parameter_info(hou: Any, node: Any, parm_template: Any) -> dict[str
 
     if type_str == "menu":
         param_info["menu_items"] = read(
-            f"menu items of {param_name}", lambda: _menu_items(node, parm_template)
+            f"menu items of {param_name}", lambda: _menu_items(parm, parm_template)
         )
 
     return param_info
@@ -239,17 +235,16 @@ def _default(value: Any, is_tuple: bool) -> Any:
 _MENU_SEPARATOR = "_separator_"
 
 
-def _menu_items(node: Any, parm_template: Any) -> list[dict[str, Any]]:
+def _menu_items(parm: Parm, parm_template: Any) -> list[dict[str, Any]]:
     # [LAW:one-source-of-truth] The parm holds the items, a script-generated
     # menu's included; its template's own list is empty for those.
-    parm = resolve(node, parm_template.name()).target
     use_token = parm_template.menuUseToken()
     # Houdini's own switch for the value domain: a use-token menu holds its
     # token's integer, any other menu the item's index. eval, the default and
     # set all speak it, so an offered value is one set_parameter selects.
     # A separator is no item to select, but it takes its index (boolean's
     # "seam" is 6, after the separator at 5).
-    entries = list(zip(parm.menuItems(), parm.menuLabels(), strict=True))
+    entries = list(zip(parm.target.menuItems(), parm.target.menuLabels(), strict=True))
     items = [
         {"label": label, "value": int(token) if use_token else index}
         for index, (token, label) in enumerate(entries)
@@ -257,7 +252,7 @@ def _menu_items(node: Any, parm_template: Any) -> list[dict[str, Any]]:
     ]
     logger.debug(
         "menu items parm=%s use_token=%s offered=%d separators=%d",
-        parm_template.name(),
+        parm.name,
         use_token,
         len(items),
         len(entries) - len(items),
