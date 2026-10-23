@@ -456,32 +456,100 @@ def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
     assert "Framed 2 items of /obj" in caplog.messages
 
 
-def test_render_node_network_frames_the_network_it_navigated_to(
-    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
-) -> None:
-    """fit_contents is on by default here: the editor goes to the node, then
-    frames that network's items, then is grabbed."""
-    events: list[object] = []
-    editor = MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
-    shown: dict[str, str] = {}
-    editor.cd = lambda path: shown.update(path=path)  # type: ignore[attr-defined]
-    editor.pwd = lambda: SimpleNamespace(  # type: ignore[attr-defined]
-        path=lambda: shown["path"], allItems=lambda: (f"items of {shown['path']}",)
-    )
+def _network_editor(mock_connection: MockHouModule, width: int = 800) -> MockPaneTab:
+    """A NetworkEditor in the layout showing /obj, over a scene holding /obj/geo1/box1."""
+    mock_connection.node("/obj").createNode("geo", "geo1").createNode("box", "box1")
+    editor = MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, width, 600)
     mock_connection.ui.curDesktop().paneTabs().append(editor)
+    return editor
+
+
+def test_render_node_network_frames_the_network_it_navigated_to(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_connection: MockHouModule,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """fit_contents is on by default here: the editor goes into the network on
+    Houdini's main thread, then frames that network's items, then is grabbed;
+    the network is named by its own path, not the caller's spelling of it."""
+    events: list[object] = []
+    editor = _network_editor(mock_connection)
+    navigate = editor.cd
+    editor.cd = lambda path: (  # type: ignore[method-assign]
+        events.append(("cd", path, mock_connection.ui.on_main_thread())),
+        navigate(path),
+    )
     monkeypatch.setitem(
         sys.modules,
         "nodegraphview",
-        SimpleNamespace(frameItems=lambda pane, items, **_: _framed(events, pane, items)),
+        SimpleNamespace(
+            frameItems=lambda pane, items, **_: _framed(
+                events, pane, tuple(item.path() for item in items)
+            )
+        ),
     )
-    QtCore = _qt_core_double()
 
-    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
-        result = render_node_network("/obj")
+    with (
+        caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),
+    ):
+        result = render_node_network("/obj/geo1/")
 
     assert result["status"] == "success", result
-    assert events == [("items of /obj",)]
+    assert (result["node_path"], result["child_count"]) == ("/obj/geo1", 1)
+    assert events == [("cd", "/obj/geo1", True), ("/obj/geo1/box1",)]
+    assert "Took panetab1 into /obj/geo1" in caplog.messages
     assert mock_connection.ui.grabs == [("panetab1", "framed", (0, 0, 800, 600))]
+
+
+def test_render_node_network_without_fit_captures_the_network_it_navigated_to(
+    mock_connection: MockHouModule,
+) -> None:
+    """The editor goes into the network whether or not it is framed."""
+    _network_editor(mock_connection)
+
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
+        result = render_node_network("/obj/geo1", fit_contents=False)
+
+    assert result["status"] == "success", result
+    assert result["node_path"] == "/obj/geo1"
+    assert mock_connection.ui.grabs == [("panetab1", "inside /obj/geo1", (0, 0, 800, 600))]
+
+
+def test_render_node_network_refuses_a_node_that_is_not_a_network(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A NetworkEditor cannot go into a node that holds no nodes, so the call is
+    refused, naming the network the node sits in, and the editor stays put."""
+    editor = _network_editor(mock_connection)
+
+    with caplog.at_level(logging.INFO):
+        result = render_node_network("/obj/geo1/box1")
+
+    assert result["kind"] == "invalid_input", result
+    assert result["message"] == (
+        "Node /obj/geo1/box1 is not a network, so it holds no nodes; it sits in /obj/geo1"
+    )
+    assert result["network"] == "/obj/geo1"
+    assert (editor.network_path, editor.view) == ("/obj", "as left")
+    assert mock_connection.ui.grabs == []
+    assert f"render_node_network failed (invalid_input): {result['message']}" in caplog.messages
+    assert not [m for m in caplog.messages if m.startswith("Took ")]
+
+
+def test_render_node_network_refused_by_its_pane_leaves_the_editor_where_it_was(
+    mock_connection: MockHouModule,
+) -> None:
+    """The editor is navigated only after every refusal a capture has, so a
+    capture refused for its pane leaves the user's editor on what it showed."""
+    editor = _network_editor(mock_connection, width=-1)
+
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()):
+        result = render_node_network("/obj/geo1")
+
+    assert result["kind"] == "operation_failed", result
+    assert "invalid geometry" in result["message"]
+    assert (editor.network_path, editor.view) == ("/obj", "as left")
 
 
 def _viewport(

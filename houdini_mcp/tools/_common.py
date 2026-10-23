@@ -86,6 +86,7 @@ __all__ = [
     "Undone",
     "batch_status",
     "node_at",
+    "network_at",
     # Output utilities
     "_truncate_output",
     # Response pagination and bounds (houdini-mcp-2t6)
@@ -350,6 +351,24 @@ def node_at(hou: Any, path: str, what: str = "Node") -> Any:
     node = hou.node(path)
     if node is None:
         raise InvalidInput(f"{what} not found: {path}", path=path)
+    return node
+
+
+def network_at(hou: Any, path: str, what: str = "Node") -> Any:
+    """The node at ``path``, which is a network: a node that holds nodes.
+
+    [LAW:parse-dont-validate] A node that is not one is refused naming the network
+    it sits in, the one a caller most likely meant. Every node that is not a
+    network sits in one, since the root is a network.
+    """
+    node = node_at(hou, path, what)
+    if not node.isNetwork():
+        network = node.parent().path()
+        raise InvalidInput(
+            f"{what} {node.path()} is not a network, so it holds no nodes; it sits in {network}",
+            path=path,
+            network=network,
+        )
     return node
 
 

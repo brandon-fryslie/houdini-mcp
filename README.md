@@ -330,7 +330,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `capture_pane_screenshot` | Capture any Houdini pane as PNG |
 | `list_visible_panes` | List capturable panes |
 | `capture_multiple_panes` | Batch capture multiple panes |
-| `render_node_network` | Navigate to node and capture network |
+| `render_node_network` | Navigate into a network and capture it |
 
 ### Code Execution (`code.py`)
 | Tool | Description |

@@ -29,7 +29,7 @@ from ._common import (
     batch_status,
     failed_on,
     failure_for,
-    node_at,
+    network_at,
     tool,
     using,
 )
@@ -147,12 +147,17 @@ def _as_shown(pane: Any) -> None:
     logger.info("Left %s as shown", pane.name())
 
 
+def _in_place(pane: Any) -> None:
+    """Leaves the pane on what it shows."""
+
+
 def _capture_pane_to_bytes(
     link: Link,
     main_thread: MainThread,
     pane_type_name: str,
     QtCore: Any,
     fit_contents: bool = False,
+    navigate: Callable[[Any], None] = _in_place,
 ) -> dict[str, Any]:
     """
     Internal function to capture a pane screenshot and return raw bytes.
@@ -163,6 +168,8 @@ def _capture_pane_to_bytes(
         pane_type_name: Name of the pane type to capture
         QtCore: Houdini's QtCore module
         fit_contents: If True, frame everything the pane shows before capture
+        navigate: Takes the pane to what it is captured showing, before it is
+            framed; by default it stays on what it shows
 
     Returns:
         Dict with the capture's data, including raw_bytes.
@@ -213,6 +220,7 @@ def _capture_pane_to_bytes(
         )
 
     def framed() -> None:
+        navigate(pane)
         try:
             frame(pane)
         except ToolError:
@@ -222,8 +230,9 @@ def _capture_pane_to_bytes(
                 f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
             ) from e
 
-    # Framed only once the input and the pane are known good, so a capture refused
-    # for either leaves the user's view as it was; only the grab can fail after.
+    # Navigated and framed only once the input and the pane are known good, so a
+    # capture refused for either leaves the user's view as it was; only the grab
+    # can fail after.
     main_thread.call(link, framed)
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is
@@ -456,12 +465,14 @@ def render_node_network(
     """
     Capture a screenshot of a node's network showing its children.
 
-    Navigates the NetworkEditor to the specified node and captures a screenshot.
+    Navigates the NetworkEditor into the specified network and captures a screenshot.
     Useful for visualizing the network structure of any node context.
 
     Args:
-        node_path: Path to the node whose network to capture (default: "/obj").
-            The NetworkEditor will navigate into this node to show its children.
+        node_path: Path to the network to capture (default: "/obj"): a node that
+            holds nodes. The NetworkEditor will navigate into it to show its
+            children. A node that is not a network is refused, naming the
+            network it sits in.
             Examples: "/obj", "/obj/geo1", "/stage", "/mat"
         fit_contents: If True, frame all children in view before capture (default: True).
             Set to False to capture the current zoom/pan state.
@@ -469,7 +480,7 @@ def render_node_network(
     Returns:
         Dict with:
         - status: "success" or "error"
-        - node_path: The node path that was navigated to
+        - node_path: The path of the network the image shows
         - child_count: Number of children in the network
         - geometry: x, y, width, height of the captured region
         - image_base64: Base64-encoded PNG image data
@@ -480,37 +491,29 @@ def render_node_network(
         render_node_network("/stage")  # Capture LOPs/Solaris network
     """
     with using(host, port) as link:
-        hou = link.hou
+        # [LAW:parse-dont-validate] a NetworkEditor told to cd into a node that is
+        # not a network stays where it was and says nothing (Houdini 22.0.466), so
+        # such a node is refused here, before the editor is touched.
+        network = network_at(link.hou, node_path)
+        # [LAW:one-source-of-truth] the editor shows the network's own path, which
+        # a caller's spelling of it ("/obj/geo1/") is not.
+        path = network.path()
 
-        # Validate node exists
-        node = node_at(hou, node_path)
+        child_count = read(f"children of {path}", lambda: len(network.children()))
 
-        # Get child count for context
-        child_count = read(f"children of {node_path}", lambda: len(node.children()))
+        def into_network(pane: Any) -> None:
+            try:
+                pane.cd(path)
+            except Exception as e:
+                raise OperationFailed(f"Failed to navigate to {path}: {e}", path=path) from e
+            logger.info("Took %s into %s", pane.name(), path)
 
-        QtCore = _qt_core(link)
+        result = _capture_pane_to_bytes(
+            link, main_thread, "NetworkEditor", _qt_core(link), fit_contents, into_network
+        )
 
-        # Find NetworkEditor pane
-        pane_type = hou.paneTabType.NetworkEditor
-        pane = hou.ui.paneTabOfType(pane_type)
-        if pane is None:
-            raise OperationFailed(
-                "No NetworkEditor pane found in the current Houdini layout.",
-                pane_type="NetworkEditor",
-            )
-
-        # Navigate to the node (set as current network)
-        try:
-            pane.cd(node_path)
-        except Exception as e:
-            raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
-
-        # Capture the pane
-        result = _capture_pane_to_bytes(link, main_thread, "NetworkEditor", QtCore, fit_contents)
-
-        # Extract raw bytes and build response
         raw_bytes: bytes = result.pop("raw_bytes")
-        result["node_path"] = node_path
+        result["node_path"] = path
         result["child_count"] = child_count
         result["image_format"] = "png"
         result["image_size_bytes"] = len(raw_bytes)

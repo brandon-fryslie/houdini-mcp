@@ -392,6 +392,14 @@ class MockHouNode:
         held = self._held()
         return MockNodeTypeCategory(held) if held is not None else None
 
+    def isNetwork(self) -> bool:
+        """Whether this node holds nodes, read off the same category as childTypeCategory."""
+        return self._held() is not None
+
+    def allItems(self) -> tuple[Any, ...]:
+        """Every item in this network, of the kinds this double models."""
+        return (*self._children, *self._network_boxes, *self._indirect_inputs)
+
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
         parent subnet; nothing is wired there in this double, so it is None here."""
@@ -870,7 +878,7 @@ class MockHouModule:
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
-        self.ui = MockUi(self.undos)
+        self.ui = MockUi(self.undos, self.node)
 
     def applicationVersionString(self) -> str:
         return self._version
@@ -1305,6 +1313,7 @@ class MockPaneTab:
         self._geometry.x.return_value = 0
         self._geometry.y.return_value = 0
         self.view = self.drawn = "as left"
+        self.network_path = "/obj"
         self.ui: MockUi | None = None
 
     def name(self) -> str:
@@ -1315,6 +1324,24 @@ class MockPaneTab:
 
     def qtScreenGeometry(self) -> MagicMock:
         return self._geometry
+
+    def cd(self, path: str) -> None:
+        """hou.NetworkEditor.cd: into the network at ``path``, which it then shows. A
+        node that is not a network leaves the editor where it was, and says nothing,
+        as Houdini 22.0.466 does."""
+        assert self.ui is not None, f"{self._name} was not handed out by hou.ui"
+        node = self.ui.node(path)
+        assert node is not None, f"no node at {path}"
+        if node.isNetwork():
+            self.network_path = node.path()
+            self.view = f"inside {self.network_path}"
+
+    def pwd(self) -> "MockHouNode":
+        """hou.NetworkEditor.pwd: the network the editor shows."""
+        assert self.ui is not None, f"{self._name} was not handed out by hou.ui"
+        network = self.ui.node(self.network_path)
+        assert network is not None, f"the network {self.network_path} is gone"
+        return network
 
     def qtParentWindow(self) -> "MockPaneWindow":
         assert self.ui is not None, f"{self._name} was not handed out by hou.ui"
@@ -1356,9 +1383,10 @@ class MockUi:
     """``hou.ui``: one current desktop holding the layout's pane tabs, and every
     grab of a pane's window, as (pane name, what it showed, rectangle)."""
 
-    def __init__(self, undos: "MockUndos") -> None:
+    def __init__(self, undos: "MockUndos", node: Callable[[str], "MockHouNode | None"]) -> None:
         self._desktop = MockDesktop("Build", [])
         self._undos = undos
+        self.node = node
         self.grabs: list[tuple[str, str, Any]] = []
 
     def on_main_thread(self) -> bool:
