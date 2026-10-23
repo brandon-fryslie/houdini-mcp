@@ -83,6 +83,7 @@ can work; it blocks until `main_thread.stop()` is called from another thread:
 
 ```python
 from houdini_mcp_plugin import main_thread
+
 main_thread.serve()
 ```
 
