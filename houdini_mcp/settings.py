@@ -205,9 +205,8 @@ def log_level(environ: Mapping[str, str]) -> int:
 # IPv6 address in brackets. [LAW:types-are-the-program] no port, which the guard ignores,
 # and no * or ?, which fastmcp would read as a wildcard: a bare * admits every Host and
 # reopens the server to a rebinding page.
-AllowedHost = Annotated[
-    str, Field(pattern=r"^(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|\[[0-9A-Fa-f:.]+\])$")
-]
+ALLOWED_HOST_PATTERN = r"^(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|\[[0-9A-Fa-f:.]+\])$"
+AllowedHost = Annotated[str, Field(pattern=ALLOWED_HOST_PATTERN)]
 
 
 def _entries(raw: object) -> object:

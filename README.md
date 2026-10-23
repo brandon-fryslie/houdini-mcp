@@ -240,7 +240,8 @@ another machine, set two settings, in the environment under `uv run` or in `.env
 under Docker Compose:
 
 1. `MCP_HOST` to the interface that client reaches: `0.0.0.0` for every interface,
-   or one LAN address of this machine.
+   or one LAN address of this machine, where a client on this machine must then
+   call that address rather than `localhost`.
 2. `MCP_ALLOWED_HOSTS` to the name or address that client puts in its URL. Under
    Compose this includes a client calling this machine by its IP address: list
    that IP.

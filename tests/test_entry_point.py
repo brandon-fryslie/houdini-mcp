@@ -19,6 +19,7 @@ import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import main
 from houdini_mcp.settings import (
+    ALLOWED_HOST_PATTERN,
     Http,
     HttpListener,
     InvalidSetting,
@@ -56,9 +57,7 @@ STARTUP_SETTINGS = (
 # What a server reads of the environment, then: those, and where its results go (each
 # test names its own).
 READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR")
-ALLOWED_HOST = (
-    "String should match pattern '^(?:[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*|\\[[0-9A-Fa-f:.]+\\])$'"
-)
+ALLOWED_HOST = f"String should match pattern '{ALLOWED_HOST_PATTERN}'"
 
 # This process's environment with none of them set, so the developer's shell decides nothing.
 UNSET = {name: value for name, value in os.environ.items() if name not in STARTUP_SETTINGS}
@@ -241,6 +240,15 @@ def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     assert environ.read == set(READ_AT_START) == named | image
 
 
+def test_compose_publishes_on_loopback_unless_told_otherwise() -> None:
+    """In its container the server listens on every interface, so the publish is what keeps
+    the LAN out: unset or empty, MCP_HOST publishes on this machine's loopback."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "compose.yaml").read_text())
+    (published,) = compose["services"]["houdini-mcp"]["ports"]
+    assert published.startswith("${MCP_HOST:-127.0.0.1}:"), published
+
+
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -290,8 +298,8 @@ def test_starting_applies_and_logs_what_it_resolved(
     logged = [r.getMessage() for r in caplog.records]
     assert "Log level: DEBUG" in logged
     assert (
-        "Starting Houdini MCP Server over http on 192.168.1.10:3100, answering loopback and "
-        "['studio-box']"
+        "Starting Houdini MCP Server over http on 192.168.1.10 port 3100, answering a Host of "
+        "loopback, the address a request arrives at, or one of ['studio-box']"
     ) in logged
     assert "Houdini connection target: studio-box:19000" in logged
     assert (
