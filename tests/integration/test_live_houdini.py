@@ -88,3 +88,46 @@ def test_cook_state_reads_what_houdini_22_can_tell(at: dict[str, Any]) -> None:
     assert failed["cook_state"] == "error"
     assert "planted" in failed["errors"][0]["message"]
     assert failed["last_cook_time"]["unread"].startswith("hou.OperationFailed")
+
+
+async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
+    at: dict[str, Any], bound: dict[str, Any]
+) -> None:
+    """Houdini 22's boundingBox() of a SOP with no points is a box at the origin; the
+    summary reports no box for it, and the sphere's own box for a sphere."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_bounds", **at)["node_path"]
+    empty = tools.create_node("null", geo, "empty1", **at)["node_path"]
+    sphere = tools.create_node("sphere", geo, "sphere1", **at)["node_path"]
+
+    nothing = await tools.get_geo_summary(empty, max_sample_points=0, summarize=False, **bound)
+    ball = await tools.get_geo_summary(sphere, max_sample_points=0, summarize=False, **bound)
+
+    assert nothing["point_count"] == 0 and "bounding_box" not in nothing
+    assert ball["bounding_box"] == {
+        "min": [-1.0, -1.0, -1.0],
+        "max": [1.0, 1.0, 1.0],
+        "size": [2.0, 2.0, 2.0],
+        "center": [0.0, 0.0, 0.0],
+    }
+
+
+async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
+    at: dict[str, Any], bound: dict[str, Any]
+) -> None:
+    """Houdini 22's bounds skip a point at NaN, so a stray one costs no box, and
+    points all at NaN have no box though they have a count."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_nan", **at)["node_path"]
+
+    async def summary(name: str, positions: str) -> dict[str, Any]:
+        sop = tools.create_node("python", geo, name, **at)["node_path"]
+        code = f"g = hou.pwd().geometry()\nfor p in {positions}: g.createPoint().setPosition(p)"
+        tools.set_parameter(sop, "python", code, **at)
+        return await tools.get_geo_summary(sop, max_sample_points=0, summarize=False, **bound)
+
+    nan = "float('nan')"
+    stray = await summary("stray1", f"[({nan}, 0, 0), (1, 1, 1), (2, 2, 2)]")
+    lost = await summary("lost1", f"[({nan}, {nan}, {nan})] * 3")
+
+    assert stray["bounding_box"]["min"] == [1.0, 0.0, 0.0]
+    assert stray["bounding_box"]["max"] == [2.0, 2.0, 2.0]
+    assert lost["point_count"] == 3 and "bounding_box" not in lost

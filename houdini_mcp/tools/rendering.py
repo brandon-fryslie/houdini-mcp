@@ -28,6 +28,7 @@ from ._common import (
     node_category,
     using,
 )
+from .bounds import Box, box_center, box_of_bounds, box_sides
 from .failure import add_note
 from .parms import read_present, write_all
 
@@ -149,9 +150,6 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
 # =============================================================================
 
 
-Box = tuple[Vec3, Vec3]
-"""An axis-aligned box: its min and max corners."""
-
 _Row = tuple[float, float, float, float]
 Matrix4 = tuple[_Row, _Row, _Row, _Row]
 """A hou.Matrix4's rows, as asTupleOfTuples() gives them. A point is the row vector
@@ -178,16 +176,14 @@ class Framing:
     def center(self) -> Vec3:
         if self.bounds is None:
             return (0.0, 0.0, 0.0)
-        lo, hi = self.bounds
-        return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+        return box_center(self.bounds)
 
     @property
     def extent(self) -> float:
         """The box's longest side; zero for a single point, or no box at all."""
         if self.bounds is None:
             return 0.0
-        lo, hi = self.bounds
-        return max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+        return max(box_sides(self.bounds))
 
     @property
     def size(self) -> float:
@@ -292,19 +288,6 @@ def _displayed_shapes(network: Any) -> list[_Shape]:
     ]
 
 
-def _local_box(geometry: Any) -> Box | None:
-    """The box around a geometry in its own space; None when it has no points.
-
-    [LAW:parse-dont-validate] Houdini's bounds intrinsic, one read, is
-    (xmin, xmax, ymin, ymax, zmin, zmax), inverted for geometry with no points.
-    Its boundingBox() of such geometry is a valid box of no size at the origin,
-    which would frame a point the geometry does not have.
-    """
-    xmin, xmax, ymin, ymax, zmin, zmax = geometry.intrinsicValue("bounds")
-    lo, hi = (xmin, ymin, zmin), (xmax, ymax, zmax)
-    return (lo, hi) if all(a <= b for a, b in zip(lo, hi, strict=True)) else None
-
-
 def _enclosing(points: Sequence[Vec3]) -> Box:
     """The smallest box holding every point; there is at least one."""
     xs, ys, zs = zip(*points, strict=True)
@@ -338,7 +321,7 @@ def _world_box(shape: _Shape) -> Box | _Unframed:
         # [LAW:no-silent-failure] a SOP that did not cook is named, not just left out
         logger.warning("Not framed: %s has no geometry (its SOP did not cook)", shape.source)
         return "did not cook"
-    box = _local_box(shape.geometry)
+    box = box_of_bounds(shape.geometry.intrinsicValue("bounds"))
     if box is None:
         return "no points"
     return _transformed(box, _placement(shape.placer))

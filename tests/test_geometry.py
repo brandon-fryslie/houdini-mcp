@@ -14,7 +14,10 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import SUMMARIZER
+from tests.conftest import NO_POINTS_EXTENT, SUMMARIZER
+
+# Houdini's bounds intrinsic for geometry with no points: every axis inverted.
+NO_POINTS_BOUNDS = [NO_POINTS_EXTENT, -NO_POINTS_EXTENT] * 3
 
 
 class TestGetGeoSummary:
@@ -38,15 +41,8 @@ class TestGetGeoSummary:
             "vertex_count": kwargs.get("vertex_count", 0),
         }
 
-        if "bounding_box" in kwargs:
-            response["bounding_box"] = kwargs["bounding_box"]
-        elif kwargs.get("include_bbox", True):
-            response["bounding_box"] = {
-                "min": kwargs.get("bbox_min", [0.0, 0.0, 0.0]),
-                "max": kwargs.get("bbox_max", [1.0, 1.0, 1.0]),
-                "size": kwargs.get("bbox_size", [1.0, 1.0, 1.0]),
-                "center": kwargs.get("bbox_center", [0.5, 0.5, 0.5]),
-            }
+        # the program's bounds read: (xmin, xmax, ymin, ymax, zmin, zmax)
+        response["bounds"] = kwargs.get("bounds", [0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
 
         if kwargs.get("include_attributes", True):
             response["attributes"] = kwargs.get(
@@ -87,10 +83,7 @@ class TestGetGeoSummary:
             point_count=3,
             primitive_count=2,
             vertex_count=8,
-            bbox_min=[-1.0, -1.0, -1.0],
-            bbox_max=[1.0, 1.0, 1.0],
-            bbox_size=[2.0, 2.0, 2.0],
-            bbox_center=[0.0, 0.0, 0.0],
+            bounds=[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0],
             attributes={
                 "point": [
                     {"name": "P", "type": "float", "size": 3},
@@ -170,10 +163,7 @@ class TestGetGeoSummary:
             point_count=0,
             primitive_count=0,
             vertex_count=0,
-            bbox_min=[0.0, 0.0, 0.0],
-            bbox_max=[0.0, 0.0, 0.0],
-            bbox_size=[0.0, 0.0, 0.0],
-            bbox_center=[0.0, 0.0, 0.0],
+            bounds=NO_POINTS_BOUNDS,
             attributes={"point": [], "primitive": [], "vertex": [], "detail": []},
             groups={"point": [], "primitive": []},
         )
@@ -195,6 +185,7 @@ class TestGetGeoSummary:
         assert result["point_count"] == 0
         assert result["primitive_count"] == 0
         assert result["vertex_count"] == 0
+        assert "bounding_box" not in result
         assert len(result["attributes"]["point"]) == 0
         assert len(result["groups"]["point"]) == 0
 
@@ -210,8 +201,7 @@ class TestGetGeoSummary:
             point_count=1500000,
             primitive_count=100000,
             vertex_count=300000,
-            bbox_min=[-100.0, -100.0, -100.0],
-            bbox_max=[100.0, 100.0, 100.0],
+            bounds=[-100.0, 100.0, -100.0, 100.0, -100.0, 100.0],
             sample_points=sample_points,
             warning="Geometry has 1500000 points (>1M); samples are its first 100.",
         )
@@ -368,12 +358,7 @@ class TestGetGeoSummary:
             "point_count": 1,
             "primitive_count": 1,
             "vertex_count": 4,
-            "bounding_box": {
-                "min": [-1.0, -1.0, -1.0],
-                "max": [1.0, 1.0, 1.0],
-                "size": [2.0, 2.0, 2.0],
-                "center": [0.0, 0.0, 0.0],
-            },
+            "bounds": [-1.0, 1.0, -1.0, 1.0, -1.0, 1.0],
             # No attributes, groups, or sample_points
         }
         mock_execute_code.return_value = {
@@ -721,15 +706,18 @@ class TestTheProgramHoudiniRuns:
                 "/obj/geo1/box1", **kwargs, summarizer=SUMMARIZER, bypass_config_enabled=False
             )
 
-    def _geo(self, **overrides: Any) -> SimpleNamespace:
+    def _geo(
+        self,
+        bounds: Any = lambda: (0.0, 1.0, 0.0, 1.0, 0.0, 1.0),
+        counts: dict[str, int] | None = None,
+        **overrides: Any,
+    ) -> SimpleNamespace:
+        """A geometry whose bounds intrinsic is ``bounds()`` and whose every count is
+        1 but those in ``counts``."""
         point = SimpleNamespace(attribValue=lambda _name: (0.0, 1.0, 2.0))
         geo = SimpleNamespace(
-            intrinsicValue=lambda _name: 1,
-            boundingBox=lambda: SimpleNamespace(
-                minvec=lambda: (0, 0, 0),
-                maxvec=lambda: (1, 1, 1),
-                sizevec=lambda: (1, 1, 1),
-                center=lambda: (0.5, 0.5, 0.5),
+            intrinsicValue=lambda name: (
+                bounds() if name == "bounds" else (counts or {}).get(name, 1)
             ),
             pointAttribs=lambda: [_Attrib("P")],
             primAttribs=lambda: [],
@@ -749,18 +737,28 @@ class TestTheProgramHoudiniRuns:
             setattr(node, key, value)
         return node
 
-    async def test_a_readable_geometry_reads_whole(self):
-        result = await self._run(self._node(self._geo()), max_sample_points=1)
+    async def test_a_readable_geometry_reads_whole(self, caplog):
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.geometry"):
+            result = await self._run(self._node(self._geo()), max_sample_points=1)
 
         assert result["cook_state"] == "cooked"
-        assert result["bounding_box"]["center"] == [0.5, 0.5, 0.5]
+        box = {
+            "min": [0.0, 0.0, 0.0],
+            "max": [1.0, 1.0, 1.0],
+            "size": [1.0, 1.0, 1.0],
+            "center": [0.5, 0.5, 0.5],
+        }
+        assert result["bounding_box"] == box
+        # a summary's excerpt is the result's start, which the box must be in
+        fields = list(result)
+        assert fields.index("bounding_box") < fields.index("attributes")
+        assert f"Read geometry of /obj/geo1/box1: 1 points, bounding_box={box}" in caplog.text
         assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
         assert result["groups"]["point"] == ["top"]
         assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
 
     async def test_a_massive_geometry_says_so_and_still_samples(self):
-        counts = {"pointcount": 1_500_000}
-        geo = self._geo(intrinsicValue=lambda name: counts.get(name, 1))
+        geo = self._geo(counts={"pointcount": 1_500_000})
 
         result = await self._run(self._node(geo), max_sample_points=2)
 
@@ -775,8 +773,21 @@ class TestTheProgramHoudiniRuns:
         assert result["cook_state"] == {"unread": "RuntimeError: cook failed"}
         assert result["point_count"] == 1
 
+    async def test_a_geometry_with_no_points_has_no_bounding_box(self, caplog):
+        geo = self._geo(bounds=lambda: tuple(NO_POINTS_BOUNDS), counts={"pointcount": 0})
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.geometry"):
+            result = await self._run(self._node(geo), max_sample_points=0)
+
+        assert result["point_count"] == 0
+        assert "bounding_box" not in result
+        assert (
+            "Read geometry of /obj/geo1/box1: 0 points, bounding_box=none (no point has a position)"
+            in caplog.text
+        )
+
     async def test_a_bounding_box_houdini_will_not_give_is_unread_not_null(self):
-        result = await self._run(self._node(self._geo(boundingBox=_Raises("no bounds"))))
+        result = await self._run(self._node(self._geo(bounds=_Raises("no bounds"))))
 
         assert result["bounding_box"] == {"unread": "RuntimeError: no bounds"}
 
@@ -803,9 +814,7 @@ class TestTheProgramHoudiniRuns:
 
     async def test_each_field_the_program_could_not_read_is_logged(self, caplog):
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
-            await self._run(
-                self._node(self._geo(boundingBox=_Raises("no bounds"))), max_sample_points=0
-            )
+            await self._run(self._node(self._geo(bounds=_Raises("no bounds"))), max_sample_points=0)
 
         assert "unread bounding_box of /obj/geo1/box1 reason=RuntimeError: no bounds" in caplog.text
 
@@ -819,7 +828,7 @@ class TestTheProgramHoudiniRuns:
         def no_bounds() -> None:
             raise OperationFailed("no bounds")
 
-        result = await self._run(self._node(self._geo(boundingBox=no_bounds)), max_sample_points=0)
+        result = await self._run(self._node(self._geo(bounds=no_bounds)), max_sample_points=0)
 
         assert result["bounding_box"] == {"unread": format_reason(OperationFailed("no bounds"))}
         assert result["bounding_box"] == {"unread": "hou.OperationFailed: no bounds"}

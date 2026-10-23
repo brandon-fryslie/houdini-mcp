@@ -604,6 +604,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_geo_summary` of geometry with no points has no `bounding_box`, as a
+  render that framed nothing has none (houdini-laws-etg.jm0). Before, it
+  reported a box of no size at the origin, where the geometry is not, because
+  Houdini 22's `boundingBox()` of such geometry is that box. The box is now
+  read from the bounds intrinsic framing reads.
+
 - Every tool refuses a number that is NaN or Infinity, or an integer too large
   for a float parameter (houdini-laws-etg.xfj). The JSON-RPC parse admits NaN
   and Infinity, a float parse turns such an integer into Infinity, and only a
