@@ -820,6 +820,22 @@ class TestATeardownDropsTheLinkThatFailed:
         assert (failure.kind, failure.exception) == ("operation_failed", "EOFError")
         assert any(r.levelno == logging.ERROR for r in caplog.records)
 
+    def test_a_wrapped_link_failure_outside_any_scope_is_the_bug_it_is_not_the_tools_label(
+        self, caplog
+    ):
+        from houdini_mcp.tools._common import OperationFailed
+        from houdini_mcp.tools.failure import failure_for
+
+        try:
+            raise OperationFailed("Failed to enumerate panes") from EOFError("stream closed")
+        except OperationFailed as wrapped:
+            with caplog.at_level(logging.ERROR, logger="houdini_mcp.tools"):
+                failure = failure_for(wrapped, "list_visible_panes")
+
+        assert failure.kind == "operation_failed"
+        assert "EOFError: stream closed" in failure.traceback
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
+
     def test_a_tool_whose_link_failed_after_a_reconnect_leaves_the_new_link_standing(
         self, mock_connection, monkeypatch
     ):

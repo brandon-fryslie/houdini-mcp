@@ -383,8 +383,9 @@ def _classify(e: Exception, operation: str) -> _Failure:
     loss is a ``LinkLost``, whose link :func:`failed_on` already dropped. A
     tool body that wrapped an exception in a ``ToolError`` with ``from`` stated
     its cause, and the link's own failures outrank the body's label: the cause
-    is what is classified. A raw transport failure here came from Houdini work
-    done outside a ``using`` scope, and reaches the caller as the bug it is.
+    is what is classified. A transport failure here, raw or wrapped, came from
+    Houdini work done outside a ``using`` scope, and reaches the caller as the bug
+    it is.
     """
     cause = _cause(e)
     if isinstance(cause, HoudiniConnectionError):
@@ -429,7 +430,7 @@ def _classify(e: Exception, operation: str) -> _Failure:
             ),
             **exception,
         )
-    if isinstance(e, ToolError):
+    if isinstance(e, ToolError) and transport_failure(cause) is None:
         return e.failure(operation)
     # [LAW:no-silent-failure] an exception nobody classified is a bug: the alarm
     # is an ERROR with the traceback in the server log, and the traceback also

@@ -509,7 +509,7 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
     except Exception as e:
         # [LAW:parse-dont-validate] ``transport_failure`` says which exceptions are the
         # link's. Those are the probe's "no answer", not the loss of the server's own
-        # link, which a raw transport failure would tear down. The rest are the code's.
+        # link, which a tool's ``using`` scope drops. The rest are the code's.
         if transport_failure(e) is None:
             raise
         raise HoudiniConnectionError(
