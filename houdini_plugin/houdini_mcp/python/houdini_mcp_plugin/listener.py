@@ -405,23 +405,30 @@ def _serve(server: HrpycServer) -> None:
 
 
 def _serve_connection(server: HrpycServer, conn: Any) -> None:
-    """Serve one client's rpyc connection until it ends.
+    """Serve one client's rpyc connection until it ends, and record who ended it.
 
-    rpyc's ``close()`` clears ``active`` and then closes each client's socket
-    under the thread serving it, so that thread's next poll() fails on a closed
-    descriptor, and ``serve_all()`` raises that as an OSError: it knows the
-    socket closed, not that its connection was closed on purpose. Once the
-    server is no longer active that error is the stop's own disconnect, so it
-    is recorded as one instead of reaching the log as a traceback.
+    The client ends it by closing its side; the listener ends it by closing,
+    which clears ``active`` and then closes each client's socket under the
+    thread serving it. That thread is then either blocked in poll(), which
+    reads the close as EOF and returns, or about to enter it, which fails on
+    the closed descriptor: ``serve_all()`` raises that as an OSError, knowing
+    the socket closed but not that it was closed on purpose. Both are the
+    listener's own disconnect, recorded as one, not as a traceback.
     """
     try:
         conn.serve_all()
     except OSError:
-        # [LAW:one-source-of-truth] "the server was closed" is rpyc's own
+        # [LAW:one-source-of-truth] "the listener closed" is rpyc's own
         # ``active``, cleared before close() touches any client socket.
         if server.active:
             raise
-        logger.info("hrpyc client disconnected by stop() on port %s", server.port)
+    # The peer as rpyc's own "welcome"/"goodbye" lines print it.
+    logger.info(
+        "hrpyc client %s disconnected from port %s by the %s",
+        conn._config["endpoints"][1],
+        server.port,
+        "client" if server.active else "listener",
+    )
 
 
 # libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.
