@@ -48,8 +48,7 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     type_template.type.return_value = mock_hou.parmTemplateType.Menu
     type_template.numComponents.return_value = 1
     type_template.defaultValue.return_value = 0
-    type_template.menuLabels.return_value = ["Polygon", "Mesh", "Polygon Mesh", "NURBS"]
-    type_template.menuItems.return_value = ["poly", "mesh", "polymesh", "nurbs"]
+    type_template.menuUseToken.return_value = False
     sphere_templates.append(type_template)
 
     # 3. Frequency (int)
@@ -90,6 +89,9 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
         template = next((t for t in sphere_templates if t.name() == name), None)
         mock_parm.parmTemplate.return_value = template
         mock_parm.eval.return_value = parm_current_values[name]
+        # Houdini reads a menu's items from its parm
+        mock_parm.menuLabels.return_value = ("Polygon", "Mesh", "Polygon Mesh", "NURBS")
+        mock_parm.menuItems.return_value = ("poly", "mesh", "polymesh", "nurbs")
         return mock_parm
 
     def mock_parm_tuple_getter(name):
@@ -141,8 +143,8 @@ def test_get_parameter_schema_sphere_real_world(connected_to):
     assert ptype["current_value"] == 0
     assert ptype["is_animatable"] is False
     assert len(ptype["menu_items"]) == 4
-    assert ptype["menu_items"][0] == {"label": "Polygon", "value": "poly"}
-    assert ptype["menu_items"][1] == {"label": "Mesh", "value": "mesh"}
+    assert ptype["menu_items"][0] == {"label": "Polygon", "value": 0}
+    assert ptype["menu_items"][1] == {"label": "Mesh", "value": 1}
 
     # 3. Check freq (int)
     assert "freq" in params_by_name

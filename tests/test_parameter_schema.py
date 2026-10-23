@@ -1,5 +1,6 @@
 """Tests for the get_parameter_schema function."""
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -18,8 +19,7 @@ class MockParmTemplate:
         default_value: Any = None,
         min_val: Any = None,
         max_val: Any = None,
-        menu_items: list[str] | None = None,
-        menu_labels: list[str] | None = None,
+        menu_use_token: bool = False,
     ):
         self._name = name
         self._label = label
@@ -30,8 +30,7 @@ class MockParmTemplate:
         )
         self._min_val = min_val
         self._max_val = max_val
-        self._menu_items = menu_items or []
-        self._menu_labels = menu_labels or []
+        self._menu_use_token = menu_use_token
 
     def name(self) -> str:
         return self._name
@@ -63,11 +62,16 @@ class MockParmTemplate:
     def maxValue(self) -> Any:
         return self._max_val
 
-    def menuItems(self) -> list[str]:
-        return self._menu_items
+    # As in Houdini, a menu's items are read from its hou.Parm (see give_menu):
+    # a script-generated menu's template lists none.
+    def menuUseToken(self) -> bool:
+        return self._menu_use_token
 
-    def menuLabels(self) -> list[str]:
-        return self._menu_labels
+
+def give_menu(parm: Any, tokens: list[str], labels: list[str]) -> None:
+    """Give a fake hou.Parm its menu, as Houdini evaluates it."""
+    parm.menuItems = MagicMock(return_value=tuple(tokens))
+    parm.menuLabels = MagicMock(return_value=tuple(labels))
 
 
 def create_mock_hou_with_parm_types():
@@ -212,8 +216,6 @@ class TestGetParameterSchema:
             parm_type=mock_hou.parmTemplateType.Menu,
             num_components=1,
             default_value=0,
-            menu_items=["poly", "mesh", "polymesh"],
-            menu_labels=["Polygon", "Mesh", "Polygon Mesh"],
         )
 
         sphere.parmTemplates = MagicMock(return_value=[type_template])
@@ -221,6 +223,7 @@ class TestGetParameterSchema:
         mock_parm = sphere.parm("type")
         mock_parm.parmTemplate = MagicMock(return_value=type_template)
         mock_parm.eval = MagicMock(return_value=0)
+        give_menu(mock_parm, ["poly", "mesh", "polymesh"], ["Polygon", "Mesh", "Polygon Mesh"])
 
         connected_to(mock_hou)
         result = get_parameter_schema("/obj/geo1/sphere1", "type")
@@ -234,9 +237,11 @@ class TestGetParameterSchema:
         assert param["default"] == 0
         assert param["is_animatable"] is False
         assert len(param["menu_items"]) == 3
-        assert param["menu_items"][0] == {"label": "Polygon", "value": "poly"}
-        assert param["menu_items"][1] == {"label": "Mesh", "value": "mesh"}
-        assert param["menu_items"][2] == {"label": "Polygon Mesh", "value": "polymesh"}
+        assert param["menu_items"] == [
+            {"label": "Polygon", "value": 0},
+            {"label": "Mesh", "value": 1},
+            {"label": "Polygon Mesh", "value": 2},
+        ]
 
     def test_get_parameter_schema_all_parameters(self, connected_to):
         """Test getting schema for all parameters on a node."""
@@ -282,8 +287,6 @@ class TestGetParameterSchema:
                 "Type",
                 mock_hou.parmTemplateType.Menu,
                 default_value=[0],
-                menu_items=["poly", "mesh"],
-                menu_labels=["Polygon", "Mesh"],
             ),
         ]
 
@@ -295,12 +298,18 @@ class TestGetParameterSchema:
             if mock_parm:
                 mock_parm.parmTemplate = MagicMock(return_value=template)
                 mock_parm.eval = MagicMock(return_value=sphere._params.get(template.name()))
+        give_menu(sphere.parm("type"), ["poly", "mesh"], ["Polygon", "Mesh"])
 
         connected_to(mock_hou)
         result = get_parameter_schema("/obj/geo1/sphere1")
 
         assert result["status"] == "success"
         assert result["count"] == 4
+        [menu] = [p for p in result["parameters"] if p["name"] == "type"]
+        assert menu["menu_items"] == [
+            {"label": "Polygon", "value": 0},
+            {"label": "Mesh", "value": 1},
+        ]
         assert len(result["parameters"]) == 4
 
         # Check that all parameters are present
@@ -565,20 +574,25 @@ class TestGetParameterSchema:
 class TestSchemaReadsOnlyWhatHoudiniGives:
     """[LAW:no-silent-failure] A part Houdini will not give is Unread, never a guess."""
 
-    def _schema_of(self, connected_to, template: MockParmTemplate, value: Any) -> dict[str, Any]:
+    def _schema_of(
+        self, connected_to, template: MockParmTemplate, value: Any, **parm_attrs: Any
+    ) -> dict[str, Any]:
         from houdini_mcp.tools import get_parameter_schema
 
         mock_hou = create_mock_hou_with_parm_types()
         node = MockHouNode(path="/obj/n", name="n", node_type="null", params={"p": value})
         mock_hou.add_node(node)
-        node.parm("p").parmTemplate = MagicMock(return_value=template)
+        parm = node.parm("p")
+        parm.parmTemplate = MagicMock(return_value=template)
+        for attr, fake in parm_attrs.items():
+            setattr(parm, attr, fake)
         connected_to(mock_hou)
         [param] = get_parameter_schema("/obj/n", "p")["parameters"]
         return param
 
     def test_a_menu_reports_its_real_default(self, connected_to):
         # Houdini gives a Menu's default as one int, not a tuple to index.
-        menu = MockParmTemplate("p", "P", "Menu", default_value=2, menu_labels=["a", "b", "c"])
+        menu = MockParmTemplate("p", "P", "Menu", default_value=2)
         assert self._schema_of(connected_to, menu, 2)["default"] == 2
 
     def test_a_toggle_reports_its_real_default(self, connected_to):
@@ -604,9 +618,100 @@ class TestSchemaReadsOnlyWhatHoudiniGives:
 
     def test_menu_items_houdini_will_not_give_are_unread_not_empty(self, connected_to):
         menu = MockParmTemplate("p", "P", "Menu", default_value=0)
-        menu.menuLabels = MagicMock(side_effect=RuntimeError("no menu"))  # type: ignore[method-assign]
-        param = self._schema_of(connected_to, menu, 0)
+        param = self._schema_of(
+            connected_to, menu, 0, menuLabels=MagicMock(side_effect=RuntimeError("no menu"))
+        )
         assert param["menu_items"] == {"unread": "RuntimeError: no menu"}
+
+
+class TestMenuValueDomain:
+    """A menu offers each item as the value set_parameter takes and eval reports."""
+
+    def _menu(
+        self, connected_to, tokens: list[str], value: int, default: int, use_token: bool = False
+    ) -> dict[str, Any]:
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = MockHouNode(path="/obj/n", name="n", node_type="null", params={"m": value})
+        mock_hou.add_node(node)
+        template = MockParmTemplate(
+            "m", "M", "Menu", default_value=default, menu_use_token=use_token
+        )
+        parm = node.parm("m")
+        parm.parmTemplate = MagicMock(return_value=template)
+        give_menu(parm, tokens, [t.upper() for t in tokens])
+        connected_to(mock_hou)
+        [param] = get_parameter_schema("/obj/n", "m")["parameters"]
+        return param
+
+    @staticmethod
+    def _values(param: dict[str, Any]) -> list[Any]:
+        return [item["value"] for item in param["menu_items"]]
+
+    def test_an_index_menu_offers_each_item_by_index(self, connected_to):
+        # The items come from the parm alone, as a script-generated menu's do.
+        param = self._menu(connected_to, ["poly", "mesh", "polymesh"], value=1, default=0)
+        assert self._values(param) == [0, 1, 2]
+        assert param["current_value"] in self._values(param)
+        assert param["default"] in self._values(param)
+
+    def test_an_index_menu_with_numeric_tokens_still_offers_indexes(self, connected_to):
+        # attribcreate's precision: '8' is the first item, not index 8
+        param = self._menu(connected_to, ["8", "16", "32", "64", "auto"], value=4, default=4)
+        assert self._values(param) == [0, 1, 2, 3, 4]
+
+    def test_a_use_token_menu_offers_each_tokens_integer(self, connected_to):
+        # fasciasolver's stiffness exponent: eval and the default are the token's integer
+        param = self._menu(connected_to, ["10", "9", "8"], value=8, default=9, use_token=True)
+        assert self._values(param) == [10, 9, 8]
+        assert param["current_value"] in self._values(param)
+        assert param["default"] in self._values(param)
+
+    def test_a_separator_is_not_offered_but_keeps_its_index(self, connected_to):
+        # boolean's operation: "seam" keeps index 2, after the separator at 1
+        param = self._menu(connected_to, ["union", "_separator_", "seam"], value=2, default=0)
+        assert param["menu_items"] == [
+            {"label": "UNION", "value": 0},
+            {"label": "SEAM", "value": 2},
+        ]
+
+    def test_a_use_token_menu_offers_no_separator(self, connected_to):
+        # TOP nameconflict separates its integer tokens
+        param = self._menu(
+            connected_to, ["0", "_separator_", "6"], value=6, default=0, use_token=True
+        )
+        assert self._values(param) == [0, 6]
+
+    def test_each_menu_read_logs_its_domain_and_what_it_offered(self, connected_to, caplog):
+        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.parameters"):
+            self._menu(connected_to, ["0", "_separator_", "6"], value=6, default=0, use_token=True)
+        assert "menu items parm=m use_token=True offered=2 separators=1" in caplog.messages
+
+    def test_a_use_token_menu_with_a_non_integer_token_is_unread(self, connected_to):
+        param = self._menu(connected_to, ["3", "b"], value=0, default=0, use_token=True)
+        assert param["menu_items"] == {
+            "unread": "ValueError: invalid literal for int() with base 10: 'b'"
+        }
+
+    def test_a_listed_menu_template_that_names_no_parm_is_unread(self, connected_to):
+        # A whole-node listing walks into multiparm blocks: attribcreate's
+        # type# is a template with no parm of that name on the node.
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = MockHouNode(path="/obj/n", name="n", node_type="attribcreate", params={})
+        mock_hou.add_node(node)
+        node.parmTemplates = MagicMock(  # type: ignore[method-assign]
+            return_value=[MockParmTemplate("type#", "Type", "Menu", default_value=0)]
+        )
+        connected_to(mock_hou)
+        result = get_parameter_schema("/obj/n")
+        assert result["status"] == "success"
+        [param] = result["parameters"]
+        assert param["menu_items"] == {
+            "unread": "houdini_mcp.tools.parms.ParmNotFound: Parameter not found: type# on /obj/n"
+        }
 
 
 class TestFlattenParmTemplates:
