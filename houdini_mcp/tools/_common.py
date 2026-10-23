@@ -297,13 +297,8 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
                 return failure_response(e, operation_name)
 
         # What callers and the server see: the tool's parameters, without the one
-        # the boundary supplies, whether read from the signature or the annotations.
+        # the boundary supplies.
         wrapper.__signature__ = signature  # type: ignore[attr-defined]
-        wrapper.__annotations__ = {
-            name: hint
-            for name, hint in func.__annotations__.items()
-            if name != MAIN_THREAD_PARAMETER
-        }
         declare_policy(wrapper, policy)
         return cast(ToolFn, wrapper)
 

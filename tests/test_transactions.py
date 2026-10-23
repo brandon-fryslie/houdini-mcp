@@ -8,7 +8,6 @@ from __future__ import annotations
 import inspect
 import logging
 import time
-import typing
 from typing import Any
 
 import pytest
@@ -119,7 +118,6 @@ def test_a_driving_tool_is_handed_the_main_thread_its_callers_cannot_pass(mock_c
         return {"status": "success"}
 
     assert "main_thread" not in inspect.signature(drives).parameters
-    assert "main_thread" not in typing.get_type_hints(drives)
     assert drives() == {"status": "success"}
     # Houdini records undo groups only on its main thread, so the fake's are on there alone.
     assert ran_on == [True]
