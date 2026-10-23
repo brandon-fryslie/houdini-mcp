@@ -481,7 +481,7 @@ async def run_in_executor(func: Any, *args: Any, **kwargs: Any) -> Any:
 PAGE_LIMIT_MAX = 500
 
 
-# [LAW:types-are-the-program] [LAW:single-enforcer] A page's bounds are these two
+# [LAW:types-are-the-program] [LAW:one-source-of-truth] A page's bounds are these two
 # types and nothing else: the served schema states them, the tool boundary refuses
 # a value outside them, and PageRequest holds only values inside them.
 PageLimit = Annotated[int, Field(ge=1, le=PAGE_LIMIT_MAX)]
