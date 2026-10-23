@@ -8,10 +8,12 @@ import logging
 from typing import Any
 
 from ._common import (
+    READ,
+    UNDOABLE,
     InvalidInput,
     ResultLimit,
-    handle_connection_errors,
     node_at,
+    tool,
     tool_error,
     using,
 )
@@ -21,7 +23,7 @@ from .reads import read
 logger = logging.getLogger("houdini_mcp.tools.parameters")
 
 
-@handle_connection_errors("set_parameter")
+@tool(UNDOABLE)
 def set_parameter(
     node_path: str,
     param_name: str,
@@ -65,7 +67,7 @@ def set_parameter(
         }
 
 
-@handle_connection_errors("get_parameter_schema")
+@tool(READ)
 def get_parameter_schema(
     node_path: str,
     parm_name: str | None = None,

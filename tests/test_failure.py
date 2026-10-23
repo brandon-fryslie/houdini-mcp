@@ -16,12 +16,16 @@ from pydantic import ValidationError
 from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch, houdini
 from houdini_mcp.tools._common import (
     FAILURE,
+    FILE_WRITE,
+    HOLDS_SCENE,
+    PROGRAM,
+    READ,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
     TimedOut,
-    handle_connection_errors,
     node_at,
+    tool,
     using,
 )
 from tests.conftest import raised_inside_houdini
@@ -43,19 +47,19 @@ def installed(mock_connection: Any) -> None:
     it can be seen to drop it."""
 
 
-def failing(exc: BaseException, operation: str = "get_scene_info") -> dict[str, Any]:
-    """What ``operation`` returns when its body raises ``exc`` holding its link."""
+def failing(exc: BaseException) -> dict[str, Any]:
+    """What a tool returns when its body raises ``exc`` holding its link."""
 
-    @handle_connection_errors(operation)
-    def tool() -> dict[str, Any]:
+    @tool(READ)
+    def probe() -> dict[str, Any]:
         with using("localhost", 18811):
             raise exc
 
-    return tool()
+    return probe()
 
 
-def failing_tool(tool: Any) -> dict[str, Any]:
-    return tool()
+def failing_tool(body: Any) -> dict[str, Any]:
+    return body()
 
 
 def arm(result: dict[str, Any]) -> Any:
@@ -101,7 +105,7 @@ class TestEveryFailureIsOneArm:
         assert result.status == "error"
         assert result.kind == kind
         assert result.retry == retry
-        assert result.operation == "get_scene_info"
+        assert result.operation == "probe"
         assert kind in KINDS
 
     def test_no_two_kinds_share_a_shape(self) -> None:
@@ -133,11 +137,11 @@ class TestEveryFailureIsOneArm:
         """Spelling a payload field like a declared one is the tool's bug, refused
         where the tool raises, and the boundary reports it as a bug."""
 
-        @handle_connection_errors("get_node_info")
-        def tool() -> dict[str, Any]:
+        @tool(READ)
+        def body() -> dict[str, Any]:
             raise OperationFailed("x", **redefined)
 
-        result = arm(failing_tool(tool))
+        result = arm(failing_tool(body))
         assert (result.kind, result.exception) == ("operation_failed", "TypeError")
 
     def test_unavailable_names_the_target(self) -> None:
@@ -160,8 +164,8 @@ class TestEveryFailureIsOneArm:
         """A body that wrote ``raise OperationFailed(...) from e`` around a torn link
         stated its cause; the link's failure outranks the label and tears down."""
 
-        @handle_connection_errors("list_visible_panes")
-        def tool() -> dict[str, Any]:
+        @tool(READ)
+        def body() -> dict[str, Any]:
             with using("localhost", 18811):
                 try:
                     raise EOFError("stream closed")
@@ -169,21 +173,21 @@ class TestEveryFailureIsOneArm:
                     raise OperationFailed("Failed to enumerate panes", hint="x") from e
 
         link = houdini().link()
-        result = arm(tool())
+        result = arm(body())
 
         assert (result.kind, result.retry) == ("connection_lost", "call_again")
         assert result.exception == "EOFError"
         assert link.conn.closed and houdini().link() is None
 
     def test_a_tool_error_wrapping_an_unreachable_houdini_is_unavailable(self) -> None:
-        @handle_connection_errors("capture_pane_screenshot")
-        def tool() -> dict[str, Any]:
+        @tool(FILE_WRITE)
+        def body() -> dict[str, Any]:
             try:
                 raise HoudiniConnectionError("gone", target="farm:1")
             except HoudiniConnectionError as e:
                 raise OperationFailed("Failed to access Houdini's Qt (hutil.PySide)") from e
 
-        result = arm(failing_tool(tool))
+        result = arm(failing_tool(body))
         assert (result.kind, result.retry, result.target) == (
             "connection_unavailable",
             "start_houdini",
@@ -192,39 +196,39 @@ class TestEveryFailureIsOneArm:
         assert result.message == "gone"
 
     def test_a_tool_error_wrapping_houdinis_own_raise_keeps_its_label(self) -> None:
-        @handle_connection_errors("list_visible_panes")
-        def tool() -> dict[str, Any]:
+        @tool(READ)
+        def body() -> dict[str, Any]:
             try:
                 raise raised_inside_houdini(EOFError("a file Houdini's code read"))
             except EOFError as e:
                 raise OperationFailed("Failed to enumerate panes") from e
 
         link = houdini().link()
-        result = arm(tool())
+        result = arm(body())
 
         assert result.kind == "operation_failed"
         assert houdini().link() is link and not link.conn.closed
 
     def test_a_transport_timeout_resets_the_connection_and_says_so(self) -> None:
-        @handle_connection_errors("render_viewport")
-        def tool() -> dict[str, Any]:
+        @tool(HOLDS_SCENE)
+        def body() -> dict[str, Any]:
             with using("localhost", 18811):
                 raise TimeoutError("no answer")
 
         link = houdini().link()
-        result = arm(tool())
+        result = arm(body())
 
         assert result.connection_reset is True
         assert result.exception == "TimeoutError"
         assert link.conn.closed and houdini().link() is None
 
     def test_a_request_timeout_keeps_the_connection_and_says_so(self) -> None:
-        @handle_connection_errors("get_houdini_help")
-        def tool() -> dict[str, Any]:
+        @tool(READ)
+        def body() -> dict[str, Any]:
             raise TimedOut("Request timed out after 30 seconds", url="https://x")
 
         link = houdini().link()
-        result = arm(tool())
+        result = arm(body())
 
         assert (result.kind, result.retry) == ("timeout", "call_again")
         assert result.connection_reset is False
@@ -234,12 +238,12 @@ class TestEveryFailureIsOneArm:
         """The program still holds the scene, so "call again" would only be
         refused: the arm is the worker's, naming it, with the link standing."""
 
-        @handle_connection_errors("execute_code")
-        def tool(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+        @tool(PROGRAM)
+        def body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
             raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
 
         link = houdini().link()
-        result = arm(tool())
+        result = arm(body())
 
         assert (result.kind, result.retry) == ("worker_still_running", "wait_for_worker")
         assert result.timeout == 30
@@ -263,12 +267,12 @@ class TestEveryFailureIsOneArm:
         """One WARNING audit line per failure. A bug (an exception nobody
         classified) also sounds one ERROR alarm carrying its traceback."""
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
-            failing(InvalidInput("Node not found: /obj/x"), operation="get_node_info")
-            failing(KeyError("stdout"), operation="get_node_info")
+            failing(InvalidInput("Node not found: /obj/x"))
+            failing(KeyError("stdout"))
         assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
-            ("WARNING", "get_node_info failed (invalid_input): Node not found: /obj/x"),
-            ("ERROR", "get_node_info raised KeyError: 'stdout'"),
-            ("WARNING", "get_node_info failed (operation_failed): 'stdout'"),
+            ("WARNING", "probe failed (invalid_input): Node not found: /obj/x"),
+            ("ERROR", "probe raised KeyError: 'stdout'"),
+            ("WARNING", "probe failed (operation_failed): 'stdout'"),
         ]
         [alarm] = [r for r in caplog.records if r.levelname == "ERROR"]
         assert alarm.exc_info is not None and alarm.exc_info[0] is KeyError

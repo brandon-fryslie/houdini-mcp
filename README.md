@@ -340,7 +340,7 @@ first 8KB of the file's text and is told that is part of the result, and
 `summarized_bytes` says how many bytes from the file's start the summary covers.
 
 ### Infrastructure (`_common.py`, `cache.py`)
-- **Error handling**: `@handle_connection_errors` decorator; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`
+- **Error handling**: `@tool(policy)` decorator, the tool named by its function; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind` with a fixed `retry`
 - **Connection retry**: Exponential backoff with jitter
 - **Response size**: one bound for every tool, in `houdini_mcp/delivery.py`; a larger result is written whole to a file
 - **Caching**: Node type cache with TTL

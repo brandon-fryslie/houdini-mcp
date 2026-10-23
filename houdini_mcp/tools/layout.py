@@ -9,9 +9,10 @@ from typing import Any
 
 from ._common import (
     RGB,
+    UNDOABLE,
     InvalidInput,
-    handle_connection_errors,
     node_at,
+    tool,
     using,
 )
 
@@ -23,7 +24,7 @@ def _clamped(color: RGB) -> list[float]:
     return [max(0.0, min(1.0, c)) for c in color]
 
 
-@handle_connection_errors("layout_children")
+@tool(UNDOABLE)
 def layout_children(
     node_path: str,
     horizontal_spacing: float = 2.0,
@@ -80,7 +81,7 @@ def layout_children(
         }
 
 
-@handle_connection_errors("set_node_color")
+@tool(UNDOABLE)
 def set_node_color(
     node_path: str,
     color: RGB,
@@ -116,7 +117,7 @@ def set_node_color(
         }
 
 
-@handle_connection_errors("set_node_position")
+@tool(UNDOABLE)
 def set_node_position(
     node_path: str,
     x: float,
@@ -155,7 +156,7 @@ def set_node_position(
         }
 
 
-@handle_connection_errors("create_network_box")
+@tool(UNDOABLE)
 def create_network_box(
     parent_path: str,
     node_paths: list[str],

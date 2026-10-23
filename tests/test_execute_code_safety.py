@@ -14,8 +14,7 @@ import keyword
 from unittest.mock import patch
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
+from hypothesis import given, settings, strategies as st
 
 # ---------------------------------------------------------------------------
 # AC1: expanded dangerous-pattern coverage (network / evasion)

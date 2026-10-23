@@ -41,7 +41,7 @@ from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
 from houdini_mcp.tools import summarization
-from houdini_mcp.tools._common import FAILURE, Vec3, handle_connection_errors
+from houdini_mcp.tools._common import FAILURE, Vec3
 from houdini_mcp.tools.code import Policy
 from tests.conftest import DEFAULT_SETTINGS, Wire
 
@@ -49,6 +49,34 @@ CONTRACTS_DOC = pathlib.Path(__file__).parent.parent / "docs" / "tool-contracts.
 
 # A markdown heading that presents the example beneath it as a mistake.
 WRONG_EXAMPLE_MARK = "❌"
+
+
+# One legal value for each parameter some served tool requires, so any tool can be
+# called; a tool requiring a parameter not named here fails the test that calls it.
+REQUIRED_ARGUMENTS: dict[str, Any] = {
+    "node_type": "geo",
+    "code": "pass",
+    "node_path": "/obj",
+    "param_name": "tx",
+    "value": 1.0,
+    "file_path": "/tmp/next.hip",
+    "rop_path": "/out/rop1",
+    "settings": {},
+    "rop_type": "opengl",
+    "src_path": "/obj/a",
+    "dst_path": "/obj/b",
+    "new_order": [0],
+    "help_type": "sop",
+    "item_name": "box",
+    "geometry_path": "/obj/a",
+    "material_path": "/mat/m",
+    "color": [0.0, 0.0, 0.0],
+    "x": 0.0,
+    "y": 0.0,
+    "parent_path": "/obj",
+    "node_paths": [],
+    "pane_types": ["SceneViewer"],
+}
 
 
 @pytest.fixture
@@ -113,12 +141,98 @@ class TestServedSchemas:
             assert json.loads(json.dumps(schema)) == schema, tool.name
             jsonschema.Draft202012Validator.check_schema(schema)
 
-    def test_every_served_tool_has_a_policy(self, served: dict[str, Tool]) -> None:
-        """TOOL_POLICIES is the map of the served surface: a new tool must be classified,
-        and a policy for a tool nobody serves is a stale entry."""
-        from houdini_mcp.tools.transactions import TOOL_POLICIES
+    def test_the_served_names_are_the_ones_clients_call(self, served: dict[str, Tool]) -> None:
+        """A served name is the wire contract: a tool's name is its function's, so
+        renaming the function renames what clients call, and that is decided here."""
+        assert set(served) == {
+            "assign_material",
+            "capture_multiple_panes",
+            "capture_pane_screenshot",
+            "check_connection",
+            "connect_nodes",
+            "create_material",
+            "create_network_box",
+            "create_node",
+            "create_render_node",
+            "delete_node",
+            "disconnect_node_input",
+            "execute_code",
+            "find_error_nodes",
+            "find_nodes",
+            "get_geo_summary",
+            "get_houdini_help",
+            "get_last_scene_diff",
+            "get_material_info",
+            "get_node_info",
+            "get_parameter_schema",
+            "get_render_settings",
+            "get_scene_info",
+            "get_summarization_status",
+            "layout_children",
+            "list_children",
+            "list_node_types",
+            "list_render_nodes",
+            "list_visible_panes",
+            "load_scene",
+            "manage_cache",
+            "new_scene",
+            "ping_houdini",
+            "render_node_network",
+            "render_quad_view",
+            "render_viewport",
+            "reorder_inputs",
+            "save_scene",
+            "serialize_scene",
+            "set_node_color",
+            "set_node_flags",
+            "set_node_position",
+            "set_parameter",
+            "set_render_settings",
+        }
 
-        assert set(served) == set(TOOL_POLICIES)
+    def test_a_tool_names_no_other_tool(self) -> None:
+        """A tool's body refers to no tool but itself: the name its failures and statuses
+        carry, and the policy it holds the scene under, are its own."""
+        served_names = {fn.__name__ for fn in tools.SERVED_TOOLS}
+        for fn in tools.SERVED_TOOLS:
+            body = ast.parse(textwrap.dedent(inspect.getsource(inspect.unwrap(fn))))
+            named = {
+                node.id
+                for node in ast.walk(body)
+                if isinstance(node, ast.Name) and node.id in served_names
+            }
+            assert named <= {fn.__name__}, (fn.__name__, named)
+
+    def test_two_tools_cannot_be_served_under_one_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        from houdini_mcp.server import build_server
+
+        monkeypatch.setattr(tools, "SERVED_TOOLS", (*tools.SERVED_TOOLS, tools.get_scene_info))
+        with Results.claim(tmp_path) as results, pytest.raises(ValueError, match="get_scene_info"):
+            build_server(DEFAULT_SETTINGS, results)
+
+    async def test_every_served_tools_failure_names_it_as_it_is_served(
+        self, client: Client[Any], served: dict[str, Tool], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The operation the boundary names a failure by is the name the client called.
+        Every call fails inside the tool's boundary: a sync tool's recovery raises, and
+        no Houdini answers an async tool's read. The names a body builds are
+        test_a_tool_names_no_other_tool's."""
+
+        def broken(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("injected")
+
+        monkeypatch.setattr("houdini_mcp.tools._common.recovering", broken)
+        monkeypatch.setattr("houdini_mcp.connection.handshake.connect", broken)
+        for name, served_tool in served.items():
+            arguments = {
+                parameter: REQUIRED_ARGUMENTS[parameter]
+                for parameter in served_tool.input_schema.get("required", [])
+            }
+            result = await client.call_tool(name, arguments, raise_on_error=False)
+            failure = FAILURE.validate_python(result.structured_content)
+            assert failure.operation == name, (name, failure)
 
     def test_every_served_parameter_is_documented(self, served: dict[str, Tool]) -> None:
         """A client learns what each argument means from the schema it reads."""
@@ -140,7 +254,7 @@ class TestServedSchemas:
     def test_every_parameter_a_tool_takes_from_the_server_is_one_it_binds(self) -> None:
         """A keyword-only parameter with no default is configuration the tool takes from
         the server; one the server does not bind would be published for the caller to choose."""
-        from houdini_mcp.server import SERVED_TOOLS
+        from houdini_mcp.tools import SERVED_TOOLS
 
         configured = set(DEFAULT_SETTINGS.bound())
         for tool in SERVED_TOOLS:
@@ -378,10 +492,12 @@ class TestServedSchemas:
     def test_a_default_outside_its_type_fails_the_tools_definition(self) -> None:
         """A default is served and bound without a caller's parse, so it is parsed
         where the tool is defined: a tool cannot serve a value it would refuse."""
+        from houdini_mcp.tools._common import HOLDS_SCENE, tool
+
         with pytest.raises(TypeError, match=r"render_viewport default .*camera_rotation"):
 
-            @handle_connection_errors("render_viewport")
-            def tool(camera_rotation: Vec3 = (math.nan, 0.0, 0.0)) -> dict[str, Any]:
+            @tool(HOLDS_SCENE)
+            def render_viewport(camera_rotation: Vec3 = (math.nan, 0.0, 0.0)) -> dict[str, Any]:
                 return {}
 
     async def test_a_color_is_three_finite_numbers(

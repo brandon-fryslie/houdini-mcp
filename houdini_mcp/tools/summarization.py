@@ -18,7 +18,7 @@ import httpx
 from .. import shorthand
 from ..reading import RESPONSE_BOUND_BYTES, Reading
 from ..settings import Summarizer
-from ._common import run_in_executor
+from ._common import READ, run_in_executor, tool
 
 logger = logging.getLogger("houdini_mcp.summarization")
 
@@ -297,6 +297,7 @@ async def _request(prompt: str, summarizer: Summarizer) -> str | NoSummary:
     return completion.text
 
 
+@tool(READ)
 def get_summarization_status(*, summarizer: Summarizer) -> dict[str, Any]:
     """
     Get AI summarization configuration and status.

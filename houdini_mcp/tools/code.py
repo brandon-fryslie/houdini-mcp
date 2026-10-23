@@ -50,13 +50,15 @@ from typing import Any, Literal
 
 from ..connection import houdini
 from ._common import (
+    PROGRAM,
+    READ,
     Count,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
     Seconds,
     _truncate_output,
-    handle_connection_errors,
+    tool,
     using,
 )
 from .code_policy import (
@@ -486,7 +488,7 @@ def _blocked(
     )
 
 
-@handle_connection_errors("execute_code")
+@tool(PROGRAM)
 def execute_code(
     code: str,
     capture_diff: bool = False,
@@ -583,7 +585,7 @@ def execute_code(
     return _execute_with_grant(
         code,
         grant,
-        operation="execute_code",
+        operation=execute_code.__name__,
         capture_diff=capture_diff,
         max_stdout_size=max_stdout_size,
         max_stderr_size=max_stderr_size,
@@ -983,6 +985,7 @@ def _execute_with_grant(
         return result
 
 
+@tool(READ)
 def get_last_scene_diff() -> dict[str, Any]:
     """
     Get the scene diff of the execute_code run with capture_diff=True launched last.

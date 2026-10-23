@@ -13,11 +13,14 @@ from typing import Any
 
 from ..settings import Summarizer
 from ._common import (
+    CHECKPOINTED,
+    FILE_WRITE,
+    READ,
     Count,
     OperationFailed,
-    handle_connection_errors,
     node_at,
     on_the_scene,
+    tool,
     using,
 )
 from .cache import invalidate_all_caches
@@ -28,7 +31,7 @@ from .summarization import SCENE_BRIEF, summarized
 logger = logging.getLogger("houdini_mcp.tools.scene")
 
 
-@handle_connection_errors("get_scene_info")
+@tool(READ)
 def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Get current Houdini scene information.
@@ -60,7 +63,7 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
         }
 
 
-@handle_connection_errors("save_scene")
+@tool(FILE_WRITE)
 def save_scene(
     file_path: str | None = None, host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
@@ -87,7 +90,7 @@ def save_scene(
         return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 
 
-@handle_connection_errors("load_scene")
+@tool(CHECKPOINTED)
 def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Load a Houdini scene file in place of the current scene.
@@ -114,7 +117,7 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
         return {"status": "success", "message": "Scene loaded", "file_path": file_path}
 
 
-@handle_connection_errors("new_scene")
+@tool(CHECKPOINTED)
 def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Create a new empty Houdini scene in place of the current scene.
@@ -138,7 +141,7 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
         return {"status": "success", "message": "New scene created"}
 
 
-@handle_connection_errors("serialize_scene")
+@tool(READ)
 async def serialize_scene(
     root_path: str = "/obj",
     include_params: bool = False,
@@ -170,7 +173,7 @@ async def serialize_scene(
         or ai_summary_error saying why no summary could be made.
     """
     result = await on_the_scene(
-        "serialize_scene", _scene_tree, root_path, include_params, max_depth, host, port
+        serialize_scene, _scene_tree, root_path, include_params, max_depth, host, port
     )
     return await summarized(result, SCENE_BRIEF, summarizer=summarizer, asked=summarize)
 

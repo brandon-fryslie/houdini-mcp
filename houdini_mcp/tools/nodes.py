@@ -16,16 +16,18 @@ from typing import Any, Literal
 
 from ..connection import Link
 from ._common import (
+    READ,
+    UNDOABLE,
     Count,
     OperationFailed,
     ResultLimit,
-    handle_connection_errors,
     join_warnings,
     node_at,
     page_from,
     paginate,
     paging_fields,
     parse_page_request,
+    tool,
     using,
 )
 from .cache import node_type_cache
@@ -43,7 +45,7 @@ Detail = Literal["compact", "standard", "full"]
 CookInfo = Literal["none", "inspect", "force_cook"]
 
 
-@handle_connection_errors("create_node")
+@tool(UNDOABLE)
 def create_node(
     node_type: str,
     parent_path: str = "/obj",
@@ -79,7 +81,7 @@ def create_node(
         }
 
 
-@handle_connection_errors("get_node_info")
+@tool(READ)
 def get_node_info(
     node_path: str,
     detail: Detail = "full",
@@ -250,7 +252,7 @@ def _messages(severity: str, path: str, messages: Any) -> list[dict[str, str]]:
     return [{"severity": severity, "message": m, "node_path": path} for m in messages]
 
 
-@handle_connection_errors("delete_node")
+@tool(UNDOABLE)
 def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Delete a node from the scene.
@@ -275,7 +277,7 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
         }
 
 
-@handle_connection_errors("list_node_types")
+@tool(READ)
 def list_node_types(
     category: str | None = None,
     name_filter: str | None = None,
@@ -338,7 +340,7 @@ def list_node_types(
         return result
 
 
-@handle_connection_errors("list_children")
+@tool(READ)
 def list_children(
     node_path: str,
     recursive: bool = False,
@@ -482,7 +484,7 @@ def list_children(
         }
         failed = [Undone(u["path"], "operation_failed", u[UNREAD]) for u in unwalked]
         result = {
-            "status": batch_status("list_children", range(walked), failed, **report),
+            "status": batch_status(list_children.__name__, range(walked), failed, **report),
             **report,
         }
 
@@ -519,7 +521,7 @@ def _search_module(link: Link) -> Any:
         ) from e
 
 
-@handle_connection_errors("find_nodes")
+@tool(READ)
 def find_nodes(
     root_path: str = "/obj",
     pattern: str = "*",

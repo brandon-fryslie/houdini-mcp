@@ -18,7 +18,6 @@ from .results import Results
 from .settings import Http, ServerSettings, Serving, Stdio
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
-from .tools.transactions import TOOL_POLICIES
 from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
@@ -29,56 +28,6 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "healthy", "service": "houdini-mcp"})
 
 
-# [LAW:one-source-of-truth] Each tool's caller-facing signature and docs are its
-# function in houdini_mcp.tools; the served tool is derived from that function,
-# so the schema a client reads and the function that runs cannot diverge.
-SERVED_TOOLS: tuple[Callable[..., Any], ...] = (
-    tools.get_scene_info,
-    tools.create_node,
-    tools.execute_code,
-    tools.set_parameter,
-    tools.get_node_info,
-    tools.delete_node,
-    tools.save_scene,
-    tools.load_scene,
-    tools.new_scene,
-    tools.serialize_scene,
-    tools.get_last_scene_diff,
-    tools.list_node_types,
-    tools.list_children,
-    tools.find_nodes,
-    tools.render_viewport,
-    tools.render_quad_view,
-    tools.list_render_nodes,
-    tools.get_render_settings,
-    tools.set_render_settings,
-    tools.create_render_node,
-    tools.find_error_nodes,
-    tools.check_connection,
-    tools.ping_houdini,
-    tools.connect_nodes,
-    tools.disconnect_node_input,
-    tools.set_node_flags,
-    tools.reorder_inputs,
-    tools.get_parameter_schema,
-    tools.get_geo_summary,
-    tools.get_houdini_help,
-    tools.create_material,
-    tools.assign_material,
-    tools.get_material_info,
-    tools.layout_children,
-    tools.set_node_color,
-    tools.set_node_position,
-    tools.create_network_box,
-    tools.manage_cache,
-    tools.get_summarization_status,
-    tools.capture_pane_screenshot,
-    tools.list_visible_panes,
-    tools.capture_multiple_panes,
-    tools.render_node_network,
-)
-
-
 def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     """The tool as a client's call runs it, never blocking the server's event loop.
 
@@ -87,17 +36,15 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     sends its own Houdini read there and finishes the rest on the loop with the
     scene released.
     """
-    name = tool.__name__
-    TOOL_POLICIES[name]  # an unclassified tool fails here, when the server is built
     if inspect.iscoroutinefunction(tool):
         return tool
 
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
-            return await on_the_scene(name, tool, *args, **kwargs)
+            return await on_the_scene(tool, tool, *args, **kwargs)
         except WorkerStillRunning as refused:
-            return failure_response(refused, name)
+            return failure_response(refused, tool.__name__)
 
     return call
 
@@ -145,9 +92,12 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
         "Houdini MCP",
         instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
         strict_input_validation=True,
+        # [LAW:one-source-of-truth] a served name is one tool: a second tool under
+        # it fails the build instead of replacing the first.
+        on_duplicate="error",
     )
     mcp.custom_route("/health", methods=["GET"])(health_check)
-    for tool in SERVED_TOOLS:
+    for tool in tools.SERVED_TOOLS:
         mcp.add_tool(served(tool, settings, results))
 
     def delivered_result(name: str) -> str:

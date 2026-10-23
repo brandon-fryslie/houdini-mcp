@@ -18,11 +18,9 @@ from typing import Any
 
 import pytest
 from fastmcp import Client, FastMCP
-from hypothesis import given, settings
-from hypothesis import strategies as st
+from hypothesis import given, settings, strategies as st
 
-from houdini_mcp import delivery
-from houdini_mcp import results as store
+from houdini_mcp import delivery, results as store
 from houdini_mcp.delivery import deliver
 from houdini_mcp.reading import RESPONSE_BOUND_BYTES, Reading
 from houdini_mcp.results import RESULTS_BUDGET_BYTES, Results

@@ -3,10 +3,10 @@
 from typing import Any
 
 from ..connection import ping
-from ._common import handle_connection_errors, using
+from ._common import READ, tool, using
 
 
-@handle_connection_errors("check_connection")
+@tool(READ)
 def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Check Houdini connection status with detailed info.
@@ -24,7 +24,7 @@ def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, An
         return {"status": "success", **link.info()}
 
 
-@handle_connection_errors("ping_houdini")
+@tool(READ)
 def ping_houdini(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     """
     Quick connectivity test to Houdini.
