@@ -363,6 +363,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any exception a program raises now leads with its type (`ValueError: boom`);
   it was the bare text, which for these is empty or `0`.
 
+- **BREAKING (wire)**: `get_node_info`'s `type_description` is
+  `{"unread": "<ExcType>: <message>"}` when Houdini will not give the node
+  type's description, beside the rest of the node info (houdini-laws-etg.wvs).
+  The whole call failed with `operation_failed`, as for a broken HDA definition.
+  A link lost during that read is still `connection_lost`.
+
 - **BREAKING (wire)**: `list_node_types` and `manage_cache("warmup")` fail with
   `operation_failed` when Houdini refuses the node-type walk
   (houdini-laws-etg.29y); they returned success with no types. Nothing is
