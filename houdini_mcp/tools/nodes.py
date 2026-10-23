@@ -459,10 +459,13 @@ def list_children(
                     yield from walk(child, child_path, depth + 1)
 
         # [LAW:dataflow-not-control-flow] max_nodes is a value applied to the walk,
-        # not a stop inside it: a node taken past it is the proof one was left out.
-        taken = list(islice(walk(parent, parent.path()), max_nodes + 1))
-        cut = len(taken) > max_nodes
-        children_list = [record(child, child_path) for child, child_path in taken[:max_nodes]]
+        # not a stop inside it: a node the walk still has past it is the proof one
+        # was left out.
+        nodes = walk(parent, parent.path())
+        children_list = [
+            record(child, child_path) for child, child_path in islice(nodes, max_nodes)
+        ]
+        cut = next(nodes, None) is not None
         logger.info(
             "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
             "beyond_depth_unknown=%d cut=%s",
