@@ -520,6 +520,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plugin installed as README describes now loads (houdini-tuneup-ef3.0ho). The
+  package JSON set the plugin root to the packages directory itself, so Houdini
+  found neither `houdini_mcp_plugin`, `houdini_mcp_handshake` nor
+  `houdini_mcp_search`, and no "Houdini MCP" shelf. `houdini_plugin/` is now laid
+  out as a packages directory (`houdini_mcp.json` beside `houdini_mcp/python` and
+  `houdini_mcp/toolbar`), and the install copies that tree into the packages
+  directory in place of any earlier install; re-running README's install
+  fixes an old one.
+  `tests/integration/test_plugin_package.py` installs into a scratch packages
+  directory and checks the imports and the shelf in a fresh `hython`.
+
 - `get_houdini_help` (houdini-tuneup-ef3.vrw): an `item_name` is one page of its
   section, so a `/`, `#` or `?` in it no longer fetches some other page. Its
   `url`, on success or a missing page, is where it read, after any redirect. The

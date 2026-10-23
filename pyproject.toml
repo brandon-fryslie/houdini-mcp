@@ -82,7 +82,7 @@ houdini-mcp = "houdini_mcp.__main__:main"
 # houdini_mcp_handshake is defined once, in the plugin tree (Houdini's path), and
 # ships in this distribution from that same source. The plugin itself does not, nor
 # does houdini_mcp_search: the server reaches it only inside Houdini.
-where = [".", "houdini_plugin/python"]
+where = [".", "houdini_plugin/houdini_mcp/python"]
 include = ["houdini_mcp*"]
 exclude = ["houdini_mcp_plugin*", "houdini_mcp_search*"]
 
@@ -136,7 +136,7 @@ indent-style = "space"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # The plugin tree, as the package JSON puts it on Houdini's path.
-pythonpath = ["houdini_plugin/python"]
+pythonpath = ["houdini_plugin/houdini_mcp/python"]
 asyncio_mode = "auto"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
@@ -184,7 +184,7 @@ no_strict_optional = true
 exclude = ["tests/", "build/"]
 # houdini_mcp_handshake ships from the plugin tree; the editable install reaches it
 # through an import hook mypy cannot follow.
-mypy_path = "houdini_plugin/python"
+mypy_path = "houdini_plugin/houdini_mcp/python"
 
 # Bandit security configuration
 [tool.bandit]

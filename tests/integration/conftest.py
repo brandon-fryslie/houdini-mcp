@@ -1,4 +1,5 @@
-"""The live tests: every test here runs against a headless Houdini the session starts.
+"""The live tests: every test here runs against a real Houdini, most against the headless
+one the session starts when a test first asks for ``houdini``.
 
 Run them with ``uv run pytest -m integration``.
 """
@@ -33,8 +34,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture(scope="session")
-def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
-    """The Houdini this session started, until the session ends."""
+def houdini_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
+    """The Houdini this session started, until the session ends.
+
+    Tests ask for ``houdini``, which empties the scene; this leaves it as the last test did.
+    """
     command = hython_listener(hython_executable(os.environ))
     log_path = tmp_path_factory.mktemp("hython") / "hython.log"
     with pytest.MonkeyPatch.context() as mp:
@@ -49,6 +53,19 @@ def houdini(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Target]:
 
 
 @pytest.fixture
+def houdini(houdini_session: Target) -> Target:
+    """This session's Houdini, its scene emptied of whatever the tests before built.
+
+    [LAW:dataflow-not-control-flow] the empty scene comes with asking for Houdini, so a
+    test that asks for none starts no listener.
+    """
+    connection.ensure_connected(houdini_session.host, houdini_session.port).hipFile.clear(
+        suppress_save_prompt=True
+    )
+    return houdini_session
+
+
+@pytest.fixture
 def at(houdini: Target) -> dict[str, Any]:
     """The ``host`` and ``port`` arguments every tool call takes, naming this session's Houdini."""
     return asdict(houdini)
@@ -58,9 +75,3 @@ def at(houdini: Target) -> dict[str, Any]:
 def bound(at: dict[str, Any]) -> dict[str, Any]:
     """Every argument the suite's server binds into a tool, naming this session's Houdini."""
     return DEFAULT_SETTINGS.bound() | at
-
-
-@pytest.fixture(autouse=True)
-def empty_scene(houdini: Target) -> None:
-    """Each test starts from an empty scene, whatever the tests before it built."""
-    connection.ensure_connected(houdini.host, houdini.port).hipFile.clear(suppress_save_prompt=True)
