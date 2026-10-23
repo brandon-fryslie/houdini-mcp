@@ -46,22 +46,55 @@ def join_path(parent: str, name: str) -> str:
     return f"{parent.rstrip('/')}/{name}"
 
 
-# [LAW:one-source-of-truth] the root of a fresh Houdini 22.0.466 scene, as hython
-# reads it (houdini-tests-tct): each context's type name, which is also its node
-# name, and the category of the nodes it holds. Every context is a Manager.
-ROOT_CONTEXTS = {
-    "obj": "Object",
-    "out": "Driver",
-    "ch": "ChopNet",
-    "shop": "Shop",
-    "img": "CopNet",
-    "vex": "VopNet",
-    "mat": "Vop",
-    "stage": "Lop",
-    "tasks": "TopNet",
+# The SOPs a network of Sop category offers that hold no children; the custom
+# fillers give list_node_types more than one page to cut.
+_SOP_LEAVES = (
+    *("sphere", "box", "grid", "tube", "torus", "circle", "line", "curve", "noise"),
+    *("mountain", "attribnoise", "cloudnoise", "heightfield_noise", "transform", "xform"),
+    *("blast", "delete", "dissolve", "fuse", "clean", "merge", "switch", "copy", "scatter"),
+    *("copytopoints", "foreach", "vex", "wrangle", "attribwrangle", "pointwrangle"),
+    *("volumewrangle", "vdb", "vdbfromparticles", "vdbsmooth", "vdbreshape", "vdbcombine"),
+    *("file", "alembic", "filecache", "cache", "stash", "group", "groupcreate"),
+    *("groupcombine", "groupexpression", "subdivide", "polyextrude", "polybevel"),
+    *("polyreduce", "polyfill", "null", "output", "object_merge", "timeshift", "trail"),
+    *("material", "attribcreate", "split", "custom"),
+    *(f"custom_sop_{i}" for i in range(60)),
+)
+
+# [LAW:one-source-of-truth] the fake's node types: for each category, the types it
+# offers and the category each one's network holds, None for a node that is not a
+# network. A node's category is the one its network holds; createNode admits
+# exactly the types listed under it, so none at all in a category the fake lists
+# no types for (/ch's ChopNet, /tasks' TopNet, ...). The root's children are the
+# contexts of a fresh Houdini 22.0.466 scene, as hython reads it
+# (houdini-tests-tct): each one's type name is also its node name.
+NODE_TYPES: dict[str, dict[str, str | None]] = {
+    "Director": {"root": "Manager"},
+    "Manager": {
+        "obj": "Object",
+        "out": "Driver",
+        "ch": "ChopNet",
+        "shop": "Shop",
+        "img": "CopNet",
+        "vex": "VopNet",
+        "mat": "Vop",
+        "stage": "Lop",
+        "tasks": "TopNet",
+    },
+    "Object": {
+        **dict.fromkeys(("null", "cam", "light", "instance", "fetch")),
+        "geo": "Sop",
+        "subnet": "Object",
+        "dopnet": "Dop",
+        "ropnet": "Driver",
+        "chopnet": "Chop",
+    },
+    "Sop": {**dict.fromkeys(_SOP_LEAVES), "subnet": "Sop", "hda": "Sop", "dopnet": "Dop"},
+    "Dop": {"pyrosolver": None, "subnet": "Dop"},
+    "Vop": {"principledshader": None, "subnet": "Vop"},
+    "Driver": {"opengl": None, "karma": None, "subnet": "Driver"},
+    "Lop": {"sopcreate": "Sop"},
 }
-# The category of the nodes each network type holds, where it is not the network's own.
-CHILD_CATEGORIES = {"geo": "Sop", "root": "Manager", **ROOT_CONTEXTS}
 
 
 class OperationFailed(Exception):
@@ -206,7 +239,9 @@ class MockHouNode:
         self._type_description = type_description
         # [LAW:one-source-of-truth] the tree is the scene graph: a node is in the
         # scene exactly when it is in its parent's children, and hou.node() walks it.
-        self._children: list[MockHouNode] = []
+        # A tree built by hand is only assembled here: unplaced, it has no category
+        # to judge it by, so attach links and judges it when it enters a scene.
+        self._children: list[MockHouNode] = list(children or [])
         self._parent: MockHouNode | None = None
         self._params: dict[str, Any] = params if params is not None else dict(_TRANSFORM_PARAMS)
         self._inputs: list[Any] = []
@@ -241,26 +276,20 @@ class MockHouNode:
         self._indirect_inputs = tuple(
             MockSubnetIndirectInput(self, n) for n in range(1, 5) if node_type == "subnet"
         )
-        for child in children or []:
-            self.attach(child)
 
     def attach(self, child: "MockHouNode") -> None:
-        """Place a prebuilt child in this network; the child's path must say so.
+        """Place a prebuilt subtree in this network, as Houdini could have built it.
 
-        The one write path for a node built by hand (createNode builds its own).
-        A path that names another parent, or a name already taken here, is a
-        fixture lying about the scene, and the test fails here instead of later.
+        [LAW:single-enforcer] the one way into the scene (createNode and add_node
+        come here) and the one place a parent link is set. The whole subtree is
+        judged before any of it is linked, so a refused one leaves the scene and
+        every node's links as they were. A path, name or parent that lies is a
+        fixture lying, ValueError; a type its network cannot hold is refused as
+        Houdini's createNode refuses it.
         """
-        parent_path, name = split_path(child.path())
-        if parent_path != self.path() or name != child.name():
-            raise ValueError(
-                f"{child.path()!r} (name {child.name()!r}) cannot be a child of {self.path()!r}"
-            )
-        if child._parent is not None:
-            raise ValueError(f"{child.path()!r} is already in {child._parent.path()!r}")
-        if self.node(name) is not None:
-            raise ValueError(f"{self.path()!r} already has a child named {name!r}")
-        child._parent = self
+        _admit(self, self._held(), child, self._children)
+        for network, node in [(self, child), *_links(child)]:
+            node._parent = network
         self._children.append(child)
 
     def node(self, path: str) -> "MockHouNode | None":
@@ -286,47 +315,29 @@ class MockHouNode:
         mock_type = MagicMock()
         mock_type.name.return_value = self._node_type
         mock_type.description.return_value = self._type_description
-
-        # Add category mock
-        mock_category = MagicMock()
-        # Determine category from node type
-        # SOPs: grid, sphere, box, noise, mountain, merge, etc.
-        # Objects: geo, cam, light, null (at /obj level)
-        # A subnet is of its network's category: an Object subnet under /obj,
-        # a SOP subnet inside a geo.
-        parent = self._parent
-        object_subnet = (
-            self._node_type == "subnet" and parent is not None and parent.path() == "/obj"
-        )
-        if object_subnet or self._node_type in ["geo", "cam", "light", "null"]:
-            mock_category.name.return_value = "Object"
-        elif self._node_type in [
-            "grid",
-            "sphere",
-            "box",
-            "noise",
-            "mountain",
-            "merge",
-            "transform",
-            "subnet",
-        ]:
-            mock_category.name.return_value = "Sop"
-        elif self._node_type in ["dopnet", "pyrosolver"]:
-            mock_category.name.return_value = "Dop"
-        elif self._node_type in ["opengl", "karma"]:
-            mock_category.name.return_value = "Driver"
-        elif self._node_type == "root":
-            mock_category.name.return_value = "Director"
-        elif self._node_type in ROOT_CONTEXTS:
-            mock_category.name.return_value = "Manager"
-        else:
-            mock_category.name.return_value = "Sop"  # Default to Sop
-
-        mock_type.category.return_value = mock_category
-        mock_type.nameWithCategory.return_value = (
-            f"{mock_category.name.return_value}/{self._node_type}"
-        )
+        # Read when asked, not when type() is: a node's category is its network's,
+        # which a node built by hand has only once it is placed.
+        mock_type.category = lambda: MockNodeTypeCategory(self._category())
+        mock_type.nameWithCategory = lambda: f"{self._category()}/{self._node_type}"
         return mock_type
+
+    def _category(self) -> str:
+        """The category this node's network holds, as Houdini's node takes it.
+
+        The root is the one node with no network, and it is the Director. Any other
+        parentless node is not in a scene, and Houdini has no such node.
+        """
+        if self._parent is not None:
+            held = self._parent._held()
+            assert held is not None, "attach places no child in a node that is not a network"
+            return held
+        if self._node_type != "root":
+            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
+        return "Director"
+
+    def _held(self) -> str | None:
+        """The category of the nodes this network holds; None for a node that is not one."""
+        return NODE_TYPES[self._category()][self._node_type]
 
     def children(self) -> tuple["MockHouNode", ...]:
         """The network's children, as hou.Node.children gives them: a tuple, which
@@ -337,13 +348,10 @@ class MockHouNode:
         return self._indirect_inputs
 
     def childTypeCategory(self) -> "MockNodeTypeCategory | None":
-        """The category of this network's children: SOPs inside a geo, contexts under
-        the root, each root context's own kind, any other network's own kind; None
-        for a node that is not a network, as hou.Node.childTypeCategory returns."""
-        if self._node_type in ("cam", "light", "null"):
-            return None
-        contained = CHILD_CATEGORIES.get(self._node_type)
-        return MockNodeTypeCategory(contained or self.type().category().name())
+        """The category of this network's children; None for a node that is not a
+        network, as hou.Node.childTypeCategory returns."""
+        held = self._held()
+        return MockNodeTypeCategory(held) if held is not None else None
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -657,6 +665,40 @@ class MockHouNode:
         self.setInput(0, node)
 
 
+def _admit(
+    network: MockHouNode,
+    held: str | None,
+    node: MockHouNode,
+    siblings: Sequence[MockHouNode],
+) -> None:
+    """Refuse ``node`` and its subtree as a child of ``network``, beside ``siblings``,
+    unless Houdini could have built them there. ``held`` is the category the network
+    holds, None for a node that is not a network, which holds no type at all."""
+    parent_path, name = split_path(node.path())
+    if parent_path != network.path() or name != node.name():
+        raise ValueError(
+            f"{node.path()!r} (name {node.name()!r}) cannot be a child of {network.path()!r}"
+        )
+    if node._parent is not None:
+        raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
+    if any(sibling.name() == name for sibling in siblings):
+        raise ValueError(f"{network.path()!r} already has a child named {name!r}")
+    offered = {} if held is None else NODE_TYPES.get(held, {})
+    if node._node_type not in offered:
+        refused = OperationFailed("The attempted operation failed.\nInvalid node type name")
+        refused.add_note(f"{node._node_type!r} in {network.path()!r}, which holds {held}")
+        raise raised_inside_houdini(refused)
+    for index, child in enumerate(node._children):
+        _admit(node, offered[node._node_type], child, node._children[:index])
+
+
+def _links(node: MockHouNode) -> Generator[tuple[MockHouNode, MockHouNode], None, None]:
+    """Every (network, child) pair under ``node``, the links attach sets."""
+    for child in node._children:
+        yield node, child
+        yield from _links(child)
+
+
 class MockModuleNamespace:
     """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
@@ -703,7 +745,7 @@ class MockHouModule:
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
 
-        for context in ROOT_CONTEXTS:
+        for context in NODE_TYPES["Manager"]:
             self.add_node(MockHouNode(path=f"/{context}", name=context, node_type=context))
 
         # Mock hipFile
@@ -787,97 +829,16 @@ class MockHouModule:
         return next((i for i in parent.indirectInputs() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, Any]:
-        """Return mock node type categories with sufficient types for testing limits."""
-        # Object-level node types
-        object_types = {
-            "geo": MagicMock(),
-            "null": MagicMock(),
-            "cam": MagicMock(),
-            "light": MagicMock(),
-            "dopnet": MagicMock(),
-            "ropnet": MagicMock(),
-            "chopnet": MagicMock(),
-            "subnet": MagicMock(),
-            "instance": MagicMock(),
-            "fetch": MagicMock(),
-        }
-        for name, mock_type in object_types.items():
-            mock_type.description.return_value = f"{name.capitalize()} node"
-
-        object_category = MagicMock()
-        object_category.nodeTypes.return_value = object_types
-
-        # SOP-level node types (many more to test limits)
-        sop_type_names = [
-            "sphere",
-            "box",
-            "grid",
-            "tube",
-            "torus",
-            "circle",
-            "line",
-            "curve",
-            "noise",
-            "mountain",
-            "attribnoise",
-            "cloudnoise",
-            "heightfield_noise",
-            "transform",
-            "xform",
-            "blast",
-            "delete",
-            "dissolve",
-            "fuse",
-            "clean",
-            "merge",
-            "switch",
-            "copy",
-            "scatter",
-            "copytopoints",
-            "foreach",
-            "vex",
-            "wrangle",
-            "attribwrangle",
-            "pointwrangle",
-            "volumewrangle",
-            "vdb",
-            "vdbfromparticles",
-            "vdbsmooth",
-            "vdbreshape",
-            "vdbcombine",
-            "file",
-            "alembic",
-            "filecache",
-            "cache",
-            "stash",
-            "group",
-            "groupcreate",
-            "groupcombine",
-            "groupexpression",
-            "subdivide",
-            "polyextrude",
-            "polybevel",
-            "polyreduce",
-            "polyfill",
-            "null",
-            "output",
-            "object_merge",
-            "timeshift",
-            "trail",
-            # Add more to exceed 100 total
-            *[f"custom_sop_{i}" for i in range(60)],
-        ]
-
-        sop_types = {}
-        for name in sop_type_names:
-            mock_type = MagicMock()
-            mock_type.description.return_value = f"{name.replace('_', ' ').title()} SOP"
-            sop_types[name] = mock_type
-
-        sop_category = MagicMock()
-        sop_category.nodeTypes.return_value = sop_types
-
-        return {"Object": object_category, "Sop": sop_category}
+        """Every category of NODE_TYPES, each offering its node types by name."""
+        categories = {}
+        for category, offered in NODE_TYPES.items():
+            types = {}
+            for name in offered:
+                types[name] = MagicMock()
+                types[name].description.return_value = f"{name.replace('_', ' ').title()} node"
+            categories[category] = MagicMock()
+            categories[category].nodeTypes.return_value = types
+        return categories
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""

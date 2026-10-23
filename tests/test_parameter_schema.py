@@ -422,17 +422,17 @@ class TestGetParameterSchema:
         from houdini_mcp.tools import get_parameter_schema
 
         mock_hou = create_mock_hou_with_parm_types()
-        sphere = MockHouNode(path="/obj/s", name="s", node_type="sphere", params={"sep1": []})
-        mock_hou.add_node(sphere)
+        sphere = MockHouNode(path="/obj/geo1/s", name="s", node_type="sphere", params={"sep1": []})
+        mock_hou.node("/obj").createNode("geo", "geo1").attach(sphere)
         give_templates(
             sphere, [MockParmTemplate("sep1", "Separator", mock_hou.parmTemplateType.Separator)]
         )
 
         connected_to(mock_hou)
-        result = get_parameter_schema("/obj/s", "sep1")
+        result = get_parameter_schema("/obj/geo1/s", "sep1")
 
         assert (result["status"], result["kind"]) == ("error", "invalid_input")
-        assert "sep1 on /obj/s is layout (Separator)" in result["message"]
+        assert "sep1 on /obj/geo1/s is layout (Separator)" in result["message"]
 
     def test_get_parameter_schema_toggle_parameter(self, connected_to):
         """Test getting schema for a toggle parameter."""
@@ -707,12 +707,12 @@ class TestMultiparmInstances:
         # parm is named by its template's type#.
         mock_hou = create_mock_hou_with_parm_types()
         node = MockHouNode(
-            path="/obj/n",
+            path="/obj/geo1/n",
             name="n",
             node_type="attribcreate",
             params={"numattr": 2, "type1": 0, "value1v": [1.0, 0.0], "type2": 2},
         )
-        mock_hou.add_node(node)
+        mock_hou.node("/obj").createNode("geo", "geo1").attach(node)
         give_templates(
             node,
             [
@@ -731,7 +731,7 @@ class TestMultiparmInstances:
 
         mock_hou, _ = self._attribcreate()
         connected_to(mock_hou)
-        result = get_parameter_schema("/obj/n")
+        result = get_parameter_schema("/obj/geo1/n")
 
         assert [(p["name"], p["current_value"]) for p in result["parameters"]] == [
             ("numattr", 2),
@@ -750,17 +750,17 @@ class TestMultiparmInstances:
 
         mock_hou, _ = self._attribcreate()
         connected_to(mock_hou)
-        listed = get_parameter_schema("/obj/n")["parameters"]
+        listed = get_parameter_schema("/obj/geo1/n")["parameters"]
 
-        assert get_parameter_schema("/obj/n", "type2")["parameters"] == [listed[3]]
-        assert get_parameter_schema("/obj/n", "value1v")["parameters"] == [listed[2]]
+        assert get_parameter_schema("/obj/geo1/n", "type2")["parameters"] == [listed[3]]
+        assert get_parameter_schema("/obj/geo1/n", "value1v")["parameters"] == [listed[2]]
 
     def test_the_count_is_listed_as_the_parameter_that_makes_instances(self, connected_to):
         from houdini_mcp.tools import get_parameter_schema
 
         mock_hou, _ = self._attribcreate()
         connected_to(mock_hou)
-        [count] = get_parameter_schema("/obj/n", "numattr")["parameters"]
+        [count] = get_parameter_schema("/obj/geo1/n", "numattr")["parameters"]
 
         assert count == {
             "name": "numattr",
