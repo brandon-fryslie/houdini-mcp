@@ -454,7 +454,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `localhost:8082`, where nothing listened, so summarization ran for the first
   time in this fork. Every request sends `chat_template_kwargs` with
   `enable_thinking: false`, so a Qwen3 model writes the summary without first
-  spending its token budget on reasoning; the server must accept that field, as
+  spending its token budget on reasoning; the server must honor that field, as
   vLLM and omlx do. `CLAUDE_PROXY_URL` is
   replaced by `SUMMARIZATION_BASE_URL`, and `SUMMARIZATION_API_KEY` is new;
   `get_summarization_status` returns `base_url` in place of `proxy_url`. A

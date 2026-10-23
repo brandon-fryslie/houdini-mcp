@@ -226,7 +226,7 @@ Environment variables:
 | `HOUDINI_MCP_RESULTS_DIR` | `~/.cache/houdini-mcp/results` | The root under which each running server keeps results too large to return inline, in a directory of its own: its newest that fit in 64MB. A stopped server's results are removed when another starts |
 | `HOUDINI_MCP_ALLOW_BYPASS` | `false` | Whether `execute_code`'s `allow_dangerous` and `allow_heavy_geometry` can be honored at all: true/yes/on/1/t/y or false/no/off/0/f/n, in any case; any other value stops the server |
 | `SUMMARIZATION_ENABLED` | `true` | Whether a result too large to read inline is summarized: true/yes/on/1/t/y or false/no/off/0/f/n, in any case; any other value stops the server |
-| `SUMMARIZATION_BASE_URL` | `http://100.66.66.66:8000/v1` | The OpenAI-compatible chat-completions server summaries are asked of, which must accept the `chat_template_kwargs` request field (vLLM and omlx do); anything but an http(s) URL with a host, and no credentials, stops the server |
+| `SUMMARIZATION_BASE_URL` | `http://100.66.66.66:8000/v1` | The OpenAI-compatible chat-completions server summaries are asked of, which must honor the `chat_template_kwargs` request field (vLLM and omlx do); anything but an http(s) URL with a host, and no credentials, stops the server |
 | `SUMMARIZATION_API_KEY` | `1234` | Bearer token for that server |
 | `SUMMARIZATION_MODEL` | `Qwen3.8-Flash-Next-Sushi` | The model summaries are asked of; empty stops the server |
 

@@ -163,7 +163,8 @@ def summarizer(environ: Mapping[str, str]) -> Summarizer:
         ),
         api_key=setting(environ, "SUMMARIZATION_API_KEY", TypeAdapter(str), "1234"),
         # The model that server keeps pinned, so a summary never waits on a cold load; its
-        # thinking is switched off per request (summarization._request).
+        # thinking is switched off per request (summarization._request). Measured 2026-10-23
+        # at 22.5s for a full 8KB excerpt, against REQUEST_TIMEOUT_SECONDS of 60.
         model=setting(
             environ,
             "SUMMARIZATION_MODEL",
