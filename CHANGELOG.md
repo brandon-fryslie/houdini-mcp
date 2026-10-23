@@ -492,11 +492,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MCP_TRANSPORT`. So the container always summarized with the built-in defaults.
   compose.yaml now passes every setting in the table in README's Configuration
   section. A setting left unset everywhere stays unset in the container, so the
-  server's own default applies, and compose.yaml no longer restates 18811, 3055 and
-  `INFO`. A setting set to an empty value, such as `HOUDINI_PORT=` or `LOG_LEVEL=`,
-  used to become compose's default and now reaches the server empty, which refuses
-  it at start and names the variable; an empty `HOUDINI_RPC_TOKEN=` still means no
-  token. A test fails when the server reads a setting compose.yaml does not pass.
+  server's own default applies. A setting set to an empty value, such as
+  `HOUDINI_PORT=` or `LOG_LEVEL=`, used to become compose's default and now reaches
+  the server empty, which refuses it at start and names the variable; an empty
+  `HOUDINI_RPC_TOKEN=` still means no token. A test fails when the server reads a
+  setting compose.yaml does not pass.
 
 - **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
   it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
