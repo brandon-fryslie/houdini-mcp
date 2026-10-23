@@ -813,6 +813,21 @@ class TestRenderLeavesSceneUnchanged:
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
         return rendering_scene
 
+    @pytest.fixture
+    def rop_refused(self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """A scene whose /out refuses the ROP's type, as Houdini refuses a type it
+        lacks: the camera exists, the ROP never does."""
+        out = rendering_scene.node("/out")
+        create = out.createNode
+
+        def refuse_opengl(node_type: str, name: str | None = None) -> Any:
+            if node_type == "opengl":
+                raise RuntimeError("Invalid node type name")
+            return create(node_type, name)
+
+        monkeypatch.setattr(out, "createNode", refuse_opengl)
+        return rendering_scene
+
     @pytest.mark.parametrize("tool", TOOLS)
     def test_failure_leaves_scene_unchanged(self, render_raises: Any, tool: str) -> None:
         import houdini_mcp.tools as tools
@@ -985,7 +1000,7 @@ class TestRenderLeavesSceneUnchanged:
         assert destroyed == []
 
     @pytest.mark.parametrize("tool", TOOLS)
-    @pytest.mark.parametrize("scene", ["rendering_scene", "render_raises"])
+    @pytest.mark.parametrize("scene", ["rendering_scene", "render_raises", "rop_refused"])
     def test_a_user_node_with_a_temporary_name_survives(
         self, request: pytest.FixtureRequest, tool: str, scene: str
     ) -> None:
