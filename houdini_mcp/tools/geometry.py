@@ -226,10 +226,9 @@ else:
         # Sample points - use numpy-style array access if possible
         point_count = result["point_count"]
         if max_sample_points > 0 and point_count > 0:
+            sample_count = min(max_sample_points, point_count)
             if point_count > 1000000:
                 result["warning"] = f"Geometry has {{point_count}} points (>1M); samples are its first {{sample_count}}."
-
-            sample_count = min(max_sample_points, point_count)
             sample_points = []
 
             # Get point attribute names

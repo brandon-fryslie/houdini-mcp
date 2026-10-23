@@ -758,6 +758,15 @@ class TestTheProgramHoudiniRuns:
         assert result["groups"]["point"] == ["top"]
         assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
 
+    async def test_a_massive_geometry_says_so_and_still_samples(self):
+        counts = {"pointcount": 1_500_000}
+        geo = self._geo(intrinsicValue=lambda name: counts.get(name, 1))
+
+        result = await self._run(self._node(geo), max_sample_points=2)
+
+        assert result["warning"] == "Geometry has 1500000 points (>1M); samples are its first 2."
+        assert [p["index"] for p in result["sample_points"]] == [0, 1]
+
     async def test_a_cook_that_raises_is_unread_not_a_state(self):
         node = self._node(self._geo(), needsToCook=lambda: True, cook=_Raises("cook failed"))
 
