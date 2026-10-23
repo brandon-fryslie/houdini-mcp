@@ -358,10 +358,38 @@ class TestServedSchemas:
         calls = {
             ("get_node_info", "max_params"): {"node_path": "/obj"},
             ("serialize_scene", "max_depth"): {},
+            ("list_children", "max_depth"): {"node_path": "/obj"},
+            ("execute_code", "max_stdout_size"): {"code": "pass"},
+            ("execute_code", "max_stderr_size"): {"code": "pass"},
+            ("execute_code", "max_diff_nodes"): {"code": "pass"},
+            ("get_geo_summary", "max_sample_points"): {"node_path": "/obj/geo1/box1"},
         }
         for (name, limit), base in calls.items():
-            assert await accepts(client, served, name, {**base, limit: 0}), name
-            assert not await accepts(client, served, name, {**base, limit: -1}), name
+            assert await accepts(client, served, name, {**base, limit: 0}), (name, limit)
+            assert not await accepts(client, served, name, {**base, limit: -1}), (name, limit)
+
+    async def test_a_listing_limit_lists_at_least_one(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """A limit of zero would list nothing and call it the node's contents."""
+        calls = {
+            ("list_children", "max_nodes"): {"node_path": "/obj"},
+            ("get_parameter_schema", "max_parms"): {"node_path": "/obj"},
+        }
+        for (name, limit), base in calls.items():
+            assert await accepts(client, served, name, {**base, limit: 1}), (name, limit)
+            assert not await accepts(client, served, name, {**base, limit: 0}), (name, limit)
+
+    async def test_geo_summary_samples_at_most_ten_thousand_points(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        arguments = {"node_path": "/obj/geo1/box1"}
+        assert await accepts(
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 10000}
+        )
+        assert not await accepts(
+            client, served, "get_geo_summary", {**arguments, "max_sample_points": 10001}
+        )
 
     @pytest.mark.parametrize("name", ["find_error_nodes", "get_geo_summary", "serialize_scene"])
     def test_summarize_and_the_target_are_keyword_only(self, name: str) -> None:

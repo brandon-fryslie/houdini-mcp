@@ -88,6 +88,7 @@ __all__ = [
     "DEFAULT_RESOLUTION",
     "Vec3",
     "Count",
+    "SampleCount",
     "RGB",
 ]
 
@@ -292,6 +293,8 @@ RGB = tuple[Channel, Channel, Channel]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
+SampleCount = Annotated[Count, Field(le=10000)]
+"""How many points a geometry read samples; past 10000 the response is too large to read."""
 
 
 def _truncate_output(output: str, max_size: int) -> tuple[str, bool]:

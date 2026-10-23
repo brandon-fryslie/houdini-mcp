@@ -342,6 +342,9 @@ class TestGetParameterSchema:
         assert result["status"] == "success"
         assert result["count"] == 5
         assert len(result["parameters"]) == 5
+        assert result["warning"] == "Parameters limited to the first 5 of 20 parameter templates"
+
+        assert "warning" not in get_parameter_schema("/obj/geo1/sphere1", max_parms=20)
 
     def test_get_parameter_schema_skip_folders(self, connected_to):
         """Test that folder/separator parameters are skipped."""

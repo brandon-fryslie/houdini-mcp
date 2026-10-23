@@ -50,6 +50,7 @@ from typing import Any, Literal
 
 from ..connection import houdini
 from ._common import (
+    Count,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
@@ -488,9 +489,9 @@ def _blocked(
 def execute_code(
     code: str,
     capture_diff: bool = False,
-    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
-    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
-    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
+    max_stdout_size: Count = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: Count = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
     timeout: int = DEFAULT_TIMEOUT,
     allow_dangerous: bool = False,
     host: str = "localhost",
@@ -598,9 +599,9 @@ def _execute_with_grant(
     *,
     operation: str,
     capture_diff: bool = False,
-    max_stdout_size: int = DEFAULT_MAX_STDOUT_SIZE,
-    max_stderr_size: int = DEFAULT_MAX_STDERR_SIZE,
-    max_diff_nodes: int = DEFAULT_MAX_DIFF_NODES,
+    max_stdout_size: Count = DEFAULT_MAX_STDOUT_SIZE,
+    max_stderr_size: Count = DEFAULT_MAX_STDERR_SIZE,
+    max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
     timeout: int = DEFAULT_TIMEOUT,
     host: str,
     port: int,

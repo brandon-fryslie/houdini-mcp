@@ -6,20 +6,18 @@ including point/primitive counts, attributes, groups, and sampling.
 
 import inspect
 import json
-import logging
 from typing import Any
 
 from ..settings import Summarizer
 from ._common import (
     OperationFailed,
+    SampleCount,
     handle_connection_errors,
     on_the_scene,
     tool_error,
 )
 from .reads import UNREAD, format_reason, log_unread, unreads
 from .summarization import GEOMETRY_BRIEF, summarized
-
-logger = logging.getLogger("houdini_mcp.tools.geometry")
 
 # [LAW:one-source-of-truth] the program run inside Houdini spells a reason
 # with reads.format_reason itself, so one failure reads the same from any tool
@@ -29,7 +27,7 @@ _FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
 @handle_connection_errors("get_geo_summary")
 async def get_geo_summary(
     node_path: str,
-    max_sample_points: int = 16,
+    max_sample_points: SampleCount = 16,
     include_attributes: bool = True,
     include_groups: bool = True,
     *,
@@ -48,7 +46,7 @@ async def get_geo_summary(
 
     Args:
         node_path: Full path to the SOP node (e.g., "/obj/geo1/sphere1")
-        max_sample_points: Maximum number of sample points to return (default: 16, max: 10000).
+        max_sample_points: Maximum number of sample points to return (default: 16).
                           Set to 0 to skip point sampling.
         include_attributes: Whether to include attribute metadata (default: True)
         include_groups: Whether to include group information (default: True)
@@ -104,7 +102,7 @@ async def get_geo_summary(
 
 def _read_geometry(
     node_path: str,
-    max_sample_points: int,
+    max_sample_points: SampleCount,
     include_attributes: bool,
     include_groups: bool,
     bypass_config_enabled: bool,
@@ -114,13 +112,6 @@ def _read_geometry(
     """The geometry statistics of the SOP at node_path."""
     # Imported here to avoid circular imports
     from .code import ExecutionGrant, _execute_with_grant
-
-    # Validate max_sample_points
-    if max_sample_points < 0:
-        max_sample_points = 0
-    elif max_sample_points > 10000:
-        logger.warning(f"max_sample_points capped at 10000 (was {max_sample_points})")
-        max_sample_points = 10000
 
     # Build Houdini-side code that does all the heavy lifting locally
     # This avoids slow RPC iteration over geometry elements

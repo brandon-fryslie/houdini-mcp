@@ -4,11 +4,11 @@ This module provides tools for getting and setting parameters on Houdini nodes,
 including parameter schema introspection.
 """
 
-import logging
 from typing import Any
 
 from ._common import (
     InvalidInput,
+    ResultLimit,
     handle_connection_errors,
     node_at,
     tool_error,
@@ -16,8 +16,6 @@ from ._common import (
 )
 from .parms import ParmNotFound, read_present, resolve, write_all
 from .reads import read
-
-logger = logging.getLogger("houdini_mcp.tools.parameters")
 
 
 @handle_connection_errors("set_parameter")
@@ -67,7 +65,7 @@ def set_parameter(
 def get_parameter_schema(
     node_path: str,
     parm_name: str | None = None,
-    max_parms: int = 100,
+    max_parms: ResultLimit = 100,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -85,7 +83,8 @@ def get_parameter_schema(
         max_parms: Maximum number of parameters to return when parm_name is None (default: 100)
 
     Returns:
-        Dict containing parameter schemas with type information, defaults, ranges, and current values.
+        Dict containing parameter schemas with type information, defaults, ranges, and current values,
+        and a "warning" when max_parms left some of the node's parameters out.
 
     Schema includes:
         - name: Parameter name
@@ -139,22 +138,25 @@ def get_parameter_schema(
             else:
                 parm_templates = []
 
-        # Process each parameter template
-        for idx, parm_template in enumerate(parm_templates):
-            if idx >= max_parms and parm_name is None:
-                logger.info(f"Reached max_parms limit of {max_parms}")
-                break
-
+        # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
+        # template, and max_parms is at least 1.
+        for parm_template in parm_templates[:max_parms]:
             param_info = _extract_parameter_info(hou, node, parm_template)
             if param_info is not None:
                 parameters.append(param_info)
 
-        result = {
+        result: dict[str, Any] = {
             "status": "success",
             "node_path": node_path,
             "parameters": parameters,
             "count": len(parameters),
         }
+        if len(parm_templates) > max_parms:
+            # [LAW:no-silent-failure] a capped listing is not the node's whole schema.
+            result["warning"] = (
+                f"Parameters limited to the first {max_parms} of "
+                f"{len(parm_templates)} parameter templates"
+            )
 
         return result
 

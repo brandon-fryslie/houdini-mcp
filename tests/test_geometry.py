@@ -511,47 +511,6 @@ class TestGetGeoSummary:
         assert pt1["P"] == [1.0, 0.0, 0.0]
         assert pt1["N"] == [1.0, 0.0, 0.0]
 
-    async def test_get_geo_summary_max_sample_points_validation(self, mock_execute_code):
-        """Test max_sample_points validation (capped at 10000)."""
-        from houdini_mcp.tools import get_geo_summary
-
-        # Response when max_sample_points=0 (no sample_points key)
-        geo_data = {
-            "status": "success",
-            "node_path": "/obj/geo1/grid1",
-            "cook_state": "cooked",
-            "point_count": 1,
-            "primitive_count": 0,
-            "vertex_count": 0,
-            "bounding_box": {
-                "min": [0.0, 0.0, 0.0],
-                "max": [1.0, 1.0, 1.0],
-                "size": [1.0, 1.0, 1.0],
-                "center": [0.5, 0.5, 0.5],
-            },
-            "attributes": {"point": [], "primitive": [], "vertex": [], "detail": []},
-            "groups": {"point": [], "primitive": []},
-            # Note: no sample_points key when max_sample_points=0
-        }
-
-        mock_execute_code.return_value = {
-            "status": "success",
-            "stdout": json.dumps(geo_data),
-            "stderr": "",
-        }
-
-        # Test negative value -> 0 (no sample_points in result)
-        result = await get_geo_summary(
-            "/obj/geo1/grid1",
-            max_sample_points=-10,
-            host="localhost",
-            port=18811,
-            summarizer=SUMMARIZER,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert "sample_points" not in result
-
     async def test_get_geo_summary_multiple_groups(self, mock_execute_code):
         """Test geometry with multiple groups."""
         from houdini_mcp.tools import get_geo_summary
