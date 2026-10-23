@@ -3477,12 +3477,26 @@ class TestHandleConnectionErrorsDecorator:
 
         assert result["operation"] == "failing_function"
 
-    def test_a_tool_with_no_policy_cannot_be_served(self):
-        """A tool's boundary declares its policy; a function no boundary declared cannot be served."""
-        from houdini_mcp.server import held
+    def test_a_function_no_boundary_declared_is_not_a_tool(self):
+        """A module's tools are the functions its tool boundary declared; no other is served."""
+        import types
 
-        def custom_operation_name():
+        from houdini_mcp.tools._common import READ, tool
+        from houdini_mcp.tools.transactions import policy_of, tools_in
+
+        module = types.ModuleType("a_tools_module")
+
+        def undeclared():
             return {"status": "success"}
 
-        with pytest.raises(TypeError, match="custom_operation_name is not a tool"):
-            held(custom_operation_name)
+        @tool(READ)
+        def declared():
+            return {"status": "success"}
+
+        for fn in (undeclared, declared):
+            fn.__module__ = module.__name__
+            setattr(module, fn.__name__, fn)
+
+        assert tools_in(module) == (declared,)
+        with pytest.raises(TypeError, match="undeclared is not a tool"):
+            policy_of(undeclared)

@@ -18,7 +18,6 @@ from .results import Results
 from .settings import Http, ServerSettings, Serving, Stdio
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
-from .tools.transactions import policy_of
 from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
@@ -37,7 +36,6 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
     sends its own Houdini read there and finishes the rest on the loop with the
     scene released.
     """
-    policy_of(tool)  # a function no boundary declared fails here, when the server is built
     if inspect.iscoroutinefunction(tool):
         return tool
 
@@ -94,6 +92,9 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
         "Houdini MCP",
         instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
         strict_input_validation=True,
+        # [LAW:one-source-of-truth] a served name is one tool: a second tool under
+        # it fails the build instead of replacing the first.
+        on_duplicate="error",
     )
     mcp.custom_route("/health", methods=["GET"])(health_check)
     for tool in tools.SERVED_TOOLS:

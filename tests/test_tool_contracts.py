@@ -190,6 +190,31 @@ class TestServedSchemas:
             "set_render_settings",
         }
 
+    def test_a_tool_names_no_operation_but_its_own(self) -> None:
+        """A failure or status a tool builds in its body names it by its own function,
+        never by another tool's."""
+        served_names = {fn.__name__ for fn in tools.SERVED_TOOLS}
+        for fn in tools.SERVED_TOOLS:
+            body = ast.parse(textwrap.dedent(inspect.getsource(inspect.unwrap(fn))))
+            named = {
+                node.value.id
+                for node in ast.walk(body)
+                if isinstance(node, ast.Attribute)
+                and node.attr == "__name__"
+                and isinstance(node.value, ast.Name)
+                and node.value.id in served_names
+            }
+            assert named <= {fn.__name__}, (fn.__name__, named)
+
+    def test_two_tools_cannot_be_served_under_one_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        from houdini_mcp.server import build_server
+
+        monkeypatch.setattr(tools, "SERVED_TOOLS", (*tools.SERVED_TOOLS, tools.get_scene_info))
+        with Results.claim(tmp_path) as results, pytest.raises(ValueError, match="get_scene_info"):
+            build_server(DEFAULT_SETTINGS, results)
+
     async def test_every_served_tools_failure_names_it_as_it_is_served(
         self, client: Client[Any], served: dict[str, Tool], monkeypatch: pytest.MonkeyPatch
     ) -> None:
