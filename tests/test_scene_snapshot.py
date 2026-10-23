@@ -11,9 +11,13 @@ from typing import Any
 import pytest
 
 from houdini_mcp.server import held
-from houdini_mcp.tools import code as code_module
-from houdini_mcp.tools import execute_code, get_last_scene_diff, serialize_scene
-from houdini_mcp.tools import scene as scene_module
+from houdini_mcp.tools import (
+    code as code_module,
+    execute_code,
+    get_last_scene_diff,
+    scene as scene_module,
+    serialize_scene,
+)
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
 from tests.conftest import SUMMARIZER, MockHouModule, MockHouNode

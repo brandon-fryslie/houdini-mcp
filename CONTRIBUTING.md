@@ -110,9 +110,11 @@ A test added under `tests/integration` is a live test without being marked.
 A tool's function in `houdini_mcp/tools` is its MCP contract: the server serves
 its signature and docstring as they are, with `host` and `port` bound to the
 server's Houdini and hidden from clients. A new tool declares its policy in its
-`@tool` decorator (the policies are in `houdini_mcp/tools/transactions.py`) and
-gets an entry in `SERVED_TOOLS` (`houdini_mcp/tools/__init__.py`). Its name is
-its function's name; nothing else spells it. Clients see the docstring's summary
+`@tool` decorator (the policies are in `houdini_mcp/tools/transactions.py`);
+every such function in `houdini_mcp/tools` is served. Its name is its
+function's name, and the served names are pinned by
+`test_the_served_names_are_the_ones_clients_call`, so adding, renaming or
+removing a tool is a deliberate change to what clients call. Clients see the docstring's summary
 and its `Args`, so document every argument but `host` and `port` there.
 
 ```python

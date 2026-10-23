@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagree. `TOOL_POLICIES` is gone; `policy_of(tool)` reads the declared
   policy. `get_last_scene_diff` and `get_summarization_status` now pass the
   boundary too, so a failure of either names its operation. `SERVED_TOOLS`
-  moved to `houdini_mcp.tools`.
+  moved to `houdini_mcp.tools` and is derived: it is every function there that
+  carries the tool boundary.
 
 - **BREAKING (wire)**: each `get_parameter_schema` `menu_items` `value` is
   the value `set_parameter` takes to select that item, the same value

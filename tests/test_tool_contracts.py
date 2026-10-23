@@ -141,6 +141,55 @@ class TestServedSchemas:
             assert json.loads(json.dumps(schema)) == schema, tool.name
             jsonschema.Draft202012Validator.check_schema(schema)
 
+    def test_the_served_names_are_the_ones_clients_call(self, served: dict[str, Tool]) -> None:
+        """A served name is the wire contract: a tool's name is its function's, so
+        renaming the function renames what clients call, and that is decided here."""
+        assert set(served) == {
+            "assign_material",
+            "capture_multiple_panes",
+            "capture_pane_screenshot",
+            "check_connection",
+            "connect_nodes",
+            "create_material",
+            "create_network_box",
+            "create_node",
+            "create_render_node",
+            "delete_node",
+            "disconnect_node_input",
+            "execute_code",
+            "find_error_nodes",
+            "find_nodes",
+            "get_geo_summary",
+            "get_houdini_help",
+            "get_last_scene_diff",
+            "get_material_info",
+            "get_node_info",
+            "get_parameter_schema",
+            "get_render_settings",
+            "get_scene_info",
+            "get_summarization_status",
+            "layout_children",
+            "list_children",
+            "list_node_types",
+            "list_render_nodes",
+            "list_visible_panes",
+            "load_scene",
+            "manage_cache",
+            "new_scene",
+            "ping_houdini",
+            "render_node_network",
+            "render_quad_view",
+            "render_viewport",
+            "reorder_inputs",
+            "save_scene",
+            "serialize_scene",
+            "set_node_color",
+            "set_node_flags",
+            "set_node_position",
+            "set_parameter",
+            "set_render_settings",
+        }
+
     async def test_every_served_tools_failure_names_it_as_it_is_served(
         self, client: Client[Any], served: dict[str, Tool], monkeypatch: pytest.MonkeyPatch
     ) -> None:

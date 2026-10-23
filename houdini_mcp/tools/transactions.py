@@ -9,11 +9,13 @@ body recovers its own effect.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
+from types import ModuleType
 from typing import Any, assert_never
 
 from ..connection import Link, transport_failure
@@ -107,6 +109,15 @@ def policy_of(tool: Callable[..., Any]) -> ToolPolicy:
             f"{tool.__name__} is not a tool: no tool boundary declared its policy"
         ) from None
     return policy
+
+
+def tools_in(module: ModuleType) -> tuple[Callable[..., Any], ...]:
+    """The tools ``module`` defines: its functions a tool boundary declared."""
+    return tuple(
+        fn
+        for fn in vars(module).values()
+        if inspect.isfunction(fn) and fn.__module__ == module.__name__ and hasattr(fn, _POLICY)
+    )
 
 
 def recovering(

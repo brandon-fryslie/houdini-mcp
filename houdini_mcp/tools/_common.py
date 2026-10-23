@@ -137,8 +137,8 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
     The tool boundary: every tool call enters and leaves through this wrapper.
 
     [LAW:one-source-of-truth] The tool's name is its function's: the operation
-    its failures name, the name its policy is declared under, and the name it
-    is served as are one value, so renaming the function renames all three.
+    its failures name and the name it is served as are one value, so renaming
+    the function renames both. Its policy is declared here, on the function.
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
     ``failure_response`` builds for it; the link a failed call used was already

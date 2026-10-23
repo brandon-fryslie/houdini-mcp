@@ -127,6 +127,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["houdini_mcp"]
+combine-as-imports = true
 
 [tool.ruff.format]
 quote-style = "double"

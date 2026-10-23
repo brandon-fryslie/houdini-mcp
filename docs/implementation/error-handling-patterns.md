@@ -17,7 +17,7 @@ This document describes the error handling patterns used throughout the Houdini 
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │               Tool (houdini_mcp/tools)                          │
-│  @tool(READ)  ◄── Decorator: the policy; the name is the function│
+│  @tool(READ)  ◄── Decorator: the policy; named by the function  │
 │  def some_tool(...):                                            │
 │      with using(host, port) as link:  ◄── Connection            │
 │          hou = link.hou                                         │
