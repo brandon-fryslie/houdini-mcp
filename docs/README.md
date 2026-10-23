@@ -1,24 +1,11 @@
 # Houdini MCP Server Documentation
 
-## Implementation Details
+Each tool's arguments and results are what the server publishes to an MCP client
+with the tool. These documents cover what a single tool's description does not.
 
-Detailed implementation notes for each feature in the SOP Workflow MVP:
-
-| Document | Feature |
-|----------|---------|
-| [overview.md](implementation/overview.md) | Implementation summary |
-| [network-introspection.md](implementation/network-introspection.md) | list_children, find_nodes, get_node_info |
-| [node-wiring.md](implementation/node-wiring.md) | connect_nodes, disconnect, flags, reorder |
-| [parameter-schema.md](implementation/parameter-schema.md) | get_parameter_schema |
-| [error-introspection.md](implementation/error-introspection.md) | get_node_info with errors |
-| [geometry-summary.md](implementation/geometry-summary.md) | get_geo_summary |
-
-## Quick Reference
-
-Quick reference guides for using the tools:
-
-| Document | Description |
-|----------|-------------|
-| [quick-reference.md](reference/quick-reference.md) | General quick reference |
-| [error-introspection-ref.md](reference/error-introspection-ref.md) | Error introspection usage |
-| [geometry-summary-ref.md](reference/geometry-summary-ref.md) | Geometry summary usage |
+| Document | Read it to learn |
+|----------|------------------|
+| [tool-contracts.md](tool-contracts.md) | What every tool's result shares, and the arguments callers most often get wrong |
+| [remote-listener.md](remote-listener.md) | How to let an MCP server on another machine reach Houdini |
+| [implementation/error-handling-patterns.md](implementation/error-handling-patterns.md) | How a tool reports a failure, for anyone writing or changing one |
+| [adr/0001-language-and-process-boundaries.md](adr/0001-language-and-process-boundaries.md) | Why the server, the plugin and Houdini run where they do |

@@ -2,6 +2,11 @@
 
 This document clarifies the input/output contracts for Houdini MCP tools and documents common mistakes discovered through usage.
 
+A call written here as `render_viewport(resolution=[512, 512])` stands for an MCP
+call with the arguments `{"resolution": [512, 512]}`; it is not Python a client
+runs. `tests/test_tool_contracts.py` sends every such call to the server, so each
+one is accepted, or refused when it sits under a ❌ heading.
+
 ## Every Tool: Large Results Arrive as a File
 
 A result whose text (the shorthand below) is over 16KB is not returned inline,
@@ -76,6 +81,8 @@ If you try to import `hou`, you'll now receive a helpful error message:
 ```json
 {
   "status": "error",
+  "kind": "invalid_input",
+  "retry": "fix_input",
   "message": "Code attempts to import hou module, but hou is already available",
   "hint": "The 'hou' module is pre-injected as a global variable by execute_code via RPyC. You can use 'hou' directly without importing it...",
   "suggested_fix": "# import hou  # Not needed - hou is pre-injected\n..."
@@ -245,7 +252,8 @@ Both `render_viewport` and `render_quad_view` enforce resolution limits:
 - **Minimum:** 64x64 pixels
 - **Maximum:** 4096x4096 pixels
 
-Attempting to render outside these bounds will return an error immediately.
+The served schema refuses a resolution outside them, so the call fails at the MCP
+boundary as a protocol error and never reaches Houdini.
 
 ## Common Patterns
 
@@ -254,14 +262,14 @@ Attempting to render outside these bounds will return an error immediately.
 When other tools don't cover your use case, `execute_code` is the escape hatch. Remember:
 
 1. `hou` is pre-injected - don't import it
-2. Use `print()` for output - it will appear in `result["stdout"]`
+2. Use `print()` for output - it arrives in the result's `stdout` field
 3. Heavy geometry operations are blocked by default; `allow_heavy_geometry=True` unlocks them only under policy "normal" with `HOUDINI_MCP_ALLOW_BYPASS` set server-side (prefer `get_geo_summary`)
 4. Dangerous operations are blocked by default; `allow_dangerous=True` unlocks only them, under the same two conditions
 5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
 6. A refusal for either flag lists `unmet_requirements` - each of `policy`, `request` (the flag), `config` (`HOUDINI_MCP_ALLOW_BYPASS`), or `source` (a server-authored program, which no input admits) still missing - and the `hint` asks for exactly those; `audit.unmet` reports the same per capability on every run
 
 ```python
-result = execute_code(
+execute_code(
     code="""
 # Create a complete SOP chain
 obj = hou.node('/obj')
@@ -272,9 +280,9 @@ xform.setFirstInput(sphere)
 print(f"Created: {xform.path()}")
 """
 )
-
-print(result["stdout"])  # "Created: /obj/my_network/xform"
 ```
+
+Its result's `stdout` is `Created: /obj/my_network/xform`.
 
 ### Rendering the Current Scene
 
@@ -282,18 +290,19 @@ For quick previews, just call `render_viewport()` with defaults:
 
 ```python
 # Auto-frame and render with defaults
-result = render_viewport()
-if result["status"] == "success":
-    image_data = result["image_base64"]
-    # Use the base64-encoded image
+render_viewport()
 ```
+
+The image is base64 in `image_base64`. It is usually over the 16KB bound, so the
+result carries `result_file` and `result_uri` in its place and the image is in
+the file (see [Large Results Arrive as a File](#every-tool-large-results-arrive-as-a-file)).
 
 ### Focusing on Specific Geometry
 
 Use `look_at`, without `camera_position`, to center the camera on a specific node:
 
 ```python
-result = render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080])
+render_viewport(look_at="/obj/my_geo", orthographic=True, resolution=[1920, 1080])
 ```
 
 ## Testing Your Code

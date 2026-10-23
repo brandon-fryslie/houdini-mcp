@@ -249,21 +249,25 @@ asserts the schema and the server's refusals agree.
 
 ### Pattern 1: Simple Tool with Decorator
 
+`delete_node` (`houdini_mcp/tools/nodes.py`) is the whole shape: the decorator,
+`ensure_connected`, `node_at` raising `invalid_input` for a path with no node,
+and a body that returns only success.
+
 ```python
-@handle_connection_errors("list_children")
-def list_children(
-    node_path: str,
-    host: str = "localhost",
-    port: int = 18811,
-) -> Dict[str, Any]:
+@handle_connection_errors("delete_node")
+def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     hou = ensure_connected(host, port)
 
-    node = hou.node(node_path)
-    if node is None:
-        return {"status": "error", "message": f"Node not found: {node_path}"}
+    node = node_at(hou, node_path)
 
-    children = [child.name() for child in node.children()]
-    return {"status": "success", "children": children}
+    node_name = node.name()
+    node.destroy()
+
+    return {
+        "status": "success",
+        "message": f"Deleted node: {node_name}",
+        "deleted_path": node_path,
+    }
 ```
 
 ### Pattern 2: Tool with Constrained Input
@@ -281,43 +285,12 @@ def render_viewport(
 
 ### Pattern 3: Tool with Multiple Error Sources
 
-```python
-@handle_connection_errors("execute_code")
-def execute_code(
-    code: str,
-    host: str = "localhost",
-    port: int = 18811,
-) -> Dict[str, Any]:
-    # Parse once; a program the gates cannot read is a program that does not run
-    try:
-        tree = parse_code(code)
-    except SyntaxError as exc:
-        return {
-            "status": "error",
-            "message": f"Code does not parse: {exc.msg} (line {exc.lineno})",
-        }
-
-    # Judge the parsed program BEFORE connecting
-    dangerous = _detect_dangerous_code(tree)
-    if dangerous:
-        return {
-            "status": "error",
-            "message": f"Dangerous code pattern detected: {dangerous}",
-        }
-
-    hou = ensure_connected(host, port)
-
-    try:
-        exec(code, {"hou": hou})
-        return {"status": "success"}
-    except Exception as e:
-        # Decorator handles connection errors
-        # This catches code execution errors specifically
-        return {
-            "status": "error",
-            "message": f"Code execution failed: {e}",
-        }
-```
+`execute_code` (`houdini_mcp/tools/code.py`) refuses a program before it
+connects: `_blocked` raises `InvalidInput` for a program that does not parse, an
+`import hou`, a mutation under `read-only`, or a rail the caller did not unlock.
+Once the program runs, it raises `OperationFailed` when the program raised, and
+`ProgramStillRunning` when the program outlived its timeout. Every failure is
+raised; none is a dict the body builds.
 
 ## Testing Error Handling
 
@@ -337,19 +310,9 @@ def test_reads_my_double(self, connected_to):
 
 ### Testing Connection Errors
 
-```python
-def test_handles_connection_timeout(self, mock_connection):
-    from houdini_mcp.tools import get_scene_info
-
-    # Simulate timeout
-    mock_connection.node.side_effect = TimeoutError("Connection timed out")
-
-    result = get_scene_info()
-
-    assert result["status"] == "error"
-    assert result["kind"] == "timeout"
-    assert result["connection_reset"] is True
-```
+`TestConnectionErrorHandling` in `tests/test_tools.py` raises each transport
+failure from a patched `ensure_connected` and reads the arm the decorator
+returns; `test_get_scene_info_handles_timeout` is the `timeout` case.
 
 `tests/test_failure.py` parses every arm the boundary emits back through `FAILURE`
 and refuses a response relabelled as another kind or as success.
@@ -383,5 +346,4 @@ MCP client, not by calling the tool function. See
 
 ## Related Documentation
 
-- [Error Introspection](./error-introspection.md) - Node-level error/warning detection
-- [Connection Module](../reference/quick-reference.md) - Connection API reference
+- [Tool Contracts](../tool-contracts.md) - what a caller sees of these failures
