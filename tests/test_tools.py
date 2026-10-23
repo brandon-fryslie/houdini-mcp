@@ -2545,13 +2545,42 @@ class TestGetHoudiniHelp:
         assert [str(request.url) for request in docs_site.sent] == [BOX_PAGE, moved]
 
     def test_get_houdini_help_refuses_a_name_no_url_can_carry(self, docs_site):
-        """A name that cannot be put in a URL is the caller's mistake, and nothing is sent."""
+        """A name too long for any URL is the caller's mistake, and nothing is sent."""
         from houdini_mcp.tools import get_houdini_help
 
-        result = get_houdini_help("sop", "box\x00")
+        result = get_houdini_help("sop", "a" * 70_000)
 
         assert (result["status"], result["kind"]) == ("error", "invalid_input")
         assert docs_site.sent == []
+
+    @pytest.mark.parametrize(
+        ("item", "page"),
+        [
+            ("box#x", "box%23x"),
+            ("x/../../vex/functions/noise", "x%2F..%2F..%2Fvex%2Ffunctions%2Fnoise"),
+            ("box\x00", "box%00"),
+        ],
+        ids=["fragment", "path", "control"],
+    )
+    def test_get_houdini_help_reads_only_the_named_page_of_its_section(self, docs_site, item, page):
+        """Every character of the name is the name's: none reaches another page."""
+        from houdini_mcp.tools import get_houdini_help
+
+        result = get_houdini_help("sop", item)
+
+        assert (result["kind"], result["url"]) == ("invalid_input", docs_page("nodes/sop", page))
+        assert [str(request.url) for request in docs_site.sent] == [result["url"]]
+
+    def test_get_houdini_help_names_the_moved_page_that_is_missing(self, docs_site):
+        """A page moved to a missing page is reported where it went missing."""
+        from houdini_mcp.tools import get_houdini_help
+
+        moved = docs_page("nodes/sop", "box-2.0")
+        docs_site.pages[BOX_PAGE] = httpx.Response(301, headers={"Location": moved})
+
+        result = get_houdini_help("sop", "box")
+
+        assert (result["kind"], result["url"]) == ("invalid_input", moved)
 
     def test_get_houdini_help_success_sop(self, docs_site):
         """Test successful parsing of SOP node documentation."""

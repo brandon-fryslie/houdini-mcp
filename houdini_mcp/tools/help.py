@@ -5,6 +5,7 @@ the SideFX website. It does NOT require a Houdini connection.
 """
 
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 import httpx
 from bs4 import BeautifulSoup
@@ -103,7 +104,10 @@ def get_houdini_help(
         get_houdini_help("python_hou", "Node")  # Get hou.Node class docs
         get_houdini_help("obj", "cam")  # Get camera object docs
     """
-    full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{item_name}.html"
+    # [LAW:parse-dont-validate] item_name is one page of its section: quoted whole, a
+    # '/', '#' or '?' in it is part of the name, never a way to another page.
+    page = quote(item_name, safe="")
+    full_url = f"https://www.sidefx.com/docs/houdini/{_HELP_PATHS[help_type]}/{page}.html"
 
     try:
         with docs_client(timeout) as client:
@@ -112,12 +116,13 @@ def get_houdini_help(
         if response.status_code == 404:
             raise InvalidInput(
                 f"Documentation not found for {help_type}/{item_name}. Check if the name is correct.",
-                url=full_url,
+                url=str(response.url),
             )
 
         if response.status_code != 200:
             raise OperationFailed(
-                f"Failed to fetch help page. HTTP status: {response.status_code}", url=full_url
+                f"Failed to fetch help page. HTTP status: {response.status_code}",
+                url=str(response.url),
             )
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -263,7 +268,7 @@ def get_houdini_help(
         raise TimedOut(
             f"Request timed out: a step of the fetch took over {timeout} seconds", url=full_url
         ) from e
-    # Only the caller's item_name can make the URL unparseable; a bad redirect is a
+    # Only an item_name too long for any URL makes it unparseable; a bad redirect is a
     # RemoteProtocolError, an HTTPError.
     except httpx.InvalidURL as e:
         raise InvalidInput(f"No docs page can be named {item_name!r}: {e}", url=full_url) from e

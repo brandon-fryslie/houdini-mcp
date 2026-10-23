@@ -494,10 +494,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `get_houdini_help` (houdini-tuneup-ef3.vrw): its `url` is the page it read,
-  after any redirect, not the one it asked for. The schema refuses a `timeout`
-  under 1, which failed as an unclassified error, and an `item_name` no URL can
-  carry is `invalid_input`, not a network error.
+- `get_houdini_help` (houdini-tuneup-ef3.vrw): an `item_name` is one page of its
+  section, so a `/`, `#` or `?` in it no longer fetches some other page. Its
+  `url`, on success or a missing page, is where it read, after any redirect. The
+  schema refuses a `timeout` under 1, which failed as an unclassified error.
 
 - **Docker Compose passes the container every setting the server reads**
   (houdini-tuneup-ef3.d72): it passed only `HOUDINI_HOST`, `HOUDINI_PORT`,
