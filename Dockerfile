@@ -1,8 +1,9 @@
 # .python-version decides the interpreter: uv uses this one when it matches and
 # installs the declared one when it does not.
 FROM python:3.13-slim
-# The newest uv, as setup-uv installs in CI, so the image builds with the uv the checks
-# ran. [tool.uv].required-version in pyproject.toml is a floor; uv fails the build below it.
+# The newest uv at build time, as setup-uv installs in CI (build locally with --pull, or
+# Docker reuses whatever uv:latest it cached). [tool.uv].required-version in
+# pyproject.toml is a floor; uv fails the build below it.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 # The cache is a build mount on another filesystem, so hardlinks cannot work; compile
 # bytecode at build time rather than on every container start.

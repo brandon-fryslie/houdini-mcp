@@ -65,7 +65,8 @@ dev = [
 # was written and checked with. uv refuses to run below it; setup-uv reads it and
 # installs the newest release above it, and the Docker image takes the newest too.
 # No ceiling: a ceiling refuses every uv released after it, which is the one a new
-# user installs.
+# user installs. CI never runs the floor itself, so a lock rewritten by a newer uv
+# may need the floor raised to match (check with `uvx --from 'uv==<floor>' uv lock --check`).
 required-version = ">=0.12.15"
 
 [project.urls]
