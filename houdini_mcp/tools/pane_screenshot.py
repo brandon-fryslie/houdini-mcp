@@ -1,4 +1,4 @@
-"""Pane screenshot capture tools using Qt/PySide2 via RPyC.
+"""Pane screenshot capture tools using Houdini's own Qt via RPyC.
 
 This module provides tools for capturing screenshots of Houdini pane tabs
 using Qt's screen grab functionality. Screenshots are returned as base64-encoded
@@ -35,22 +35,19 @@ from .reads import Unread, is_unread, read
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
-def _get_qt_modules(link: Link) -> tuple[Any, Any, Any]:
-    """PySide2's (QtWidgets, QtCore, QtGui) from the Houdini ``link`` reaches,
-    or the one failure every capture tool reports when Houdini has no PySide2."""
+def _get_qt_modules(link: Link) -> tuple[Any, Any]:
+    """(QtWidgets, QtCore) of the Qt the Houdini ``link`` reaches runs, or the
+    one failure every capture tool reports when that Houdini has none."""
     # [LAW:single-enforcer] the connection module owns the connection; Qt comes
     # over it the way ``hou`` does.
     conn = link.conn
+    # [LAW:one-source-of-truth] which PySide a Houdini runs is a fact of its build,
+    # and hutil.PySide is where Houdini states it; a binding named here is a copy
+    # that goes stale the release SideFX moves to another one.
     try:
-        return (
-            conn.modules["PySide2.QtWidgets"],
-            conn.modules["PySide2.QtCore"],
-            conn.modules["PySide2.QtGui"],
-        )
+        return conn.modules["hutil.PySide.QtWidgets"], conn.modules["hutil.PySide.QtCore"]
     except ImportError as e:
-        raise OperationFailed(
-            f"Failed to access PySide2 modules: {e}. Ensure Houdini has PySide2 available."
-        ) from e
+        raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
 
 
 def pane_type_member(hou: Any, name: str) -> Any | None:
@@ -155,8 +152,8 @@ def _capture_pane_to_bytes(
     Args:
         link: The link to the Houdini whose pane is captured
         pane_type_name: Name of the pane type to capture
-        QtWidgets: PySide2.QtWidgets module reference
-        QtCore: PySide2.QtCore module reference
+        QtWidgets: Houdini's QtWidgets module
+        QtCore: Houdini's QtCore module
         fit_contents: If True, frame everything the pane shows before capture
 
     Returns:
@@ -284,7 +281,7 @@ def capture_pane_screenshot(
         Use list_visible_panes() to find capturable panes.
     """
     with using(host, port) as link:
-        QtWidgets, QtCore, _ = _get_qt_modules(link)
+        QtWidgets, QtCore = _get_qt_modules(link)
 
         # Capture pane to bytes
         result = _capture_pane_to_bytes(link, pane_type_name, QtWidgets, QtCore, fit_contents)
@@ -455,7 +452,7 @@ def render_node_network(
         # Get child count for context
         child_count = read(f"children of {node_path}", lambda: len(node.children()))
 
-        QtWidgets, QtCore, _ = _get_qt_modules(link)
+        QtWidgets, QtCore = _get_qt_modules(link)
 
         # Find NetworkEditor pane
         pane_type = hou.paneTabType.NetworkEditor
@@ -531,7 +528,7 @@ def capture_multiple_panes(
         - results: Per-pane results with image_base64 or file_path
     """
     with using(host, port) as link:
-        QtWidgets, QtCore, _ = _get_qt_modules(link)
+        QtWidgets, QtCore = _get_qt_modules(link)
 
         # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
         # captured once, so the slots, the counts and the status all count the same panes.

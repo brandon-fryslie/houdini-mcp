@@ -47,18 +47,15 @@ def test_pane_type_names_filters_through_rpyc_netrefs() -> None:
         assert pane_type_member(hou, "thisown") is None
 
 
-def test_qt_comes_from_the_connected_houdini(
+def test_qt_is_the_one_the_connected_houdini_names(
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
-    fakes = {name: object() for name in ("QtWidgets", "QtCore", "QtGui")}
+    """Houdini's hutil.PySide names the binding its build runs; the capture tools take that one."""
+    fakes = {name: object() for name in ("QtWidgets", "QtCore")}
     for name, module in fakes.items():
-        monkeypatch.setitem(sys.modules, f"PySide2.{name}", module)
+        monkeypatch.setitem(sys.modules, f"hutil.PySide.{name}", module)
 
-    assert _get_qt_modules(houdini().link()) == (
-        fakes["QtWidgets"],
-        fakes["QtCore"],
-        fakes["QtGui"],
-    )
+    assert _get_qt_modules(houdini().link()) == (fakes["QtWidgets"], fakes["QtCore"])
 
 
 def test_list_visible_panes_advertises_the_live_enum(mock_connection: MockHouModule) -> None:
@@ -121,7 +118,7 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     with (
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
     ):
@@ -148,7 +145,7 @@ def test_capture_multiple_panes_that_captures_nothing_is_an_error_carrying_every
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(object(), object(), object()),
+        return_value=(object(), object()),
     ):
         result = capture_multiple_panes(["ChannelEditor", "thisown"])
 
@@ -173,7 +170,7 @@ def test_capture_multiple_panes_of_nothing_is_success_over_no_slots(
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(object(), object(), object()),
+        return_value=(object(), object()),
     ):
         result = capture_multiple_panes([])
 
@@ -197,7 +194,7 @@ def test_capture_multiple_panes_captures_a_pane_named_twice_once(
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools"),
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
@@ -227,7 +224,7 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
     with (
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
@@ -254,7 +251,7 @@ def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     with (
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
@@ -290,7 +287,7 @@ def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
     with (
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
         patch.object(Path, "write_bytes", write_bytes),
@@ -322,7 +319,7 @@ def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
         caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object(), object()),
+            return_value=(object(), object()),
         ),
         patch(
             "houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes",
@@ -380,7 +377,7 @@ def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore, object()),
+            return_value=(QtWidgets, QtCore),
         ),
     ):
         result = capture_pane_screenshot("NetworkEditor", fit_contents=True)
@@ -412,7 +409,7 @@ def test_render_node_network_frames_the_network_it_navigated_to(
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+        return_value=(QtWidgets, QtCore),
     ):
         result = render_node_network("/obj")
 
@@ -457,7 +454,7 @@ def test_fit_contents_frames_every_viewport_a_scene_viewer_shows(
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore, object()),
+            return_value=(QtWidgets, QtCore),
         ),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
@@ -478,7 +475,7 @@ def test_fit_contents_on_a_pane_houdini_cannot_frame_is_refused_naming_those_it_
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+        return_value=(QtWidgets, QtCore),
     ):
         result = capture_pane_screenshot("Parm", fit_contents=True)
 
@@ -506,7 +503,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+        return_value=(QtWidgets, QtCore),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
@@ -533,7 +530,7 @@ def test_fit_contents_refuses_a_viewport_whose_view_moves_its_camera(
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+        return_value=(QtWidgets, QtCore),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
@@ -554,7 +551,7 @@ def test_a_capture_refused_before_the_grab_leaves_the_view_unframed(
 
     with patch(
         "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore, object()),
+        return_value=(QtWidgets, QtCore),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
@@ -577,7 +574,7 @@ def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
         patch(
             "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore, object()),
+            return_value=(QtWidgets, QtCore),
         ),
     ):
         result = capture_pane_screenshot("Parm")
