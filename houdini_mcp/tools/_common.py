@@ -183,7 +183,7 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
                     raise InvalidInput(
                         f"{told}, got {reprlib.repr(value)}", parameter=name
                     ) from None
-                again = to_json(bound.arguments[name])
+                again = to_json(bound.arguments[name], inf_nan_mode="constants")
                 try:
                     from_json(again, allow_inf_nan=False)
                 except ValueError:
