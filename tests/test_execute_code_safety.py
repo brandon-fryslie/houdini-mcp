@@ -739,49 +739,6 @@ class TestTimeoutRollback:
 
 
 class TestCapBoundaries:
-    def test_stdout_exactly_at_limit_not_truncated(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        # Emit exactly 50 characters, cap at 50.
-        result = execute_code(
-            "import sys; sys.stdout.write('x' * 50)",
-            max_stdout_size=50,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) == 50
-        assert result.get("stdout_truncated") is not True
-
-    def test_stdout_one_over_limit_truncated(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stdout.write('x' * 51)",
-            max_stdout_size=50,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) == 50
-        assert result.get("stdout_truncated") is True
-
-    def test_stderr_one_over_limit_truncated(self, mock_connection):
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stderr.write('y' * 51)",
-            max_stderr_size=50,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stderr"]) == 50
-        assert result.get("stderr_truncated") is True
-
     @pytest.mark.parametrize(
         "ending",
         [
@@ -827,6 +784,41 @@ class TestCapBoundaries:
             f"execute_code output stdout={written} stderr={written} characters "
             f"truncated={['stdout', 'stderr'] if cut else []}"
         )
+
+    @pytest.mark.parametrize(
+        ("ending", "outcome"),
+        [
+            (lambda _: "", {"status": "success"}),
+            (
+                lambda _: "raise ValueError('mine')",
+                {"status": "error", "kind": "operation_failed", "message": "ValueError: mine"},
+            ),
+            (
+                lambda request: request.getfixturevalue("stalled_program"),
+                {"status": "error", "kind": "worker_still_running"},
+            ),
+        ],
+        ids=["success", "exception", "timeout"],
+    )
+    def test_a_program_that_closes_its_stdout_reports_how_it_ended(
+        self, mock_connection, request, ending, outcome
+    ):
+        """Closing sys.stdout ends the program's writes, not the call's read of them."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            f"import sys; print('hi'); sys.stdout.close()\n{ending(request)}",
+            timeout=1,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+
+        assert {key: result.get(key) for key in (*outcome, "stdout", "stdout_truncated")} == {
+            **outcome,
+            "stdout": "hi\n",
+            "stdout_truncated": False,
+        }
 
     def test_the_bound_counts_characters_not_bytes(self, mock_connection):
         from houdini_mcp.tools import execute_code

@@ -272,36 +272,6 @@ class TestExecuteCode:
         assert result["status"] == "success"
         assert "error message" in result["stderr"]
 
-    def test_execute_stdout_truncation(self, mock_connection):
-        """Test stdout is truncated when exceeds limit."""
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "print('x' * 1000)",
-            max_stdout_size=100,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stdout"]) <= 100
-        assert result.get("stdout_truncated") is True
-
-    def test_execute_stderr_truncation(self, mock_connection):
-        """Test stderr is truncated when exceeds limit."""
-        from houdini_mcp.tools import execute_code
-
-        result = execute_code(
-            "import sys; sys.stderr.write('x' * 1000)",
-            max_stderr_size=100,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "success"
-        assert len(result["stderr"]) <= 100
-        assert result.get("stderr_truncated") is True
-
     def test_execute_connection_error(self, reset_connection_state):
         """Test handling of connection errors."""
         from houdini_mcp.tools import execute_code
@@ -391,6 +361,21 @@ class TestExecuteCodeTimeout:
 
 class TestExecuteCodeOutputCapture:
     """A program's capture holds what the program wrote and nothing else."""
+
+    def test_a_capture_keeps_its_bound_counts_the_rest_and_outlives_its_close(self):
+        import pytest
+
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(5)
+        capture.write("abc")
+        capture.write("defgh")
+        capture.close()
+
+        with pytest.raises(ValueError, match="closed file"):
+            capture.write("i")
+        assert capture.written() == Written("abcde", 8)
+        assert capture.written().truncated
 
     def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
         """A write from another thread while a program runs reaches its own stream, not the capture."""

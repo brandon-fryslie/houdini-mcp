@@ -441,61 +441,6 @@ x = 1 + 2
 
     # --- Output Size Cap Tests ---
 
-    def test_stdout_truncation(self, mock_connection):
-        """Test that large stdout is truncated."""
-        from houdini_mcp.tools import execute_code
-
-        # Generate output larger than 100 bytes (using small size for test)
-        code = "print('x' * 200)"
-        result = execute_code(
-            code,
-            host="localhost",
-            port=18811,
-            capture_diff=False,
-            max_stdout_size=100,
-            bypass_config_enabled=False,
-        )
-
-        assert result["status"] == "success"
-        assert len(result["stdout"]) <= 100
-        assert result["stdout_truncated"] is True
-
-    def test_stderr_truncation(self, mock_connection):
-        """Test that large stderr is truncated."""
-        from houdini_mcp.tools import execute_code
-
-        code = "import sys; sys.stderr.write('y' * 200)"
-        result = execute_code(
-            code,
-            host="localhost",
-            port=18811,
-            capture_diff=False,
-            max_stderr_size=100,
-            bypass_config_enabled=False,
-        )
-
-        assert result["status"] == "success"
-        assert len(result["stderr"]) <= 100
-        assert result["stderr_truncated"] is True
-
-    def test_no_truncation_within_limits(self, mock_connection):
-        """Test that output within limits is not truncated."""
-        from houdini_mcp.tools import execute_code
-
-        code = "print('hello')"
-        result = execute_code(
-            code,
-            host="localhost",
-            port=18811,
-            capture_diff=False,
-            max_stdout_size=100000,
-            bypass_config_enabled=False,
-        )
-
-        assert result["status"] == "success"
-        assert result["stdout_truncated"] is False
-        assert result["stderr_truncated"] is False
-
     def test_default_size_limits(self, mock_connection):
         """Test that default size limits are applied."""
         from houdini_mcp.tools import execute_code

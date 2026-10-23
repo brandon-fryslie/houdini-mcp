@@ -46,8 +46,7 @@ import traceback
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-from io import StringIO
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from ..connection import houdini
 from ._common import (
@@ -69,7 +68,7 @@ from .code_policy import (
     parse_code,
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
-from .program_output import captured
+from .program_output import Capture, captured
 from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
@@ -416,7 +415,7 @@ class _Ended:
 
 
 def _run_code_thread(
-    code: str, hou: Any, stdout_capture: StringIO, stderr_capture: StringIO
+    code: str, hou: Any, stdout_capture: Capture, stderr_capture: Capture
 ) -> tuple[_Fault, ...]:
     """Execute user code, capturing stdout/stderr; what it raised, if it raised."""
     try:
@@ -456,24 +455,30 @@ class _NeverRan:
     error: Exception
 
 
-def _reported_output(operation: str, streams: dict[str, tuple[StringIO, int]]) -> dict[str, Any]:
-    """Each captured stream, by name, as every way out of execute_code reports
-    it: cut to its bound, beside ``<name>_truncated`` saying whether it was.
+class _ReportedOutput(TypedDict):
+    """A program's output as every way out of execute_code reports it."""
 
-    Each capture is read once, so a program still writing (one that timed out)
-    cannot report text and a flag taken from two different reads.
-    """
-    texts = {name: (capture.getvalue(), bound) for name, (capture, bound) in streams.items()}
-    cut = [name for name, (text, bound) in texts.items() if len(text) > bound]
+    stdout: str
+    stdout_truncated: bool
+    stderr: str
+    stderr_truncated: bool
+
+
+def _reported_output(operation: str, stdout: Capture, stderr: Capture) -> _ReportedOutput:
+    """Each capture's text beside whether its bound cut it."""
+    out, err = stdout.written(), stderr.written()
     logger.info(
-        "%s output %s characters truncated=%s",
+        "%s output stdout=%d stderr=%d characters truncated=%s",
         operation,
-        " ".join(f"{name}={len(text)}" for name, (text, _) in texts.items()),
-        cut,
+        out.length,
+        err.length,
+        [name for name, written in (("stdout", out), ("stderr", err)) if written.truncated],
     )
     return {
-        **{name: text[:bound] for name, (text, bound) in texts.items()},
-        **{f"{name}_truncated": name in cut for name in texts},
+        "stdout": out.text,
+        "stdout_truncated": out.truncated,
+        "stderr": err.text,
+        "stderr_truncated": err.truncated,
     }
 
 
@@ -788,14 +793,10 @@ def _execute_with_grant(
         hou = link.hou
         undos = _resolve_undo_primitive(hou)
 
-        stdout_capture = StringIO()
-        stderr_capture = StringIO()
-        # [LAW:one-source-of-truth] Each capture meets its bound here, once, for
-        # every way out of the call to report through _reported_output.
-        streams = {
-            "stdout": (stdout_capture, max_stdout_size),
-            "stderr": (stderr_capture, max_stderr_size),
-        }
+        # [LAW:one-source-of-truth] Each capture holds its own bound, and every way
+        # out of the call reports them through _reported_output.
+        stdout_capture = Capture(max_stdout_size)
+        stderr_capture = Capture(max_stderr_size)
         # The worker writes this once the program and its undo group have ended.
         ended = _Ended((), None)
         # With capture_diff, the worker writes this on every way out: the program's
@@ -950,7 +951,7 @@ def _execute_with_grant(
             raise ProgramStillRunning(
                 f"Execution timeout: code did not complete within {timeout} seconds",
                 policy=grant.policy,
-                **_reported_output(operation, streams),
+                **_reported_output(operation, stdout_capture, stderr_capture),
                 timeout=timeout,
                 warning=(
                     "Execution timed out while its background thread and undo group are still active. "
@@ -991,7 +992,7 @@ def _execute_with_grant(
             failure = OperationFailed(
                 first.told(),
                 traceback="".join(fault.traceback for fault in ended.faults),
-                **_reported_output(operation, streams),
+                **_reported_output(operation, stdout_capture, stderr_capture),
                 policy=grant.policy,
                 audit=audit,
             )
@@ -1012,7 +1013,7 @@ def _execute_with_grant(
         # --- Success -------------------------------------------------------------
         result: dict[str, Any] = {
             "status": "success",
-            **_reported_output(operation, streams),
+            **_reported_output(operation, stdout_capture, stderr_capture),
             "policy": grant.policy,
             "audit": audit,
         }

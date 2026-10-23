@@ -9,16 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `execute_code` reports `stdout_truncated` and `stderr_truncated` on every
-  result that carries the program's output, success, a program that raised,
-  and a program still running past its timeout, as `true` when the stream was
-  cut to `max_stdout_size` / `max_stderr_size` and `false` when it was not
-  (houdini-laws-etg.79x). A timed-out program's output was cut with no flag,
-  so a caller could not tell a program that printed little from one whose
-  output was cut, and the flags were absent rather than `false` on output that
-  fit. `stdout_warning` and `stderr_warning` are gone: they restated the flag
-  and the caller's own bound. The bounds count characters, as they always did;
-  the parameters said bytes.
+- `execute_code` reports `stdout_truncated` and `stderr_truncated` on a
+  program still running past its timeout, as it does on success and on a
+  program that raised (houdini-laws-etg.79x). A timed-out program's output was
+  cut with no flag, so a caller could not tell a program that printed little
+  from one whose output was cut. The bounds count characters, as they always
+  did; the parameters said bytes.
+
+- `execute_code` reports how a program ended when the program closed
+  `sys.stdout` or `sys.stderr` (houdini-laws-etg.79x). It reported
+  `operation_failed` "I/O operation on closed file" in place of the program's
+  success, its exception, or `worker_still_running`, and without its output.
+  The server holds at most `max_stdout_size` / `max_stderr_size` characters of
+  a program's output, where it held all of it and cut it when reporting.
 
 - `list_children` warns "Collection limited to N nodes" only when `max_nodes`
   left a node out (houdini-laws-etg.c76). It warned whenever the walk reached
@@ -95,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (wire)**: `execute_code`'s `stdout_truncated` and
+  `stderr_truncated` are on every result that carries the program's output,
+  `false` when the stream fit, where they were absent
+  (houdini-laws-etg.79x). `stdout_warning` and `stderr_warning` are gone:
+  they restated the flag and the caller's own bound.
 
 - **BREAKING (wire)**: `list_node_types`, `list_children` and `find_nodes`
   refuse a page `limit` outside 1 to 500 or a negative `cursor`: the served

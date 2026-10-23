@@ -16,9 +16,59 @@ import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from io import StringIO, TextIOBase
 from typing import TextIO
 
 logger = logging.getLogger("houdini_mcp.tools.program_output")
+
+
+@dataclass(frozen=True)
+class Written:
+    """What a program wrote to a capture: the first ``bound`` characters of it, and
+    how many it wrote in all."""
+
+    text: str
+    length: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.length > len(self.text)
+
+
+class Capture(TextIOBase):
+    """A program's stream that keeps the first ``bound`` characters written to it
+    and only counts the rest, so a program's output costs the server at most its
+    bound.
+
+    [LAW:types-are-the-program] The bound is the capture's, not its reader's: the
+    program writes to this, and the call reads ``written()``, so a program that
+    closes its stream ends its own writes - as on any file - and not the read.
+    """
+
+    def __init__(self, bound: int) -> None:
+        super().__init__()
+        self._bound = bound
+        self._kept = StringIO()
+        self._length = 0
+        # [LAW:no-ambient-temporal-coupling] A program that outlived its timeout
+        # still writes while the call reads; the lock makes each read one moment.
+        self._lock = threading.Lock()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            if self.closed:
+                raise ValueError("I/O operation on closed file.")
+            self._kept.write(text[: max(0, self._bound - self._length)])
+            self._length += len(text)
+        return len(text)
+
+    def written(self) -> Written:
+        with self._lock:
+            return Written(self._kept.getvalue(), self._length)
 
 
 class _ThreadRoutedStream:
@@ -29,7 +79,7 @@ class _ThreadRoutedStream:
     from a later thread that is handed the program thread's reused ident.
     """
 
-    def __init__(self, thread: int, capture: TextIO, past: TextIO) -> None:
+    def __init__(self, thread: int, capture: TextIOBase, past: TextIO) -> None:
         self._thread: int | None = thread
         self._capture = capture
         self._past = past
@@ -44,7 +94,7 @@ class _ThreadRoutedStream:
 
 
 @contextmanager
-def captured(stdout: TextIO, stderr: TextIO) -> Iterator[None]:
+def captured(stdout: TextIOBase, stderr: TextIOBase) -> Iterator[None]:
     """Send the calling thread's stdout and stderr writes to these captures."""
     thread = threading.get_ident()
     entered = (sys.stdout, sys.stderr)
