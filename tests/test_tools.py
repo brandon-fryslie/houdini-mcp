@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
+from tests.conftest import (
+    SUMMARIZER,
+    MockHouNode,
+    MockNodeWithoutRenderFlag,
+    link_failure,
+    raised_inside_houdini,
+)
 
 
 class TestGetSceneInfo:
@@ -1512,11 +1518,12 @@ class TestListChildren:
             assert "inputs" not in child
             assert "outputs" not in child
 
-    def test_compact_flags_are_optional_per_node(self, mock_connection, monkeypatch):
+    def test_compact_flags_are_optional_per_node(self, mock_connection):
         from houdini_mcp.tools import list_children
 
-        child = MockHouNode(path="/obj/geo1/custom", name="custom", node_type="custom")
-        monkeypatch.setattr(child, "isRenderFlagSet", None)
+        child = MockNodeWithoutRenderFlag(
+            path="/obj/geo1/custom", name="custom", node_type="custom"
+        )
         mock_connection.add_node(
             MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])
         )

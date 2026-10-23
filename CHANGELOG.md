@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BREAKING (wire)**: `get_node_info`'s `is_displayed` and `is_rendered` are
+  `{"unread": "<ExcType>: <message>"}` when Houdini will not read the flag,
+  beside the rest of the node info (houdini-laws-etg.1dc). The whole call
+  failed with `operation_failed`. A flag the node's class does not have is
+  still `null`; a link lost during the read is still `connection_lost`.
+
 - A `get_geo_summary` of a node whose cook failed says why (houdini-laws-etg.216).
   On Houdini 22 such a node has no geometry, and the reason is only in the errors
   Houdini lists on it. The failure of a SOP with no geometry now carries those

@@ -9,7 +9,13 @@ from houdini_mcp.connection import houdini
 from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
 from houdini_mcp.tools.summarization import Excerpt
-from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
+from tests.conftest import (
+    SUMMARIZER,
+    MockHouNode,
+    MockNodeWithoutRenderFlag,
+    link_failure,
+    raised_inside_houdini,
+)
 
 
 class TestGetNodeInfoWithErrors:
@@ -314,6 +320,75 @@ class TestGetNodeInfoWithErrors:
         result = get_node_info("/obj/geo1", detail="standard")
 
         assert (result["status"], result["kind"]) == ("error", "connection_lost")
+
+    @pytest.mark.parametrize(
+        ("method", "field", "what"),
+        [
+            ("isDisplayFlagSet", "is_displayed", "display flag"),
+            ("isRenderFlagSet", "is_rendered", "render flag"),
+        ],
+    )
+    def test_a_flag_houdini_will_not_read_is_unread_beside_the_node_info(
+        self, mock_connection, caplog, method, field, what
+    ):
+        from houdini_mcp.tools import get_node_info
+
+        box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
+        setattr(box, method, MagicMock(side_effect=raised_inside_houdini(RuntimeError("gone"))))
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[box])
+        )
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            result = get_node_info("/obj/geo1/box1", detail="standard")
+
+        assert result["status"] == "success"
+        assert result[field]["unread"].startswith("RuntimeError: gone")
+        assert (result["path"], result["type"]) == ("/obj/geo1/box1", "box")
+        assert f"unread {what} of /obj/geo1/box1 reason=RuntimeError" in caplog.text
+
+    def test_an_attribute_error_houdini_raises_reading_a_flag_is_unread_not_absent(
+        self, mock_connection
+    ):
+        from houdini_mcp.tools import get_node_info
+
+        box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
+        box.isRenderFlagSet = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(AttributeError("inside the read"))
+        )
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[box])
+        )
+
+        result = get_node_info("/obj/geo1/box1", detail="standard")
+
+        assert result["is_rendered"]["unread"].startswith("AttributeError: inside the read")
+
+    def test_a_lost_link_while_reading_a_flag_fails_the_call(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
+        box.isDisplayFlagSet = MagicMock(  # type: ignore[method-assign]
+            side_effect=link_failure(EOFError("stream has been closed"))
+        )
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[box])
+        )
+
+        result = get_node_info("/obj/geo1/box1", detail="standard")
+
+        assert (result["status"], result["kind"]) == ("error", "connection_lost")
+
+    def test_a_node_with_no_render_flag_reads_null_for_it(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockNodeWithoutRenderFlag(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1.setDisplayFlag(True)
+        mock_connection.add_node(geo1)
+
+        result = get_node_info("/obj/geo1", detail="standard")
+
+        assert (result["is_displayed"], result["is_rendered"]) == (True, None)
 
 
 class TestFindErrorNodes:

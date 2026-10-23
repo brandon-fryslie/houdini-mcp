@@ -116,6 +116,21 @@ def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, 
         assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")
 
 
+def test_a_flag_a_nodes_class_does_not_have_reads_null(at: dict[str, Any]) -> None:
+    """On Houdini 22 /obj has neither flag, an object only a display flag, a SOP both."""
+
+    def flags(path: str) -> tuple[Any, Any]:
+        info = tools.get_node_info(path, detail="standard", **at)
+        return info["is_displayed"], info["is_rendered"]
+
+    geo = tools.create_node("geo", "/obj", "mcp_it_flags", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    assert flags("/obj") == (None, None)
+    assert flags(geo) == (True, None)
+    assert flags(box) == (True, True)
+
+
 def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str, Any]) -> None:
     """A forced cook counts, for a manager and for a displayed SOP alike: compared with
     the count before it, so a viewer that already cooked the box changes nothing."""

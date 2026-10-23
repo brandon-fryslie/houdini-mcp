@@ -802,6 +802,15 @@ def _admit(
         _admit(node, offered[node._node_type], child, node._children[:index])
 
 
+class MockNodeWithoutRenderFlag(MockHouNode):
+    """A node whose class has no render flag, as an object's has none on Houdini 22:
+    the method is not there, so looking it up raises AttributeError."""
+
+    @property
+    def isRenderFlagSet(self) -> Any:  # type: ignore[override]
+        raise AttributeError("isRenderFlagSet")
+
+
 class MockModuleNamespace:
     """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
