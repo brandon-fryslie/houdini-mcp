@@ -1514,6 +1514,38 @@ class TestListChildren:
         assert result["returned"] == 10
         assert "warning" in result
 
+    @pytest.mark.parametrize(
+        ("count", "recursive", "cut"),
+        [(3, False, False), (4, False, True), (3, True, False), (4, True, True)],
+    )
+    def test_list_children_warns_of_the_cap_only_when_a_node_was_left_out(
+        self, mock_connection, caplog, count, recursive, cut
+    ):
+        from houdini_mcp.tools import list_children
+
+        top: list[MockHouNode] = []
+        if recursive:
+            # a chain, each node the only child of the one above: the last node
+            # taken has no children when count == max_nodes, and one when it is more
+            for i in reversed(range(count)):
+                path = "/obj/geo1/" + "/".join(f"n{j}" for j in range(i + 1))
+                top = [MockHouNode(path=path, name=f"n{i}", node_type="subnet", children=top)]
+        else:
+            top = [
+                MockHouNode(path=f"/obj/geo1/n{i}", name=f"n{i}", node_type="null")
+                for i in range(count)
+            ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=top)
+        )
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
+            result = list_children("/obj/geo1", recursive=recursive, max_nodes=3)
+
+        assert result["returned"] == 3
+        assert ("Collection limited to 3 nodes" in result.get("warning", "")) is cut
+        assert f"cut={cut}" in caplog.text
+
     def test_list_children_node_not_found(self, mock_connection):
         """Test error when node not found."""
         from houdini_mcp.tools import list_children

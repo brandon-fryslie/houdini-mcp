@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_children` warns "Collection limited to N nodes" only when `max_nodes`
+  left a node out (houdini-laws-etg.c76). It warned whenever the walk reached
+  `max_nodes`, so a network with exactly `max_nodes` children was reported as
+  cut, and a caller re-queried for nodes that do not exist.
+
 - `render_node_network` refuses a node that is not a network, such as a SOP
   or LOP node, as `invalid_input` naming the network the node sits in
   (houdini-laws-etg.9wg). It returned success with a picture of whatever
