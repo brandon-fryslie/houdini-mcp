@@ -208,12 +208,12 @@ class TestDefaults:
     """With no configuration, summarization is on and aimed at the local completions server."""
 
     def test_enabled_against_the_local_server(self):
-        """The out-of-the-box target is the omlx server and its instruct model."""
+        """The out-of-the-box target is the omlx server and the model it keeps pinned."""
         assert summarizer({}) == Summarizer(
             enabled=True,
             base_url="http://100.66.66.66:8000/v1",
             api_key="1234",
-            model="mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit",
+            model="Qwen3.8-Flash-Next-Sushi",
         )
 
     def test_client_authenticates_to_the_local_server(self, production_summarizer_client):
@@ -305,7 +305,8 @@ class TestSummarize:
     """The chat-completions request the summarizer sends, and how each answer is reported."""
 
     async def test_sends_a_chat_completions_request(self, wire):
-        """The request goes to /v1/chat/completions with the key, model, budget and prompt."""
+        """The request goes to /v1/chat/completions with the key, model, budget and prompt,
+        and switches the model's thinking off."""
         reading = Reading.of(LARGE)
         result = await summarization._summarize("Summarize this.", reading, SUMMARIZER)
 
@@ -323,6 +324,7 @@ class TestSummarize:
                     "content": summarization._prompt("Summarize this.", Excerpt.of(reading)),
                 }
             ],
+            "chat_template_kwargs": {"enable_thinking": False},
         }
 
     @pytest.mark.parametrize(
