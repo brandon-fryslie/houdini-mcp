@@ -948,7 +948,7 @@ def _execute_with_grant(
         stdout_val, stdout_truncated = _truncate_output(stdout_capture.getvalue(), max_stdout_size)
         stderr_val, stderr_truncated = _truncate_output(stderr_capture.getvalue(), max_stderr_size)
 
-        result = {
+        result: dict[str, Any] = {
             "status": "success",
             "stdout": stdout_val,
             "stderr": stderr_val,

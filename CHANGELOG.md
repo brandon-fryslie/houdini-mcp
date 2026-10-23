@@ -1019,6 +1019,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only existed on the fake). The plugin packages are type-checked in CI, and
   that check fails the build.
 
+- **A type error in `houdini_mcp/` fails CI** (houdini-laws-etg.95j): its mypy
+  step had been allowed to fail, so the three errors it reported in
+  `tools/code.py` shipped green. They are fixed, and the step now fails the
+  build.
+
 - **Flags have a cap and an exit plan; the permission decision is one value**
   (houdini-laws-etg.pic):
   - `get_node_info` takes `detail` ("compact" | "standard" | "full", default
