@@ -555,14 +555,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
   it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
-  because MCP is served at `/mcp`. README now gives `http://localhost:3055/mcp`.
-  The server no longer logs its own pathless
-  `Starting Houdini MCP Server on http://0.0.0.0:3055`; fastmcp's startup line,
-  which names the path, stays. The live tests' server child watches for the test
-  ending from its first instant, imports this checkout's `houdini_mcp` first on the
-  path, and treats a slow `/health` answer as not serving yet rather than a failure.
-  The default `MCP_PORT` lives in one place the test reads, and README's
-  `MCP_TRANSPORT` row names the URL path each transport serves (`sse` serves `/sse`).
+  because MCP is served at `/mcp`. README now gives `http://localhost:3055/mcp`. The
+  server no longer logs its own pathless `Starting Houdini MCP Server on
+  http://0.0.0.0:3055`; fastmcp's startup line, which names the path, stays. The live
+  tests' server child watches for the test ending from its first instant, imports
+  this checkout's `houdini_mcp` first on the path, and treats a slow `/health` answer
+  as not serving yet rather than a failure. The default `MCP_PORT` lives in one place
+  the test reads, and README's `MCP_TRANSPORT` row names the URL path each transport
+  serves (`sse` serves `/sse`).
 
 - **`get_houdini_help` names the class on a hou page** (houdini-tuneup-ef3.avb):
   a `python_hou` title came back as ` - class`, because the parser read only the
