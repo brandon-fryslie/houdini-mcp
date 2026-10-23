@@ -501,6 +501,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ever ran. A client calls the tools over MCP, as README's client configurations
   show. The live workflow tests they were said to be tested by remain, as
   `tests/integration/test_workflows.py`; they call the tool functions directly.
+- README's "Common Patterns" and "Error Handling Best Practices" sections
+  (houdini-tuneup-ef3.9x8). Their snippets called the tools as synchronous Python
+  functions, but the tools are async, and `get_geo_summary` takes arguments the
+  server supplies, so none of them ran. "Verifying Results" also checked
+  `cook_state` for a failure, but a failing `get_geo_summary` returns
+  `status: "error"` with no `cook_state`. An agent reads each tool's arguments
+  and result from the tool description the server serves; README's Example
+  Prompts show the same workflows as requests to the agent.
 - `docs/codex-windows-setup.md` (houdini-tuneup-ef3.avb). README's install steps
   now use Houdini 22's macOS paths, give Codex's `config.toml` form beside the
   JSON one, and end with the Windows and Linux paths. The guide's own plugin
