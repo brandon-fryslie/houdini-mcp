@@ -178,11 +178,7 @@ show_missing = true
 # Mypy configuration
 [tool.mypy]
 python_version = "3.11"
-files = [
-    "houdini_mcp",
-    "houdini_plugin/houdini_mcp/python/houdini_mcp_plugin",
-    "houdini_plugin/houdini_mcp/python/houdini_mcp_handshake",
-]
+files = ["houdini_mcp", "houdini_plugin/houdini_mcp/python", "scripts"]
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true

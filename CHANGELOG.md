@@ -1022,7 +1022,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A type error in `houdini_mcp/` fails CI** (houdini-laws-etg.95j): its mypy
   step had been allowed to fail, so the three errors it reported in
   `tools/code.py` shipped green. They are fixed, and the step now fails the
-  build.
+  build. One `uv run mypy` checks `houdini_mcp/`, every plugin package
+  (`houdini_mcp_search` was unchecked) and `scripts/`, from the file list in
+  `pyproject.toml`.
 
 - **Flags have a cap and an exit plan; the permission decision is one value**
   (houdini-laws-etg.pic):
