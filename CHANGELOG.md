@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   external `mcp-network`, which a fresh clone does not have, and no longer
   carries the upstream dashboard's `homepage.*` labels.
 
+- **BREAKING (Docker Compose)**: a setting set to an empty value, such as
+  `HOUDINI_PORT=` or `LOG_LEVEL=`, reaches the server empty, and the server refuses
+  it at start and names the variable (houdini-tuneup-ef3.d72). Compose used to
+  replace an empty `HOUDINI_PORT`, `MCP_PORT` or `LOG_LEVEL` with its own default.
+  An empty `HOUDINI_RPC_TOKEN=` still means no token.
+
 - **BREAKING (wire)**: a summary says how much of the result it was written from
   (houdini-laws-spine-cqp.lf0). The summarizer was sent the first 8000
   characters of the result's indented JSON (`serialize_scene`: 10000), cut
@@ -492,11 +498,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MCP_TRANSPORT`. So the container always summarized with the built-in defaults.
   compose.yaml now passes every setting in the table in README's Configuration
   section. A setting left unset everywhere stays unset in the container, so the
-  server's own default applies. A setting set to an empty value, such as
-  `HOUDINI_PORT=` or `LOG_LEVEL=`, used to become compose's default and now reaches
-  the server empty, which refuses it at start and names the variable; an empty
-  `HOUDINI_RPC_TOKEN=` still means no token. A test fails when the server reads a
-  setting compose.yaml does not pass.
+  server's own default applies.
 
 - **README's client configuration reaches the HTTP server** (houdini-tuneup-ef3.pd9):
   it gave `http://localhost:3055`, which the server answers with `404 Not Found`,
