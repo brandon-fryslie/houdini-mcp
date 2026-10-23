@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
+from tests.conftest import (
+    SUMMARIZER,
+    MockHouNode,
+    MockNodeLacking,
+    link_failure,
+    raised_inside_houdini,
+)
 
 
 class TestGetSceneInfo:
@@ -1350,19 +1356,21 @@ class TestListChildren:
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert result["unwalked"][0]["path"] == "/obj/geo1"
 
-    def test_a_compact_flag_houdini_will_not_read_is_unread(self, mock_connection):
+    # an AttributeError Houdini raises inside the read is a refusal, not an absent flag
+    @pytest.mark.parametrize("refusal", [RuntimeError("gone"), AttributeError("gone")])
+    def test_a_compact_flag_houdini_will_not_read_is_unread(self, mock_connection, refusal):
         from houdini_mcp.tools import list_children
 
         child = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
         child.isBypassed = MagicMock(  # type: ignore[method-assign]
-            side_effect=raised_inside_houdini(RuntimeError("gone"))
+            side_effect=raised_inside_houdini(refusal)
         )
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])
         mock_connection.add_node(geo1)
 
         [record] = list_children("/obj/geo1", compact=True)["children"]
 
-        assert record["flags"]["unread"].startswith("RuntimeError: gone")
+        assert record["flags"]["unread"].startswith(f"{type(refusal).__name__}: gone")
 
     def test_list_children_max_nodes(self, mock_connection):
         """Test max_nodes limit is respected."""
@@ -1512,11 +1520,12 @@ class TestListChildren:
             assert "inputs" not in child
             assert "outputs" not in child
 
-    def test_compact_flags_are_optional_per_node(self, mock_connection, monkeypatch):
+    def test_compact_flags_are_optional_per_node(self, mock_connection):
         from houdini_mcp.tools import list_children
 
-        child = MockHouNode(path="/obj/geo1/custom", name="custom", node_type="custom")
-        monkeypatch.setattr(child, "isRenderFlagSet", None)
+        child = MockNodeLacking(
+            path="/obj/geo1/custom", name="custom", node_type="custom", lacks=("isRenderFlagSet",)
+        )
         mock_connection.add_node(
             MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])
         )

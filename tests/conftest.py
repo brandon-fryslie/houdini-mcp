@@ -94,7 +94,7 @@ NODE_TYPES: dict[str, dict[str, str | None]] = {
     "Sop": {**dict.fromkeys(_SOP_LEAVES), "subnet": "Sop", "hda": "Sop", "dopnet": "Dop"},
     "Dop": {"pyrosolver": None, "subnet": "Dop"},
     "Vop": {"principledshader": None, "subnet": "Vop"},
-    "Driver": {"opengl": None, "karma": None, "subnet": "Driver"},
+    "Driver": {"opengl": None, "karma": None, "subnet": "Driver", "sopnet": "Sop"},
     "Lop": {"sopnet": "Sop"},
     **{category: {} for category in ("ChopNet", "Chop", "Shop", "CopNet", "VopNet", "TopNet")},
 }
@@ -800,6 +800,20 @@ def _admit(
         raise raised_inside_houdini(refused)
     for index, child in enumerate(node._children):
         _admit(node, offered[node._node_type], child, node._children[:index])
+
+
+class MockNodeLacking(MockHouNode):
+    """A node whose class lacks the methods ``lacks`` names, as an object has no
+    render flag on Houdini 22: looking one up raises AttributeError."""
+
+    def __init__(self, *args: Any, lacks: tuple[str, ...], **kwargs: Any):
+        object.__setattr__(self, "_lacks", frozenset(lacks))
+        super().__init__(*args, **kwargs)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in object.__getattribute__(self, "_lacks"):
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
 
 
 class MockModuleNamespace:

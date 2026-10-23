@@ -26,6 +26,7 @@ from ._common import (
     ResultLimit,
     join_warnings,
     node_at,
+    node_flag,
     page_from,
     paginate,
     paging_fields,
@@ -110,8 +111,11 @@ def get_node_info(
         max_params: Most parameter values returned under detail="full" (default: 50)
 
     Returns:
-        Node information at the requested detail; a type_description Houdini
-        would not give is {unread}. When cook_info is not "none",
+        Node information at the requested detail; a type_description,
+        is_displayed or is_rendered Houdini would not give is {unread}.
+        is_displayed and is_rendered are null for a node with no such flag
+        (on Houdini 22, a network such as /obj has neither and an object has
+        no render flag). When cook_info is not "none",
         also includes cook_info with cook_count, needs_to_cook, errors and
         warnings (and last_cook_time after a forced cook). cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
@@ -192,8 +196,10 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
-        "is_displayed": node.isDisplayFlagSet() if hasattr(node, "isDisplayFlagSet") else None,
-        "is_rendered": node.isRenderFlagSet() if hasattr(node, "isRenderFlagSet") else None,
+        "is_displayed": read(
+            f"display flag of {path}", partial(node_flag, node, "isDisplayFlagSet")
+        ),
+        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "isRenderFlagSet")),
     }
 
     info["input_connections"] = [conn.as_record() for conn in connections]
@@ -374,6 +380,9 @@ def list_children(
         - type: Node type
         - inputs: Array of input connection records (input_index, source_node, source_output_index), omitted if compact=True
         - outputs: Array of output node paths (omitted if compact=True)
+        - flags (compact=True only): display, render and bypass as "1" or "0",
+          "-" for a flag the node's class does not have; {unread} when Houdini
+          will not read them
         Also unwalked: nodes whose children Houdini would not list, as
         {path, unread}; any makes status "partial". A walk stopped by max_depth
         above nodes that have children, or that would not say, says so in warning,
@@ -399,11 +408,10 @@ def list_children(
         def compact_flags(node: Any) -> str:
             # Three-character bitset: display/render/bypassed. `-` means the node
             # class does not expose that flag API.
-            getters = (
-                getattr(node, m, None)
-                for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
+            flags = (
+                node_flag(node, m) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
             )
-            return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
+            return "".join("-" if f is None else "1" if f else "0" for f in flags)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:
             # Anything a record raises reaches the tool's error boundary, so a wire

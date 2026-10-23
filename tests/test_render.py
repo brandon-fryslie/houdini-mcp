@@ -1,14 +1,17 @@
 """Tests for the render_viewport function."""
 
 import base64
+import logging
 import math
 import os
 import pathlib
 import tempfile
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
 
 
 class TestRenderViewportValidation:
@@ -394,6 +397,43 @@ class TestListRenderNodes:
 
         assert result["status"] == "error"
         assert "Failed to connect" in result["message"]
+
+    def test_bypassed_is_null_for_a_node_with_no_bypass_flag(self, mock_connection, caplog):
+        from houdini_mcp.tools import list_render_nodes
+
+        caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.rendering")
+
+        rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
+        rop.setBypass(True)
+        mock_connection.add_node(rop)
+        mock_connection.add_node(
+            MockNodeLacking(
+                path="/out/sopnet1", name="sopnet1", node_type="sopnet", lacks=("isBypassed",)
+            )
+        )
+
+        listed = list_render_nodes()["render_nodes"]
+
+        assert {r["name"]: r["bypassed"] for r in listed} == {"opengl1": True, "sopnet1": None}
+        assert "list_render_nodes count=2 without_bypass_flag=['/out/sopnet1']" in caplog.text
+
+    def test_a_bypass_flag_houdini_will_not_read_is_unread(self, mock_connection, caplog):
+        from houdini_mcp.tools import list_render_nodes
+
+        refusing = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
+        refusing.isBypassed = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("gone"))
+        )
+        mock_connection.add_node(refusing)
+        mock_connection.add_node(MockHouNode(path="/out/karma1", name="karma1", node_type="karma"))
+
+        result = list_render_nodes()
+
+        listed = {r["name"]: r["bypassed"] for r in result["render_nodes"]}
+        assert result["status"] == "success"
+        assert listed["opengl1"]["unread"].startswith("RuntimeError: gone")
+        assert listed["karma1"] is False
+        assert "unread bypass flag of /out/opengl1 reason=RuntimeError" in caplog.text
 
 
 class TestGetRenderSettings:

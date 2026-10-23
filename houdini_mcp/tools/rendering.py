@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal, cast
 
 from ..connection import Link, transport_failure
@@ -28,12 +29,14 @@ from ._common import (
     batch_status,
     node_at,
     node_category,
+    node_flag,
     tool,
     using,
 )
 from .bounds import Box, box_center, box_of_bounds, box_sides
 from .failure import add_note
 from .parms import read_present, write_all
+from .reads import read
 
 logger = logging.getLogger("houdini_mcp.tools.rendering")
 
@@ -786,7 +789,9 @@ def list_render_nodes(
             - type: ROP type (opengl, karma, ifd, etc.)
             - camera: Camera path if set
             - output: Output image path if set
-            - bypassed: Whether the node is bypassed
+            - bypassed: Whether the node is bypassed; null for a node with no
+              bypass flag (on Houdini 22, a network such as a sopnet or matnet);
+              {unread} when Houdini will not read it
 
     Examples:
         list_render_nodes()  # List all ROPs in /out
@@ -798,12 +803,12 @@ def list_render_nodes(
 
         render_nodes = []
         for node in out_context.children():
-            node_type = node.type().name()
+            path = node.path()
             node_info = {
-                "path": node.path(),
+                "path": path,
                 "name": node.name(),
-                "type": node_type,
-                "bypassed": node.isBypassed() if hasattr(node, "isBypassed") else False,
+                "type": node.type().name(),
+                "bypassed": read(f"bypass flag of {path}", partial(node_flag, node, "isBypassed")),
             }
 
             # Output path lives under a different name per ROP type
@@ -816,6 +821,11 @@ def list_render_nodes(
 
             render_nodes.append(node_info)
 
+        logger.debug(
+            "list_render_nodes count=%d without_bypass_flag=%s",
+            len(render_nodes),
+            [r["path"] for r in render_nodes if r["bypassed"] is None],
+        )
         return {
             "status": "success",
             "count": len(render_nodes),

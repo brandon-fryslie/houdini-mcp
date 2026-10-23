@@ -340,6 +340,19 @@ def node_category(node: Any) -> str:
     return str(node.type().category().name())
 
 
+def node_flag(node: Any, method: str) -> bool | None:
+    """The flag ``method`` reads, or None when the node's class has no such flag.
+
+    Which flags a node has follows its class: on Houdini 22, for example, a SOP has
+    a display and a render flag, an object only a display flag, and a network such
+    as /obj neither.
+    """
+    # [LAW:no-silent-failure] looked up, then called: an AttributeError Houdini raises
+    # while reading the flag is a refused read, not a flag the node lacks
+    getter = getattr(node, method, None)
+    return None if getter is None else bool(getter())
+
+
 def node_at(hou: Any, path: str, what: str = "Node") -> Any:
     """The node at ``path``, which cannot be absent.
 
