@@ -100,8 +100,8 @@ says where.
 
 If the listener is bound to loopback, `Remote Status` / `Remote Self-Test`
 warn that **remote clients cannot reach it** and explain how to re-bind. The
-self-test also emits per-OS firewall commands. On Linux and Windows they open the
-bound port. The macOS Application Firewall admits programs, not ports, so the
+self-test also emits the firewall commands for the OS Houdini runs on. On Linux
+and Windows they open the bound port. The macOS Application Firewall admits programs, not ports, so the
 macOS command allows the executable that owns the listener's socket, which the
 guidance names; `self_test_hrpyc()` on a running listener also returns it as
 `executable`. In graphical Houdini, that is the binary the

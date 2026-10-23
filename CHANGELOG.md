@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --add` and `--unblockapp`. The self-test reports that executable as
   `executable`, read from the running process. The binary that runs a graphical
   Houdini depends on its launcher, so no fixed name would be right.
+  The guidance now gives only the commands for the OS Houdini runs on, not
+  every OS's.
 - **BREAKING (HTTP, Docker Compose, Python API)**: the HTTP server answers only
   this machine by default, and refuses a request that calls it by a name it does
   not admit (houdini-tuneup-ef3.9q8). It used to listen on every interface and

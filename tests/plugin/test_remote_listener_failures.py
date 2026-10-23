@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 import socket
 import subprocess
 import sys
@@ -315,7 +314,7 @@ class TestSelfTestAndStatus:
     def test_self_test_reports_and_allows_the_process_executable(
         self, fake_hrpyc, fake_hou, monkeypatch
     ):
-        """macOS's firewall admits programs, so the report names this process's binary."""
+        """The report's guidance is this host's, for this process's binary."""
         app = "/Applications/Houdini FX.app/Contents/MacOS/houdini"
         monkeypatch.setattr(listener_module, "own_executable", lambda: app)
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
@@ -323,8 +322,9 @@ class TestSelfTestAndStatus:
         report = listener.self_test()
 
         assert report["executable"] == app
-        (macos,) = (g for g in report["guidance"] if g.startswith("macOS:"))
-        assert f"--add {shlex.quote(app)}" in macos
+        assert report["guidance"] == firewall_guidance(
+            "127.0.0.1", report["bound_port"], app, sys.platform
+        )
 
     def test_own_executable_is_the_os_answer_not_what_python_was_told(self, tmp_path):
         """PYTHONEXECUTABLE rewrites sys.executable, not the program the OS runs.
@@ -353,9 +353,19 @@ class TestSelfTestAndStatus:
         app = (
             "/Applications/Houdini/Houdini22.0.466/Houdini FX 22.0.466.app/Contents/MacOS/houdinifx"
         )
-        (macos,) = (g for g in firewall_guidance("0.0.0.0", 18811, app) if g.startswith("macOS:"))
         fw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
-        assert macos == f"macOS:          {fw} --add '{app}' && {fw} --unblockapp '{app}'"
+        assert firewall_guidance("0.0.0.0", 18811, app, "darwin")[1:] == [
+            f"macOS:          {fw} --add '{app}' && {fw} --unblockapp '{app}'"
+        ]
+
+    @pytest.mark.parametrize(
+        ("platform", "labels"),
+        [("darwin", ["macOS"]), ("win32", ["Windows"]), ("linux", ["Linux (ufw)", "Linux (nft)"])],
+    )
+    def test_guidance_gives_only_the_commands_for_the_host_os(self, platform, labels):
+        """The firewall that matters is the one on the host serving the listener."""
+        commands = firewall_guidance("0.0.0.0", 18811, "/opt/hfs/bin/hython", platform)[1:]
+        assert [c.split(":")[0] for c in commands] == labels
 
     def test_self_test_when_stopped_reports_unreachable(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)

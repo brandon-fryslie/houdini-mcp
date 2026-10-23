@@ -428,24 +428,37 @@ def own_executable() -> str:
     return os.readlink("/proc/self/exe")
 
 
-def firewall_guidance(host: str, port: int, executable: str) -> list[str]:
+def firewall_guidance(host: str, port: int, executable: str, platform: str) -> list[str]:
     """Return human-readable firewall / connectivity guidance.
 
-    ``executable`` is the program that owns the listener's socket. The macOS
-    Application Firewall admits programs, not ports, and which binary runs a
-    graphical Houdini depends on the launcher (bin/houdinifx starts
-    MacOS/houdinifx, bin/houdini starts MacOS/houdini), so only the running
-    process can name it.
+    ``executable`` is the program that owns the listener's socket and
+    ``platform`` is the ``sys.platform`` it runs on: the firewall that matters
+    is the one on the host serving the listener. The macOS Application Firewall
+    admits programs, not ports, and which binary runs a graphical Houdini
+    depends on the launcher (bin/houdinifx starts MacOS/houdinifx, bin/houdini
+    starts MacOS/houdini), so only the running process can name it.
     """
-    socketfilterfw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
-    quoted = shlex.quote(executable)
+    match platform:
+        case "darwin":
+            socketfilterfw = "sudo /usr/libexec/ApplicationFirewall/socketfilterfw"
+            quoted = shlex.quote(executable)
+            commands = [
+                f"macOS:          {socketfilterfw} --add {quoted} && "
+                f"{socketfilterfw} --unblockapp {quoted}"
+            ]
+        case "win32":
+            commands = [
+                f"Windows:        New-NetFirewallRule -DisplayName 'Houdini hrpyc' "
+                f"-Direction Inbound -LocalPort {port} -Protocol TCP -Action Allow"
+            ]
+        case _:
+            commands = [
+                f"Linux (ufw):    sudo ufw allow {port}/tcp",
+                f"Linux (nft):    add rule inet filter input tcp dport {port} accept",
+            ]
     guidance = [
         f"Ensure the OS firewall lets inbound TCP port {port} reach this process ({executable}).",
-        f"macOS:          {socketfilterfw} --add {quoted} && {socketfilterfw} --unblockapp {quoted}",
-        f"Linux (ufw):    sudo ufw allow {port}/tcp",
-        f"Linux (nft):    add rule inet filter input tcp dport {port} accept",
-        f"Windows:        New-NetFirewallRule -DisplayName 'Houdini hrpyc' "
-        f"-Direction Inbound -LocalPort {port} -Protocol TCP -Action Allow",
+        *commands,
     ]
     if is_loopback_host(host):
         guidance.insert(
@@ -897,5 +910,7 @@ class RemoteListener:
             "protocol": "rpyc/hrpyc SlaveService (classic)",
             "warnings": warnings,
             "executable": executable,
-            "guidance": firewall_guidance(held.config.host, held.bound_port, executable),
+            "guidance": firewall_guidance(
+                held.config.host, held.bound_port, executable, sys.platform
+            ),
         }
