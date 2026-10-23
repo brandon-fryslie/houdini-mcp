@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_children` warns "Collection limited to N nodes" only when `max_nodes`
   left a node out (houdini-laws-etg.c76). It warned whenever the walk reached
   `max_nodes`, so a network with exactly `max_nodes` children was reported as
-  cut, and a caller re-queried for nodes that do not exist.
+  cut, and a caller re-queried for nodes that do not exist. The last node under
+  the cap is now walked like the others, so a locked HDA there is in `unwalked`
+  and a node with children past `max_depth` is in the depth warning.
 
 - `render_node_network` refuses a node that is not a network, such as a SOP
   or LOP node, as `invalid_input` naming the network the node sits in

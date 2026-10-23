@@ -410,6 +410,8 @@ def list_children(
             return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:
+            # Anything a record raises reaches the tool's error boundary, so a wire
+            # whose output cannot be read is reported, not dropped with its siblings.
             # Compact mode: only path, name, type
             if compact:
                 return {
@@ -429,13 +431,13 @@ def list_children(
 
         def walk(node: Any, path: str, depth: int = 0) -> Iterator[tuple[Any, str]]:
             # Every child in preorder, lazily: the walk reads only as far as its
-            # consumer takes, and knows nothing of max_nodes.
+            # consumer takes, and knows nothing of max_nodes. Between yielding a node
+            # and the next it reads only that node's subtree, so what it records -
+            # unwalked, beyond max_depth - is about nodes the consumer took.
             nonlocal walked, beyond_depth, beyond_depth_unknown
 
             # A locked HDA refuses to list its children; that is the one failure this
-            # walk tolerates, and the node is listed as unwalked. Anything a child's
-            # own record raises reaches the tool's error boundary, so a wire whose
-            # output cannot be read is reported, not dropped with its siblings.
+            # walk tolerates, and the node is listed as unwalked.
             # hou is untyped: a node's children are Any, so is_unread is the discriminator
             children: Any = read(f"children of {path}", node.children)
             if depth > max_depth:

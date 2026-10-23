@@ -1546,6 +1546,26 @@ class TestListChildren:
         assert ("Collection limited to 3 nodes" in result.get("warning", "")) is cut
         assert f"cut={cut}" in caplog.text
 
+    @pytest.mark.parametrize("cut", [False, True])
+    def test_the_last_node_under_the_cap_is_walked_like_any_other(self, mock_connection, cut):
+        from houdini_mcp.tools import list_children
+
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked.children = MagicMock(  # type: ignore[method-assign]
+            side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+        )
+        after = [MockHouNode(path="/obj/geo1/b", name="b", node_type="null")] if cut else []
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[locked, *after])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, max_nodes=1)
+
+        # whether the cap left b out says nothing about whether hda's children list
+        assert result["status"] == "partial"
+        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+        assert ("Collection limited to 1 nodes" in result.get("warning", "")) is cut
+
     def test_list_children_node_not_found(self, mock_connection):
         """Test error when node not found."""
         from houdini_mcp.tools import list_children
