@@ -5,13 +5,16 @@ import os
 import pathlib
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 from fastmcp import Client, FastMCP
 from fastmcp.server.server import Transport
 from pydantic import TypeAdapter
 
+import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import main
 from houdini_mcp.settings import InvalidSetting, Port, log_level, results_dir, setting
@@ -177,6 +180,24 @@ async def test_a_started_server_reads_no_setting_again(
     assert status["enabled"] is True
     assert refused["unmet_requirements"] == ["config"]
     assert not environ.read & set(READ_AT_START), environ.read & set(READ_AT_START)
+
+
+def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
+    monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], tmp_path: pathlib.Path
+) -> None:
+    """A setting compose.yaml does not name never reaches the server in its container,
+    whatever .env says. Only the entry point's own environment records, so what a
+    library reads of the process's is not counted."""
+    monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(tmp_path))
+    environ = Recording(os.environ)
+    monkeypatch.setattr(entry_point, "os", SimpleNamespace(environ=environ))
+
+    main()
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "compose.yaml").read_text())
+    named = {item.split("=")[0] for item in compose["services"]["houdini-mcp"]["environment"]}
+    assert environ.read == set(READ_AT_START) == named
 
 
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
