@@ -103,8 +103,9 @@ def get_node_info(
             "standard": identity, flags, children, inputs, outputs and input_connections
                 (source node and output index per connection).
             "full": "standard" plus parameter values (at most max_params).
-        cook_info: Whether to report cook state, errors and warnings (default: "none").
-            "inspect": report the node's current cook state.
+        cook_info: Whether to report the node's cook count, whether it needs to cook,
+            errors and warnings (default: "none").
+            "inspect": report them as the node is now.
             "force_cook": cook the node first, then report.
         max_params: Most parameter values returned under detail="full" (default: 50)
 
@@ -114,12 +115,12 @@ def get_node_info(
         also includes cook_info with cook_count, needs_to_cook, errors and
         warnings (and last_cook_time after a forced cook). cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
-        needsToCook(): for a SOP, whether it changed since its last cook. Some
+        needsToCook(): for a SOP, True after a change and after a cook that failed. Some
         nodes answer the same after every cook: VOPs, most DOPs and networks
         such as /obj always need to cook, and ROPs never do.
 
     Example:
-        # Check cook state and errors
+        # Check cook count and errors
         get_node_info("/obj/geo1/sphere1", cook_info="inspect")
 
         # Force cook and check for errors

@@ -3,6 +3,8 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from houdini_mcp.connection import houdini
 from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
@@ -85,17 +87,24 @@ class TestGetNodeInfoWithErrors:
         assert len(result["cook_info"]["errors"]) == 1
         assert len(result["cook_info"]["warnings"]) == 1
 
-    def test_cook_info_is_houdinis_cook_count_and_needs_to_cook(self, mock_connection):
+    @pytest.mark.parametrize("cook_count", [0, 2])
+    @pytest.mark.parametrize("needs_to_cook", [False, True])
+    def test_cook_info_is_houdinis_cook_count_and_needs_to_cook(
+        self, mock_connection, cook_count, needs_to_cook
+    ):
         from houdini_mcp.tools import get_node_info
 
-        # a ROP's answers: never cooked, and Houdini says it needs no cook
-        rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
-        rop._cook_count = 0
-        mock_connection.add_node(rop)
+        # every pair is one Houdini gives, and none hides the errors it lists
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1._cook_count = cook_count
+        geo1._needs_to_cook = needs_to_cook
+        geo1._errors = ["Undefined node type"]
+        mock_connection.add_node(geo1)
 
-        cook_info = get_node_info("/out/opengl1", cook_info="inspect")["cook_info"]
+        cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
 
-        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (0, False)
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (cook_count, needs_to_cook)
+        assert [e["message"] for e in cook_info["errors"]] == ["Undefined node type"]
         assert "cook_state" not in cook_info
 
     def test_a_forced_cook_of_a_stale_node_counts_and_needs_no_cook(self, mock_connection):

@@ -303,7 +303,7 @@ class TestErrorHandling:
         noise = create_node("attribnoise", geo_path, "noise1", **at)
         noise_path = noise["node_path"]
 
-        # Check cook state
+        # Force cook
         noise_info = get_node_info(noise_path, cook_info="force_cook", **at)
         assert noise_info["status"] == "success"
         assert "cook_info" in noise_info
@@ -374,7 +374,7 @@ class TestErrorHandling:
     async def test_safe_geometry_access_pattern(
         self, at: dict[str, Any], bound: dict[str, Any]
     ) -> None:
-        """Test the safe pattern: check cook state before accessing geometry."""
+        """A force-cooked SOP needs no cook, and its geometry reads."""
 
         geo_result = create_node("geo", "/obj", "test_safe_access", **at)
         geo_path = geo_result["node_path"]
@@ -382,7 +382,7 @@ class TestErrorHandling:
         box = create_node("box", geo_path, "box1", **at)
         box_path = box["node_path"]
 
-        # Step 1: Check cook state first
+        # Step 1: force cook
         node_info = get_node_info(box_path, cook_info="force_cook", **at)
         assert node_info["status"] == "success"
         assert "cook_info" in node_info
