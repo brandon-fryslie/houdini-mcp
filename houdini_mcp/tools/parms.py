@@ -1,17 +1,17 @@
 """The one owner of reading and writing a named parameter on a node.
 
-[LAW:one-source-of-truth] How a name resolves to a scalar parm or a tuple,
-how a Houdini value becomes a JSON value, and how a write failure is reported
-are decided here and nowhere else.
-Houdini's own naming is the resolution rule: ``parm("tx")`` is a component and
-``parmTuple("t")`` is the vector, and ``parm("t")`` finds nothing. A scalar's
-name answers both calls, ``parmTuple`` giving it as a one-component tuple.
+[LAW:one-source-of-truth] How a name resolves to a scalar parm or a tuple and
+how a Houdini value becomes a JSON value are defined in ``houdini_mcp_read``,
+which the plugin's modules read inside Houdini too; how a write failure is
+reported is decided here and nowhere else.
 """
 
 import logging
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from houdini_mcp_read import Parm, ParmNotFound, evaluated_json, json_safe_hou_value, resolve
 
 from .failure import Undone, items_failed
 from .reads import Unread, read, reraise_transport_failure
@@ -25,7 +25,6 @@ __all__ = [
     "Writes",
     "evaluated",
     "json_safe_hou_value",
-    "of_tuple",
     "read_present",
     "resolve",
     "value",
@@ -34,56 +33,8 @@ __all__ = [
 ]
 
 
-class ParmNotFound(LookupError):
-    """``name`` is neither a parm nor a parm tuple on the node at ``node_path``."""
-
-    def __init__(self, node_path: str, name: str) -> None:
-        super().__init__(f"Parameter not found: {name} on {node_path}")
-        self.node_path = node_path
-        self.name = name
-
-
 class ParmValueError(ValueError):
     """``value`` has a shape the parameter cannot take."""
-
-
-@dataclass(frozen=True)
-class Parm:
-    """A parameter name resolved on its node.
-
-    [LAW:parse-dont-validate] Holding one proves the name was found; ``target``
-    is the ``hou.Parm`` or, when ``is_tuple``, the ``hou.ParmTuple``.
-    """
-
-    name: str
-    target: Any
-    is_tuple: bool
-
-    def parm_tuple(self) -> Any:
-        """The ``hou.ParmTuple`` this parameter is, or is a component of."""
-        return self.target if self.is_tuple else self.target.tuple()
-
-
-def resolve(node: Any, name: str) -> Parm:
-    """Find ``name`` on ``node`` as a scalar parm, else as a tuple."""
-    parm = node.parm(name)
-    if parm is not None:
-        return Parm(name, parm, is_tuple=False)
-    parm_tuple = node.parmTuple(name)
-    if parm_tuple is not None:
-        return Parm(name, parm_tuple, is_tuple=True)
-    raise ParmNotFound(node.path(), name)
-
-
-def of_tuple(parm_tuple: Any) -> Parm:
-    """A ``hou.ParmTuple`` as ``resolve`` names it: one component is its parm.
-
-    Houdini names a one-component tuple's parm as it names the tuple, so this
-    is the ``Parm`` that ``resolve(node, parm_tuple.name())`` finds.
-    """
-    if len(parm_tuple) == 1:
-        return Parm(parm_tuple.name(), parm_tuple[0], is_tuple=False)
-    return Parm(parm_tuple.name(), parm_tuple, is_tuple=True)
 
 
 def write(parm: Parm, value: Any) -> None:
@@ -122,9 +73,7 @@ def evaluated(hou: Any, parms: Iterable[Any]) -> Iterator[tuple[str, Any]]:
 
 
 def _evaluated(hou: Any, name: str, target: Any) -> Any | Unread:
-    # [LAW:no-silent-failure] converting is part of reading: a value with no
-    # JSON form is as unread as one that would not evaluate
-    return read(f"parameter {name}", lambda: json_safe_hou_value(hou, target.eval()))
+    return read(f"parameter {name}", lambda: evaluated_json(hou, target))
 
 
 @dataclass(frozen=True)
@@ -178,35 +127,3 @@ def write_all(node: Any, values: Mapping[str, Any]) -> Writes:
         failed,
     )
     return Writes(updated=updated, failed=failed)
-
-
-def json_safe_hou_value(hou: Any, value: Any) -> Any:
-    """Convert a Houdini (hou) value into a JSON-serializable structure.
-
-    Raises when the value will not convert, so the caller reports it unread
-    rather than as a guess. A self-containing value raises ``RecursionError``.
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, dict):
-        return {str(k): json_safe_hou_value(hou, v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [json_safe_hou_value(hou, v) for v in value]
-    if isinstance(value, hou.Ramp):
-        return {
-            "type": "hou.Ramp",
-            "basis": [json_safe_hou_value(hou, b) for b in value.basis()],
-            "keys": list(value.keys()),
-            "values": [json_safe_hou_value(hou, v) for v in value.values()],
-        }
-    if isinstance(value, (hou.Vector2, hou.Vector3, hou.Vector4, hou.Color)):
-        return [float(x) for x in value]
-    if isinstance(value, hou.EnumValue):
-        return value.name()
-    # hou.Node, hou.Parm and every other hou object that names itself by path
-    path = getattr(value, "path", None)
-    if callable(path):
-        return path()
-    return str(value)

@@ -79,12 +79,13 @@ Issues = "https://github.com/brandon-fryslie/houdini-mcp/issues"
 houdini-mcp = "houdini_mcp.__main__:main"
 
 [tool.setuptools.packages.find]
-# houdini_mcp_handshake is defined once, in the plugin tree (Houdini's path), and
-# ships in this distribution from that same source. The plugin itself does not, nor
-# does houdini_mcp_search: the server reaches it only inside Houdini.
+# houdini_mcp_handshake and houdini_mcp_read are defined once, in the plugin tree
+# (Houdini's path), and ship in this distribution from that same source. The plugin
+# itself does not, nor do houdini_mcp_search and houdini_mcp_schema: the server
+# reaches them only inside Houdini. This is the one list of what ships from there.
 where = [".", "houdini_plugin/houdini_mcp/python"]
 include = ["houdini_mcp*"]
-exclude = ["houdini_mcp_plugin*", "houdini_mcp_search*"]
+exclude = ["houdini_mcp_plugin*", "houdini_mcp_search*", "houdini_mcp_schema*"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]
@@ -184,8 +185,8 @@ warn_unused_configs = true
 ignore_missing_imports = true
 no_strict_optional = true
 exclude = ["tests/", "build/"]
-# houdini_mcp_handshake ships from the plugin tree; the editable install reaches it
-# through an import hook mypy cannot follow.
+# houdini_mcp_handshake and houdini_mcp_read ship from the plugin tree; the editable
+# install reaches them through an import hook mypy cannot follow.
 mypy_path = "houdini_plugin/houdini_mcp/python"
 
 # Bandit security configuration

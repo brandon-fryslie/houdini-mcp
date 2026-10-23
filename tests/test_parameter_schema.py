@@ -1,10 +1,13 @@
 """Tests for the get_parameter_schema function."""
 
+import json
 import logging
+import sys
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from tests.conftest import MockHouModule, MockHouNode
+from tests.conftest import MockHouModule, MockHouNode, served_connection
 
 
 class MockParmTemplate:
@@ -770,3 +773,120 @@ class TestMultiparmInstances:
             "is_animatable": False,
             "default": 1,
         }
+
+
+class TestTheReadRunsInsideHoudini:
+    """The schema is read where the parameters live: one call into Houdini, one
+    JSON answer back, whatever the node's parameter count."""
+
+    @staticmethod
+    def _node_of(mock_hou: MockHouModule, name: str, count: int) -> MockHouNode:
+        node = MockHouNode(
+            path=f"/obj/{name}",
+            name=name,
+            node_type="null",
+            params={f"p{i}": float(i) for i in range(count)},
+        )
+        mock_hou.add_node(node)
+        give_templates(node, [MockParmTemplate(f"p{i}", f"P{i}", "Float") for i in range(count)])
+        return node
+
+    def test_the_server_asks_houdini_once_and_reads_no_parameter_itself(
+        self, connected_to, monkeypatch
+    ):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = self._node_of(mock_hou, "n", 3)
+        for method in ("parmTuples", "parm", "parmTuple"):
+            setattr(
+                node, method, MagicMock(side_effect=AssertionError(f"{method} from the server"))
+            )
+        parameters = [{"name": "p0", "type": "float", "current_value": 0.0}]
+        schema = SimpleNamespace(
+            parameter_schema=MagicMock(
+                return_value=json.dumps({"parameters": parameters, "listed": 3, "menus": []})
+            )
+        )
+        monkeypatch.setitem(sys.modules, "houdini_mcp_schema", schema)
+        connected_to(mock_hou)
+
+        result = get_parameter_schema("/obj/n", "p0", max_parms=1)
+
+        schema.parameter_schema.assert_called_once_with(mock_hou, node, "p0", 1)
+        assert (result["parameters"], result["count"]) == (parameters, 1)
+        assert result["warning"] == "Parameters limited to the first 1 of 3 parameters"
+
+    def test_a_houdini_without_the_schema_read_is_told_to_install_the_plugin(
+        self, connected_to, monkeypatch
+    ):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        self._node_of(mock_hou, "n", 1)
+        monkeypatch.setitem(sys.modules, "houdini_mcp_schema", None)
+        connected_to(mock_hou)
+
+        result = get_parameter_schema("/obj/n")
+
+        assert (result["status"], result["kind"]) == ("error", "operation_failed")
+        assert (
+            "Houdini cannot import houdini_mcp_schema (ModuleNotFoundError: " in result["message"]
+        )
+        assert "Install the plugin from the same release" in result["message"]
+
+    def test_a_read_houdini_refused_is_an_event_on_the_server(self, connected_to, caplog):
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        node = self._node_of(mock_hou, "n", 1)
+        node.parm("p0").parmTemplate().defaultValue = MagicMock(
+            side_effect=RuntimeError("no default")
+        )
+        connected_to(mock_hou)
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            get_parameter_schema("/obj/n")
+
+        assert "unread default of p0 reason=RuntimeError: no default" in caplog.messages
+
+    def test_the_read_costs_the_link_the_same_requests_whatever_the_parameter_count(
+        self, monkeypatch, reset_connection_state
+    ):
+        """Over a real rpyc link: a schema of 40 parameters sends exactly the
+        requests one of 2 does, so no parameter or template crosses on its own."""
+        from houdini_mcp.connection import houdini
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        for name, count in (("warm", 1), ("few", 2), ("many", 40)):
+            self._node_of(mock_hou, name, count)
+        # the served side is this interpreter: the hou it imports is the double
+        monkeypatch.setitem(sys.modules, "hou", mock_hou)
+
+        with served_connection("") as conn:
+            with patch("houdini_mcp.connection.handshake") as handshake:
+                handshake.connect.return_value = conn
+                houdini().connect("localhost", 18811)
+            # the plugin module's import and rpyc's first sight of each class
+            # are paid once a link, not once a read
+            get_parameter_schema("/obj/warm")
+            send = conn.sync_request
+
+            def requests_of(path: str) -> int:
+                sent: list[Any] = []
+
+                def counted(*request: Any) -> Any:
+                    sent.append(request[0])
+                    return send(*request)
+
+                conn.sync_request = counted
+                result = get_parameter_schema(path, max_parms=100)
+                conn.sync_request = send
+                assert result["status"] == "success", result
+                return len(sent)
+
+            few, many = requests_of("/obj/few"), requests_of("/obj/many")
+            houdini().close()
+
+        assert few == many < 20

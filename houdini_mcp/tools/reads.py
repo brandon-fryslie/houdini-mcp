@@ -6,16 +6,19 @@ It is never ``[]``, ``0``, ``None``, ``"unknown"`` or a placeholder string,
 each of which is also a real answer, so "empty", "healthy" and "could not
 read" stay three different facts.
 
-[LAW:single-enforcer] ``read`` is the one place a failed Houdini read becomes
-that value. Programs that run inside Houdini spell it with the same ``UNREAD``
-key.
+[LAW:single-enforcer] ``houdini_mcp_read`` defines ``Unread`` and the one place a
+refusal becomes it, for the server and the plugin's modules alike; ``read`` here
+is that place as the server reaches Houdini, over the link. get_geo_summary's
+program spells the same ``UNREAD`` key in its own source.
 """
 
 import itertools
 import logging
-import traceback
 from collections.abc import Callable, Iterator
-from typing import Any, TypedDict, TypeGuard, TypeVar
+from typing import Any, TypeGuard, TypeVar
+
+import houdini_mcp_read
+from houdini_mcp_read import UNREAD, Unread, format_reason
 
 from ..connection import transport_failure
 
@@ -37,33 +40,12 @@ __all__ = [
 T = TypeVar("T")
 
 
-class Unread(TypedDict):
-    """What stands where a value could not be read."""
-
-    unread: str
-    """``<ExcType>: <message>`` from Houdini."""
-
-
-UNREAD = next(iter(Unread.__annotations__))
-"""The key that marks a value Houdini would not give, for programs run inside it."""
-
-
 def is_unread(value: Any) -> TypeGuard[Unread]:
     return isinstance(value, dict) and value.keys() == {UNREAD}
 
 
 def unread(e: Exception) -> Unread:
     return Unread(unread=reason(e))
-
-
-def format_reason(e: BaseException) -> str:
-    """``<ExcType>: <message>``, as Python spells an exception it reports.
-
-    [LAW:one-source-of-truth] The one spelling of a reason: Python used it
-    inside Houdini to write a remote traceback's last lines, and programs run
-    inside Houdini define it from this function's source.
-    """
-    return "".join(traceback.format_exception_only(type(e), e)).rstrip()
 
 
 def reason(e: Exception) -> str:
@@ -91,13 +73,14 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
     ``what`` names the read in the log. A lost link is not a failed read: it
     propagates to the call's ``using`` scope, which drops that link.
     """
-    try:
-        return fetch()
-    except Exception as e:
+
+    def explain(e: Exception) -> str:
         reraise_transport_failure(e)
-        found = unread(e)
-        log_unread(what, found)
-        return found
+        why = reason(e)
+        log_unread(what, Unread(unread=why))
+        return why
+
+    return houdini_mcp_read.read(fetch, explain)
 
 
 def log_unread(what: str, found: Unread) -> None:

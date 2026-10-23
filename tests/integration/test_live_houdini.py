@@ -45,6 +45,41 @@ def test_parameter_schema_recurses_into_folders(at: dict[str, Any]) -> None:
     assert "remapramp" in names
 
 
+def test_a_parameter_schema_costs_the_link_the_same_requests_whatever_the_node(
+    at: dict[str, Any],
+) -> None:
+    """A geo's 76 parameter tuples and a principled shader's 336 are read in the same
+    requests, whole or by name: the read runs inside Houdini, and nothing crosses the
+    link per parameter."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_requests", **at)["node_path"]
+    shader = tools.create_node("principledshader::2.0", "/mat", "mcp_it_requests", **at)
+    with using(**at) as link:
+        conn = link.conn
+    # the plugin module's import and rpyc's first sight of each class are paid
+    # once a link, not once a read
+    tools.get_parameter_schema(geo, max_parms=500, **at)
+    send = conn.sync_request
+
+    def requests_of(path: str, parm_name: str | None) -> int:
+        sent: list[Any] = []
+
+        def counted(*request: Any) -> Any:
+            sent.append(request[0])
+            return send(*request)
+
+        conn.sync_request = counted
+        try:
+            schema = tools.get_parameter_schema(path, parm_name, max_parms=500, **at)
+        finally:
+            conn.sync_request = send
+        assert schema["status"] == "success", schema
+        return len(sent)
+
+    whole = {requests_of(path, None) for path in (geo, shader["node_path"])}
+    named = {requests_of(geo, "t"), requests_of(shader["node_path"], "basecolor")}
+    assert len(whole) == len(named) == 1 and max(whole | named) < 20, (whole, named)
+
+
 def test_get_node_info_serializes_ramp_parameter(at: dict[str, Any]) -> None:
     geo = tools.create_node("geo", "/obj", "mcp_it_ramp", **at)
     assert geo["status"] == "success"

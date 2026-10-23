@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_parameter_schema` reads a node's parameters inside Houdini, in the same
+  few requests whatever the node's parameter count (houdini-laws-etg.foj). It
+  read each parameter's template, type, value, default, range and menu over the
+  link one call at a time while it held the scene: a Principled Shader's schema
+  cost 10,833 requests and 1.3 s on Houdini 22 over loopback, and is now 5
+  requests and 5 ms.
+
 - `execute_code` reports `stdout_truncated` and `stderr_truncated` on a
   program still running past its timeout, as it does on success and on a
   program that raised (houdini-laws-etg.79x). A timed-out program's output was
@@ -98,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (deployment)**: `get_parameter_schema` needs the houdini_mcp plugin
+  installed in the Houdini it reaches, as `find_nodes` does
+  (houdini-laws-etg.foj): it reads the schema inside Houdini. Without it, it
+  fails saying to install the plugin.
 
 - **BREAKING (wire)**: `execute_code`'s `stdout_truncated` and
   `stderr_truncated` are on every result that carries the program's output,
