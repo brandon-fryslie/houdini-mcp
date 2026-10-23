@@ -169,13 +169,17 @@ def _standard_record(node: Any) -> dict[str, Any]:
     # wires, so both come from one read of the connection records.
     connections = input_connections(node)
     path = node.path()
+    node_type = node.type()
+    type_name = node_type.name()
     info: dict[str, Any] = {
         "status": "success",
         "path": path,
         "name": node.name(),
-        "type": node.type().name(),
+        "type": type_name,
         # a broken HDA definition refuses its description; the node is still there
-        "type_description": read(f"description of {path}'s type", node.type().description),
+        "type_description": read(
+            f"description of type {type_name} of {path}", node_type.description
+        ),
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],

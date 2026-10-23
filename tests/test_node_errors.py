@@ -327,7 +327,7 @@ class TestGetNodeInfoWithErrors:
             )
             assert (result["path"], result["type"]) == ("/obj/geo1", "geo")
         assert "parameters" in result
-        assert "unread description of /obj/geo1's type reason=RuntimeError" in caplog.text
+        assert "unread description of type geo of /obj/geo1 reason=RuntimeError" in caplog.text
 
     def test_a_lost_link_while_reading_the_type_description_fails_the_call(self, mock_connection):
         from houdini_mcp.tools import get_node_info
