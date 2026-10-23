@@ -172,7 +172,6 @@ class TestToolsShareTheOwner:
     def test_create_material_reports_the_parameter_it_could_not_set(self, mock_connection):
         from houdini_mcp.tools import create_material
 
-        mock_connection.add_node(MockHouNode(path="/mat", name="mat", node_type="matnet"))
         result = create_material(
             "principledshader",
             "m",
@@ -193,7 +192,6 @@ class TestToolsShareTheOwner:
     def test_create_render_node_reports_the_setting_it_could_not_set(self, mock_connection):
         from houdini_mcp.tools import create_render_node
 
-        mock_connection.add_node(MockHouNode(path="/out", name="out", node_type="ropnet"))
         result = create_render_node(
             "karma", "k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811
         )
@@ -210,7 +208,6 @@ class TestToolsShareTheOwner:
     def test_set_render_settings_reports_the_same_way(self, mock_connection):
         from houdini_mcp.tools import set_render_settings
 
-        mock_connection.add_node(MockHouNode(path="/out", name="out", node_type="ropnet"))
         mock_connection.add_node(MockHouNode(path="/out/k", name="k", node_type="karma"))
         result = set_render_settings("/out/k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811)
         assert result["status"] == "partial"
@@ -229,7 +226,6 @@ class TestToolsShareTheOwner:
         from houdini_mcp.tools import set_render_settings
         from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
 
-        mock_connection.add_node(MockHouNode(path="/out", name="out", node_type="ropnet"))
         mock_connection.add_node(MockHouNode(path="/out/k", name="k", node_type="karma"))
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
             result = set_render_settings("/out/k", {"nope": 1}, host="localhost", port=18811)
@@ -250,7 +246,6 @@ class TestToolsShareTheOwner:
         """The material node was created, so the call did something: partial, not error."""
         from houdini_mcp.tools import create_material
 
-        mock_connection.add_node(MockHouNode(path="/mat", name="mat", node_type="matnet"))
         result = create_material(
             "principledshader", "m", parameters={"nope": 1}, host="localhost", port=18811
         )
@@ -262,8 +257,6 @@ class TestToolsShareTheOwner:
     def test_reads_return_one_shape_for_a_vector(self, mock_connection):
         from houdini_mcp.tools import get_material_info, get_render_settings
 
-        mock_connection.add_node(MockHouNode(path="/mat", name="mat", node_type="matnet"))
-        mock_connection.add_node(MockHouNode(path="/out", name="out", node_type="ropnet"))
         mock_connection.add_node(
             MockHouNode(
                 path="/mat/m",

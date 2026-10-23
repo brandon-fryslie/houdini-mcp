@@ -56,11 +56,40 @@ def test_root_is_slash_and_node_takes_only_absolute_paths(mock_hou: MockHouModul
 
     assert mock_hou.node("/").path() == "/"
     assert obj.parent() is mock_hou.node("/")
-    assert mock_hou.node("/").createNode("mat", "mat").path() == "/mat"
     with pytest.raises(ValueError, match="no pwd"):
         mock_hou.node("obj")
     with pytest.raises(ValueError, match="no pwd"):
         mock_hou.item("1")
+
+
+def test_root_holds_a_fresh_houdini_22_scenes_contexts(mock_hou: MockHouModule) -> None:
+    """What hython reads from hou.node("/") in a fresh Houdini 22.0.466 scene."""
+    root = mock_hou.node("/")
+
+    assert (root.type().category().name(), root.childTypeCategory().name()) == (
+        "Director",
+        "Manager",
+    )
+    assert [
+        (
+            c.path(),
+            c.type().name(),
+            c.type().category().name(),
+            c.childTypeCategory().name(),
+            c.children(),
+        )
+        for c in root.children()
+    ] == [
+        ("/obj", "obj", "Manager", "Object", ()),
+        ("/out", "out", "Manager", "Driver", ()),
+        ("/ch", "ch", "Manager", "ChopNet", ()),
+        ("/shop", "shop", "Manager", "Shop", ()),
+        ("/img", "img", "Manager", "CopNet", ()),
+        ("/vex", "vex", "Manager", "VopNet", ()),
+        ("/mat", "mat", "Manager", "Vop", ()),
+        ("/stage", "stage", "Manager", "Lop", ()),
+        ("/tasks", "tasks", "Manager", "TopNet", ()),
+    ]
 
 
 def test_node_walks_a_relative_path_from_a_node(mock_hou: MockHouModule) -> None:

@@ -46,6 +46,22 @@ def join_path(parent: str, name: str) -> str:
     return f"{parent.rstrip('/')}/{name}"
 
 
+# [LAW:one-source-of-truth] the root of a fresh Houdini 22.0.466 scene, as hython
+# reads it (houdini-tests-tct): each context's type name, which is also its node
+# name, and the category of the nodes it holds. Every context is a Manager.
+ROOT_CONTEXTS = {
+    "obj": "Object",
+    "out": "Driver",
+    "ch": "ChopNet",
+    "shop": "Shop",
+    "img": "CopNet",
+    "vex": "VopNet",
+    "mat": "Vop",
+    "stage": "Lop",
+    "tasks": "TopNet",
+}
+
+
 class MockSubnetIndirectInput:
     """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
 
@@ -288,7 +304,9 @@ class MockHouNode:
             mock_category.name.return_value = "Dop"
         elif self._node_type in ["opengl", "karma"]:
             mock_category.name.return_value = "Driver"
-        elif self._node_type in ["root", "obj", "out"]:
+        elif self._node_type == "root":
+            mock_category.name.return_value = "Director"
+        elif self._node_type in ROOT_CONTEXTS:
             mock_category.name.return_value = "Manager"
         else:
             mock_category.name.return_value = "Sop"  # Default to Sop
@@ -305,12 +323,12 @@ class MockHouNode:
         return self._indirect_inputs
 
     def childTypeCategory(self) -> "MockNodeTypeCategory | None":
-        """The category of this network's children: SOPs inside a geo, objects under
-        /obj, ROPs under /out, any other network's own kind; None for a node that is
-        not a network, as hou.Node.childTypeCategory returns."""
+        """The category of this network's children: SOPs inside a geo, contexts under
+        the root, each root context's own kind, any other network's own kind; None
+        for a node that is not a network, as hou.Node.childTypeCategory returns."""
         if self._node_type in ("cam", "light", "null"):
             return None
-        contained = {"geo": "Sop", "obj": "Object", "out": "Driver"}.get(self._node_type)
+        contained = {"geo": "Sop", "root": "Manager", **ROOT_CONTEXTS}.get(self._node_type)
         return MockNodeTypeCategory(contained or self.type().category().name())
 
     def inputs(self) -> list[Any]:
@@ -643,7 +661,8 @@ class MockHouModule:
         self._version = "20.5.123"
         self._version_tuple = (20, 5, 123)
 
-        self.add_node(MockHouNode(path="/obj", name="obj", node_type="obj"))
+        for context in ROOT_CONTEXTS:
+            self.add_node(MockHouNode(path=f"/{context}", name=context, node_type=context))
 
         # Mock hipFile
         self.hipFile = MagicMock()
