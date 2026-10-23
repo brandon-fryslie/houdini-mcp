@@ -47,14 +47,6 @@ class TransactionPolicy(StrEnum):
     """A file outside the scene: nothing in Houdini to recover."""
 
 
-class SceneAccess(StrEnum):
-    """Whether a tool's Houdini work may run beside another call's, or beside an
-    execute_code program still mutating the scene."""
-
-    SHARED = "shared"
-    EXCLUSIVE = "exclusive"
-
-
 # File writers (screenshots, save) leave the Houdini scene as it was.
 _SCENE_WRITERS = (
     TransactionPolicy.UNDOABLE,
@@ -65,44 +57,64 @@ _SCENE_WRITERS = (
 
 @dataclass(frozen=True)
 class ToolPolicy:
-    """What a tool leaves behind, and whether it needs the scene to itself meanwhile.
+    """What a tool leaves behind, and how it holds Houdini meanwhile.
 
     [LAW:types-are-the-program] Two facts, two discriminators: a render leaves
     nothing to recover (``recovery`` is None) yet must not run beside a mutating
-    program. The one pair no tool may have, a scene writer that shares the
-    scene, is refused here.
+    program. ``access`` is how the ledger admits the call, stated, not inferred.
+    The pairs no tool may have are refused here: a scene writer that shares the
+    scene, and an undoable call off Houdini's main thread, the one thread whose
+    undo groups Houdini records.
     """
 
     recovery: TransactionPolicy | None
-    access: SceneAccess
+    access: Admission
 
     @property
     def writes_scene(self) -> bool:
         return self.recovery in _SCENE_WRITERS
 
     @property
-    def admission(self) -> Admission:
-        """How the ledger admits the call: its access, and whether its Houdini work
-        runs on Houdini's main thread, as an undoable call's does
-        (:func:`_undone_on_failure`)."""
-        if self.recovery is TransactionPolicy.UNDOABLE:
-            return Admission.EXCLUSIVE_ON_MAIN_THREAD
-        return Admission.EXCLUSIVE if self.access is SceneAccess.EXCLUSIVE else Admission.SHARED
+    def drives_main_thread(self) -> bool:
+        """Whether the tool's own body posts its work to Houdini's main thread,
+        and so is handed the :class:`MainThread` to post it with.
+
+        [LAW:one-source-of-truth] Derived, never declared: an undoable body is
+        already on the main thread, put there whole by its recovery
+        (:func:`_undone_on_failure`), where a second call would wait on itself.
+        """
+        return (
+            self.access is Admission.EXCLUSIVE_ON_MAIN_THREAD
+            and self.recovery is not TransactionPolicy.UNDOABLE
+        )
 
     def __post_init__(self) -> None:
-        if self.writes_scene and self.access is SceneAccess.SHARED:
+        if self.writes_scene and self.access is Admission.SHARED:
             raise ValueError(f"A {self.recovery} tool writes the scene, so it cannot share it")
+        if (
+            self.recovery is TransactionPolicy.UNDOABLE
+            and self.access is not Admission.EXCLUSIVE_ON_MAIN_THREAD
+        ):
+            raise ValueError(
+                "An undoable tool runs on Houdini's main thread, so it is admitted there"
+            )
 
 
-READ = ToolPolicy(None, SceneAccess.SHARED)
+READ = ToolPolicy(None, Admission.SHARED)
 # Needs the scene to itself for the call and leaves it as found: a read through a
 # program in the one worker slot, or a render that adds a camera and a ROP
 # for the call and removes them before returning.
-HOLDS_SCENE = ToolPolicy(None, SceneAccess.EXCLUSIVE)
-UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, SceneAccess.EXCLUSIVE)
-CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, SceneAccess.EXCLUSIVE)
-PROGRAM = ToolPolicy(TransactionPolicy.PROGRAM_UNDO_GROUP, SceneAccess.EXCLUSIVE)
-FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, SceneAccess.SHARED)
+HOLDS_SCENE = ToolPolicy(None, Admission.EXCLUSIVE)
+UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE_ON_MAIN_THREAD)
+CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, Admission.EXCLUSIVE)
+PROGRAM = ToolPolicy(TransactionPolicy.PROGRAM_UNDO_GROUP, Admission.EXCLUSIVE)
+FILE_WRITE = ToolPolicy(TransactionPolicy.EXTERNAL_SIDE_EFFECT, Admission.SHARED)
+# A pane capture: its body drives Houdini's main thread, where Qt draws the pane,
+# so it has Houdini to itself while it runs, as an undoable call does.
+ON_MAIN_THREAD = ToolPolicy(None, Admission.EXCLUSIVE_ON_MAIN_THREAD)
+FILE_WRITE_ON_MAIN_THREAD = ToolPolicy(
+    TransactionPolicy.EXTERNAL_SIDE_EFFECT, Admission.EXCLUSIVE_ON_MAIN_THREAD
+)
 
 _POLICY = "__tool_policy__"
 
@@ -238,6 +250,35 @@ def _on_main_thread(
             raise OperationFailed(refusal)
     (outcome,) = outcomes
     return outcome
+
+
+class MainThread:
+    """The right to run work on Houdini's main thread, which only the tool
+    boundary hands out (:func:`granted`), to a tool whose policy
+    :attr:`~ToolPolicy.drives_main_thread`.
+
+    [LAW:parse-dont-validate] Holding one is the proof: the ledger admitted the
+    call as ``EXCLUSIVE_ON_MAIN_THREAD``, so no other call's request is on the
+    link while Houdini's main thread calls back into this process.
+    """
+
+    def call(self, link: Link, work: Callable[[], Result]) -> Result:
+        """What ``work`` returned, run while Houdini's main thread serves every
+        request it makes; whatever it raised, raised here.
+
+        Raises:
+            OperationFailed: the main thread refused the call, which never ran.
+        """
+        return _on_main_thread(link, "call", work).result()
+
+
+MAIN_THREAD_PARAMETER = "main_thread"
+"""The keyword-only parameter a driving tool takes its :class:`MainThread` as."""
+
+
+def granted(policy: ToolPolicy) -> dict[str, MainThread]:
+    """The capabilities a tool with ``policy`` is called with, by parameter name."""
+    return {MAIN_THREAD_PARAMETER: MainThread()} if policy.drives_main_thread else {}
 
 
 def _undone_on_failure(

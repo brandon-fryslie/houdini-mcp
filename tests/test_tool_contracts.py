@@ -251,6 +251,15 @@ class TestServedSchemas:
             assert not configured & set(tool.input_schema["properties"]), tool.name
             assert tool.input_schema["additionalProperties"] is False, tool.name
 
+    def test_no_caller_can_hand_a_tool_houdinis_main_thread(self, served: dict[str, Tool]) -> None:
+        """The main thread is the tool boundary's to hand a capture, never a parameter
+        a client sees or passes."""
+        assert {"capture_pane_screenshot", "render_node_network", "capture_multiple_panes"} <= set(
+            served
+        )
+        for tool in served.values():
+            assert "main_thread" not in tool.input_schema["properties"], tool.name
+
     def test_every_parameter_a_tool_takes_from_the_server_is_one_it_binds(self) -> None:
         """A keyword-only parameter with no default is configuration the tool takes from
         the server; one the server does not bind would be published for the caller to choose."""

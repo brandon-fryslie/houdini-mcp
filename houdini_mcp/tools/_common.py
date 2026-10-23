@@ -40,12 +40,16 @@ from .failure import (
 from .transactions import (
     CHECKPOINTED,
     FILE_WRITE,
+    FILE_WRITE_ON_MAIN_THREAD,
     HOLDS_SCENE,
+    MAIN_THREAD_PARAMETER,
+    ON_MAIN_THREAD,
     PROGRAM,
     READ,
     UNDOABLE,
     ToolPolicy,
     declare_policy,
+    granted,
     policy_of,
     recovering,
 )
@@ -67,6 +71,8 @@ __all__ = [
     "CHECKPOINTED",
     "PROGRAM",
     "FILE_WRITE",
+    "ON_MAIN_THREAD",
+    "FILE_WRITE_ON_MAIN_THREAD",
     "ToolFailure",
     "FAILURE",
     "failure_for",
@@ -168,7 +174,22 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
         # the caller's bug and raises as one, before the boundary opens. A value
         # that does not fit its parameter's type is the caller's input, refused
         # inside the boundary as invalid_input, as the server refuses it.
-        signature = inspect.signature(func)
+        # [LAW:single-enforcer] The main thread is the boundary's to hand over, to the
+        # tool whose policy drives it, never a caller's to pass: the parameter that
+        # takes it is checked against the policy here and left out of the
+        # signature the tool is called and served by.
+        declared = inspect.signature(func)
+        takes_main_thread = MAIN_THREAD_PARAMETER in declared.parameters
+        if takes_main_thread is not policy.drives_main_thread or (
+            takes_main_thread and inspect.iscoroutinefunction(func)
+        ):
+            raise TypeError(
+                f"{operation_name} takes {MAIN_THREAD_PARAMETER} exactly when it is a sync "
+                f"tool whose policy drives Houdini's main thread ({policy})"
+            )
+        signature = declared.replace(
+            parameters=[p for p in declared.parameters.values() if p.name != MAIN_THREAD_PARAMETER]
+        )
         hints = typing.get_type_hints(func, include_extras=True)
         undeclared = sorted(signature.parameters.keys() - hints.keys())
         if undeclared:
@@ -270,11 +291,14 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
                     operation_name,
                     policy,
                     lambda: using(call.arguments["host"], call.arguments["port"]),
-                    lambda: func(*call.args, **call.kwargs),
+                    lambda: func(*call.args, **call.kwargs, **granted(policy)),
                 )
             except Exception as e:
                 return failure_response(e, operation_name)
 
+        # What callers and the server see: the tool's parameters, without the one
+        # the boundary supplies.
+        wrapper.__signature__ = signature  # type: ignore[attr-defined]
         declare_policy(wrapper, policy)
         return cast(ToolFn, wrapper)
 
@@ -401,7 +425,7 @@ async def on_the_scene(
     refused with :class:`WorkerStillRunning` while a program still runs
     against Houdini. The result tells the wait in ``scene_wait``.
     """
-    async with WORKERS.hold(tool.__name__, policy_of(tool).admission) as wait:
+    async with WORKERS.hold(tool.__name__, policy_of(tool).access) as wait:
         result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
     return {**result, **wait.response_fields()}
 

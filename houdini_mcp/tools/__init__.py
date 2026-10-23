@@ -83,7 +83,6 @@ from .summarization import (
     get_summarization_status as get_summarization_status,
 )
 from .transactions import (
-    SceneAccess,
     ToolPolicy,
     TransactionPolicy,
     policy_of,
@@ -118,7 +117,6 @@ __all__ = [
     "WorkerStillRunning",
     # What a tool leaves behind, and how a call recovers from it
     "policy_of",
-    "SceneAccess",
     "ToolPolicy",
     "TransactionPolicy",
     "recovering",

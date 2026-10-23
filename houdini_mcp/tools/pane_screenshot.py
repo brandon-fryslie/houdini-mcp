@@ -1,8 +1,9 @@
 """Pane screenshot capture tools using Houdini's own Qt via RPyC.
 
-This module provides tools for capturing screenshots of Houdini pane tabs
-using Qt's screen grab functionality. Screenshots are returned as base64-encoded
-PNG images.
+This module provides tools for capturing screenshots of Houdini pane tabs as
+the pane's own window draws them, on Houdini's main thread, so a window in front
+of Houdini is never captured as the pane. Screenshots are returned as
+base64-encoded PNG images.
 
 Pane type names are read from the connected Houdini's ``hou.paneTabType``;
 ``list_visible_panes`` returns them under ``available_types``.
@@ -18,7 +19,8 @@ from typing import Any
 
 from ..connection import Link, houdini
 from ._common import (
-    FILE_WRITE,
+    FILE_WRITE_ON_MAIN_THREAD,
+    ON_MAIN_THREAD,
     READ,
     InvalidInput,
     OperationFailed,
@@ -33,13 +35,14 @@ from ._common import (
 )
 from .failure import LinkLost
 from .reads import Unread, is_unread, read
+from .transactions import MainThread
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
 
-def _get_qt_modules(link: Link) -> tuple[Any, Any]:
-    """(QtWidgets, QtCore) of the Qt the Houdini ``link`` reaches runs, or the
-    one failure every capture tool reports when that Houdini has none."""
+def _qt_core(link: Link) -> Any:
+    """QtCore of the Qt the Houdini ``link`` reaches runs, or the one failure
+    every capture tool reports when that Houdini has none."""
     # [LAW:single-enforcer] the connection module owns the connection; Qt comes
     # over it the way ``hou`` does.
     conn = link.conn
@@ -48,12 +51,11 @@ def _get_qt_modules(link: Link) -> tuple[Any, Any]:
     # that goes stale the release SideFX moves to another one. Its submodules are
     # attributes of the package, which serves the ones it loads lazily the same way.
     try:
-        pyside = conn.modules["hutil.PySide"]
-        QtWidgets, QtCore = pyside.QtWidgets, pyside.QtCore
+        QtCore = conn.modules["hutil.PySide"].QtCore
     except (ImportError, AttributeError) as e:
         raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
     logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
-    return QtWidgets, QtCore
+    return QtCore
 
 
 def pane_type_member(hou: Any, name: str) -> Any | None:
@@ -147,8 +149,8 @@ def _as_shown(pane: Any) -> None:
 
 def _capture_pane_to_bytes(
     link: Link,
+    main_thread: MainThread,
     pane_type_name: str,
-    QtWidgets: Any,
     QtCore: Any,
     fit_contents: bool = False,
 ) -> dict[str, Any]:
@@ -157,8 +159,8 @@ def _capture_pane_to_bytes(
 
     Args:
         link: The link to the Houdini whose pane is captured
+        main_thread: Houdini's main thread, where the pane is framed and drawn
         pane_type_name: Name of the pane type to capture
-        QtWidgets: Houdini's QtWidgets module
         QtCore: Houdini's QtCore module
         fit_contents: If True, frame everything the pane shows before capture
 
@@ -194,57 +196,70 @@ def _capture_pane_to_bytes(
             pane_type=pane_type_name,
         )
 
-    # Get geometry
     screen_geom = pane.qtScreenGeometry()
-    geom_x: int = screen_geom.x()
-    geom_y: int = screen_geom.y()
-    geom_width: int = screen_geom.width()
-    geom_height: int = screen_geom.height()
+    geometry = {
+        "x": screen_geom.x(),
+        "y": screen_geom.y(),
+        "width": screen_geom.width(),
+        "height": screen_geom.height(),
+    }
 
     # Check for invalid geometry (pane on inactive desktop or minimized)
-    if geom_width <= 0 or geom_height <= 0:
+    if geometry["width"] <= 0 or geometry["height"] <= 0:
         raise OperationFailed(
-            f"Pane {pane_type_name} has invalid geometry ({geom_width}x{geom_height}). "
+            f"Pane {pane_type_name} has invalid geometry ({geometry['width']}x{geometry['height']}). "
             "It may be on an inactive desktop or minimized.",
             pane_type=pane_type_name,
         )
 
-    # Get QApplication and screen
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        raise OperationFailed("No QApplication instance found. Houdini UI may not be initialized.")
-
-    screen = app.primaryScreen()
-    if screen is None:
-        raise OperationFailed("No primary screen found.")
+    def framed() -> None:
+        try:
+            frame(pane)
+        except ToolError:
+            raise
+        except Exception as e:
+            raise OperationFailed(
+                f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
+            ) from e
 
     # Framed only once nothing above can refuse the capture, so a refused
     # capture leaves the user's view as it was.
-    try:
-        frame(pane)
-    except ToolError:
-        raise
-    except Exception as e:
-        raise OperationFailed(
-            f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
-        ) from e
-
-    # Capture screen region
-    pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)
-
-    if pixmap.isNull():
-        raise OperationFailed(
-            "Screen grab returned null pixmap. The screen region may not be accessible.",
-            pane_type=pane_type_name,
-        )
+    main_thread.call(link, framed)
+    # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
+    # last drew, and Houdini draws a pane's change only once its main thread is
+    # back in its event loop; it offers no signal that it has (no viewer or
+    # viewport event says so, and no draw call makes a grab in the same call
+    # current). So the grab is the next main-thread call, which Houdini begins
+    # only when its event loop is idle again, after that drawing.
+    raw_bytes = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
 
     return {
         "status": "success",
         "pane_type": pane_type_name,
         "pane_name": read("pane name", lambda: str(pane.name())),
-        "geometry": {"x": geom_x, "y": geom_y, "width": geom_width, "height": geom_height},
-        "raw_bytes": png_bytes(pixmap.toImage(), QtCore, pane_type_name),
+        "geometry": geometry,
+        "raw_bytes": raw_bytes,
     }
+
+
+def _drawn(pane: Any, geometry: dict[str, int], QtCore: Any, pane_type_name: str) -> bytes:
+    """The pane as its own window last drew it, encoded as PNG.
+
+    The window renders its widgets into the picture, so what the screen shows
+    in front of the pane (another app, a Houdini menu) is not in it, and no
+    screen is read for a pane on any monitor. Run on Houdini's main thread, the
+    one thread Qt draws widgets on.
+    """
+    window = pane.qtParentWindow()
+    corner = window.mapFromGlobal(QtCore.QPoint(geometry["x"], geometry["y"]))
+    pixmap = window.grab(
+        QtCore.QRect(corner.x(), corner.y(), geometry["width"], geometry["height"])
+    )
+    if pixmap.isNull():
+        raise OperationFailed(
+            f"Houdini's window drew no picture of {pane_type_name}.", pane_type=pane_type_name
+        )
+    return png_bytes(pixmap.toImage(), QtCore, pane_type_name)
 
 
 def png_bytes(image: Any, QtCore: Any, pane_type_name: str) -> bytes:
@@ -262,18 +277,21 @@ def png_bytes(image: Any, QtCore: Any, pane_type_name: str) -> bytes:
     return bytes(buffer.data().data())
 
 
-@tool(FILE_WRITE)
+@tool(FILE_WRITE_ON_MAIN_THREAD)
 def capture_pane_screenshot(
     pane_type_name: str = "NetworkEditor",
     save_path: str | None = None,
     fit_contents: bool = False,
     host: str = "localhost",
     port: int = 18811,
+    *,
+    main_thread: MainThread,
 ) -> dict[str, Any]:
     """
     Capture a screenshot of a Houdini pane tab.
 
-    Uses Qt screen grab to capture the specified pane type. Returns
+    Captures the pane as its own window draws it, so a window in front of
+    Houdini is never captured as the pane. Returns
     base64-encoded PNG or saves to disk if save_path provided.
 
     Args:
@@ -294,10 +312,10 @@ def capture_pane_screenshot(
         Use list_visible_panes() to find capturable panes.
     """
     with using(host, port) as link:
-        QtWidgets, QtCore = _get_qt_modules(link)
+        QtCore = _qt_core(link)
 
         # Capture pane to bytes
-        result = _capture_pane_to_bytes(link, pane_type_name, QtWidgets, QtCore, fit_contents)
+        result = _capture_pane_to_bytes(link, main_thread, pane_type_name, QtCore, fit_contents)
 
         # Extract raw bytes and add format info
         raw_bytes: bytes = result.pop("raw_bytes")
@@ -423,12 +441,14 @@ def _both(a: Fact, b: Fact) -> Fact:
     return a if is_unread(a) else b
 
 
-@tool(READ)
+@tool(ON_MAIN_THREAD)
 def render_node_network(
     node_path: str = "/obj",
     fit_contents: bool = True,
     host: str = "localhost",
     port: int = 18811,
+    *,
+    main_thread: MainThread,
 ) -> dict[str, Any]:
     """
     Capture a screenshot of a node's network showing its children.
@@ -465,7 +485,7 @@ def render_node_network(
         # Get child count for context
         child_count = read(f"children of {node_path}", lambda: len(node.children()))
 
-        QtWidgets, QtCore = _get_qt_modules(link)
+        QtCore = _qt_core(link)
 
         # Find NetworkEditor pane
         pane_type = hou.paneTabType.NetworkEditor
@@ -483,7 +503,7 @@ def render_node_network(
             raise OperationFailed(f"Failed to navigate to {node_path}: {e}", path=node_path) from e
 
         # Capture the pane
-        result = _capture_pane_to_bytes(link, "NetworkEditor", QtWidgets, QtCore, fit_contents)
+        result = _capture_pane_to_bytes(link, main_thread, "NetworkEditor", QtCore, fit_contents)
 
         # Extract raw bytes and build response
         raw_bytes: bytes = result.pop("raw_bytes")
@@ -512,12 +532,14 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
     return {**picture, "file_path": str(path.absolute())}
 
 
-@tool(FILE_WRITE)
+@tool(FILE_WRITE_ON_MAIN_THREAD)
 def capture_multiple_panes(
     pane_types: list[str],
     save_dir: str | None = None,
     host: str = "localhost",
     port: int = 18811,
+    *,
+    main_thread: MainThread,
 ) -> dict[str, Any]:
     """
     Capture screenshots of multiple pane types in one call.
@@ -539,7 +561,7 @@ def capture_multiple_panes(
         - results: Per-pane results with image_base64 or file_path
     """
     with using(host, port) as link:
-        QtWidgets, QtCore = _get_qt_modules(link)
+        QtCore = _qt_core(link)
 
         # [LAW:one-source-of-truth] one slot per pane type: a pane named twice is
         # captured once, so the slots, the counts and the status all count the same panes.
@@ -552,7 +574,7 @@ def capture_multiple_panes(
             # failure takes, and the next pane is still tried. Anything else - a torn
             # link, a bug - is the whole call's and reaches the boundary.
             try:
-                result = _capture_pane_to_bytes(link, pane_type_name, QtWidgets, QtCore)
+                result = _capture_pane_to_bytes(link, main_thread, pane_type_name, QtCore)
                 result.update(_delivered(result.pop("raw_bytes"), pane_type_name, save_dir))
             except ToolError as e:
                 judged = failed_on(houdini(), link, e)

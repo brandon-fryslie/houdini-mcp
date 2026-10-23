@@ -114,10 +114,11 @@ for that worker is the remedy, with `timeout`, a `warning`,
 Until that program ends, every scene-writing tool, another `execute_code`,
 `get_geo_summary` (which reads through a program in the same worker slot), and
 `render_viewport` and `render_quad_view` (which add a camera and a ROP for
-the call) return
+the call), and the pane captures (`capture_pane_screenshot`,
+`capture_multiple_panes`, `render_node_network`) return
 `kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
-worker; plain reads,
-`save_scene` and screenshots still work. See `docs/implementation/error-handling-patterns.md`.
+worker; plain reads and
+`save_scene` still work. See `docs/implementation/error-handling-patterns.md`.
 
 ### Concurrent Calls Wait Their Turn
 
@@ -133,9 +134,12 @@ held it) and how long it waited:
 
 A read runs beside any of them but a scene-writing tool that Houdini's undo
 can reverse (`set_parameter`, `create_node`, `connect_nodes`, `create_material`
-and the rest): those run on Houdini's main thread and have Houdini to
-themselves, so a read that arrives during one waits for it, and carries
-`scene_wait` the same way.
+and the rest) and a pane capture (`capture_pane_screenshot`,
+`capture_multiple_panes`, `render_node_network`): those run on Houdini's main
+thread and have Houdini to themselves, so a read that arrives during one waits
+for it, and carries `scene_wait` the same way. A capture is the pane as its own
+window draws it, so a window in front of Houdini is never in the picture, and
+like the undoable tools it needs the plugin installed in that Houdini.
 
 A call that finds the scene free has no `scene_wait`. A call still waiting
 when a timed-out program takes over the scene is refused with
