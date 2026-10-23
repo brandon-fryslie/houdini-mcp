@@ -9,7 +9,7 @@ This document describes the error handling patterns used throughout the Houdini 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         MCP Server                              │
-│  server.py: SERVED_TOOLS = (tools.some_tool, ...)               │
+│  serves tools.SERVED_TOOLS: every @tool function in tools/      │
 │  each served from its own signature and docs, with host/port    │
 │  bound to the server's target and hidden from clients           │
 └─────────────────────────────────────────────────────────────────┘

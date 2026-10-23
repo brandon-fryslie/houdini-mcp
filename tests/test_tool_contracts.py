@@ -190,19 +190,16 @@ class TestServedSchemas:
             "set_render_settings",
         }
 
-    def test_a_tool_names_no_operation_but_its_own(self) -> None:
-        """A failure or status a tool builds in its body names it by its own function,
-        never by another tool's."""
+    def test_a_tool_names_no_other_tool(self) -> None:
+        """A tool's body refers to no tool but itself: the name its failures and statuses
+        carry, and the policy it holds the scene under, are its own."""
         served_names = {fn.__name__ for fn in tools.SERVED_TOOLS}
         for fn in tools.SERVED_TOOLS:
             body = ast.parse(textwrap.dedent(inspect.getsource(inspect.unwrap(fn))))
             named = {
-                node.value.id
+                node.id
                 for node in ast.walk(body)
-                if isinstance(node, ast.Attribute)
-                and node.attr == "__name__"
-                and isinstance(node.value, ast.Name)
-                and node.value.id in served_names
+                if isinstance(node, ast.Name) and node.id in served_names
             }
             assert named <= {fn.__name__}, (fn.__name__, named)
 
@@ -218,9 +215,10 @@ class TestServedSchemas:
     async def test_every_served_tools_failure_names_it_as_it_is_served(
         self, client: Client[Any], served: dict[str, Tool], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The operation a failure names is the name the client called: one name per
-        tool, whatever its body does. Every call fails inside the tool's boundary: a
-        sync tool's recovery raises, and no Houdini answers an async tool's read."""
+        """The operation the boundary names a failure by is the name the client called.
+        Every call fails inside the tool's boundary: a sync tool's recovery raises, and
+        no Houdini answers an async tool's read. The names a body builds are
+        test_a_tool_names_no_other_tool's."""
 
         def broken(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("injected")
