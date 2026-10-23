@@ -45,9 +45,9 @@ async def test_a_client_at_the_documented_url_lists_and_calls_tools(
     server_port: int, houdini: Target
 ) -> None:
     documented = urlsplit(documented_url())
-    assert str(documented.port) == str(
-        mcp_port({})
-    ), "the port README gives is not the server's default MCP_PORT"
+    assert str(documented.port) == str(mcp_port({})), (
+        "the port README gives is not the server's default MCP_PORT"
+    )
     url = documented._replace(netloc=f"{documented.hostname}:{server_port}").geturl()
 
     async with Client(StreamableHttpTransport(url)) as client:
