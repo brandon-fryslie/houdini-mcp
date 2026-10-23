@@ -19,7 +19,7 @@ from houdini_mcp.tools.parms import (
     write,
     write_all,
 )
-from tests.conftest import MockHouNode
+from tests.conftest import MockHouNode, link_failure
 
 
 def node_with(**params):
@@ -108,7 +108,9 @@ class TestEvaluated:
 
     def test_connection_loss_is_not_an_unread_parm(self, mock_connection):
         node = node_with(radx=2.5)
-        node.parm("radx").eval = MagicMock(side_effect=EOFError("stream has been closed"))
+        node.parm("radx").eval = MagicMock(
+            side_effect=link_failure(EOFError("stream has been closed"))
+        )
         with pytest.raises(EOFError):
             dict(evaluated(mock_connection, node.parms()))
 
@@ -157,7 +159,9 @@ class TestWriteAll:
 
     def test_connection_loss_propagates_instead_of_being_a_failed_parm(self, mock_connection):
         node = node_with(radx=2.5)
-        node.parm("radx").set = MagicMock(side_effect=EOFError("stream has been closed"))
+        node.parm("radx").set = MagicMock(
+            side_effect=link_failure(EOFError("stream has been closed"))
+        )
         with pytest.raises(EOFError):
             write_all(node, {"radx": 1.0})
 

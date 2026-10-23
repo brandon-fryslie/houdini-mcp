@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from houdini_mcp.tools.reads import UNREAD, Unread, format_reason, is_unread, read, unreads
-from tests.conftest import raised_inside_houdini
+from tests.conftest import link_failure, raised_inside_houdini
 
 
 def _raising(exc: BaseException):
@@ -33,7 +33,7 @@ def test_a_remote_reason_is_houdinis_message_without_the_remote_traceback():
 
 def test_a_lost_link_is_not_a_failed_read():
     with pytest.raises(EOFError):
-        read("radx", _raising(EOFError("stream has been closed")))
+        read("radx", _raising(link_failure(EOFError("stream has been closed"))))
 
 
 def test_the_programs_key_is_the_types_key():

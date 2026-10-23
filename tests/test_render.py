@@ -846,13 +846,13 @@ class TestRenderLeavesSceneUnchanged:
     ) -> None:
         """The first destroy kills the link: the call ends as connection loss after that one."""
         import houdini_mcp.tools as tools
-        from tests.conftest import MockHouNode
+        from tests.conftest import MockHouNode, link_failure
 
         destroyed: list[str] = []
 
         def destroy(self: Any) -> None:
             destroyed.append(self.path())
-            raise EOFError("stream has been closed")
+            raise link_failure(EOFError("stream has been closed"))
 
         monkeypatch.setattr(MockHouNode, "destroy", destroy)
 
@@ -984,10 +984,10 @@ class TestRenderLeavesSceneUnchanged:
     ) -> None:
         """A render that dies with the link ends as connection loss and attempts no destroy."""
         import houdini_mcp.tools as tools
-        from tests.conftest import MockHouNode
+        from tests.conftest import MockHouNode, link_failure
 
         def render(self: Any) -> None:
-            raise EOFError("stream has been closed")
+            raise link_failure(EOFError("stream has been closed"))
 
         destroyed: list[str] = []
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
@@ -1008,10 +1008,10 @@ class TestRenderLeavesSceneUnchanged:
 
         hou = request.getfixturevalue(scene)
         users = [
-            hou.node(context).createNode("geo", name)
-            for context, names in (
-                ("/obj", ("_mcp_render_cam", "_mcp_quad_render_cam")),
-                ("/out", ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")),
+            hou.node(context).createNode(node_type, name)
+            for context, node_type, names in (
+                ("/obj", "geo", ("_mcp_render_cam", "_mcp_quad_render_cam")),
+                ("/out", "karma", ("_mcp_opengl_rop", "_mcp_quad_opengl_rop")),
             )
             for name in names
         ]
@@ -1297,7 +1297,9 @@ class TestRenderFraming:
         assert result["bounding_box"]["center"] == [10.0, 0.0, 0.0]
         assert _looks_at(frames[0], (10.0, 0.0, 0.0))
 
-    @pytest.mark.parametrize("path", ["/out", "/out/stray_box", "/obj/cube_b/solver"])
+    @pytest.mark.parametrize(
+        "path", ["/out", "/stage/sopnet1/stray_box", "/obj/cube_b/dopnet1/solver"]
+    )
     def test_look_at_anything_but_an_object_or_a_sop_in_one_is_an_error(
         self, frames: list[dict[str, Any]], framed_scene: Any, path: str
     ) -> None:
@@ -1305,8 +1307,9 @@ class TestRenderFraming:
         object, are refused rather than framed where some object stands."""
         from houdini_mcp.tools import render_viewport
 
-        framed_scene.node("/out").createNode("box", "stray_box")
-        framed_scene.node("/obj/cube_b").createNode("pyrosolver", "solver")
+        framed_scene.node("/stage").createNode("sopnet", "sopnet1").createNode("box", "stray_box")
+        dopnet = framed_scene.node("/obj/cube_b").createNode("dopnet", "dopnet1")
+        dopnet.createNode("pyrosolver", "solver")
 
         result = render_viewport(look_at=path, host="localhost", port=18811)
 

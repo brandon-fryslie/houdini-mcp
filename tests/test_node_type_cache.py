@@ -11,7 +11,7 @@ from houdini_mcp.connection import houdini
 from houdini_mcp.tools import list_node_types
 from houdini_mcp.tools.cache import NodeType, NodeTypeCache, invalidate_all_caches
 from houdini_mcp.tools.failure import OperationFailed
-from tests.conftest import MockHouModule
+from tests.conftest import MockHouModule, link_failure
 
 
 def _hou_with_types(*names: str) -> MagicMock:
@@ -136,7 +136,13 @@ class TestNodeTypeCacheReadsThroughTheProxy:
 
         connection.execute.assert_not_called()
         assert cache.is_valid()
-        assert {t["category"] for t in types.all} == set(hou.nodeTypeCategories())
+        offered = hou.nodeTypeCategories()
+        assert set(types.categories) == set(offered)
+        assert {(t["category"], t["name"]) for t in types.all} == {
+            (category, name)
+            for category, types_of in offered.items()
+            for name in types_of.nodeTypes()
+        }
         assert types.filter(category="Object", name_filter="geo") == [
             {"category": "Object", "name": "geo", "description": "Geo node"}
         ]
@@ -243,7 +249,7 @@ class TestListNodeTypesReportsAFailedRead:
         self, mock_connection: MockHouModule
     ) -> None:
         mock_connection.nodeTypeCategories = MagicMock(  # type: ignore[method-assign]
-            side_effect=EOFError("stream has been closed")
+            side_effect=link_failure(EOFError("stream has been closed"))
         )
 
         result = list_node_types()

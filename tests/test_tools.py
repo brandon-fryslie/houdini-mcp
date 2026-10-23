@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
+from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
 
 
 class TestGetSceneInfo:
@@ -91,7 +91,9 @@ class TestCreateNode:
         """Test creating a node with auto-generated name."""
         from houdini_mcp.tools import create_node
 
-        result = create_node("sphere", "/obj", None, host="localhost", port=18811)
+        mock_connection.node("/obj").createNode("geo", "geo1")
+
+        result = create_node("sphere", "/obj/geo1", None, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "sphere" in result["node_path"]
@@ -1123,7 +1125,7 @@ class TestSerializeScene:
 
         level1 = MockHouNode(path="/obj/level1", name="level1", node_type="geo")
         mock_connection.add_node(level1)
-        level2 = MockHouNode(path="/obj/level1/level2", name="level2", node_type="null")
+        level2 = MockHouNode(path="/obj/level1/level2", name="level2", node_type="subnet")
         mock_connection.add_node(level2)
         level3 = MockHouNode(path="/obj/level1/level2/level3", name="level3", node_type="null")
         mock_connection.add_node(level3)
@@ -1132,7 +1134,9 @@ class TestSerializeScene:
             "/obj", False, 1, host="localhost", port=18811, summarizer=SUMMARIZER
         )
 
-        assert result["status"] == "success"
+        level1_tree = result["structure"]["children"][0]
+        assert level1_tree["path"] == "/obj/level1"
+        assert level1_tree["children"] == [{"path": "/obj/level1/level2", "truncated": True}]
 
 
 class TestSceneDiff:
@@ -1387,8 +1391,10 @@ class TestListChildren:
 
         # Create deep hierarchy
         level3 = MockHouNode(path="/obj/geo1/l1/l2/l3", name="l3", node_type="null")
-        level2 = MockHouNode(path="/obj/geo1/l1/l2", name="l2", node_type="null", children=[level3])
-        level1 = MockHouNode(path="/obj/geo1/l1", name="l1", node_type="null", children=[level2])
+        level2 = MockHouNode(
+            path="/obj/geo1/l1/l2", name="l2", node_type="subnet", children=[level3]
+        )
+        level1 = MockHouNode(path="/obj/geo1/l1", name="l1", node_type="subnet", children=[level2])
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[level1])
         mock_connection.add_node(geo1)
 
@@ -1624,11 +1630,12 @@ class TestFindNodes:
         """Test finding nodes with wildcard pattern."""
         from houdini_mcp.tools import find_nodes
 
-        noise1 = MockHouNode(path="/obj/noise1", name="noise1", node_type="noise")
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        noise1 = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
         mock_connection.add_node(noise1)
-        noise2 = MockHouNode(path="/obj/noise2", name="noise2", node_type="noise")
+        noise2 = MockHouNode(path="/obj/geo1/noise2", name="noise2", node_type="noise")
         mock_connection.add_node(noise2)
-        grid1 = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
+        grid1 = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
         mock_connection.add_node(grid1)
 
         result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
@@ -1646,7 +1653,10 @@ class TestFindNodes:
         """Test finding nodes with substring matching (no wildcards)."""
         from houdini_mcp.tools import find_nodes
 
-        my_noise = MockHouNode(path="/obj/my_noise_node", name="my_noise_node", node_type="noise")
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        my_noise = MockHouNode(
+            path="/obj/geo1/my_noise_node", name="my_noise_node", node_type="noise"
+        )
         mock_connection.add_node(my_noise)
         other = MockHouNode(path="/obj/other", name="other", node_type="null")
         mock_connection.add_node(other)
@@ -1661,11 +1671,12 @@ class TestFindNodes:
         """Test finding nodes with type filter."""
         from houdini_mcp.tools import find_nodes
 
-        sphere1 = MockHouNode(path="/obj/sphere1", name="sphere1", node_type="sphere")
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        sphere1 = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
         mock_connection.add_node(sphere1)
-        sphere2 = MockHouNode(path="/obj/sphere2", name="sphere2", node_type="sphere")
+        sphere2 = MockHouNode(path="/obj/geo1/sphere2", name="sphere2", node_type="sphere")
         mock_connection.add_node(sphere2)
-        box1 = MockHouNode(path="/obj/box1", name="box1", node_type="box")
+        box1 = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
         mock_connection.add_node(box1)
 
         result = find_nodes("/obj", "*", "sphere", host="localhost", port=18811)
@@ -1721,7 +1732,8 @@ class TestFindNodes:
         """Test when no nodes match pattern."""
         from houdini_mcp.tools import find_nodes
 
-        grid = MockHouNode(path="/obj/grid1", name="grid1", node_type="grid")
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
         mock_connection.add_node(grid)
 
         result = find_nodes("/obj", "noise*", None, host="localhost", port=18811)
@@ -1776,11 +1788,11 @@ class TestFindNodes:
         """A root path shaped like Python source names a node; it is never executed."""
         from houdini_mcp.tools import find_nodes
 
-        root_path = '/obj"); hou.pwned = True #'
+        root_path = '/obj/geo"); hou.pwned = True #'
         mock_connection.add_node(
             MockHouNode(
                 path=root_path,
-                name=root_path[1:],
+                name=root_path.removeprefix("/obj/"),
                 children=[MockHouNode(path=f"{root_path}/grid1", name="grid1", node_type="grid")],
             )
         )
@@ -1822,14 +1834,15 @@ class TestFindNodes:
         """Each search logs its inputs and the totals it computed."""
         from houdini_mcp.tools import find_nodes
 
+        geo = mock_connection.node("/obj").createNode("geo", "geo1")
         for i in range(3):
-            mock_connection.node("/obj").createNode("grid", f"grid{i}")
+            geo.createNode("grid", f"grid{i}")
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
-            find_nodes("/obj", "grid*", None, limit=2, host="localhost", port=18811)
+            find_nodes("/obj/geo1", "grid*", None, limit=2, host="localhost", port=18811)
 
         assert (
-            "find_nodes root=/obj pattern=grid* node_type=None offset=0 "
+            "find_nodes root=/obj/geo1 pattern=grid* node_type=None offset=0 "
             "total=3 returned=2 has_more=True"
         ) in caplog.text
 
@@ -2066,14 +2079,14 @@ class TestConnectNodes:
         # SOP node
         mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        # DOP node
-        dopnet = MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet")
-
+        # DOP node: a solver inside a DOP network; the network itself is an Object
         mock_connection.add_node(grid)
-        mock_connection.add_node(dopnet)
+        mock_connection.node("/obj").createNode("dopnet", "dopnet1").createNode(
+            "pyrosolver", "pyrosolver1"
+        )
 
         result = connect_nodes(
-            "/obj/geo1/grid1", "/obj/dopnet1", 0, 0, host="localhost", port=18811
+            "/obj/geo1/grid1", "/obj/dopnet1/pyrosolver1", 0, 0, host="localhost", port=18811
         )
 
         assert result["status"] == "error"
@@ -3275,7 +3288,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_timeout(self, mock_connection):
         """Test that TimeoutError produces a helpful error response."""
-        result, link = self._run(TimeoutError("Connection timed out"))
+        result, link = self._run(link_failure(TimeoutError("Connection timed out")))
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
@@ -3288,7 +3301,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_eof(self, mock_connection):
         """Test that EOFError produces a helpful error response."""
-        result, link = self._run(EOFError("Connection closed"))
+        result, link = self._run(link_failure(EOFError("Connection closed")))
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_lost"
@@ -3299,7 +3312,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_reset_arrives_as_eof(self, mock_connection):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
-        result, link = self._run(EOFError("[Errno 54] Connection reset by peer"))
+        result, link = self._run(link_failure(EOFError("[Errno 54] Connection reset by peer")))
 
         assert result["kind"] == "connection_lost"
         assert "reset" in result["message"]
@@ -3344,7 +3357,7 @@ class TestConnectionErrorHandling:
         """Test that get_scene_info handles TimeoutError gracefully."""
         from houdini_mcp.tools import get_scene_info
 
-        unanswered = MagicMock(side_effect=TimeoutError("Request timed out"))
+        unanswered = MagicMock(side_effect=link_failure(TimeoutError("Request timed out")))
         monkeypatch.setattr(mock_connection.hipFile, "path", unanswered)
 
         result = get_scene_info(host="localhost", port=18811)
@@ -3358,7 +3371,9 @@ class TestConnectionErrorHandling:
         """Test that create_node handles EOFError gracefully."""
         from houdini_mcp.tools import create_node
 
-        monkeypatch.setattr(mock_connection, "node", MagicMock(side_effect=EOFError("closed")))
+        monkeypatch.setattr(
+            mock_connection, "node", MagicMock(side_effect=link_failure(EOFError("closed")))
+        )
 
         result = create_node("geo", host="localhost", port=18811)
 

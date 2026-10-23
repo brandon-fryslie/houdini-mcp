@@ -6,9 +6,8 @@ backs up the scene's unsaved work first."""
 from __future__ import annotations
 
 import logging
-from typing import Any
-
 import time
+from typing import Any
 
 import pytest
 
@@ -29,7 +28,7 @@ from houdini_mcp.tools.transactions import (
     policy_of,
 )
 from tests import conftest
-from tests.conftest import MockHouModule, MockUndos, raised_inside_houdini
+from tests.conftest import MockHouModule, MockUndos, link_failure, raised_inside_houdini
 
 
 @pytest.mark.parametrize("render_tool", [render_viewport, render_quad_view])
@@ -176,7 +175,7 @@ class TestBackedUpFirst:
         call, replaces = REPLACERS[tool]
         hip = mock_connection.hipFile
         hip.hasUnsavedChanges.return_value = True
-        hip.saveAsBackup.side_effect = EOFError("stream has been closed")
+        hip.saveAsBackup.side_effect = link_failure(EOFError("stream has been closed"))
 
         result = call()
 
@@ -447,7 +446,7 @@ def failing_after(undos):
     def test_a_houdini_that_stops_answering_times_the_call_out(self, mock_connection, monkeypatch):
         from houdini_mcp.connection import Link
 
-        monkeypatch.setattr(Link, "sync_timeout", property(lambda link: 0.2))
+        monkeypatch.setattr(Link, "sync_timeout", property(lambda _link: 0.2))
         with conftest.served_namespace(self._PLUGINS) as plugins:
             self._served(monkeypatch, plugins, "never_answering")
             started = time.monotonic()
