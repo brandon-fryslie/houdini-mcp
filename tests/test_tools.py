@@ -1514,6 +1514,81 @@ class TestListChildren:
         assert result["returned"] == 10
         assert "warning" in result
 
+    @pytest.mark.parametrize(
+        ("count", "recursive", "cut", "walked"),
+        [(3, False, False, 1), (4, False, True, 1), (3, True, False, 4), (4, True, True, 4)],
+    )
+    def test_list_children_warns_of_the_cap_only_when_a_node_was_left_out(
+        self, mock_connection, caplog, count, recursive, cut, walked
+    ):
+        from houdini_mcp.tools import list_children
+
+        top: list[MockHouNode] = []
+        if recursive:
+            # a chain, each node the only child of the one above: the last node
+            # taken has no children when count == max_nodes, and one when it is more
+            for i in reversed(range(count)):
+                path = "/obj/geo1/" + "/".join(f"n{j}" for j in range(i + 1))
+                top = [MockHouNode(path=path, name=f"n{i}", node_type="subnet", children=top)]
+        else:
+            top = [
+                MockHouNode(path=f"/obj/geo1/n{i}", name=f"n{i}", node_type="null")
+                for i in range(count)
+            ]
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=top)
+        )
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
+            result = list_children("/obj/geo1", recursive=recursive, max_nodes=3)
+
+        assert result["returned"] == 3
+        assert ("Collection limited to 3 nodes" in result.get("warning", "")) is cut
+        # the last node taken is walked, empty or not
+        assert f"collected=3 walked={walked} " in caplog.text
+        assert f"cut={cut}" in caplog.text
+
+    @pytest.mark.parametrize("cut", [False, True])
+    def test_the_last_node_under_the_cap_is_walked_like_any_other(self, mock_connection, cut):
+        from houdini_mcp.tools import list_children
+
+        def locked(name: str) -> MockHouNode:
+            node = MockHouNode(path=f"/obj/geo1/{name}", name=name, node_type="hda")
+            node.children = MagicMock(  # type: ignore[method-assign]
+                side_effect=raised_inside_houdini(RuntimeError("locked asset"))
+            )
+            return node
+
+        # b is past the cap: proving it was left out must not walk it
+        after = [locked("b")] if cut else []
+        mock_connection.add_node(
+            MockHouNode(
+                path="/obj/geo1", name="geo1", node_type="geo", children=[locked("hda"), *after]
+            )
+        )
+
+        result = list_children("/obj/geo1", recursive=True, max_nodes=1)
+
+        # whether the cap left b out says nothing about whether hda's children list
+        assert result["status"] == "partial"
+        assert [u["path"] for u in result["unwalked"]] == ["/obj/geo1/hda"]
+        assert ("Collection limited to 1 nodes" in result.get("warning", "")) is cut
+
+    def test_the_last_node_under_the_cap_is_in_the_depth_warning(self, mock_connection):
+        from houdini_mcp.tools import list_children
+
+        inner = MockHouNode(path="/obj/geo1/a/x", name="x", node_type="null")
+        a = MockHouNode(path="/obj/geo1/a", name="a", node_type="subnet", children=[inner])
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[a])
+        )
+
+        result = list_children("/obj/geo1", recursive=True, max_depth=0, max_nodes=1)
+
+        assert result["warning"] == (
+            "Depth limited to 0: 1 nodes at that depth have children not listed"
+        )
+
     def test_list_children_node_not_found(self, mock_connection):
         """Test error when node not found."""
         from houdini_mcp.tools import list_children

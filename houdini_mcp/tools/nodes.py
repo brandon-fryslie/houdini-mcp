@@ -11,7 +11,9 @@ This module provides tools for managing Houdini nodes:
 
 import logging
 import time
+from collections.abc import Iterator
 from functools import partial
+from itertools import islice
 from typing import Any, Literal
 
 from ._common import (
@@ -378,7 +380,8 @@ def list_children(
         - outputs: Array of output node paths (omitted if compact=True)
         Also unwalked: nodes whose children Houdini would not list, as
         {path, unread}; any makes status "partial". A walk stopped by max_depth
-        above nodes that have children, or that would not say, says so in warning.
+        above nodes that have children, or that would not say, says so in warning,
+        as does a walk that left a node out because of max_nodes.
 
     Example:
         list_children("/obj/geo1", recursive=True, max_depth=3)
@@ -390,8 +393,6 @@ def list_children(
 
         parent = node_at(hou, node_path)
 
-        children_list: list[dict[str, Any]] = []
-        nodes_collected = 0
         walked = 0
         # [LAW:no-silent-failure] what the walk could not enter, and what it did
         # not enter because of max_depth, are both in the response
@@ -408,16 +409,35 @@ def list_children(
             )
             return "".join("-" if not callable(g) else "1" if g() else "0" for g in getters)
 
-        def collect_children(node: Any, path: str, depth: int = 0) -> None:
-            nonlocal nodes_collected, walked, beyond_depth, beyond_depth_unknown
+        def record(child: Any, child_path: str) -> dict[str, Any]:
+            # Anything a record raises reaches the tool's error boundary, so a wire
+            # whose output cannot be read is reported, not dropped with its siblings.
+            # Compact mode: only path, name, type
+            if compact:
+                return {
+                    "path": child_path,
+                    "name": child.name(),
+                    "type": child.type().name(),
+                    "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
+                }
+            # Full mode: input wires with their source output, and output nodes
+            return {
+                "path": child_path,
+                "name": child.name(),
+                "type": child.type().name(),
+                "inputs": [conn.as_record() for conn in input_connections(child)],
+                "outputs": [out.path() for out in child.outputs()],
+            }
 
-            if nodes_collected >= max_nodes:
-                return
+        def walk(node: Any, path: str, depth: int = 0) -> Iterator[tuple[Any, str]]:
+            # Every child in preorder, lazily: the walk reads only as far as its
+            # consumer takes, and knows nothing of max_nodes. Between yielding a node
+            # and the next it reads only that node's subtree, so what it records -
+            # unwalked, beyond max_depth - is about nodes the consumer took.
+            nonlocal walked, beyond_depth, beyond_depth_unknown
 
             # A locked HDA refuses to list its children; that is the one failure this
-            # walk tolerates, and the node is listed as unwalked. Anything a child's
-            # own record raises reaches the tool's error boundary, so a wire whose
-            # output cannot be read is reported, not dropped with its siblings.
+            # walk tolerates, and the node is listed as unwalked.
             # hou is untyped: a node's children are Any, so is_unread is the discriminator
             children: Any = read(f"children of {path}", node.children)
             if depth > max_depth:
@@ -433,45 +453,29 @@ def list_children(
             walked += 1
 
             for child in children:
-                if nodes_collected >= max_nodes:
-                    break
-
                 child_path = child.path()
-                # Compact mode: only path, name, type
-                if compact:
-                    child_info: dict[str, Any] = {
-                        "path": child_path,
-                        "name": child.name(),
-                        "type": child.type().name(),
-                        "flags": read(f"flags of {child_path}", partial(compact_flags, child)),
-                    }
-                else:
-                    # Full mode: input wires with their source output, and output nodes
-                    child_info = {
-                        "path": child_path,
-                        "name": child.name(),
-                        "type": child.type().name(),
-                        "inputs": [conn.as_record() for conn in input_connections(child)],
-                        "outputs": [out.path() for out in child.outputs()],
-                    }
-
-                children_list.append(child_info)
-                nodes_collected += 1
-
-                # Recurse if requested
+                yield child, child_path
                 if recursive:
-                    collect_children(child, child_path, depth + 1)
+                    yield from walk(child, child_path, depth + 1)
 
-        collect_children(parent, parent.path())
+        # [LAW:dataflow-not-control-flow] max_nodes is a value applied to the walk,
+        # not a stop inside it: a node the walk still has past it is the proof one
+        # was left out.
+        nodes = walk(parent, parent.path())
+        children_list = [
+            record(child, child_path) for child, child_path in islice(nodes, max_nodes)
+        ]
+        cut = next(nodes, None) is not None
         logger.info(
             "children walk root=%s collected=%d walked=%d unwalked=%d beyond_depth=%d "
-            "beyond_depth_unknown=%d",
+            "beyond_depth_unknown=%d cut=%s",
             node_path,
-            nodes_collected,
+            len(children_list),
             walked,
             len(unwalked),
             beyond_depth,
             beyond_depth_unknown,
+            cut,
         )
 
         page = paginate(children_list, request)
@@ -498,7 +502,7 @@ def list_children(
                 f"Depth limited to {max_depth}: {beyond_depth} nodes at that depth have "
                 f"children not listed{unknown}",
             )
-        if nodes_collected >= max_nodes:
+        if cut:
             # [LAW:no-silent-failure] A capped walk and a further page are two facts;
             # neither may overwrite the other.
             result["warning"] = join_warnings(
