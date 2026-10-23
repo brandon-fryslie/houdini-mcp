@@ -95,17 +95,27 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
 
     def frame_network(pane: Any) -> None:
         # Houdini's network-editor home (h.pane.wsheet.home), over every item in the network shown.
-        link.conn.modules["nodegraphview"].frameItems(pane, pane.pwd().allItems(), True)
+        link.conn.modules["nodegraphview"].frameItems(pane, pane.pwd().allItems(), immediate=True)
 
-    def frame_every_viewport(pane: Any) -> None:
-        # The grab takes the whole pane, so every viewport of a split layout is framed.
-        for viewport in pane.viewports():
+    def frame_shown_viewports(pane: Any) -> None:
+        # The grab takes every viewport the layout shows, and only those. A
+        # viewport whose view drives its camera would move that camera node,
+        # so a capture refuses rather than edit the scene.
+        shown = [viewport for viewport in pane.viewports() if viewport.isVisible()]
+        driven = [viewport.camera().path() for viewport in shown if _view_drives_camera(viewport)]
+        if driven:
+            raise OperationFailed(
+                f"framing would move camera {', '.join(driven)}, whose viewport is locked "
+                "to it; capture with fit_contents=False or unlock the view",
+                cameras=driven,
+            )
+        for viewport in shown:
             viewport.frameAll()
 
     hou = link.hou
     framers: dict[Any, Callable[[Any], None]] = {
         hou.paneTabType.NetworkEditor: frame_network,
-        hou.paneTabType.SceneViewer: frame_every_viewport,
+        hou.paneTabType.SceneViewer: frame_shown_viewports,
     }
     framer = framers.get(pane_type)
     if framer is None:
@@ -116,6 +126,13 @@ def _framer(link: Link, pane_type: Any, pane_type_name: str) -> Callable[[Any], 
             frameable_types=frameable,
         )
     return framer
+
+
+def _view_drives_camera(viewport: Any) -> bool:
+    """Whether moving ``viewport``'s view writes the camera it looks through."""
+    return viewport.camera() is not None and (
+        viewport.isCameraLockedToView() or viewport.isViewExportedToCameraContinuously()
+    )
 
 
 def _as_shown(pane: Any) -> None:
@@ -199,11 +216,13 @@ def _capture_pane_to_bytes(
     # capture leaves the user's view as it was.
     try:
         frame(pane)
+    except ToolError:
+        raise
     except Exception as e:
         raise OperationFailed(
             f"Failed to frame {pane_type_name}: {e}", pane_type=pane_type_name
         ) from e
-    logger.info("Capturing %s pane, view %s", pane_type_name, frame.__name__)
+    logger.info("Capturing %s pane %s", pane_type_name, "framed" if fit_contents else "as shown")
 
     # Capture screen region
     pixmap = screen.grabWindow(0, geom_x, geom_y, geom_width, geom_height)
