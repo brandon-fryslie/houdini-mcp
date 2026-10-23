@@ -64,6 +64,13 @@ ROOT_CONTEXTS = {
 CHILD_CATEGORIES = {"geo": "Sop", "root": "Manager", **ROOT_CONTEXTS}
 
 
+class OperationFailed(Exception):
+    """hou.OperationFailed, which Houdini 22 raises for a cook that fails."""
+
+
+OperationFailed.__module__ = "hou"
+
+
 class MockSubnetIndirectInput:
     """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
 
@@ -534,7 +541,9 @@ class MockHouNode:
         self._cook_count += 1
         self._needs_to_cook = bool(self._errors)
         if self._errors:
-            raise raised_inside_houdini(RuntimeError("Error while cooking."))
+            raise raised_inside_houdini(
+                OperationFailed("The attempted operation failed.\nError while cooking.")
+            )
 
     def fail_cook(self, *errors: str) -> None:
         """Leave the node as a cook that failed with ``errors`` leaves it."""
