@@ -262,7 +262,7 @@ class TestExecuteCode:
             bypass_config_enabled=False,
         )
         assert result["status"] == "success"
-        assert "20.5.123" in result["stdout"]
+        assert "22.0.466" in result["stdout"]
 
     def test_execute_syntax_error(self, mock_connection):
         """Test handling of syntax errors in code."""

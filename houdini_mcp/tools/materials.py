@@ -65,20 +65,7 @@ def create_material(
     with using(host, port) as link:
         hou = link.hou
 
-        # Find or create parent context
-        parent = hou.node(parent_path)
-        if parent is None:
-            # Try to create /mat if it doesn't exist
-            if parent_path == "/mat":
-                try:
-                    parent = hou.node("/").createNode("matnet", "mat")
-                except Exception as e:
-                    raise OperationFailed(
-                        f"Cannot find or create material context: {parent_path}: {e}",
-                        parent_path=parent_path,
-                    ) from e
-            else:
-                raise InvalidInput(f"Parent context not found: {parent_path}", path=parent_path)
+        parent = node_at(hou, parent_path, "Parent context")
 
         # Generate name if not provided
         if not name:
