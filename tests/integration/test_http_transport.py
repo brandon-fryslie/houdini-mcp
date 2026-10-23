@@ -12,7 +12,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from houdini_mcp import connection
 from houdini_mcp.server import SERVED_TOOLS
-from houdini_mcp.settings import Target, mcp_port
+from houdini_mcp.settings import Http, Target, serving
 from tests.live_houdini import houdini_mcp_over_http, running_listener
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,7 +45,9 @@ async def test_a_client_at_the_documented_url_lists_and_calls_tools(
     server_port: int, houdini: Target
 ) -> None:
     documented = urlsplit(documented_url())
-    assert str(documented.port) == str(mcp_port({})), (
+    default = serving({})
+    assert isinstance(default, Http)
+    assert documented.port == default.listener.port, (
         "the port README gives is not the server's default MCP_PORT"
     )
     url = documented._replace(netloc=f"{documented.hostname}:{server_port}").geturl()

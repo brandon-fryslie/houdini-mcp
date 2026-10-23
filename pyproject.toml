@@ -192,6 +192,5 @@ exclude_dirs = ["tests", "build", "dist"]
 # Each skip below is an intentional, non-actionable pattern in this codebase:
 #   B101 - assert statements are fine in tests
 #   B102 - exec: executing Houdini Python is the core purpose of the execute_code tool
-#   B104 - hardcoded_bind_all_interfaces: the 0.0.0.0 HTTP bind in server.py is intentional
 #   B311 - non-crypto random: used for jitter/ids, never for security
-skips = ["B101", "B102", "B104", "B311"]
+skips = ["B101", "B102", "B311"]

@@ -2,31 +2,26 @@
 
 import os
 
-from fastmcp.server.server import Transport
-from pydantic import TypeAdapter
-
 from .connection import remote_houdini, use_houdini
 from .results import Results
 from .server import run_server
 from .settings import (
     InvalidSetting,
     log_level,
-    mcp_port,
     results_dir,
     rpc_token,
     server_settings,
-    setting,
+    serving,
 )
 
 
 def main() -> None:
-    """Serve on the transport and port the environment names, reaching the Houdini it names."""
+    """Serve as the environment says to, reaching the Houdini it names."""
     try:
         settings = server_settings(os.environ)
         token = rpc_token(os.environ)
         root = results_dir(os.environ)
-        transport = setting(os.environ, "MCP_TRANSPORT", TypeAdapter(Transport), "http")
-        port = mcp_port(os.environ)
+        how = serving(os.environ)
         level = log_level(os.environ)
     except InvalidSetting as e:
         raise SystemExit(str(e)) from None
@@ -38,7 +33,7 @@ def main() -> None:
         ) from None
     use_houdini(remote_houdini(token))
     with results:
-        run_server(settings, results, transport, port, level)
+        run_server(settings, results, how, level)
 
 
 if __name__ == "__main__":

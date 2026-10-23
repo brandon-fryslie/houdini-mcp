@@ -7,7 +7,6 @@ from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.server import Transport
 from fastmcp.tools import Tool, ToolResult
 from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
@@ -16,7 +15,7 @@ from starlette.responses import JSONResponse
 from . import delivery, shorthand, tools
 from .connection import describe_target
 from .results import Results
-from .settings import ServerSettings
+from .settings import Http, ServerSettings, Serving, Stdio
 from .tools._common import on_the_scene, run_in_executor
 from .tools.failure import failure_response
 from .tools.transactions import TOOL_POLICIES
@@ -165,9 +164,7 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
     return mcp
 
 
-def run_server(
-    settings: ServerSettings, results: Results, transport: Transport, port: int, log_level: int
-) -> None:
+def run_server(settings: ServerSettings, results: Results, how: Serving, log_level: int) -> None:
     """Serve as a process of its own: configure this process's logging, then serve.
 
     [LAW:effects-at-boundaries] ``logging.basicConfig`` reconfigures the root
@@ -180,8 +177,25 @@ def run_server(
     )
     logger.info(f"Log level: {logging.getLevelName(log_level)}")
     mcp = build_server(settings, results)
-    if transport == "stdio":
-        logger.info("Starting Houdini MCP Server on stdio")
-        mcp.run(transport=transport, show_banner=False)
-    else:
-        mcp.run(transport=transport, host="0.0.0.0", port=port)
+    match how:
+        case Stdio():
+            logger.info("Starting Houdini MCP Server on stdio")
+            mcp.run(transport="stdio", show_banner=False)
+        case Http(transport, listener):
+            logger.info(
+                f"Starting Houdini MCP Server over {transport} on {listener.host} port "
+                f"{listener.port}, answering a Host of loopback, the address a request "
+                f"arrives at, or one of {list(listener.allowed_hosts)}"
+            )
+            # [LAW:single-enforcer] every request passes fastmcp's Host/Origin guard, the
+            # one check a DNS-rebinding page cannot get past; the bind is what keeps the
+            # LAN out, since a client that is not a browser sends whatever Host it likes.
+            # Each guard argument is given, so no FASTMCP_HTTP_* setting can loosen it.
+            mcp.run(
+                transport=transport,
+                host=str(listener.host),
+                port=listener.port,
+                host_origin_protection=True,
+                allowed_hosts=list(listener.allowed_hosts),
+                allowed_origins=[],
+            )

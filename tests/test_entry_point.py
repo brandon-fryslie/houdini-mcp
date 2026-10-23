@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,7 +18,18 @@ from pydantic import TypeAdapter
 import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import main
-from houdini_mcp.settings import InvalidSetting, Port, log_level, results_dir, setting
+from houdini_mcp.settings import (
+    ALLOWED_HOST_PATTERN,
+    Http,
+    HttpListener,
+    InvalidSetting,
+    Port,
+    Stdio,
+    log_level,
+    results_dir,
+    serving,
+    setting,
+)
 from houdini_mcp.tools import link
 from tests.recording_environ import Recording
 
@@ -34,7 +46,9 @@ STARTUP_SETTINGS = (
     "HOUDINI_MCP_ALLOW_BYPASS",
     "LOG_LEVEL",
     "MCP_TRANSPORT",
+    "MCP_HOST",
     "MCP_PORT",
+    "MCP_ALLOWED_HOSTS",
     "SUMMARIZATION_ENABLED",
     "SUMMARIZATION_BASE_URL",
     "SUMMARIZATION_API_KEY",
@@ -43,6 +57,7 @@ STARTUP_SETTINGS = (
 # What a server reads of the environment, then: those, and where its results go (each
 # test names its own).
 READ_AT_START = (*STARTUP_SETTINGS, "HOUDINI_MCP_RESULTS_DIR")
+ALLOWED_HOST = f"String should match pattern '{ALLOWED_HOST_PATTERN}'"
 
 # This process's environment with none of them set, so the developer's shell decides nothing.
 UNSET = {name: value for name, value in os.environ.items() if name not in STARTUP_SETTINGS}
@@ -67,6 +82,23 @@ def test_an_unset_setting_is_its_default() -> None:
 def test_a_port_that_is_not_one_is_refused(port: str) -> None:
     with pytest.raises(InvalidSetting, match=f"MCP_PORT: .*, got '{port}'"):
         setting({"MCP_PORT": port}, "MCP_PORT", TypeAdapter(Port), "3055")
+
+
+def test_http_listens_on_loopback_and_admits_the_names_listed_unless_told_otherwise() -> None:
+    assert serving({}) == Http("http", HttpListener(ip_address("127.0.0.1"), 3055, ()))
+    listed = serving(
+        {"MCP_HOST": "::", "MCP_ALLOWED_HOSTS": " studio-box.local , 192.168.1.50, [fe80::1] "}
+    )
+    assert listed == Http(
+        "http",
+        HttpListener(ip_address("::"), 3055, ("studio-box.local", "192.168.1.50", "[fe80::1]")),
+    )
+
+
+def test_stdio_reads_no_listener_setting() -> None:
+    """A listener setting means nothing to stdio, so no value of one stops it."""
+    environ = {"MCP_TRANSPORT": "stdio", "MCP_HOST": "", "MCP_PORT": "abc"}
+    assert serving(environ) == Stdio()
 
 
 def test_results_land_where_named_or_in_the_users_own_cache(
@@ -185,9 +217,9 @@ async def test_a_started_server_reads_no_setting_again(
 def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], tmp_path: pathlib.Path
 ) -> None:
-    """A setting compose.yaml does not name never reaches the server in its container,
-    whatever .env says. Only the entry point's own environment records, so what a
-    library reads of the process's is not counted."""
+    """A setting neither compose.yaml nor the image names never reaches the server in its
+    container, whatever .env says. Only the entry point's own environment records, so
+    what a library reads of the process's is not counted."""
     monkeypatch.setenv("HOUDINI_MCP_RESULTS_DIR", str(tmp_path))
     environ = Recording(os.environ)
     monkeypatch.setattr(entry_point, "os", SimpleNamespace(environ=environ))
@@ -197,7 +229,24 @@ def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     root = pathlib.Path(__file__).resolve().parents[1]
     compose = yaml.safe_load((root / "compose.yaml").read_text())
     named = {item.split("=")[0] for item in compose["services"]["houdini-mcp"]["environment"]}
-    assert environ.read == set(READ_AT_START) == named
+    image = set(READ_AT_START) & {
+        pair.split("=")[0]
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if line.startswith("ENV ")
+        for pair in line.split()[1:]
+    }
+    assert image == {"MCP_HOST", "MCP_PORT"}, "the image fixes where it listens, and only that"
+    assert not named & image, named & image
+    assert environ.read == set(READ_AT_START) == named | image
+
+
+def test_compose_publishes_on_loopback_unless_told_otherwise() -> None:
+    """In its container the server listens on every interface, so the publish is what keeps
+    the LAN out: unset or empty, MCP_HOST publishes on this machine's loopback."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "compose.yaml").read_text())
+    (published,) = compose["services"]["houdini-mcp"]["ports"]
+    assert published.startswith("${MCP_HOST:-127.0.0.1}:"), published
 
 
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
@@ -228,7 +277,9 @@ def test_starting_applies_and_logs_what_it_resolved(
 ) -> None:
     monkeypatch.setenv("HOUDINI_HOST", "studio-box")
     monkeypatch.setenv("HOUDINI_PORT", "19000")
+    monkeypatch.setenv("MCP_HOST", "192.168.1.10")
     monkeypatch.setenv("MCP_PORT", "3100")
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "studio-box")
     monkeypatch.setenv("LOG_LEVEL", "debug")
 
     # the stubbed basicConfig applies nothing, so caplog admits what DEBUG would
@@ -236,9 +287,20 @@ def test_starting_applies_and_logs_what_it_resolved(
         main()
 
     assert started["config"]["level"] == logging.DEBUG
-    assert started["run"] == {"transport": "http", "host": "0.0.0.0", "port": 3100}
+    assert started["run"] == {
+        "transport": "http",
+        "host": "192.168.1.10",
+        "port": 3100,
+        "host_origin_protection": True,
+        "allowed_hosts": ["studio-box"],
+        "allowed_origins": [],
+    }
     logged = [r.getMessage() for r in caplog.records]
     assert "Log level: DEBUG" in logged
+    assert (
+        "Starting Houdini MCP Server over http on 192.168.1.10 port 3100, answering a Host of "
+        "loopback, the address a request arrives at, or one of ['studio-box']"
+    ) in logged
     assert "Houdini connection target: studio-box:19000" in logged
     assert (
         "Summarization: enabled=True, mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit at "
@@ -260,6 +322,15 @@ def test_starting_applies_and_logs_what_it_resolved(
         ("HOUDINI_PORT", "99999", "Input should be less than or equal to 65535"),
         ("HOUDINI_HOST", "", "String should match pattern '^\\S+$'"),
         ("HOUDINI_HOST", "studio box", "String should match pattern '^\\S+$'"),
+        ("MCP_HOST", "", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_HOST", "localhost", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_HOST", "http://0.0.0.0", "value is not a valid IPv4 or IPv6 address"),
+        ("MCP_ALLOWED_HOSTS", "studio-box,http://evil.example", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,*", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,*:80", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,studio-box:3055", ALLOWED_HOST),
+        ("MCP_ALLOWED_HOSTS", "studio-box,fe80::1", ALLOWED_HOST),
         (
             "LOG_LEVEL",
             "loud",

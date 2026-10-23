@@ -158,6 +158,9 @@ docker compose up -d
 
 **Step 3: Configure your MCP client**
 
+The server answers only clients on this machine; to admit one on another, see
+[Admitting a client on another machine](#admitting-a-client-on-another-machine).
+
 ```json
 {
   "mcpServers": {
@@ -215,7 +218,9 @@ Environment variables:
 | `HOUDINI_HOST` | `localhost` | Houdini machine IP/hostname |
 | `HOUDINI_PORT` | `18811` | hrpyc server port; a value that is not a port stops the server |
 | `HOUDINI_RPC_TOKEN` | *(unset)* | Shared secret the Houdini listener enforces; must match the listener's |
-| `MCP_PORT` | `3055` | MCP server HTTP port; a value that is not a port stops the server |
+| `MCP_HOST` | `127.0.0.1` | The address on this machine the HTTP server answers at: `0.0.0.0` for every interface, or one of its IP addresses; a value that is not an IP address stops the server. Under Docker Compose, the address the container's port is published at, empty meaning the default |
+| `MCP_PORT` | `3055` | MCP server HTTP port; a value that is not a port stops the server. Under Docker Compose, the port on this machine the container's port is published at |
+| `MCP_ALLOWED_HOSTS` | *(empty)* | Comma-separated names or addresses a client may call the HTTP server by, beyond `localhost`, `127.0.0.1` and `::1`, each as the client's URL spells its host: a name, an IPv4 address, or an IPv6 address in brackets, with no port. A request calling the server by a name it does not admit is refused with 421. Any other entry, such as an empty one, `*`, `box:3055` or `http://box`, stops the server |
 | `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server. `http` and `streamable-http` serve MCP at `/mcp`, `sse` at `/sse`: point the client's URL at the path the transport serves |
 | `LOG_LEVEL` | `INFO` | Logging level: any name Python's `logging` knows (DEBUG, INFO, WARNING or WARN, ERROR, CRITICAL or FATAL, NOTSET), any case; any other value stops the server |
 | `HOUDINI_MCP_RESULTS_DIR` | `~/.cache/houdini-mcp/results` | The root under which each running server keeps results too large to return inline, in a directory of its own: its newest that fit in 64MB. A stopped server's results are removed when another starts |
@@ -226,6 +231,28 @@ Environment variables:
 | `SUMMARIZATION_MODEL` | `mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit` | The model summaries are asked of; empty stops the server |
 
 Every setting is read once, when the server starts; changing one takes a restart.
+Under `MCP_TRANSPORT=stdio`, `MCP_HOST`, `MCP_PORT` and `MCP_ALLOWED_HOSTS` are not read.
+
+### Admitting a client on another machine
+
+By default the HTTP server answers only clients on this machine. To admit one on
+another machine, set two settings, in the environment under `uv run` or in `.env`
+under Docker Compose:
+
+1. `MCP_HOST` to the interface that client reaches: `0.0.0.0` for every interface,
+   or one LAN address of this machine, where a client on this machine must then
+   call that address rather than `localhost`.
+2. `MCP_ALLOWED_HOSTS` to the name or address that client puts in its URL. Under
+   Compose this includes a client calling this machine by its IP address: list
+   that IP.
+
+```bash
+MCP_HOST=0.0.0.0
+MCP_ALLOWED_HOSTS=studio-box.local,192.168.1.10
+```
+
+The server has no authentication. Any client that can reach that address can call
+every tool, `execute_code` included.
 
 ## Tool Categories (43 Tools)
 

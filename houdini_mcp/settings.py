@@ -9,12 +9,21 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 import houdini_mcp_handshake as handshake
 import httpx
-from pydantic import AfterValidator, BeforeValidator, Field, TypeAdapter, ValidationError
+from fastmcp.server.server import Transport
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    IPvAnyAddress,
+    TypeAdapter,
+    ValidationError,
+)
 
 T = TypeVar("T")
 
@@ -192,9 +201,64 @@ def log_level(environ: Mapping[str, str]) -> int:
     return setting(environ, "LOG_LEVEL", TypeAdapter(LogLevel), "INFO")
 
 
-def mcp_port(environ: Mapping[str, str]) -> int:
-    """The HTTP port ``MCP_PORT`` names for the MCP server, by default 3055."""
-    return setting(environ, "MCP_PORT", TypeAdapter(Port), "3055")
+# The host part of the URL a client calls this server by: a name, an IPv4 address, or an
+# IPv6 address in brackets. [LAW:types-are-the-program] no port, which the guard ignores,
+# and no * or ?, which fastmcp would read as a wildcard: a bare * admits every Host and
+# reopens the server to a rebinding page.
+ALLOWED_HOST_PATTERN = r"^(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|\[[0-9A-Fa-f:.]+\])$"
+AllowedHost = Annotated[str, Field(pattern=ALLOWED_HOST_PATTERN)]
+
+
+def _entries(raw: object) -> object:
+    """A comma-separated setting as its entries, with the spaces around each trimmed."""
+    return [entry.strip() for entry in raw.split(",")] if isinstance(raw, str) and raw else []
+
+
+AllowedHosts = Annotated[tuple[AllowedHost, ...], BeforeValidator(_entries)]
+
+
+@dataclass(frozen=True)
+class HttpListener:
+    """Where an HTTP transport listens, and the names a request may call it by besides
+    loopback and the address the request arrived at."""
+
+    host: IPv4Address | IPv6Address
+    port: int
+    allowed_hosts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Stdio:
+    """Serve on this process's stdin and stdout."""
+
+
+@dataclass(frozen=True)
+class Http:
+    """Serve one of fastmcp's HTTP transports, listening as ``listener`` says."""
+
+    transport: Literal["http", "sse", "streamable-http"]
+    listener: HttpListener
+
+
+# [LAW:types-are-the-program] only an HTTP transport has a listener, so stdio reads no
+# listener setting and no stdio branch holds one it ignores.
+Serving = Stdio | Http
+
+
+def serving(environ: Mapping[str, str]) -> Serving:
+    """The transport ``MCP_TRANSPORT`` names, and for HTTP, where ``MCP_HOST`` and
+    ``MCP_PORT`` say it listens and the further names ``MCP_ALLOWED_HOSTS`` admits."""
+    transport = setting(environ, "MCP_TRANSPORT", TypeAdapter(Transport), "http")
+    if transport == "stdio":
+        return Stdio()
+    return Http(
+        transport=transport,
+        listener=HttpListener(
+            host=setting(environ, "MCP_HOST", TypeAdapter(IPvAnyAddress), "127.0.0.1"),
+            port=setting(environ, "MCP_PORT", TypeAdapter(Port), "3055"),
+            allowed_hosts=setting(environ, "MCP_ALLOWED_HOSTS", TypeAdapter(AllowedHosts), ""),
+        ),
+    )
 
 
 def results_dir(environ: Mapping[str, str]) -> Path:
