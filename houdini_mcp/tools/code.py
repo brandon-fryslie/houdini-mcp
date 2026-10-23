@@ -750,9 +750,9 @@ def _execute_with_grant(
                 changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
             except Exception as error:  # noqa: BLE001
                 # [LAW:no-silent-failure] The program ran; only its diff is missing.
-                # [LAW:effects-at-boundaries] Classifying the error is the caller's:
-                # a lost link classified here would drop the connection, and a worker
-                # that outlived its call would drop one opened since.
+                # [LAW:effects-at-boundaries] Classifying the error is the caller's,
+                # which drops this call's link when the link is what failed. A worker
+                # that outlived its call has no caller left (houdini-laws-etg.il8).
                 logger.warning("%s ran but its scene diff failed: %r", operation, error)
                 return _DiffFailed(error)
             lists = ("added", "removed", "modified", "added_nodes")

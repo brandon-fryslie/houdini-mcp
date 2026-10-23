@@ -89,7 +89,7 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
     """``fetch()``'s value, or ``Unread`` saying why Houdini would not give it.
 
     ``what`` names the read in the log. A lost link is not a failed read: it
-    propagates to the tool boundary, which tears the link down.
+    propagates to the call's ``using`` scope, which drops that link.
     """
     try:
         return fetch()
@@ -119,6 +119,6 @@ def unreads(value: Any, where: str = "") -> Iterator[tuple[str, Unread]]:
 
 def reraise_transport_failure(e: Exception) -> None:
     # [LAW:single-enforcer] a lost link is the connection module's failure, not
-    # the read's; it goes on up to the tool boundary that tears links down.
+    # the read's; it goes on up to the ``using`` scope that drops the link.
     if transport_failure(e) is not None:
         raise e

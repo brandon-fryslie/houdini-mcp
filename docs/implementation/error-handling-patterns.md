@@ -72,8 +72,9 @@ discriminated on `kind`; each kind fixes its own `retry`:
 
 A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
 its cause, and the link's own failures in that cause outrank the label: a torn link,
-an unreachable Houdini or a mismatched one wrapped that way is still its own arm, and
-a torn link still tears the connection down. A served tool that finishes its result
+an unreachable Houdini or a mismatched one wrapped that way is still its own arm. A
+torn link inside a `using` scope drops the link that call used; one outside any scope,
+raw or wrapped, is reported as the bug it is (`operation_failed`, logged at error). A served tool that finishes its result
 after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then cap)
 is under the same boundary, awaited.
 

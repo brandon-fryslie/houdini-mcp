@@ -141,9 +141,10 @@ def recovering(
     """Recover from ``operation``'s effect, as its policy says, around its body.
 
     ``houdini`` opens the scope of the link the call reaches; it is entered only
-    when the recovery acts in Houdini, and holds that link around the body. The block yields the fields the recovery adds to a
-    successful result. A failure leaves it with notes saying what became of the
-    scene, which ``failure_for`` appends to the failure's message.
+    when the recovery acts in Houdini, and holds that link around the body. The
+    block yields the fields the recovery adds to a successful result. A failure
+    leaves it with notes saying what became of the scene, which ``failure_for``
+    appends to the failure's message.
     """
     recovery = TOOL_POLICIES[operation].recovery
     match recovery:

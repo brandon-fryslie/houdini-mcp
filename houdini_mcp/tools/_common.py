@@ -45,7 +45,6 @@ T = TypeVar("T")
 __all__ = [
     # Connection utilities
     "using",
-    "held_link",
     "is_connected",
     "HoudiniConnectionError",
     "HoudiniTargetMismatch",
@@ -119,8 +118,8 @@ def handle_connection_errors(operation_name: str) -> Callable[[ToolFn], ToolFn]:
     The tool boundary: every tool call enters and leaves through this wrapper.
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
-    ``failure_response`` builds for it; connection loss is the only failure that
-    tears the connection down. A sync tool's body runs inside
+    ``failure_response`` builds for it; the link a failed call used was already
+    dropped by its ``using`` scope. A sync tool's body runs inside
     :func:`~houdini_mcp.tools.transactions.recovering`, so a call that replaces
     the scene has backed it up first. Who holds the scene while the tool's
     Houdini work runs is :func:`on_the_scene`'s to arbitrate.
