@@ -22,7 +22,7 @@ from houdini_mcp.tools.transactions import (
     TransactionPolicy,
     policy_of,
 )
-from tests.conftest import raised_inside_houdini
+from tests.conftest import link_failure, raised_inside_houdini
 
 
 @pytest.mark.parametrize("render_tool", [render_viewport, render_quad_view])
@@ -169,7 +169,7 @@ class TestBackedUpFirst:
         call, replaces = REPLACERS[tool]
         hip = mock_connection.hipFile
         hip.hasUnsavedChanges.return_value = True
-        hip.saveAsBackup.side_effect = EOFError("stream has been closed")
+        hip.saveAsBackup.side_effect = link_failure(EOFError("stream has been closed"))
 
         result = call()
 

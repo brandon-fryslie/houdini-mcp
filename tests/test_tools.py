@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
+from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
 
 
 class TestGetSceneInfo:
@@ -3285,7 +3285,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_timeout(self, mock_connection):
         """Test that TimeoutError produces a helpful error response."""
-        result, link = self._run(TimeoutError("Connection timed out"))
+        result, link = self._run(link_failure(TimeoutError("Connection timed out")))
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
@@ -3298,7 +3298,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_eof(self, mock_connection):
         """Test that EOFError produces a helpful error response."""
-        result, link = self._run(EOFError("Connection closed"))
+        result, link = self._run(link_failure(EOFError("Connection closed")))
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_lost"
@@ -3309,7 +3309,7 @@ class TestConnectionErrorHandling:
 
     def test_handle_connection_error_reset_arrives_as_eof(self, mock_connection):
         """rpyc wraps a reset it meets into EOFError; the message says so."""
-        result, link = self._run(EOFError("[Errno 54] Connection reset by peer"))
+        result, link = self._run(link_failure(EOFError("[Errno 54] Connection reset by peer")))
 
         assert result["kind"] == "connection_lost"
         assert "reset" in result["message"]
@@ -3354,7 +3354,7 @@ class TestConnectionErrorHandling:
         """Test that get_scene_info handles TimeoutError gracefully."""
         from houdini_mcp.tools import get_scene_info
 
-        unanswered = MagicMock(side_effect=TimeoutError("Request timed out"))
+        unanswered = MagicMock(side_effect=link_failure(TimeoutError("Request timed out")))
         monkeypatch.setattr(mock_connection.hipFile, "path", unanswered)
 
         result = get_scene_info(host="localhost", port=18811)
@@ -3368,7 +3368,9 @@ class TestConnectionErrorHandling:
         """Test that create_node handles EOFError gracefully."""
         from houdini_mcp.tools import create_node
 
-        monkeypatch.setattr(mock_connection, "node", MagicMock(side_effect=EOFError("closed")))
+        monkeypatch.setattr(
+            mock_connection, "node", MagicMock(side_effect=link_failure(EOFError("closed")))
+        )
 
         result = create_node("geo", host="localhost", port=18811)
 

@@ -846,13 +846,13 @@ class TestRenderLeavesSceneUnchanged:
     ) -> None:
         """The first destroy kills the link: the call ends as connection loss after that one."""
         import houdini_mcp.tools as tools
-        from tests.conftest import MockHouNode
+        from tests.conftest import MockHouNode, link_failure
 
         destroyed: list[str] = []
 
         def destroy(self: Any) -> None:
             destroyed.append(self.path())
-            raise EOFError("stream has been closed")
+            raise link_failure(EOFError("stream has been closed"))
 
         monkeypatch.setattr(MockHouNode, "destroy", destroy)
 
@@ -984,10 +984,10 @@ class TestRenderLeavesSceneUnchanged:
     ) -> None:
         """A render that dies with the link ends as connection loss and attempts no destroy."""
         import houdini_mcp.tools as tools
-        from tests.conftest import MockHouNode
+        from tests.conftest import MockHouNode, link_failure
 
         def render(self: Any) -> None:
-            raise EOFError("stream has been closed")
+            raise link_failure(EOFError("stream has been closed"))
 
         destroyed: list[str] = []
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)

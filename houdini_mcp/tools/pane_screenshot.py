@@ -508,9 +508,7 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw_bytes)
     except OSError as e:
-        # Not chained: failed_on reads a ToolError's cause as the link's failure,
-        # and a disk timeout is not the link's; the message carries the error.
-        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from None
+        raise OperationFailed(f"Could not save {pane_type_name} to {path}: {e}") from e
     return {**picture, "file_path": str(path.absolute())}
 
 

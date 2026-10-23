@@ -19,8 +19,10 @@ import rpyc
 import rpyc.utils.server
 from fastmcp import FastMCP
 from rpyc.core import vinegar
+from rpyc.core.async_ import AsyncResult
 from rpyc.utils.server import Server
 
+from houdini_mcp.connection import TransportException
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
@@ -1600,6 +1602,23 @@ class MockGeometry:
         group = MockGeoGroup(name)
         self._prim_groups.append(group)
         return group
+
+
+def link_failure(exc: TransportException) -> TransportException:
+    """Return ``exc`` as rpyc raises it when the link to Houdini fails: from rpyc's own
+    code, which is what tells the link's failure from the same type raised here.
+
+    rpyc hands a request's outcome to an ``AsyncResult`` and raises it from there;
+    this runs that hand-off locally, and an exception keeps its innermost frame
+    through every re-raise. Build ``exc`` fresh for each use.
+    """
+    result = AsyncResult(None)
+    result(True, exc)
+    try:
+        delivered = result.value
+    except BaseException:
+        return exc
+    raise AssertionError(f"rpyc delivered the failure as a value: {delivered!r}")
 
 
 def raised_inside_houdini(exc: BaseException) -> BaseException:

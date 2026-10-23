@@ -30,16 +30,19 @@ DEFAULT_SYNC_TIMEOUT = 30.0  # timeout for individual RPC calls (seconds) - redu
 # rpyc's SocketStream wraps every socket error it meets on read or write, so no
 # ConnectionError ever crosses the channel. Not OSError: that admits
 # FileNotFoundError and PermissionError, which are the tool's errors, not the link's.
-# [LAW:one-source-of-truth] The same union is the ``isinstance`` check and the type of
-# the proof it yields, so the two cannot disagree. [LAW:single-enforcer] It is not an
-# ``except`` target: the only way to know a failure is the link's is
-# ``transport_failure()``, which also rules out one Houdini's own code raised.
+# The type alone is not the link's failure: code in this process (a disk write, an
+# execute_code program) can raise either one itself. [LAW:one-source-of-truth] The same
+# union is the ``isinstance`` check and the type of the proof it yields, so the two
+# cannot disagree. [LAW:single-enforcer] It is not an ``except`` target: the only way to
+# know a failure is the link's is ``transport_failure()``, which also requires that rpyc
+# raised it and that Houdini's own code did not.
 TransportException = EOFError | TimeoutError
 
 
 @dataclass(frozen=True)
 class TransportFailure:
-    """Proof that an exception came from the link to Houdini, not from code Houdini ran.
+    """Proof that an exception came from the link to Houdini: not from code Houdini ran,
+    and not from code in this process that raised the same type.
 
     Only ``transport_failure`` produces one. Holding it is what entitles a caller to
     tear the connection down and report connection loss.
@@ -54,6 +57,18 @@ def _raised_inside_houdini(exc: BaseException) -> bool:
     return hasattr(exc, "_remote_tb")
 
 
+def _raised_by_rpyc(exc: BaseException) -> bool:
+    """rpyc raises a failing link's exceptions from its own code (a sync request's
+    expiry in ``rpyc.core.async_``, a closed or broken stream in ``rpyc.core.stream``),
+    and an exception keeps its innermost frame through every re-raise."""
+    tb = exc.__traceback__
+    if tb is None:
+        return False
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    return str(tb.tb_frame.f_globals.get("__name__", "")).startswith("rpyc.")
+
+
 def _open_is_retryable(exc: BaseException) -> bool:
     # [LAW:types-are-the-program] Before the link exists nothing but the socket layer
     # can raise an OSError - unreachable network, unresolved host, refused or denied
@@ -66,9 +81,15 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
     """Decide, once, whether an exception means the link to Houdini failed in use.
 
     [LAW:parse-dont-validate] [LAW:single-enforcer] The one place connection loss is
-    classified: the channel's own exceptions, when Houdini's code did not raise them.
+    classified: the channel's own exceptions, raised by rpyc, when Houdini's code did
+    not raise them. An exception Houdini raised also ends in an rpyc frame, where rpyc
+    re-raises it, so neither fact alone is the link's failure.
     """
-    if isinstance(exc, TransportException) and not _raised_inside_houdini(exc):
+    if (
+        isinstance(exc, TransportException)
+        and _raised_by_rpyc(exc)
+        and not _raised_inside_houdini(exc)
+    ):
         return TransportFailure(exc)
     return None
 

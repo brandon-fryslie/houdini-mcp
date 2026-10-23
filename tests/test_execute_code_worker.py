@@ -9,6 +9,8 @@ resume. A call meets the ledger where the server runs it (``held``).
 import logging
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -17,7 +19,7 @@ from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, ge
 from houdini_mcp.tools.geometry import get_geo_summary
 from houdini_mcp.tools.rendering import render_quad_view, render_viewport
 from houdini_mcp.tools.workers import WORKERS, WorkerLedger, WorkerStillRunning
-from tests.conftest import SUMMARIZER
+from tests.conftest import SUMMARIZER, link_failure
 
 
 def _child_names(mock_connection) -> list[str]:
@@ -218,33 +220,65 @@ class TestATimedOutRunsDiff:
         _use_event(monkeypatch, MonotonicEvent)
         assert _time_out(stalled_program)["audit"]["woke_early"] == 0
 
-    def test_a_late_diff_that_lost_its_link_leaves_the_connection_alone(
-        self, mock_connection, stalled_program, monkeypatch
-    ):
-        from types import SimpleNamespace
-
+    @staticmethod
+    def _late_failure_on_a_replaced_link(
+        mock_connection, connected_to, program: str, lose: Callable[[], None], caplog
+    ) -> tuple[Any, Any]:
+        """``program`` times out on one link, which ``lose`` then breaks; the server
+        reconnects on another, then the worker ends: the link it used, and the one
+        installed since."""
         from houdini_mcp.connection import houdini
-        from houdini_mcp.tools import failure as failure_module
 
-        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
         _time_out(program, capture_diff=True)
-        # The old link is gone by the time the program ends; a newer one may be open.
-        link = houdini().link()
-        monkeypatch.setattr(
-            failure_module,
-            "transport_failure",
-            lambda e: SimpleNamespace(exc=e) if isinstance(e, EOFError) else None,
-        )
+        lose()
+        used = houdini().link()
+        connected_to(mock_connection)
+        replacement = houdini().link()
+        worker = WORKERS.running()
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.connection"):
+            mock_connection.stall_gate.set()
+            worker.thread.join(5)
+        return used, replacement
+
+    def test_a_late_diff_that_lost_its_link_drops_that_link_alone(
+        self, mock_connection, connected_to, stalled_program, monkeypatch, caplog
+    ):
+        from houdini_mcp.connection import houdini
 
         def lost(_command):
-            raise EOFError("connection closed by peer")
+            raise link_failure(EOFError("connection closed by peer"))
 
-        monkeypatch.setattr(mock_connection, "hscript", lost)
-        worker = WORKERS.running()
-        mock_connection.stall_gate.set()
-        worker.thread.join(5)
-        assert houdini().link() is link and not link.conn.closed
+        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
+        used, replacement = self._late_failure_on_a_replaced_link(
+            mock_connection,
+            connected_to,
+            program,
+            lambda: monkeypatch.setattr(mock_connection, "hscript", lost),
+            caplog,
+        )
+
+        assert f"Dropped failed link to Houdini at {used.name} (not installed)" in caplog.messages
+        assert houdini().link() is replacement and not replacement.conn.closed
         assert get_last_scene_diff()["status"] == "warning"
+
+    def test_a_late_program_that_failed_on_its_link_drops_that_link_alone(
+        self, mock_connection, connected_to, stalled_program, monkeypatch, caplog
+    ):
+        from houdini_mcp.connection import houdini
+
+        def lose() -> None:
+            raise link_failure(TimeoutError("result expired"))
+
+        used, replacement = self._late_failure_on_a_replaced_link(
+            mock_connection,
+            connected_to,
+            f"{stalled_program}\nhou.lose()",
+            lambda: monkeypatch.setattr(mock_connection, "lose", lose, raising=False),
+            caplog,
+        )
+
+        assert f"Dropped failed link to Houdini at {used.name} (not installed)" in caplog.messages
+        assert houdini().link() is replacement and not replacement.conn.closed
 
 
 class TestWorkerLifetime:

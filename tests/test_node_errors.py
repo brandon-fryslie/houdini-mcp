@@ -7,7 +7,7 @@ from houdini_mcp.connection import houdini
 from houdini_mcp.reading import Reading
 from houdini_mcp.tools.failure import FAILURE
 from houdini_mcp.tools.summarization import Excerpt
-from tests.conftest import SUMMARIZER, MockHouNode, raised_inside_houdini
+from tests.conftest import SUMMARIZER, MockHouNode, link_failure, raised_inside_houdini
 
 
 class TestGetNodeInfoWithErrors:
@@ -293,7 +293,7 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        geo1.errors = MagicMock(side_effect=EOFError("stream has been closed"))  # type: ignore[method-assign]
+        geo1.errors = MagicMock(side_effect=link_failure(EOFError("stream has been closed")))  # type: ignore[method-assign]
         mock_connection.add_node(geo1)
 
         result = get_node_info("/obj/geo1", cook_info="inspect")
@@ -334,7 +334,7 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        self._type_refusing_description(geo1, EOFError("stream has been closed"))
+        self._type_refusing_description(geo1, link_failure(EOFError("stream has been closed")))
         mock_connection.add_node(geo1)
 
         result = get_node_info("/obj/geo1", detail="standard")
@@ -689,7 +689,9 @@ class TestFindErrorNodesUninspected:
     async def test_a_link_lost_reading_a_node_is_connection_loss(self, mock_connection):
         from houdini_mcp.tools import find_error_nodes
 
-        mock_connection.add_node(self._unreadable("/obj/geo1", EOFError("stream closed")))
+        mock_connection.add_node(
+            self._unreadable("/obj/geo1", link_failure(EOFError("stream closed")))
+        )
 
         link = houdini().link()
         result = FAILURE.validate_python(
@@ -705,7 +707,7 @@ class TestFindErrorNodesUninspected:
         from houdini_mcp.tools import find_error_nodes
 
         mock_connection.node("/obj").allSubChildren = MagicMock(
-            side_effect=EOFError("stream closed")
+            side_effect=link_failure(EOFError("stream closed"))
         )
 
         link = houdini().link()

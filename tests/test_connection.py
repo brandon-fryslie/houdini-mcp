@@ -19,7 +19,7 @@ from houdini_mcp.connection import (
     remote_houdini,
     transport_failure,
 )
-from tests.conftest import MockHouModule, MockRpycConnection, raised_inside_houdini
+from tests.conftest import MockHouModule, MockRpycConnection, link_failure, raised_inside_houdini
 
 
 def installed_conn() -> Any:
@@ -568,7 +568,9 @@ class TestPing:
         reachable Houdini: the failure names the target and the cause, and the
         probe's link is closed."""
         mock_conn = MockRpycConnection(mock_hou)
-        mock_hou.applicationVersionString = MagicMock(side_effect=EOFError("stream closed"))
+        mock_hou.applicationVersionString = MagicMock(
+            side_effect=link_failure(EOFError("stream closed"))
+        )
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = mock_conn
@@ -612,7 +614,7 @@ class TestPing:
         """A proven link that drops while answering is the probe's own "no answer",
         naming the target and the cause, not a loss of the server's connection."""
         mock_conn = MockRpycConnection(mock_hou)
-        mock_hou.hipFile.path = MagicMock(side_effect=EOFError("stream closed"))
+        mock_hou.hipFile.path = MagicMock(side_effect=link_failure(EOFError("stream closed")))
 
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = mock_conn
@@ -667,9 +669,9 @@ class TestTransportFailure:
     @pytest.mark.parametrize(
         "exc",
         [
-            EOFError("stream has been closed"),
-            EOFError("[Errno 54] Connection reset by peer"),
-            TimeoutError("sync request timed out"),
+            link_failure(EOFError("stream has been closed")),
+            link_failure(EOFError("[Errno 54] Connection reset by peer")),
+            link_failure(TimeoutError("sync request timed out")),
         ],
         ids=lambda e: f"{type(e).__name__}:{e}",
     )
@@ -695,6 +697,18 @@ class TestTransportFailure:
     )
     def test_file_permission_and_operation_errors_are_not(self, exc):
         assert transport_failure(exc) is None
+
+    @pytest.mark.parametrize(
+        "exc",
+        [EOFError("no more input"), TimeoutError("my own deadline")],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_the_same_types_raised_in_this_process_are_not(self, exc):
+        """A program execute_code runs here, or a disk write, raises these types itself."""
+        try:
+            raise exc
+        except type(exc) as raised:
+            assert transport_failure(raised) is None
 
     @pytest.mark.parametrize(
         "exc",
@@ -733,7 +747,7 @@ class TestATeardownDropsTheLinkThatFailed:
         ):
             first.conn.close()  # A's link fails...
             second = owner.ensure("localhost", 18811)  # ...B reconnects...
-            raise EOFError("stream closed")  # ...and A's failure arrives late.
+            raise link_failure(EOFError("stream closed"))  # ...and A's failure arrives late.
 
         assert lost.value.link is first
         assert owner.link() is second and second.alive
@@ -754,7 +768,7 @@ class TestATeardownDropsTheLinkThatFailed:
             pytest.raises(LinkLost) as lost,
             held_link(owner, "localhost", 18811),
         ):
-            raise TimeoutError("no answer")
+            raise link_failure(TimeoutError("no answer"))
 
         assert owner.link() is None and not lost.value.link.alive
         assert isinstance(lost.value.lost.exc, TimeoutError)
@@ -771,7 +785,7 @@ class TestATeardownDropsTheLinkThatFailed:
 
         owner = _owner()
         with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811):
-            closed = EOFError("stream closed")
+            closed = link_failure(EOFError("stream closed"))
             add_note(closed, "The scene's unsaved work is backed up at /tmp/backup.hip.")
             raise closed
 
@@ -780,6 +794,73 @@ class TestATeardownDropsTheLinkThatFailed:
         assert failure.message.endswith(
             "\nThe scene's unsaved work is backed up at /tmp/backup.hip."
         )
+
+    def test_a_tool_failure_around_a_lost_link_keeps_its_payload(self):
+        """``raise OperationFailed(..., path=...) from <the link's failure>`` reads as the
+        link's failure, carrying the tool's fields and, as a note, its message."""
+        from houdini_mcp.tools._common import held_link
+        from houdini_mcp.tools.failure import OperationFailed, failure_for
+
+        owner = _owner()
+        with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811):
+            raise OperationFailed(
+                "Failed to navigate to /obj/geo1", path="/obj/geo1"
+            ) from link_failure(EOFError("stream closed"))
+
+        failure = failure_for(lost.value, "capture_pane_screenshot")
+        assert (failure.kind, failure.path) == ("connection_lost", "/obj/geo1")
+        assert failure.message.endswith("\nFailed to navigate to /obj/geo1")
+
+    def test_a_lost_link_judged_again_by_an_outer_scope_is_told_once(self):
+        """A scope inside another (a checkpointed tool's body) already judged the loss;
+        the outer scope passes it on as it is, its fields and notes told once."""
+        from houdini_mcp.tools._common import held_link
+        from houdini_mcp.tools.failure import OperationFailed, add_note, failure_for
+
+        owner = _owner()
+        with (
+            pytest.raises(Exception) as lost,
+            held_link(owner, "localhost", 18811),
+            held_link(owner, "localhost", 18811),
+        ):
+            failure = OperationFailed("SceneViewer not framed", pane_type="SceneViewer")
+            add_note(failure, "The scene's unsaved work is backed up at /tmp/backup.hip.")
+            raise failure from link_failure(EOFError("stream closed"))
+
+        told = failure_for(lost.value, "capture_pane_screenshot")
+        assert (told.kind, told.pane_type) == ("connection_lost", "SceneViewer")
+        assert told.message.count("SceneViewer not framed") == 1
+        assert told.message.count("backed up at /tmp/backup.hip") == 1
+
+    def test_a_tool_failure_raised_from_a_judged_loss_adds_its_payload(self):
+        """execute_code's worker judges its program's failure on the link; the call
+        then raises its own failure, with what the program left, from that loss."""
+        from houdini_mcp.tools._common import held_link
+        from houdini_mcp.tools.failure import OperationFailed, failure_for, link_lost
+
+        owner = _owner()
+        with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811) as link:
+            judged = link_lost(owner, link, link_failure(TimeoutError("result expired")))
+            assert judged is not None and not link.alive
+            raise OperationFailed("TimeoutError: result expired", stdout="before\n") from judged
+
+        failure = failure_for(lost.value, "execute_code")
+        assert (failure.kind, failure.connection_reset) == ("timeout", True)
+        assert failure.stdout == "before\n"
+        assert failure.message.count("TimeoutError: result expired") == 1
+
+    def test_a_tool_field_the_link_arm_declares_is_refused_as_the_bug_it_is(self):
+        from houdini_mcp.tools._common import held_link
+        from houdini_mcp.tools.failure import OperationFailed, failure_for
+
+        owner = _owner()
+        with pytest.raises(TypeError) as refused, held_link(owner, "localhost", 18811):
+            raise OperationFailed("Render failed", exception="EOFError") from link_failure(
+                EOFError("stream closed")
+            )
+
+        assert "exception" in str(refused.value)
+        assert failure_for(refused.value, "render_viewport").kind == "operation_failed"
 
     def test_a_failure_that_is_not_the_links_drops_nothing(self):
         from houdini_mcp.tools._common import held_link
@@ -827,7 +908,9 @@ class TestATeardownDropsTheLinkThatFailed:
         from houdini_mcp.tools.failure import failure_for
 
         try:
-            raise OperationFailed("Failed to enumerate panes") from EOFError("stream closed")
+            raise OperationFailed("Failed to enumerate panes") from link_failure(
+                EOFError("stream closed")
+            )
         except OperationFailed as wrapped:
             with caplog.at_level(logging.ERROR, logger="houdini_mcp.tools"):
                 failure = failure_for(wrapped, "list_visible_panes")
@@ -848,7 +931,7 @@ class TestATeardownDropsTheLinkThatFailed:
             with patch("houdini_mcp.connection.handshake") as seam:
                 seam.connect.return_value = MockRpycConnection(MockHouModule())
                 replacement.append(houdini().ensure("localhost", 18811))
-            raise EOFError("stream closed")
+            raise link_failure(EOFError("stream closed"))
 
         monkeypatch.setattr(mock_connection.hipFile, "path", lost_after_another_call_reconnected)
 
