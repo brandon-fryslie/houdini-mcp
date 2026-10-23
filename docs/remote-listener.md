@@ -28,6 +28,10 @@ socket closed) is **stale**: `get_hrpyc_status()` and `self_test_hrpyc()`
 report `running: False, stale: True` with the endpoint, `is_hrpyc_running()`
 is `False`, and **Start Remote** starts a fresh listener in its place.
 
+**Stop Remote** with clients connected disconnects them: each one's next call
+fails with a closed connection, and Houdini's log records
+`hrpyc client disconnected by stop()` for each, not an error.
+
 ## Configuration (environment variables)
 
 | Variable                      | Default     | Meaning                                             |

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 import rpyc
 import rpyc.core
+import rpyc.core.stream
 import rpyc.utils.server
 from houdini_mcp_plugin.listener import (
     HrpycModule,
@@ -174,3 +175,55 @@ class TestListenerAgainstRealRpyc:
             probe.settimeout(1)
             assert probe.connect_ex(("127.0.0.1", port)) != 0
         assert listener.self_test()["running"] is False
+
+    def test_stop_disconnects_a_connected_client_with_no_traceback(
+        self, fake_hou, monkeypatch, caplog
+    ):
+        """stop() closes each client's socket under the thread serving it, and
+        that thread's next poll() reads a closed descriptor. Left to itself that
+        ordering is a narrow race, so the test parks the serving thread at
+        poll()'s entry and stops the listener while it waits there: the losing
+        interleaving, on every run, through rpyc's own code."""
+        real_poll = rpyc.core.stream.SocketStream.poll
+        test_thread = threading.current_thread()
+        armed, parked, released = threading.Event(), threading.Event(), threading.Event()
+        serving: list[threading.Thread] = []
+
+        def poll(stream: Any, timeout: Any) -> bool:
+            # The client polls on this thread; any other caller is the server's.
+            server_side = threading.current_thread() is not test_thread
+            if armed.is_set() and server_side and not parked.is_set():
+                serving.append(threading.current_thread())
+                parked.set()
+                released.wait(timeout=5)
+            return real_poll(stream, timeout)
+
+        monkeypatch.setattr(rpyc.core.stream.SocketStream, "poll", poll)
+        unhandled: list[BaseException | None] = []
+        monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
+        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+
+        listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
+        port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
+        with contextlib.closing(rpyc.classic.connect("127.0.0.1", port)) as conn:
+            try:
+                # Resolved once and held, so each call below is one round trip
+                # and nothing else reaches the server between them.
+                sqrt = conn.modules.math.sqrt
+                assert sqrt(16.0) == 4.0
+                # The serving thread is already inside poll(); answering this
+                # call brings it back to poll()'s entry, where it parks.
+                armed.set()
+                assert sqrt(9.0) == 3.0
+                assert parked.wait(timeout=5)
+                assert listener.stop()["status"] == "success"
+            finally:
+                released.set()
+            (thread,) = serving
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "serving thread did not end after stop()"
+            with pytest.raises(EOFError):
+                conn.modules.math.sqrt(1.0)
+        assert [r.getMessage() for r in caplog.records if r.exc_info] == []
+        assert unhandled == []
+        assert f"hrpyc client disconnected by stop() on port {port}" in caplog.messages
