@@ -303,8 +303,7 @@ def test_starting_applies_and_logs_what_it_resolved(
     ) in logged
     assert "Houdini connection target: studio-box:19000" in logged
     assert (
-        "Summarization: enabled=True, mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit at "
-        "http://100.66.66.66:8000/v1"
+        "Summarization: enabled=True, Qwen3.8-Flash-Next-Sushi at http://100.66.66.66:8000/v1"
     ) in logged
     assert "Bypass configuration: enabled=False" in logged
 

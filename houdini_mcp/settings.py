@@ -162,13 +162,13 @@ def summarizer(environ: Mapping[str, str]) -> Summarizer:
             shown=_masked,
         ),
         api_key=setting(environ, "SUMMARIZATION_API_KEY", TypeAdapter(str), "1234"),
-        # An instruct model with no thinking phase: measured 2026-10-15 on that server at
-        # 12-15s per summary including a cold load, where the reasoning models took 56s warm.
+        # The model that server keeps pinned, so a summary never waits on a cold load; its
+        # thinking is switched off per request (summarization._request).
         model=setting(
             environ,
             "SUMMARIZATION_MODEL",
             TypeAdapter(Annotated[str, Field(min_length=1)]),
-            "mlx-community--Qwen3-30B-A3B-Instruct-2507-8bit",
+            "Qwen3.8-Flash-Next-Sushi",
         ),
     )
 

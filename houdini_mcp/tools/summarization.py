@@ -273,6 +273,10 @@ async def _request(prompt: str, summarizer: Summarizer) -> str | NoSummary:
                     "model": summarizer.model,
                     "max_tokens": SUMMARY_TOKENS,
                     "messages": [{"role": "user", "content": prompt}],
+                    # A Qwen3 model thinks first unless its chat template is told not to, and
+                    # the thinking spends SUMMARY_TOKENS and seconds on no summary. A
+                    # "/no_think" tag in the prompt does not stop Sushi (2026-10-15).
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             response.raise_for_status()
