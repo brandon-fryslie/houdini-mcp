@@ -56,8 +56,12 @@ def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path
     assert probe.returncode == 0 and report.exists(), probe.stdout + probe.stderr
     loaded = json.loads(report.read_text())
 
-    assert loaded["root"] == str(plugin)
+    # Paths compare as the files they name, however Houdini spells them.
+    plugin = plugin.resolve()
+    assert Path(loaded["root"]).resolve() == plugin
     for name, file in loaded["modules"].items():
-        assert Path(file).is_relative_to(plugin / "python"), name
-    shelf = str(plugin / "toolbar" / "houdini_mcp.shelf")
-    assert loaded["shelves"].get("houdini_mcp") == shelf, loaded["shelves"]
+        assert Path(file).resolve().is_relative_to(plugin / "python"), name
+    shelf = loaded["shelves"].get("houdini_mcp")
+    assert shelf and Path(shelf).resolve() == plugin / "toolbar" / "houdini_mcp.shelf", loaded[
+        "shelves"
+    ]
