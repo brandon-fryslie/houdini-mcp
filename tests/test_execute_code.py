@@ -377,6 +377,55 @@ class TestExecuteCodeOutputCapture:
         assert capture.written() == Written("abcde", 8)
         assert capture.written().truncated
 
+    def test_a_capture_is_read_while_a_write_never_finishes(self):
+        """A timed-out program may be stuck inside a write; the call's read still answers."""
+        import threading
+
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(5)
+        capture.write("ab")
+        inside, release = threading.Event(), threading.Event()
+
+        class Stuck(str):
+            def __getitem__(self, key: object) -> str:
+                inside.set()
+                release.wait()
+                return str.__getitem__(self, key)  # type: ignore[index]
+
+        writer = threading.Thread(target=capture.write, args=(Stuck("cdefgh"),), daemon=True)
+        writer.start()
+        inside.wait()
+        reads: list[Written] = []
+        reader = threading.Thread(target=lambda: reads.append(capture.written()), daemon=True)
+        reader.start()
+        reader.join(timeout=5)
+        release.set()
+        writer.join(timeout=5)
+
+        assert reads == [Written("ab", 2)]
+        assert capture.written() == Written("abcde", 8)
+
+    def test_a_write_from_inside_a_write_is_kept(self):
+        """A write a write sets off on its own thread (a finalizer that prints) completes."""
+        import threading
+
+        from houdini_mcp.tools.program_output import Capture, Written
+
+        capture = Capture(10)
+
+        class Reentrant(str):
+            def __getitem__(self, key: object) -> str:
+                capture.write("F")
+                return str.__getitem__(self, key)  # type: ignore[index]
+
+        writer = threading.Thread(target=capture.write, args=(Reentrant("abc"),), daemon=True)
+        writer.start()
+        writer.join(timeout=5)
+
+        assert not writer.is_alive()
+        assert capture.written() == Written("Fabc", 4)
+
     def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
         """A write from another thread while a program runs reaches its own stream, not the capture."""
         import sys

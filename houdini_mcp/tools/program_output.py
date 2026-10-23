@@ -51,24 +51,24 @@ class Capture(TextIOBase):
         self._bound = bound
         self._kept = StringIO()
         self._length = 0
-        # [LAW:no-ambient-temporal-coupling] A program that outlived its timeout
-        # still writes while the call reads; the lock makes each read one moment.
-        self._lock = threading.Lock()
 
     def writable(self) -> bool:
         return True
 
     def write(self, text: str) -> int:
-        with self._lock:
-            if self.closed:
-                raise ValueError("I/O operation on closed file.")
-            self._kept.write(text[: max(0, self._bound - self._length)])
-            self._length += len(text)
+        if self.closed:
+            raise ValueError("I/O operation on closed file.")
+        # [LAW:no-ambient-temporal-coupling] Kept before counted: a read takes the
+        # count first, so every character it counts is already kept.
+        self._kept.write(text[: max(0, self._bound - self._length)])
+        self._length += len(text)
         return len(text)
 
     def written(self) -> Written:
-        with self._lock:
-            return Written(self._kept.getvalue(), self._length)
+        """What was written as of one moment, without waiting on a write: a program
+        that outlived its timeout may be inside one, and may never leave it."""
+        length = self._length
+        return Written(self._kept.getvalue()[: min(length, self._bound)], length)
 
 
 class _ThreadRoutedStream:
