@@ -264,7 +264,8 @@ the tool boundary:
 
 `worker.operation` is the tool that launched the program and `worker.code_sha256`
 matches `audit.code_sha256` of the timeout response that started it. Plain reads
-and file writers (`save_scene`, the screenshot tools) proceed. Recovery: wait for the program to finish; a program that uses
+and `save_scene` proceed; the pane captures are refused, as they run on Houdini's
+main thread. Recovery: wait for the program to finish; a program that uses
 `hou` ends when Houdini restarts, one that never touches Houdini ends only with
 the MCP server. Nothing clears the slot while the thread lives, because a cleared
 slot with a live thread would be a lie.

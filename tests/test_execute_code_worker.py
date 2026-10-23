@@ -17,6 +17,11 @@ import pytest
 from houdini_mcp.server import held
 from houdini_mcp.tools import create_node, execute_code, get_last_scene_diff, get_scene_info
 from houdini_mcp.tools.geometry import get_geo_summary
+from houdini_mcp.tools.pane_screenshot import (
+    capture_multiple_panes,
+    capture_pane_screenshot,
+    render_node_network,
+)
 from houdini_mcp.tools.rendering import render_quad_view, render_viewport
 from houdini_mcp.tools.workers import WORKERS, Admission, WorkerLedger, WorkerStillRunning
 from tests.conftest import SUMMARIZER, link_failure
@@ -97,16 +102,32 @@ class TestWorkerBlocksMutation:
         assert result["status"] == "success"
 
     async def test_file_writers_are_not_scene_writers(self, mock_connection, stalled_program):
-        """A screenshot is how a caller verifies the scene the warning tells it to verify."""
+        """A file outside the scene (save_scene's) is written beside a program still running."""
         _time_out(stalled_program)
 
         from houdini_mcp.tools._common import FILE_WRITE, tool
 
         @tool(FILE_WRITE)
-        def capture_pane_screenshot() -> dict:
+        def save_scene() -> dict:
             return {"status": "success"}
 
-        assert (await held(capture_pane_screenshot)())["status"] == "success"
+        assert (await held(save_scene)())["status"] == "success"
+
+    @pytest.mark.parametrize(
+        "capture", [capture_pane_screenshot, capture_multiple_panes, render_node_network]
+    )
+    async def test_pane_captures_wait_for_the_worker(
+        self, mock_connection, stalled_program, capture
+    ):
+        """A capture draws the pane on Houdini's main thread, whose call back into
+        this process must not reach the thread a running program holds on the link."""
+        _time_out(stalled_program)
+
+        args = (["SceneViewer"],) if capture is capture_multiple_panes else ()
+        result = await held(capture)(*args, host="localhost", port=18811)
+
+        assert result["kind"] == "worker_still_running"
+        assert result["operation"] == capture.__name__
 
     @pytest.mark.parametrize("render", [render_viewport, render_quad_view])
     async def test_render_tools_wait_for_the_worker(self, mock_connection, stalled_program, render):

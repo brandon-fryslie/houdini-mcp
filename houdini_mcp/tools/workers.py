@@ -91,7 +91,8 @@ class RunningWorker:
 HOW_A_WORKER_ENDS = (
     "Wait for it to finish, or restart Houdini: a program that uses hou ends when "
     "its connection drops, one that never touches Houdini ends only with the MCP "
-    "server. Tools that read the scene without running a program still work."
+    "server. Tools that read the scene without running a program or capturing a "
+    "pane still work."
 )
 
 

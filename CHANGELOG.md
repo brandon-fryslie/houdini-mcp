@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `capture_pane_screenshot`, `capture_multiple_panes` and `render_node_network`
+  return the pane as its own window draws it, where they copied whatever the
+  screen showed in the pane's rectangle (houdini-laws-etg.4k0). With another
+  application in front of Houdini, every capture was that application's
+  window, reported as the pane, and a Houdini menu open over a pane was part
+  of its picture. A pane on a secondary monitor is captured the same way, as
+  no screen is read. A capture with `fit_contents` shows the framed view: the
+  picture is taken once Houdini has drawn the frame.
+
 - Each call to `set_parameter`, `create_node`, `delete_node`, `connect_nodes`,
   `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
   `set_node_color`, `set_node_position`, `layout_children`,
@@ -58,6 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: `by the listener` when the listener closed, `by the client` otherwise.
 
 ### Changed
+
+- **BREAKING (deployment)**: `capture_pane_screenshot`, `capture_multiple_panes`
+  and `render_node_network` need the houdini_mcp plugin installed in the
+  Houdini they reach, as the editing tools below do (houdini-laws-etg.4k0):
+  they draw the pane on Houdini's main thread. Without it they fail saying to
+  install the plugin.
+
+- **BREAKING (wire)**: `capture_pane_screenshot`, `capture_multiple_panes` and
+  `render_node_network` have Houdini to themselves while they run
+  (houdini-laws-etg.4k0). A call that arrives during one waits for it and
+  reports the wait in `scene_wait`, and one waits for any call already
+  running. While an `execute_code` program is still running they are refused
+  with `kind: "worker_still_running"`, where they ran beside it.
 
 - **BREAKING (deployment)**: the fifteen editing tools listed under Fixed need
   the houdini_mcp plugin installed in the Houdini they reach, whether its

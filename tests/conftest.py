@@ -870,7 +870,7 @@ class MockHouModule:
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
-        self.ui = MockUi()
+        self.ui = MockUi(self.undos)
 
     def applicationVersionString(self) -> str:
         return self._version
@@ -1289,6 +1289,13 @@ class MockPaneTabType:
 
 
 class MockPaneTab:
+    """A pane tab and the window it draws into.
+
+    ``view`` is what the pane shows now, and ``drawn`` what it last drew, which is
+    what its window's grab returns: Houdini draws a change only once its main
+    thread is back in its event loop (:meth:`MockUi.idle`).
+    """
+
     def __init__(self, name: str, pane_type: MockEnumValue, width: int, height: int) -> None:
         self._name = name
         self._type = pane_type
@@ -1297,6 +1304,8 @@ class MockPaneTab:
         self._geometry.height.return_value = height
         self._geometry.x.return_value = 0
         self._geometry.y.return_value = 0
+        self.view = self.drawn = "as left"
+        self.ui: MockUi | None = None
 
     def name(self) -> str:
         return self._name
@@ -1306,6 +1315,29 @@ class MockPaneTab:
 
     def qtScreenGeometry(self) -> MagicMock:
         return self._geometry
+
+    def qtParentWindow(self) -> "MockPaneWindow":
+        assert self.ui is not None, f"{self._name} was not handed out by hou.ui"
+        return MockPaneWindow(self, self.ui)
+
+
+class MockPaneWindow:
+    """The window a pane draws into, at the screen's origin, as Qt grabs it: the
+    pane as it last drew, on Houdini's main thread alone."""
+
+    def __init__(self, pane: MockPaneTab, ui: "MockUi") -> None:
+        self._pane = pane
+        self._ui = ui
+
+    def mapFromGlobal(self, point: Any) -> Any:
+        return point
+
+    def grab(self, rect: Any) -> MagicMock:
+        if not self._ui.on_main_thread():
+            raise RuntimeError("a widget grab off Houdini's main thread hangs Houdini")
+        self._ui.grabs.append((self._pane.name(), self._pane.drawn, rect))
+        image = MagicMock(**{"save.return_value": True})
+        return MagicMock(**{"isNull.return_value": False, "toImage.return_value": image})
 
 
 class MockDesktop:
@@ -1321,10 +1353,21 @@ class MockDesktop:
 
 
 class MockUi:
-    """``hou.ui``: one current desktop holding the layout's pane tabs."""
+    """``hou.ui``: one current desktop holding the layout's pane tabs, and every
+    grab of a pane's window, as (pane name, what it showed, rectangle)."""
 
-    def __init__(self) -> None:
+    def __init__(self, undos: "MockUndos") -> None:
         self._desktop = MockDesktop("Build", [])
+        self._undos = undos
+        self.grabs: list[tuple[str, str, Any]] = []
+
+    def on_main_thread(self) -> bool:
+        return self._undos.on_main_thread
+
+    def idle(self) -> None:
+        """Houdini's event loop with nothing left to do: every pane has drawn what it shows."""
+        for tab in self._desktop.paneTabs():
+            tab.drawn = tab.view
 
     def curDesktop(self) -> MockDesktop:
         return self._desktop
@@ -1333,7 +1376,10 @@ class MockUi:
         return [self._desktop]
 
     def paneTabOfType(self, pane_type: MockEnumValue) -> MockPaneTab | None:
-        return next((tab for tab in self._desktop.paneTabs() if tab.type() is pane_type), None)
+        tab = next((tab for tab in self._desktop.paneTabs() if tab.type() is pane_type), None)
+        if tab is not None:
+            tab.ui = self
+        return tab
 
 
 class MockUndos:
@@ -1355,11 +1401,18 @@ class MockUndos:
         self._main_thread_calls = 0
         self.enabled = True
 
+    @property
+    def on_main_thread(self) -> bool:
+        return self._main_thread_calls > 0
+
     def enter_main_thread(self) -> None:
         self._main_thread_calls += 1
 
     def leave_main_thread(self) -> None:
         self._main_thread_calls -= 1
+        # The main thread is back in Houdini's event loop, which draws what changed.
+        if not self.on_main_thread:
+            self._hou.ui.idle()
 
     @contextlib.contextmanager
     def group(self, label: str) -> Generator[None, None, None]:

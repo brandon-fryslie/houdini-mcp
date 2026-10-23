@@ -13,7 +13,7 @@ import pytest
 from houdini_mcp.connection import houdini
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.pane_screenshot import (
-    _get_qt_modules,
+    _qt_core,
     capture_pane_screenshot,
     list_visible_panes,
     pane_type_member,
@@ -61,14 +61,11 @@ def test_qt_is_the_one_the_connected_houdini_names(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Houdini's hutil.PySide names the binding its build runs; the capture tools take that one."""
-    QtWidgets = object()
     QtCore = SimpleNamespace(__name__="PySide6.QtCore", qVersion=lambda: "6.8.3")
-    monkeypatch.setitem(
-        sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=QtWidgets, QtCore=QtCore)
-    )
+    monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtCore=QtCore))
 
     with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"):
-        assert _get_qt_modules(houdini().link()) == (QtWidgets, QtCore)
+        assert _qt_core(houdini().link()) is QtCore
 
     assert "Capturing through PySide6.QtCore, Qt 6.8.3" in caplog.messages
 
@@ -77,10 +74,10 @@ def test_a_houdini_whose_pyside_lacks_a_qt_module_has_its_qt_refused_naming_huti
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
     """hutil.PySide skips a submodule its binding cannot import; the capture is refused naming hutil.PySide."""
-    monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtCore=object()))
+    monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=object()))
 
-    with pytest.raises(OperationFailed, match=r"Houdini's Qt \(hutil\.PySide\).*QtWidgets"):
-        _get_qt_modules(houdini().link())
+    with pytest.raises(OperationFailed, match=r"Houdini's Qt \(hutil\.PySide\).*QtCore"):
+        _qt_core(houdini().link())
 
 
 @pytest.mark.parametrize("opened, saved", [(False, True), (True, False)])
@@ -154,10 +151,7 @@ def test_unknown_pane_type_is_refused_with_the_live_enum(
     resolves to a property) are refused alike, and the refusal is logged with
     how many pane types this Houdini has."""
     with (
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
     ):
         result = capture_pane_screenshot(name)
@@ -181,10 +175,7 @@ def test_capture_multiple_panes_that_captures_nothing_is_an_error_carrying_every
     from houdini_mcp.tools.failure import InvalidInputFailure
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(object(), object()),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()):
         result = capture_multiple_panes(["ChannelEditor", "thisown"])
 
     call = FAILURE.validate_python(result)
@@ -206,10 +197,7 @@ def test_capture_multiple_panes_of_nothing_is_success_over_no_slots(
     """Nothing asked is nothing failed: not an error with an empty cause."""
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(object(), object()),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()):
         result = capture_multiple_panes([])
 
     assert result == {"status": "success", "success_count": 0, "total_requested": 0, "results": {}}
@@ -224,16 +212,13 @@ def test_capture_multiple_panes_captures_a_pane_named_twice_once(
 
     attempts: list[str] = []
 
-    def capture(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+    def capture(link, main_thread, name, QtCore):  # type: ignore[no-untyped-def]
         attempts.append(name)
         return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
 
     with (
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools"),
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
         result = capture_multiple_panes(["SceneViewer", "NetworkEditor", "SceneViewer"])
@@ -255,15 +240,12 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
 
     attempts: list[str] = []
 
-    def capture(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+    def capture(link, main_thread, name, QtCore):  # type: ignore[no-untyped-def]
         attempts.append(name)
         raise OperationFailed(f"{name} not captured") from link_failure(EOFError("stream closed"))
 
     with (
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
         result = capture_multiple_panes(["SceneViewer", "NetworkEditor"])
@@ -271,6 +253,54 @@ def test_capture_multiple_panes_whose_pane_failed_on_the_link_fails_the_call(
     assert attempts == ["SceneViewer"]
     assert result["kind"] == "connection_lost", result
     assert houdini().link() is None
+
+
+def test_capture_multiple_panes_whose_main_thread_refused_fails_the_call(
+    mock_connection: MockHouModule,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refusal from Houdini's main thread is Houdini's, not the pane's: no later
+    pane is sent to wait out the same refusal, and the call fails saying why."""
+    from tests import conftest
+
+    for name, pane_type in (
+        ("panetab1", MockPaneTabType.NetworkEditor),
+        ("panetab2", MockPaneTabType.SceneViewer),
+    ):
+        mock_connection.ui.curDesktop().paneTabs().append(MockPaneTab(name, pane_type, 800, 600))
+    plugin = """
+asked = []
+
+def refusing(undos):
+    class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
+        @staticmethod
+        def call(fn):
+            asked.append(True)
+            return "Houdini's main thread did not begin the call within 30.0s"
+    return main_thread
+"""
+    with served_namespace(plugin) as plugins:
+        monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
+        with (
+            caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
+            patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),
+        ):
+            from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
+
+            result = capture_multiple_panes(["NetworkEditor", "SceneViewer"])
+        asked = len(plugins["asked"])
+
+    assert result["kind"] == "operation_failed", result
+    assert result["message"] == "Houdini's main thread did not begin the call within 30.0s"
+    assert asked == 1
+    assert mock_connection.ui.grabs == []
+    assert (
+        "Houdini's main thread refused NetworkEditor; the batch ends after 0 of 2 panes"
+        in caplog.messages
+    )
 
 
 def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
@@ -282,15 +312,12 @@ def test_capture_multiple_panes_with_a_pane_not_saved_is_partial(
     from houdini_mcp.tools.failure import OperationFailure
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
-    def capture(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+    def capture(link, main_thread, name, QtCore):  # type: ignore[no-untyped-def]
         return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
 
     (tmp_path / "SceneViewer.png").mkdir()  # a directory where the file must go
     with (
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
     ):
         result = capture_multiple_panes(["NetworkEditor", "SceneViewer"], str(tmp_path))
@@ -312,7 +339,7 @@ def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
     from houdini_mcp.tools.failure import OperationFailure
     from houdini_mcp.tools.pane_screenshot import capture_multiple_panes
 
-    def capture(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+    def capture(link, main_thread, name, QtCore):  # type: ignore[no-untyped-def]
         return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
 
     real_write = Path.write_bytes
@@ -323,10 +350,7 @@ def test_capture_multiple_panes_disk_timeout_is_the_panes_not_the_links(
         return real_write(self, data)
 
     with (
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         patch("houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes", capture),
         patch.object(Path, "write_bytes", write_bytes),
     ):
@@ -348,17 +372,14 @@ def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
     from houdini_mcp.tools._common import FAILURE
     from houdini_mcp.tools.pane_screenshot import _capture_pane_to_bytes, capture_multiple_panes
 
-    def capture_only_the_network_editor(link, name, QtWidgets, QtCore):  # type: ignore[no-untyped-def]
+    def capture_only_the_network_editor(link, main_thread, name, QtCore):  # type: ignore[no-untyped-def]
         if name == "NetworkEditor":
             return {"status": "success", "pane_type": name, "raw_bytes": b"png"}
-        return _capture_pane_to_bytes(link, name, QtWidgets, QtCore)
+        return _capture_pane_to_bytes(link, main_thread, name, QtCore)
 
     with (
         caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(object(), object()),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=object()),
         patch(
             "houdini_mcp.tools.pane_screenshot._capture_pane_to_bytes",
             capture_only_the_network_editor,
@@ -379,15 +400,24 @@ def test_capture_multiple_panes_with_a_pane_not_captured_is_partial(
     ]
 
 
-def _qt_grabbing(events: list[object]) -> tuple[MagicMock, MagicMock]:
-    """QtWidgets and QtCore whose screen grab records itself in ``events`` and yields b"png"."""
-    QtWidgets, QtCore = MagicMock(), MagicMock()
-    pixmap = QtWidgets.QApplication.instance.return_value.primaryScreen.return_value.grabWindow
-    pixmap.side_effect = lambda *_: (
-        events.append("grab") or MagicMock(**{"isNull.return_value": False})
+def _qt_core_double() -> SimpleNamespace:
+    """Houdini's QtCore as a capture uses it: points, rectangles as tuples, and a
+    buffer whose PNG is b"png". It has no screen to read; the pane's window is
+    the fake hou's (``MockPaneWindow``), which records each grab in ``hou.ui.grabs``."""
+    buffer = MagicMock(**{"open.return_value": True})
+    buffer.data.return_value.data.return_value = b"png"
+    return SimpleNamespace(
+        QPoint=lambda x, y: SimpleNamespace(x=lambda: x, y=lambda: y),
+        QRect=lambda *rect: rect,
+        QBuffer=lambda: buffer,
+        QIODevice=SimpleNamespace(WriteOnly=1),
     )
-    QtCore.QBuffer.return_value.data.return_value.data.return_value = b"png"
-    return QtWidgets, QtCore
+
+
+def _framed(events: list[object], pane: MockPaneTab, event: object) -> None:
+    """A frame of ``pane``, recorded in ``events``: the pane now shows its framed view."""
+    events.append(event)
+    pane.view = "framed"
 
 
 def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
@@ -406,22 +436,23 @@ def test_fit_contents_frames_every_item_of_the_network_shown_before_the_grab(
         sys.modules,
         "nodegraphview",
         SimpleNamespace(
-            frameItems=lambda *call, **options: events.append(("frameItems", *call, options))  # type: ignore[func-returns-value]
+            frameItems=lambda *call, **options: _framed(
+                events, call[0], ("frameItems", *call, options)
+            )
         ),
     )
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
     with (
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore),
     ):
         result = capture_pane_screenshot("NetworkEditor", fit_contents=True)
 
     assert result["status"] == "success", result
-    assert events == [("frameItems", editor, ("geo1", "dot1"), {"immediate": True}), "grab"]
+    assert events == [("frameItems", editor, ("geo1", "dot1"), {"immediate": True})]
+    # Grabbed once Houdini had drawn the framed view, on its main thread.
+    assert mock_connection.ui.grabs == [("panetab1", "framed", (0, 0, 800, 600))]
     assert "Framed 2 items of /obj" in caplog.messages
 
 
@@ -441,35 +472,34 @@ def test_render_node_network_frames_the_network_it_navigated_to(
     monkeypatch.setitem(
         sys.modules,
         "nodegraphview",
-        SimpleNamespace(frameItems=lambda _editor, items, **_: events.append(items)),  # type: ignore[func-returns-value]
+        SimpleNamespace(frameItems=lambda pane, items, **_: _framed(events, pane, items)),
     )
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
         result = render_node_network("/obj")
 
     assert result["status"] == "success", result
-    assert events == [("items of /obj",), "grab"]
+    assert events == [("items of /obj",)]
+    assert mock_connection.ui.grabs == [("panetab1", "framed", (0, 0, 800, 600))]
 
 
 def _viewport(
     events: list[object],
     name: str,
+    shown_in: MockPaneTab,
     *,
     visible: bool = True,
     camera: str | None = None,
     locked: bool = False,
 ) -> SimpleNamespace:
-    """A GeometryViewport that records its frameAll in ``events``."""
+    """A GeometryViewport of the viewer ``shown_in`` that records its frameAll in ``events``."""
     return SimpleNamespace(
         name=lambda: name,
         isVisible=lambda: visible,
         cameraPath=lambda: camera or "",
         isCameraLockedToView=lambda: locked,
-        frameAll=lambda: events.append(("frameAll", name)),  # type: ignore[func-returns-value]
+        frameAll=lambda: _framed(events, shown_in, ("frameAll", name)),
     )
 
 
@@ -481,24 +511,22 @@ def test_fit_contents_frames_every_viewport_a_scene_viewer_shows(
     events: list[object] = []
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
     viewer.viewports = lambda: (  # type: ignore[attr-defined]
-        _viewport(events, "persp"),
-        _viewport(events, "top"),
-        _viewport(events, "front", visible=False, camera="/obj/cam1", locked=True),
+        _viewport(events, "persp", viewer),
+        _viewport(events, "top", viewer),
+        _viewport(events, "front", viewer, visible=False, camera="/obj/cam1", locked=True),
     )
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
     with (
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore),
     ):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["status"] == "success", result
-    assert events == [("frameAll", "persp"), ("frameAll", "top"), "grab"]
+    assert events == [("frameAll", "persp"), ("frameAll", "top")]
+    assert mock_connection.ui.grabs == [("panetab1", "framed", (0, 0, 800, 600))]
     assert "Framed viewports ['persp', 'top']" in caplog.messages
 
 
@@ -509,12 +537,9 @@ def test_fit_contents_on_a_pane_houdini_cannot_frame_is_refused_naming_those_it_
     mock_connection.ui.curDesktop().paneTabs().append(
         MockPaneTab("panetab1", MockPaneTabType.Parm, 800, 600)
     )
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
         result = capture_pane_screenshot("Parm", fit_contents=True)
 
     assert result["kind"] == "invalid_input", result
@@ -533,16 +558,13 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
     def refuse() -> None:
         raise RuntimeError("viewport is gone")
 
-    viewport = _viewport(events, "persp")
+    viewport = _viewport(events, "persp", viewer)
     viewport.frameAll = refuse
     viewer.viewports = lambda: (viewport,)  # type: ignore[attr-defined]
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
@@ -560,16 +582,13 @@ def test_fit_contents_refuses_a_viewport_whose_view_moves_its_camera(
     events: list[object] = []
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
     viewer.viewports = lambda: (  # type: ignore[attr-defined]
-        _viewport(events, "persp", locked=True),
-        _viewport(events, "top", camera="/cameras/camera1", locked=True),
+        _viewport(events, "persp", viewer, locked=True),
+        _viewport(events, "top", viewer, camera="/cameras/camera1", locked=True),
     )
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
@@ -583,19 +602,41 @@ def test_a_capture_refused_before_the_grab_leaves_the_view_unframed(
     """A pane Houdini cannot measure is refused before its view is touched."""
     events: list[object] = []
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, -1, -1)
-    viewer.viewports = lambda: (_viewport(events, "persp"),)  # type: ignore[attr-defined]
+    viewer.viewports = lambda: (_viewport(events, "persp", viewer),)  # type: ignore[attr-defined]
     mock_connection.ui.curDesktop().paneTabs().append(viewer)
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
-    with patch(
-        "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-        return_value=(QtWidgets, QtCore),
-    ):
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
     assert "invalid geometry" in result["message"]
     assert events == []
+
+
+def test_a_capture_holds_houdinis_main_thread_for_the_grab_not_the_encoding(
+    mock_connection: MockHouModule,
+) -> None:
+    """The PNG is encoded off Houdini's main thread, so Houdini's UI waits only for the grab."""
+    mock_connection.ui.curDesktop().paneTabs().append(
+        MockPaneTab("panetab1", MockPaneTabType.NetworkEditor, 800, 600)
+    )
+    QtCore = _qt_core_double()
+    buffer = QtCore.QBuffer()
+    encoded_on_main_thread: list[bool] = []
+
+    def encoding() -> MagicMock:
+        encoded_on_main_thread.append(mock_connection.undos.on_main_thread)
+        return buffer
+
+    QtCore.QBuffer = encoding
+
+    with patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore):
+        result = capture_pane_screenshot("NetworkEditor")
+
+    assert result["status"] == "success", result
+    assert len(mock_connection.ui.grabs) == 1
+    assert encoded_on_main_thread == [False]
 
 
 def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
@@ -606,17 +647,16 @@ def test_without_fit_contents_the_pane_is_captured_as_the_user_left_it(
     mock_connection.ui.curDesktop().paneTabs().append(
         MockPaneTab("panetab1", MockPaneTabType.Parm, 800, 600)
     )
-    QtWidgets, QtCore = _qt_grabbing(events)
+    QtCore = _qt_core_double()
 
     with (
         caplog.at_level(logging.INFO, logger="houdini_mcp.tools.pane_screenshot"),
-        patch(
-            "houdini_mcp.tools.pane_screenshot._get_qt_modules",
-            return_value=(QtWidgets, QtCore),
-        ),
+        patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=QtCore),
     ):
         result = capture_pane_screenshot("Parm")
 
     assert result["status"] == "success", result
-    assert events == ["grab"]
+    assert events == []
+    assert mock_connection.ui.grabs == [("panetab1", "as left", (0, 0, 800, 600))]
     assert "Left panetab1 as shown" in caplog.messages
+    assert "Grabbed Parm from its window: 3 PNG bytes" in caplog.messages

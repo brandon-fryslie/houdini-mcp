@@ -5,6 +5,7 @@ backs up the scene's unsaved work first."""
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from typing import Any
@@ -22,11 +23,13 @@ from houdini_mcp.tools import (
 )
 from houdini_mcp.tools._common import UNDOABLE, InvalidInput, tool, using
 from houdini_mcp.tools.transactions import (
-    SceneAccess,
+    FILE_WRITE_ON_MAIN_THREAD,
+    MainThread,
     ToolPolicy,
     TransactionPolicy,
     policy_of,
 )
+from houdini_mcp.tools.workers import Admission
 from tests import conftest
 from tests.conftest import MockHouModule, MockUndos, link_failure, raised_inside_houdini
 
@@ -48,7 +51,78 @@ def test_render_tools_need_no_recovery(render_tool):
 )
 def test_a_scene_writer_cannot_share_the_scene(recovery):
     with pytest.raises(ValueError, match="cannot share it"):
-        ToolPolicy(recovery, SceneAccess.SHARED)
+        ToolPolicy(recovery, Admission.SHARED)
+
+
+def test_an_undoable_tool_off_the_main_thread_is_refused():
+    """Houdini records an undo group only on its main thread."""
+    with pytest.raises(ValueError, match="runs on Houdini's main thread"):
+        ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE)
+
+
+@pytest.mark.parametrize("recovery", [None, *TransactionPolicy])
+@pytest.mark.parametrize("access", list(Admission))
+def test_only_a_body_not_already_on_the_main_thread_drives_it(recovery, access):
+    """An undoable body is put on the main thread whole by its recovery; any other
+    call admitted there posts its own work, and is the one handed the main thread."""
+    try:
+        policy = ToolPolicy(recovery, access)
+    except ValueError:
+        pytest.skip("not a policy any tool may have")
+    assert policy.drives_main_thread is (
+        access is Admission.EXCLUSIVE_ON_MAIN_THREAD and recovery is not TransactionPolicy.UNDOABLE
+    )
+
+
+def _drives(
+    host: str = "localhost", port: int = 18811, *, main_thread: MainThread
+) -> dict[str, Any]:
+    return {"status": "success"}
+
+
+def _drives_without_it(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+    return {"status": "success"}
+
+
+async def _drives_async(
+    host: str = "localhost", port: int = 18811, *, main_thread: MainThread
+) -> dict[str, Any]:
+    return {"status": "success"}
+
+
+@pytest.mark.parametrize(
+    "policy, body",
+    [
+        (FILE_WRITE_ON_MAIN_THREAD, _drives_without_it),
+        (FILE_WRITE_ON_MAIN_THREAD, _drives_async),
+        (UNDOABLE, _drives),
+    ],
+    ids=["driver_without_it", "async_driver", "undoable_with_it"],
+)
+def test_the_main_thread_goes_only_to_a_sync_tool_whose_policy_drives_it(policy, body):
+    """Where the main thread is handed over is checked where the tool is declared,
+    so no tool can post to it under a policy the ledger did not admit it by."""
+    with pytest.raises(TypeError, match="takes main_thread exactly when"):
+        tool(policy)(body)
+
+
+def test_a_driving_tool_is_handed_the_main_thread_its_callers_cannot_pass(mock_connection):
+    """The parameter is the boundary's: callers and the server see the tool
+    without it, and the body's work posted with it runs on Houdini's main thread."""
+    ran_on: list[bool] = []
+
+    @tool(FILE_WRITE_ON_MAIN_THREAD)
+    def drives(host: str = "localhost", port: int = 18811, *, main_thread: MainThread):
+        with using(host, port) as link:
+            main_thread.call(link, lambda: ran_on.append(mock_connection.undos.areEnabled()))
+        return {"status": "success"}
+
+    assert "main_thread" not in inspect.signature(drives).parameters
+    assert drives() == {"status": "success"}
+    # Houdini records undo groups only on its main thread, so the fake's are on there alone.
+    assert ran_on == [True]
+    with pytest.raises(TypeError):
+        drives(main_thread=MainThread())
 
 
 async def _async_body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
