@@ -1,7 +1,8 @@
 # Houdini MCP Server Documentation
 
-Each tool's arguments and results are what the server publishes to an MCP client
-with the tool. These documents cover what a single tool's description does not.
+An MCP client gets each tool's arguments as its published schema and what it
+returns from its description. These documents cover what a single tool's
+description does not.
 
 | Document | Read it to learn |
 |----------|------------------|

@@ -4,8 +4,9 @@ This document clarifies the input/output contracts for Houdini MCP tools and doc
 
 A call written here as `render_viewport(resolution=[512, 512])` stands for an MCP
 call with the arguments `{"resolution": [512, 512]}`; it is not Python a client
-runs. `tests/test_tool_contracts.py` sends every such call to the server, so each
-one is accepted, or refused when it sits under a ❌ heading.
+runs. `tests/test_tool_contracts.py` sends every call in this document's python
+blocks to the server, so each one is accepted, or refused when it sits under a ❌
+heading.
 
 ## Every Tool: Large Results Arrive as a File
 
@@ -55,7 +56,7 @@ it reads back as exactly the JSON.
 ```python
 execute_code(
     code="""
-import hou  # This will fail with ModuleNotFoundError
+import hou  # execute_code refuses this program before it runs
 node = hou.node('/obj')
 """
 )
@@ -74,9 +75,7 @@ geo = node.createNode('geo', 'my_geo')
 
 ### Why This Happens
 
-The `execute_code` tool runs your code remotely in Houdini via RPyC. It injects the remote `hou` object directly into your execution namespace. The `hou` module is not installed in the Python environment where the MCP server runs, so attempting to import it will fail.
-
-If you try to import `hou`, you'll now receive a helpful error message:
+`execute_code` puts the remote `hou` object in your program's globals over RPyC, so the program needs no import. `execute_code` refuses a program that imports `hou` before connecting to Houdini, and nothing in it runs:
 
 ```json
 {
@@ -252,8 +251,9 @@ Both `render_viewport` and `render_quad_view` enforce resolution limits:
 - **Minimum:** 64x64 pixels
 - **Maximum:** 4096x4096 pixels
 
-The served schema refuses a resolution outside them, so the call fails at the MCP
-boundary as a protocol error and never reaches Houdini.
+The served schema refuses a resolution outside them before the tool runs. The
+result has MCP's `isError` set and the validation message as its text, and none of
+the `status` or `kind` fields a tool's own failure carries.
 
 ## Common Patterns
 

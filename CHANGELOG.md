@@ -556,8 +556,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-tuneup-ef3.6yb). Its render example read `image_base64` from the
   result, but a render's image is usually over the 16KB bound and arrives in the
   result file; its `import hou` refusal now shows `kind` and `retry`; and an
-  out-of-range resolution is a schema refusal at the MCP boundary, not an error
-  result. The doc now says its `tool(arg=value)` calls are MCP arguments.
+  out-of-range resolution is refused by the schema before the tool runs, with
+  `isError` set and no `status` or `kind`. The doc now says its `tool(arg=value)`
+  calls are MCP arguments.
 - The plugin installed as README describes now loads (houdini-tuneup-ef3.0ho). The
   package JSON set the plugin root to the packages directory itself, so Houdini
   found neither `houdini_mcp_plugin`, `houdini_mcp_handshake` nor

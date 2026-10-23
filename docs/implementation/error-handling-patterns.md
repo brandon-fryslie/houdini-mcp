@@ -241,8 +241,9 @@ MCP boundary before the call reaches Houdini. The render inputs are the model
 (`houdini_mcp/tools/_common.py`, `Resolution` and `Vec3`): a pair of integers in
 64–4096 and a triple of numbers. The server validates strictly
 (`strict_input_validation` in `houdini_mcp/server.py`), so it refuses exactly
-what the published schema refuses. A call that fails the schema is a protocol
-error to the client, never an error result. `tests/test_tool_contracts.py`
+what the published schema refuses. A call that fails the schema never reaches the
+tool: the client gets a result with MCP's `isError` set and the validation message
+as its text, not one of the arms below. `tests/test_tool_contracts.py`
 asserts the schema and the server's refusals agree.
 
 ## Usage Patterns
@@ -286,8 +287,9 @@ def render_viewport(
 ### Pattern 3: Tool with Multiple Error Sources
 
 `execute_code` (`houdini_mcp/tools/code.py`) refuses a program before it
-connects: `_blocked` raises `InvalidInput` for a program that does not parse, an
-`import hou`, a mutation under `read-only`, or a rail the caller did not unlock.
+connects: it raises `_blocked(...)`, which builds the `InvalidInput`, for a program
+that does not parse, an `import hou`, a mutation under `read-only`, or a rail the
+caller did not unlock.
 Once the program runs, it raises `OperationFailed` when the program raised, and
 `ProgramStillRunning` when the program outlived its timeout. Every failure is
 raised; none is a dict the body builds.
@@ -310,9 +312,10 @@ def test_reads_my_double(self, connected_to):
 
 ### Testing Connection Errors
 
-`TestConnectionErrorHandling` in `tests/test_tools.py` raises each transport
-failure from a patched `ensure_connected` and reads the arm the decorator
-returns; `test_get_scene_info_handles_timeout` is the `timeout` case.
+`TestConnectionErrorHandling` in `tests/test_tools.py` raises each exception from a
+stub tool under the decorator and reads the arm it returns, including the errors
+that leave the connection standing. `test_get_scene_info_handles_timeout` raises a
+timeout from a real tool's patched `ensure_connected`.
 
 `tests/test_failure.py` parses every arm the boundary emits back through `FAILURE`
 and refuses a response relabelled as another kind or as success.
@@ -327,8 +330,10 @@ MCP client, not by calling the tool function. See
 ## Best Practices
 
 1. **Always use the decorator** - Don't write try/except for connection errors in tool functions
-2. **Validate early** - Check inputs before connecting to Houdini
-3. **Raise, don't build error dicts** - `InvalidInput`, `OperationFailed` or `TimedOut`
+2. **Refuse before connecting** - a check that needs no Houdini, like `execute_code`'s
+   program gates, runs before `ensure_connected`; input shape belongs in the
+   parameter types (see Input Validation)
+3. **Raise, don't build error dicts** - one of the exceptions under Key Components,
    with the fields the caller needs; the boundary shapes the response, so every
    tool's failure reads the same and a new tool cannot invent a shape
 4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you
