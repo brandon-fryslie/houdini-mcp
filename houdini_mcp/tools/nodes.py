@@ -104,7 +104,8 @@ def get_node_info(
         max_params: Most parameter values returned under detail="full" (default: 50)
 
     Returns:
-        Node information at the requested detail. When cook_info is not "none",
+        Node information at the requested detail; a type_description Houdini
+        would not give is {unread}. When cook_info is not "none",
         also includes cook_info with cook_state, errors, and warnings (and
         last_cook_time after a forced cook). cook_state is "error" (Houdini
         lists errors on the node), "uncooked" (never cooked), "dirty" (cooked,
@@ -167,12 +168,14 @@ def _standard_record(node: Any) -> dict[str, Any]:
     # [LAW:one-source-of-truth] "inputs" and "input_connections" describe the same
     # wires, so both come from one read of the connection records.
     connections = input_connections(node)
+    path = node.path()
     info: dict[str, Any] = {
         "status": "success",
-        "path": node.path(),
+        "path": path,
         "name": node.name(),
         "type": node.type().name(),
-        "type_description": node.type().description(),
+        # a broken HDA definition refuses its description; the node is still there
+        "type_description": read(f"description of {path}'s type", node.type().description),
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
