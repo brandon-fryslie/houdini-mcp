@@ -1081,18 +1081,28 @@ class TestSceneOperations:
             "Loaded /path/to/scene.hip; Houdini's load warnings: None"
         ]
 
-    def test_a_load_that_failed_still_drops_the_caches(self, mock_connection):
-        """Houdini may have replaced the scene before the load raised."""
-        from houdini_mcp.tools import list_node_types, load_scene
+    @pytest.mark.parametrize(
+        ("replace", "houdini_call"),
+        [
+            (lambda tools: tools.load_scene("/scenes/truncated.hip"), "load"),
+            (lambda tools: tools.new_scene(), "clear"),
+        ],
+        ids=["load_scene", "new_scene"],
+    )
+    def test_a_scene_replacement_that_failed_still_drops_the_caches(
+        self, mock_connection, replace, houdini_call
+    ):
+        """Houdini may have replaced the scene before the call raised."""
+        from houdini_mcp import tools
 
-        mock_connection.hipFile.load.side_effect = OperationFailed(
+        getattr(mock_connection.hipFile, houdini_call).side_effect = OperationFailed(
             "The attempted operation failed."
         )
-        assert list_node_types()["_cache_info"]["hit"] is False
-        assert list_node_types()["_cache_info"]["hit"] is True
+        assert tools.list_node_types()["_cache_info"]["hit"] is False
+        assert tools.list_node_types()["_cache_info"]["hit"] is True
 
-        assert load_scene("/scenes/truncated.hip")["status"] == "error"
-        assert list_node_types()["_cache_info"]["hit"] is False
+        assert replace(tools)["status"] == "error"
+        assert tools.list_node_types()["_cache_info"]["hit"] is False
 
     def test_a_load_houdini_warned_about_is_a_load_carrying_its_warning(
         self, mock_connection, caplog
