@@ -14,7 +14,6 @@ from ._common import (
     OperationFailed,
     node_at,
     node_category,
-    node_flag,
     tool,
     using,
 )
@@ -186,8 +185,11 @@ def set_node_flags(
     Set display, render, and bypass flags on a node.
 
     Only non-None values are set, allowing partial flag updates. A flag the node's
-    class does not have is refused before any flag is set, and each flag set is
-    reported as Houdini holds it after the write.
+    class does not have is refused before any flag is set: an object has only a
+    display flag, a ROP only bypass. A flag Houdini does not set as asked fails the
+    call, and the flags it set before are undone: a SOP network keeps its display
+    and render flags on one node, so to move one, set it True on the node that
+    should have it; setting it False fails.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
@@ -196,8 +198,8 @@ def set_node_flags(
         bypass: Bypass flag value (True/False) or None to skip
 
     Returns:
-        Dict with status, node_path, message, and flags_set: each flag set, as
-        Houdini holds it.
+        Dict with status, node_path, message, and flags_set: each flag set, read
+        back from Houdini.
 
     Examples:
         set_node_flags("/obj/geo1/sphere1", display=True, render=True)
@@ -214,12 +216,16 @@ def set_node_flags(
             for flag, value in (("display", display), ("render", render), ("bypass", bypass))
             if value is not None
         }
-        # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
-        # AttributeError Houdini raises while writing is a refused write, not a flag
-        # the node lacks
-        found = {flag: getattr(node, FLAGS[flag].write, None) for flag in requested}
-        setters = {flag: setter for flag, setter in found.items() if setter is not None}
-        lacking = [flag for flag in requested if flag not in setters]
+        # A flag is the node's when its class has both its methods: one this call
+        # cannot read back is one it cannot report. [LAW:no-silent-failure] looked up,
+        # then called, as node_flag reads: an AttributeError Houdini raises while
+        # writing or reading is a refused call, not a flag the node lacks
+        found = {
+            flag: (getattr(node, FLAGS[flag].read, None), getattr(node, FLAGS[flag].write, None))
+            for flag in requested
+        }
+        methods = {flag: pair for flag, pair in found.items() if all(m is not None for m in pair)}
+        lacking = [flag for flag in requested if flag not in methods]
         if lacking:
             raise InvalidInput(
                 f"{node_path} ({node.type().name()}) has no {' or '.join(lacking)} flag; "
@@ -230,11 +236,12 @@ def set_node_flags(
 
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
-            setters[flag](value)
-            # Each flag is reported as Houdini holds it after the write, not as it was
-            # asked for: a SOP network keeps its display and render flags on one node,
-            # so turning either off writes nothing. [LAW:no-silent-failure]
-            held = node_flag(node, FLAGS[flag].read)
+            read, write = methods[flag]
+            write(value)
+            # Each flag is read back after its write, not taken as asked for: a SOP
+            # network keeps its display and render flags on one node, so turning
+            # either off writes nothing. [LAW:no-silent-failure]
+            held = bool(read())
             if held != value:
                 raise OperationFailed(
                     f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",

@@ -2575,14 +2575,18 @@ class TestSetNodeFlags:
         assert "Node not found" in result["message"]
 
     def test_set_node_flags_mixed_values(self, mock_connection):
-        """Turning an object's display flag off leaves its render flag as it was."""
+        """Setting a SOP's display flag leaves its render flag as it was."""
         from houdini_mcp.tools import set_node_flags
 
-        geo = mock_connection.node("/obj").createNode("geo", "geo1")
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
+        sphere._display_flag = False
+        sphere._render_flag = False
+        mock_connection.add_node(sphere)
 
         result = set_node_flags(
-            "/obj/geo1",
-            display=False,
+            "/obj/geo1/sphere1",
+            display=True,
             render=None,
             bypass=None,
             host="localhost",
@@ -2590,9 +2594,24 @@ class TestSetNodeFlags:
         )
 
         assert result["status"] == "success"
-        assert result["flags_set"] == {"display": False}
-        assert geo.isDisplayFlagSet() is False
-        assert geo.isRenderFlagSet() is True  # Unchanged
+        assert result["flags_set"] == {"display": True}
+        assert sphere.isDisplayFlagSet() is True
+        assert sphere.isRenderFlagSet() is False  # Unchanged
+
+    def test_set_node_flags_a_flag_it_cannot_read_back_is_refused(self, mock_connection):
+        """A flag is the node's only when its class can both write and read it."""
+        from houdini_mcp.tools import set_node_flags
+
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        noise = MockNodeLacking(
+            path="/obj/geo1/noise1", name="noise1", node_type="attribnoise", lacks=("isBypassed",)
+        )
+        mock_connection.add_node(noise)
+
+        result = set_node_flags("/obj/geo1/noise1", bypass=True)
+
+        assert (result["kind"], result["flags"]) == ("invalid_input", ["bypass"]), result
+        assert noise._bypass is False
 
 
 class TestReorderInputs:
