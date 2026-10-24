@@ -2,10 +2,11 @@
 
 Two kinds of holder share one slot. A tool call that needs the scene to itself
 holds it for its whole body. ``execute_code`` runs the caller's program in its
-own thread inside an open undo group. Python cannot kill that thread, so after a
-timeout the program keeps mutating the scene while the tool has already
-returned. Any write alongside either kind of holder would interleave with it,
-and the undo stack would attribute the mix to nobody.
+own thread, as one undo step on Houdini's main thread. At its timeout the tool
+cuts the program off from Houdini and returns, but Python cannot kill the
+thread, which runs on until it ends. Any write alongside a call holding the
+scene would interleave with it, and the undo stack would attribute the mix to
+nobody.
 
 [LAW:no-ambient-temporal-coupling] Holding is therefore explicit state with one
 owner, :class:`WorkerLedger`. A call takes the slot and releases it when its body
@@ -55,8 +56,9 @@ class Admission(StrEnum):
 
 @dataclass(frozen=True)
 class RunningWorker:
-    """One program running in its own thread, undo group open until it ends, and
-    any reads its tool makes around it in that thread.
+    """One program running in its own thread - one undo step on Houdini's main
+    thread until it ends or its timeout cuts it off from Houdini - and any reads
+    its tool makes around it in that thread.
 
     ``operation`` is the tool that launched it.
     """
@@ -85,13 +87,13 @@ class RunningWorker:
 
 
 # How a running worker ends, told the same way in the timeout warning and in
-# every refusal: Python cannot stop the thread, so only the program's own end,
-# or the loss of the Houdini it talks to, releases the slot.
+# every refusal: Python cannot stop the thread, so only the program's own end
+# releases the slot.
 HOW_A_WORKER_ENDS = (
-    "Wait for it to finish, or restart Houdini: a program that uses hou ends when "
-    "its connection drops, one that never touches Houdini ends only with the MCP "
-    "server. Tools that read the scene without running a program or capturing a "
-    "pane still work."
+    "Wait for it to finish: cut off from Houdini, a program that uses hou ends at "
+    "its next request, and one that never touches Houdini again ends only with the "
+    "MCP server. Tools that read the scene without running a program or capturing "
+    "a pane still work."
 )
 
 
@@ -135,8 +137,8 @@ class WorkerStillRunning(RuntimeError):
             f"{operation} refused: a program launched by {worker.operation} "
             f"(sha256 {worker.code_sha256[:12]}, "
             f"started {worker.running_for_seconds():.1f}s ago, timeout {worker.timeout}s) is "
-            "still holding Houdini - running with its undo group open, or reading the scene "
-            f"around itself - and this call would interleave with it. {HOW_A_WORKER_ENDS}"
+            "still running, cut off from Houdini at its timeout, and no call that needs "
+            f"the scene to itself runs until it ends. {HOW_A_WORKER_ENDS}"
         )
 
 
@@ -187,8 +189,8 @@ class WorkerLedger:
     call is refused naming that worker. The slot passes from a call straight
     to the next one admitted, so nothing can take the scene between them. A
     worker's slot is filled before its thread starts and cleared by the thread
-    itself once its target has ended - the program, its undo group, and any
-    scene reads around it - so :meth:`running` is ``None`` exactly when no
+    itself once its target has ended - the program, its undo step's recovery,
+    and any scene reads around it - so :meth:`running` is ``None`` exactly when no
     worker is using Houdini. Callers ask the ledger, never the thread: the
     thread outlives the slot by a log line.
     """

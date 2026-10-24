@@ -23,15 +23,11 @@ from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["CLIENT_SILENCE_TIMEOUT", "PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
+__all__ = ["PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
 not run late, once they pass. How long the call then runs is the call's own."""
-
-CLIENT_SILENCE_TIMEOUT = 60.0
-"""Seconds the main thread waits, while a call is out to its client, for the
-client to send anything before it gives the call up."""
 
 
 class _State(Enum):
@@ -107,28 +103,36 @@ class _Call:
         return self._refusal
 
 
-def _call_while_heard(fn: Callable[[], Any]) -> Any:
+def _call_while_heard(fn: Callable[[], Any], silence: float) -> Any:
     """Call ``fn`` for as long as its client is heard from.
 
     ``fn`` is the client's function, a netref: called plainly, its reply would
     be bounded by this connection's sync timeout, which bounds one request and
     would here bound the client's whole call. Instead the main thread serves
     the connection until the reply comes, and gives up only on a client that
-    sends nothing for ``CLIENT_SILENCE_TIMEOUT``: one whose link is half-open
-    would otherwise hold the main thread, and a graphical Houdini's
-    interface, for good. A request the client sends is served inside that
-    wait, so a long cook it asks for is not silence.
+    sends nothing for ``silence`` seconds, a bound the client sets because it
+    knows its work: one whose link is half-open would otherwise hold the main
+    thread, and a graphical Houdini's interface, for good. A request the client
+    sends is served inside that wait, so a long cook it asks for is not silence.
+
+    A client given up on has its connection closed: its later requests would
+    otherwise be served off the main thread, outside the call they belong to.
     """
     import rpyc
 
     reply = rpyc.async_(fn)()
     conn = object.__getattribute__(fn, "____conn__")
     while not reply.ready:
-        if not conn.serve(CLIENT_SILENCE_TIMEOUT):
-            raise TimeoutError(
-                f"The client sent nothing for {CLIENT_SILENCE_TIMEOUT}s while its call was "
-                "out on Houdini's main thread, so the main thread gave the call up."
+        if not conn.serve(silence):
+            given_up = (
+                f"The client sent nothing for {silence}s while its call was out on "
+                "Houdini's main thread, so the main thread gave the call up and closed "
+                "its connection."
             )
+            # The client hears only the close, so the reason is told here.
+            logger.warning(given_up)
+            conn.close()
+            raise TimeoutError(given_up)
     # ``value``: an async result raises what the call raised only when read.
     return reply.value
 
@@ -188,8 +192,9 @@ class _Drain:
 _drain = _Drain()
 
 
-def call(fn: Callable[[], Any]) -> str | None:
-    """Call ``fn`` on Houdini's main thread and wait for it to return.
+def call(fn: Callable[[], Any], silence: float) -> str | None:
+    """Call ``fn`` on Houdini's main thread and wait for it to return, giving it
+    up once its client has sent nothing for ``silence`` seconds.
 
     Returns:
         None once ``fn`` has returned, or why the main thread refused the
@@ -198,10 +203,10 @@ def call(fn: Callable[[], Any]) -> str | None:
     Raises:
         Exception: whatever calling ``fn`` raised.
     """
-    return _posted(_Call(lambda: _call_while_heard(fn)))
+    return _posted(_Call(lambda: _call_while_heard(fn, silence)))
 
 
-def call_as_step(fn: Callable[[], Any], label: str) -> str | None:
+def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | None:
     """As :func:`call`, ``fn``'s edits one undo step labelled ``label``.
 
     The undo group is Houdini's own, opened and closed on the main thread
@@ -215,7 +220,7 @@ def call_as_step(fn: Callable[[], Any], label: str) -> str | None:
         import hou
 
         with hou.undos.group(label):
-            _call_while_heard(fn)
+            _call_while_heard(fn, silence)
 
     return _posted(_Call(as_step))
 

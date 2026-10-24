@@ -8,6 +8,7 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 
 import logging
 import random
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -217,6 +218,24 @@ class Link:
             self.conn.close()
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
+
+    def cut_off(self) -> None:
+        """End the link under a thread that may be waiting on it, which then closes it.
+
+        [LAW:no-ambient-temporal-coupling] Only the thread serving a socket closes it:
+        on macOS a socket closed under a thread polling it leaves that poll asleep
+        until its request's timeout (0 of 40 polls woke in a bare-socket repro). Shut
+        down, it reads as ended at once (40 of 40): a waiting request fails and rpyc
+        closes the link from that thread, a thread not waiting fails at its next
+        request, and Houdini reads the end as it reads a close.
+        """
+        try:
+            # A dup is shut down and closed here; the socket being polled is left open.
+            # socket.dup duplicates a Windows socket handle too, which os.dup cannot.
+            with socket.socket(fileno=socket.dup(self.conn.fileno())) as sock:
+                sock.shutdown(socket.SHUT_RDWR)
+        except Exception as e:
+            logger.warning(f"Error cutting off {self.name}: {e}")
 
     def info(self) -> dict[str, Any]:
         """The Houdini this link reaches: where, version, build and current hip file.
@@ -432,14 +451,32 @@ class HoudiniConnection:
         replaced must not drop the replacement it never used.
         """
         with self._lock:
-            installed = self._link is link
-            if installed:
-                self._link = None
+            installed = self._uninstall(link)
             link.close()
             logger.info(
                 f"Dropped failed link to Houdini at {link.name} "
                 f"({'was installed' if installed else 'not installed'})"
             )
+
+    def cut_off(self, link: Link) -> None:
+        """End ``link`` under the thread using it (:meth:`Link.cut_off`), and uninstall
+        it if it is still the installed one, so the next call opens a fresh link: a link
+        cut off reads as open until its user has closed it."""
+        with self._lock:
+            installed = self._uninstall(link)
+            link.cut_off()
+            logger.info(
+                f"Cut off link to Houdini at {link.name} "
+                f"({'was installed' if installed else 'not installed'})"
+            )
+
+    def _uninstall(self, link: Link) -> bool:
+        """Uninstall ``link`` if it is the installed one, saying whether it was; the
+        caller holds the lock."""
+        installed = self._link is link
+        if installed:
+            self._link = None
+        return installed
 
     def info(self, host: str, port: int) -> dict[str, Any]:
         """Connection state for diagnostics: the Houdini reached when connected, else

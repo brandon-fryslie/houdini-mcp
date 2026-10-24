@@ -66,7 +66,7 @@ class TestWorkerBlocksMutation:
         assert result["worker"]["code_sha256"] == result["audit"]["code_sha256"]
         assert result["worker"]["running_for_seconds"] >= 1
         assert result["worker"]["timeout"] == 1
-        assert "refused until this worker finishes" in result["warning"]
+        assert "refused until then" in result["warning"]
         assert "ends only with the MCP server" in result["warning"]
 
     async def test_writing_tool_is_refused_and_writes_nothing(
@@ -190,22 +190,22 @@ class TestWorkerBlocksMutation:
 
 
 class TestATimedOutRunsDiff:
-    def test_appears_once_the_program_ends(self, mock_connection, stalled_program, caplog):
+    def test_none_appears_once_the_cut_off_program_ends(
+        self, mock_connection, stalled_program, caplog
+    ):
+        """Its changes were undone at its timeout, so what it returns once it ends is
+        not the call's, and it leaves no diff."""
         program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
         _time_out(program, capture_diff=True)
-        assert get_last_scene_diff()["status"] == "warning"
         worker = WORKERS.running()
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             mock_connection.stall_gate.set()
             worker.thread.join(5)
-        # The diff's event says it came late: the program ran its whole timeout.
-        # The record carries the exact duration; the text rounds it to milliseconds.
-        [event] = [r for r in caplog.records if "scene diff of /obj" in r.getMessage()]
-        _operation, _root, took, timeout, *_counts = event.args
-        assert took >= timeout
-        assert get_last_scene_diff()["diff"]["added_nodes"] == [
-            {"path": "/obj/late", "type": "geo"}
-        ]
+
+        [ended] = [r.getMessage() for r in caplog.records if " program ended " in r.getMessage()]
+        assert "faults=['undo step']" in ended
+        assert get_last_scene_diff()["status"] == "warning"
+        assert mock_connection.node("/obj/late") is None
 
     def test_a_wait_that_wakes_early_does_not_cut_the_timeout_short(
         self, mock_connection, stalled_program, monkeypatch
@@ -244,9 +244,9 @@ class TestATimedOutRunsDiff:
         installed since."""
         from houdini_mcp.connection import houdini
 
+        used = houdini().link()
         _time_out(program, capture_diff=True)
         lose()
-        used = houdini().link()
         connected_to(mock_connection)
         replacement = houdini().link()
         worker = WORKERS.running()
@@ -254,27 +254,6 @@ class TestATimedOutRunsDiff:
             mock_connection.stall_gate.set()
             worker.thread.join(5)
         return used, replacement
-
-    def test_a_late_diff_that_lost_its_link_drops_that_link_alone(
-        self, mock_connection, connected_to, stalled_program, monkeypatch, caplog
-    ):
-        from houdini_mcp.connection import houdini
-
-        def lost(_command):
-            raise link_failure(EOFError("connection closed by peer"))
-
-        program = f"hou.node('/obj').createNode('geo', 'late')\n{stalled_program}"
-        used, replacement = self._late_failure_on_a_replaced_link(
-            mock_connection,
-            connected_to,
-            program,
-            lambda: monkeypatch.setattr(mock_connection, "hscript", lost),
-            caplog,
-        )
-
-        assert f"Dropped failed link to Houdini at {used.name} (not installed)" in caplog.messages
-        assert houdini().link() is replacement and not replacement.conn.closed
-        assert get_last_scene_diff()["status"] == "warning"
 
     def test_a_late_program_that_failed_on_its_link_drops_that_link_alone(
         self, mock_connection, connected_to, stalled_program, monkeypatch, caplog

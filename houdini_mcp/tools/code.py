@@ -28,13 +28,14 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
   Missing either fails closed.
 * Every call returns a structured ``audit`` block, including the resolved
   grant, and is logged.
-* On timeout Python cannot forcibly kill the worker thread. While that thread
-  is alive its undo group is still open, so calling ``performUndo()`` could
-  undo the previous human action rather than this run. The tool therefore does
-  not touch the undo stack on timeout and reports scene consistency as unknown.
-  The worker stays recorded in :data:`~houdini_mcp.tools.workers.WORKERS`
-  until its thread ends, and every scene-writing tool is refused, naming it,
-  for as long as it is.
+* The program runs on Houdini's main thread as one undo step labelled as the
+  call (:class:`~houdini_mcp.tools.transactions.UndoStep`), undone if it
+  raises. At its timeout it is cut off from Houdini: its link is shut down, so
+  Houdini's main thread gives it up once the request it is serving returns,
+  and its step is undone on a fresh link. Python cannot kill the worker
+  thread, so it stays recorded in :data:`~houdini_mcp.tools.workers.WORKERS`
+  until it ends, and every scene-writing tool is refused, naming it, for as
+  long as it is.
 """
 
 import builtins
@@ -44,11 +45,10 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
-from ..connection import houdini
+from ..connection import houdini, raised_inside_houdini
 from ._common import (
     PROGRAM,
     READ,
@@ -69,7 +69,9 @@ from .code_policy import (
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
+from .reads import reason
 from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
+from .transactions import BODY_SILENCE, MainThread
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -120,9 +122,6 @@ DEFAULT_MAX_STDOUT_SIZE = 100000
 DEFAULT_MAX_STDERR_SIZE = 100000
 DEFAULT_MAX_DIFF_NODES = 1000
 DEFAULT_TIMEOUT = 30
-
-# Named undo group used to wrap execution so a timeout can roll back.
-_UNDO_GROUP_LABEL = "houdini-mcp execute_code"
 
 
 @dataclass(frozen=True)
@@ -320,31 +319,13 @@ def _bypass_refusal(
             return (gate.pattern_reason, gate.found)
 
 
-def _resolve_undo_primitive(hou: Any) -> Any | None:
-    """Return the ``hou.undos`` namespace if a usable undo primitive exists.
-
-    We require both a ``group`` context factory (to wrap execution) and a
-    ``performUndo`` callable (to roll back on timeout). If either is missing we
-    return None so callers can fail closed instead of silently leaving
-    untracked mutations.
-    """
-    undos = getattr(hou, "undos", None)
-    if undos is None:
-        return None
-    if not callable(getattr(undos, "group", None)):
-        return None
-    if not callable(getattr(undos, "performUndo", None)):
-        return None
-    return undos
-
-
-# What a program's run raised in: the program itself, or the undo group around it.
-_Step = Literal["program", "undo group"]
+# What a program's run raised in: the program itself, or the undo step around it.
+_Step = Literal["program", "undo step"]
 
 # How each step's failure reads to the caller.
 _TOLD: dict[_Step, str] = {
     "program": "{}",
-    "undo group": "The undo group did not open or close: {}",
+    "undo step": "Running it as one undo step on Houdini's main thread failed: {}",
 }
 
 
@@ -359,7 +340,11 @@ class _Fault:
 
     def told(self) -> str:
         """The exception's line, its type leading (some say nothing else: SystemExit(0)
-        is "0"). Its notes are in ``traceback``, and a link's loss carries its own."""
+        is "0"). Its notes are in ``traceback``, and a link's loss carries its own.
+        One Houdini raised - a ``hou`` error the program let through, or its step's
+        own - reads as Houdini gave it, not as rpyc rebuilt it."""
+        if raised_inside_houdini(self.error):
+            return _TOLD[self.step].format(reason(self.error))
         line = traceback.TracebackException.from_exception(self.error)
         line.__notes__ = None
         return _TOLD[self.step].format("".join(line.format_exception_only()).strip())
@@ -374,21 +359,13 @@ class _Ended:
     lost: LinkLost | None
 
 
-def _run_code_thread(
-    code: str, hou: Any, stdout_capture: Capture, stderr_capture: Capture
-) -> tuple[_Fault, ...]:
-    """Execute user code, capturing stdout/stderr; what it raised, if it raised."""
-    try:
-        exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
-        # [LAW:effects-at-boundaries] Only this thread's writes are captured;
-        # other threads keep writing to the streams they always did.
-        with captured(stdout_capture, stderr_capture):
-            exec(code, exec_globals)
-    # Whatever the program raises - SystemExit and KeyboardInterrupt too - is how
-    # it ended, not the worker's own failure: the caller reports it.
-    except BaseException as e:  # noqa: BLE001 - surfaced to caller as an error result
-        return (_Fault("program", e, traceback.format_exc()),)
-    return ()
+def _run_code_thread(code: str, hou: Any, stdout_capture: Capture, stderr_capture: Capture) -> None:
+    """Execute user code, capturing stdout/stderr."""
+    exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
+    # [LAW:effects-at-boundaries] Only this thread's writes are captured;
+    # other threads keep writing to the streams they always did.
+    with captured(stdout_capture, stderr_capture):
+        exec(code, exec_globals)
 
 
 @dataclass(frozen=True)
@@ -449,8 +426,6 @@ def _build_audit(
     detected: DetectedPatterns,
     timed_out: bool = False,
     woke_early: int | None = None,
-    rollback_attempted: bool = False,
-    rollback_succeeded: bool | None = None,
     blocked_reason: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the structured audit block returned with every response."""
@@ -468,8 +443,6 @@ def _build_audit(
         # How often the wait for the program woke before its monotonic deadline;
         # None when the call was refused before anything was waited on.
         "woke_early": woke_early,
-        "rollback_attempted": rollback_attempted,
-        "rollback_succeeded": rollback_succeeded,
         "blocked_reason": blocked_reason,
         "code_length": len(code),
         "code_sha256": detected.code_sha256,
@@ -521,6 +494,7 @@ def execute_code(
     policy: Policy = DEFAULT_POLICY,
     *,
     bypass_config_enabled: bool,
+    main_thread: MainThread,
 ) -> dict[str, Any]:
     """
     Execute Python code in Houdini with scene change tracking and safety rails.
@@ -551,8 +525,13 @@ def execute_code(
       allow_heavy_geometry unlocks heavy geometry, each only when the server
       also sets HOUDINI_MCP_ALLOW_BYPASS=true.
     - Output size caps: Prevents massive output from overwhelming the response
-    - Execution timeout with rollback: on timeout the run is rolled back via a
-      named Houdini undo group when available, else it fails closed.
+    - One undo step: the program runs on Houdini's main thread as one step on
+      its undo stack, labelled as the call, and a program that raises is
+      undone. While it runs, Houdini's interface does not redraw and other
+      calls wait for it.
+    - Execution timeout with rollback: at its timeout the program is cut off
+      from Houdini, which frees Houdini's main thread once the request it is
+      serving returns, and its step is undone.
     - Scene diff limits: Caps the number of nodes returned in scene changes
     - Structured audit block returned on every call.
 
@@ -595,8 +574,10 @@ def execute_code(
         exactly these.
         audit.granted reports the one permission decision the run was made under,
         and audit.unmet what each bypass capability still lacked.
-        On timeout, a rollback block says whether an undo was attempted and
-        whether the scene is known to be consistent.
+        A failure's message ends by saying what became of the program's changes:
+        undone, or why they may not have been. The program's thread runs on
+        after a timeout until it ends, cut off from Houdini, and every
+        scene-writing tool is refused, naming it, until then.
         A program that failed because the link to Houdini did reads as that
         failure (timeout with connection_reset, or connection_lost) with the
         same stdout, stderr, traceback and audit; the next call reconnects.
@@ -719,13 +700,18 @@ def execute_code(
     # --- Connect and prepare execution --------------------------------------
     with using(host, port) as link:
         hou = link.hou
-        undos = _resolve_undo_primitive(hou)
+        # [LAW:one-source-of-truth] The program's timeout is the one bound on how
+        # long it holds Houdini's main thread: the call cuts it off then.
+        # [LAW:no-ambient-temporal-coupling] Houdini's own give-up, for a call whose
+        # client is gone, starts before that timeout's clock, so it waits a body's
+        # silence longer rather than racing the cut.
+        step = main_thread.step(operation, timeout + BODY_SILENCE)
 
         # [LAW:one-source-of-truth] Each capture holds its own bound, and every way
         # out of the call reports them through _reported_output.
         stdout_capture = Capture(max_stdout_size)
         stderr_capture = Capture(max_stderr_size)
-        # The worker writes this once the program and its undo group have ended.
+        # The worker writes this once the program and its undo step have ended.
         ended = _Ended((), None)
         # With capture_diff, the worker writes this on every way out: the program's
         # diff, why it has none, or why the program never ran. Its first value
@@ -736,8 +722,11 @@ def execute_code(
             if capture_diff
             else None
         )
-        # The program's clock: timeout is the program's, not the scene reads around it.
+        # The program's clock: timeout is the program's, not the scene reads around it,
+        # nor the wait for Houdini's main thread to take it. A program that never
+        # began reads its time from here.
         program_starts, program_ends = threading.Event(), threading.Event()
+        started = time.monotonic()
 
         def diff_since(before: SceneSnapshot, program_took: float) -> _Diff | _DiffFailed:
             # [LAW:one-source-of-truth] The worker is the one writer of its run's
@@ -791,17 +780,12 @@ def execute_code(
                         )
                         scene = _NeverRan(failed_on(houdini(), link, error))
                         return
-                started = time.monotonic()
-                program_starts.set()
                 faults = run_program()
-                # The program and its undo group have ended: the caller's clock stops
-                # here, not after the judgment below, which the caller joins on.
-                program_ends.set()
                 # Written before the link is judged, so a judgment that raises cannot
                 # leave the program's failure reading as a success.
                 ended = _Ended(faults, None)
-                # [LAW:single-enforcer] Judged once the undo group has closed, so its
-                # close still reached Houdini, and here, where the link was used, so a
+                # [LAW:single-enforcer] Judged once the undo step has ended, so its
+                # recovery still reached Houdini, and here, where the link was used, so a
                 # program that outlived its call still drops the link it failed on. The
                 # first fault that is the link's drops it; none after is judged.
                 for fault in faults:
@@ -828,25 +812,41 @@ def execute_code(
                     scene = None if ended.faults else diff_since(before, time.monotonic() - started)
 
         def run_program() -> tuple[_Fault, ...]:
-            # Never retry user code if the undo context fails: __exit__ may raise
-            # after the body already mutated the scene, so fallback would execute it
-            # twice. Fail closed and surface the context error instead, after
-            # whatever the program raised.
-            # [LAW:dataflow-not-control-flow] Without an undo primitive the group is
-            # one that does nothing, so the program runs inside a group either way.
-            # Opening it is a request to Houdini too, so it fails inside the try.
-            faults: tuple[_Fault, ...] = ()
+            # Never retry user code if its step fails: the step may fail after the
+            # program already changed the scene, so a retry would run it twice. The
+            # step's failure is told after whatever the program raised.
+            raised: list[_Fault] = []
+
+            def program() -> None:
+                nonlocal started
+                # The program's clock starts as it begins on Houdini's main thread,
+                # not while the call waits for the main thread to take it.
+                started = time.monotonic()
+                program_starts.set()
+                try:
+                    _run_code_thread(code, hou, stdout_capture, stderr_capture)
+                # Whatever the program raises - SystemExit and KeyboardInterrupt too -
+                # is how it ended, not the worker's own failure: the caller reports it.
+                except BaseException as error:
+                    raised.append(_Fault("program", error, traceback.format_exc()))
+                    raise
+                # The caller's clock stops as the program ends, not once its step has
+                # closed and been recovered, which the caller joins on: a program that
+                # ended in time is never cut off from that step's undo.
+                finally:
+                    program_ends.set()
+
             try:
-                with undos.group(_UNDO_GROUP_LABEL) if undos is not None else nullcontext():
-                    faults = _run_code_thread(code, hou, stdout_capture, stderr_capture)
-            # Whatever the group raises is how the run ended, as for the program.
+                step.run(link, program)
+            # Whatever else the step raises is how the run ended, as for the program.
             except BaseException as error:  # noqa: BLE001
-                return (*faults, _Fault("undo group", error, traceback.format_exc()))
-            return faults
+                if not raised or error is not raised[0].error:
+                    return (*raised, _Fault("undo step", error, traceback.format_exc()))
+            return tuple(raised)
 
         # [LAW:no-ambient-temporal-coupling] The ledger owns the worker's lifetime: it
         # starts the thread inside this call's hold on the scene, the thread clears
-        # the slot once the program, its undo group, and the scene reads around it
+        # the slot once the program, its undo step, and the scene reads around it
         # have ended, and a timeout leaves the slot occupied after this call returns.
         worker = WORKERS.launch(
             run_code, operation=operation, code_sha256=detected.code_sha256, timeout=timeout
@@ -861,54 +861,43 @@ def execute_code(
         while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
             woke_early += time.monotonic() < deadline
 
-        # [LAW:one-source-of-truth] The program's own end, set once its undo group
-        # has closed, says whether it is still running - not the ledger slot, which
-        # the worker holds on through the scene read after it - so a program that
-        # ended as the wait expired is reported as complete.
-        if not program_ends.is_set():
-            # The worker is still inside the undo-group context. Calling performUndo
-            # now can undo the PREVIOUS human action because this run's group has not
-            # closed yet, while the worker can continue mutating afterward. Never
-            # touch the undo stack from this state.
+        # [LAW:one-source-of-truth] The program's own end says whether it is still
+        # running - not the ledger slot, which the worker holds on through its step's
+        # recovery and the scene read after it - and the step's verdict settles a
+        # program that ends as the wait expires: one that ended is reported as
+        # complete, one cut off as timed out.
+        if not program_ends.is_set() and step.cut_off():
+            # Once its link has ended, Houdini's main thread gives the program's call
+            # up after the request it is serving returns, closing the step's group,
+            # and the program's request fails. Its step is then recovered on a fresh
+            # link, behind that call on the main thread - by this call or the worker,
+            # whichever reaches it first.
+            told = step.recover().told
             logger.warning(
-                "%s exceeded timeout of %ss; worker code_sha256=%s still running, undo not attempted",
+                "%s exceeded timeout of %ss; cut off worker code_sha256=%s: %s",
                 operation,
                 timeout,
                 detected.code_sha256,
+                told or "no step",
             )
-            raise ProgramStillRunning(
+            timed_out = ProgramStillRunning(
                 f"Execution timeout: code did not complete within {timeout} seconds",
                 policy=grant.policy,
                 **_reported_output(operation, stdout_capture, stderr_capture),
                 timeout=timeout,
                 warning=(
-                    "Execution timed out while its background thread and undo group are still active. "
-                    "No undo was attempted because doing so could undo a previous human action. "
-                    "Every tool that writes the scene is refused until this worker finishes. "
-                    f"{HOW_A_WORKER_ENDS} Scene consistency is unknown: verify state before "
-                    "further edits."
+                    "Execution timed out, so the program was cut off from Houdini. Its "
+                    "thread runs on until it ends, and every tool that writes the scene is "
+                    f"refused until then. {HOW_A_WORKER_ENDS}"
                 ),
                 worker=worker.describe(),
-                rollback={
-                    "attempted": False,
-                    "succeeded": False,
-                    "error": None,
-                    # True whenever we hit this branch: the thread was still running
-                    # at the moment we decided not to roll back, and we have no way to
-                    # confirm it has stopped since.
-                    "thread_still_running": True,
-                    "scene_consistency": "unknown",
-                },
                 audit=_build_audit(
-                    code=code,
-                    grant=grant,
-                    detected=detected,
-                    timed_out=True,
-                    woke_early=woke_early,
-                    rollback_attempted=False,
-                    rollback_succeeded=False,
+                    code=code, grant=grant, detected=detected, timed_out=True, woke_early=woke_early
                 ),
             )
+            for note in told:
+                add_note(timed_out, note)
+            raise timed_out
 
         # The program ended; what remains of the worker is the scene read after it.
         worker.thread.join()
@@ -926,6 +915,8 @@ def execute_code(
             )
             for fault in later:
                 add_note(failure, fault.told())
+            for note in step.told():
+                add_note(failure, note)
             # A program that failed because its link did reads as the link's failure,
             # carrying all of the above; its own failure has no cause to be judged by.
             raise failure from ended.lost

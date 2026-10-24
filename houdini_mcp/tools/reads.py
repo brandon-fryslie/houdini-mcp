@@ -47,7 +47,7 @@ def unread(e: Exception) -> Unread:
     return Unread(unread=reason(e))
 
 
-def reason(e: Exception) -> str:
+def reason(e: BaseException) -> str:
     """The reason Houdini gave for ``e``.
 
     rpyc rebuilds a remote exception without its arguments (a ``hou`` error
