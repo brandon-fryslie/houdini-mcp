@@ -103,9 +103,9 @@ def _handshake_reader(sock: Any) -> Iterator[Callable[[int], bytes]]:
     timeout it came in with, so rpyc's protocol runs with the settings it
     expects.
 
-    [LAW:no-silent-failure] a peer that closes early raises ``EOFError`` and one
-    that runs out the deadline raises ``TimeoutError``; a short read is never
-    returned as data.
+    [LAW:no-silent-failure] a connection that closes early raises ``EOFError``
+    and a peer that runs out the deadline raises ``TimeoutError``; a short read
+    is never returned as data.
     """
     deadline = time.monotonic() + HANDSHAKE_TIMEOUT
 
@@ -131,7 +131,7 @@ def _handshake_reader(sock: Any) -> Iterator[Callable[[int], bytes]]:
                 # ETIMEDOUT, which arrives as the same type.
                 raise expired() from exc
             if not chunk:
-                raise EOFError("peer closed the connection during the handshake")
+                raise EOFError("the connection closed during the handshake")
             received += chunk
         return bytes(received)
 
@@ -217,7 +217,9 @@ def connect(host: str, port: int, token: str | None, *, sync_request_timeout: fl
         raise
 
 
-def _peer(sock: Any) -> str:
+def peer_name(sock: Any) -> str:
+    """The address ``sock`` is connected to, as rpyc's own log lines print it,
+    or ``<unknown peer>`` once it is not connected."""
     try:
         return str(sock.getpeername())
     except OSError:
@@ -226,32 +228,33 @@ def _peer(sock: Any) -> str:
 
 def token_authenticator(token: str) -> Authenticator:
     """The listener's side: read the client's framed token, compare in constant
-    time, acknowledge, and log the outcome. A client that stalls, leaves, or
-    presents anything else fails authentication. Raises ``ImportError`` when the
-    installed rpyc has no ``AuthenticationError`` to raise, so a caller can
-    refuse to bind instead of serving unauthenticated.
+    time, acknowledge, and log the outcome. A client that presents anything but
+    the token, or does not finish presenting it within ``HANDSHAKE_TIMEOUT``,
+    fails authentication. A handshake the connection itself cut short is not an
+    outcome of the handshake: its ``EOFError`` or ``OSError`` is raised as it is,
+    for the server to record as that connection's end, since only the server
+    knows whether it closed the connection or the client did. Raises
+    ``ImportError`` when the installed rpyc has no ``AuthenticationError`` to
+    raise, so a caller can refuse to bind instead of serving unauthenticated.
     """
     from rpyc.utils.authenticators import AuthenticationError  # noqa: PLC0415
 
     expected, ack = exchange(token)
 
     def authenticate(sock: Any) -> tuple[Any, Any]:
-        peer = _peer(sock)
+        peer = peer_name(sock)
         try:
             received = _recv_framed(sock)
-            if not hmac.compare_digest(received, expected):
-                raise AuthenticationError("invalid hrpyc token")
-            sock.sendall(ack)
-        except (EOFError, OSError) as exc:
-            # TimeoutError is an OSError: a stalled client and a departed one
-            # are both an incomplete handshake. That is a prober (the listener's
-            # own reachability check among them), not a wrong token: info, not
-            # warning.
-            logger.info("%s left before completing the hrpyc token handshake: %s", peer, exc)
+        except TimeoutError as exc:
+            # The reader's deadline, the listener's own: a stalled client is a
+            # prober (the listener's reachability check among them), not a
+            # wrong token: info, not warning.
+            logger.info("%s did not complete the hrpyc token handshake: %s", peer, exc)
             raise AuthenticationError(f"hrpyc token handshake incomplete: {exc}") from exc
-        except AuthenticationError as exc:
-            logger.warning("rejected %s: %s", peer, exc)
-            raise
+        if not hmac.compare_digest(received, expected):
+            logger.warning("rejected %s: invalid hrpyc token", peer)
+            raise AuthenticationError("invalid hrpyc token")
+        sock.sendall(ack)
         logger.info("accepted hrpyc token from %s", peer)
         return sock, None
 

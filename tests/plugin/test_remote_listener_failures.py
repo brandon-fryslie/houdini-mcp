@@ -96,6 +96,35 @@ class TestBindFailure:
         assert result["bound_port"] == closed[0].port
         listener.stop()
 
+    def test_an_hrpyc_lacking_a_wrapped_member_releases_the_bound_socket(self, fake_hou):
+        """Wrapping rpyc's members is part of the launch after the bind: an
+        hrpyc whose server lacks one fails to start and holds no port."""
+        closed: list[FakeThreadedServer] = []
+
+        class LacksServeClient(FakeThreadedServer):
+            @property
+            def _serve_client(self) -> None:
+                raise AttributeError("_serve_client")
+
+            def close(self) -> None:
+                closed.append(self)
+                super().close()
+
+        hrpyc = FakeHrpycModule()
+        hrpyc.ThreadedServer = lambda *a, **kw: LacksServeClient(*a, **kw)
+        listener = RemoteListener(hrpyc=hrpyc, hou=fake_hou)
+        result = listener.start(ListenerConfig(host="127.0.0.1", port=0))
+        assert result["status"] == "error"
+        assert result["error_type"] == "start"
+        assert len(closed) == 1
+
+        hrpyc.ThreadedServer = lambda *a, **kw: FakeThreadedServer(*a, **kw)
+        result = started(
+            listener.start(ListenerConfig(host="127.0.0.1", port=closed[0].port, reuse_addr=False))
+        )
+        assert result["bound_port"] == closed[0].port
+        listener.stop()
+
     def test_close_that_raises_surfaces_and_releases_the_server(self, fake_hou):
         """rpyc's close() closes the listening socket and every client socket
         unguarded; the error is stop()'s result, and the listener no longer holds
@@ -779,14 +808,20 @@ class TestClientDisconnect:
         ]
         assert conn.closed is True
 
-    def test_a_socket_error_under_a_serving_listener_is_raised_not_recorded(self, caplog):
+    def test_a_socket_error_under_a_serving_listener_is_logged_as_a_failure_not_an_end(
+        self, caplog
+    ):
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
         server = SimpleNamespace(active=True, port=18811)
         conn = self.connection(server, _fails_under_a_serving_listener)
-        with pytest.raises(OSError) as caught:
-            listener_module._serve_connection(server, conn)
-        assert caught.value.errno == errno.EBADF
-        assert caplog.messages == []
+        listener_module._serve_connection(server, conn)
+        (failure,) = caplog.records
+        assert (failure.levelno, failure.getMessage()) == (
+            logging.ERROR,
+            "hrpyc client ('127.0.0.1', 50123) failed on port 18811"
+            " (OSError: [Errno 9] Bad file descriptor)",
+        )
+        assert failure.exc_info is not None and failure.exc_info[1].errno == errno.EBADF
         assert conn.closed is True
 
     def connection(

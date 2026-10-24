@@ -118,6 +118,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended on (`EOFError: ...`, `OSError: ...`), or `(between rounds)` when a
   round ended with none and found serving over, as when the stop never woke it.
 
+- **Stop Remote** as a client connects, or a client that leaves as it connects,
+  no longer logs a traceback (houdini-laws-etg.3no). Before the client was
+  served, rpyc logged "client connection terminated abruptly" with the
+  traceback and printed it again as an unhandled thread exception. Houdini's
+  log now records the end like any other: `by the listener` or `by the client`,
+  with `<unknown peer>` when the socket could no longer give the address. With a
+  token set, a stop during the token handshake was logged as the client having
+  left; it is recorded `by the listener`. A client that does not finish the
+  handshake within its deadline is still a rejection. A socket error while the
+  listener serves is logged as an error with one traceback, not two.
+
 ### Changed
 
 - **BREAKING (deployment)**: `get_parameter_schema` needs the houdini_mcp plugin

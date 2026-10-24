@@ -96,21 +96,28 @@ class FakeThreadedServer:
         except OSError as exc:
             raise EOFError from exc
         with conn:
-            self._admit(conn)
+            self._authenticate_and_serve_client(conn)
 
-    def _admit(self, conn: socket.socket) -> None:
+    def _authenticate_and_serve_client(self, sock: socket.socket) -> None:
         # Mirrors rpyc.utils.server.Server._authenticate_and_serve_client: no
         # authenticator admits everyone; a rejection closes the socket and the
-        # server keeps serving.
-        if self.authenticator is None:
-            self.authenticated += 1
-            return
-        try:
-            self.authenticator(conn)
-        except AuthenticationError:
-            self.rejected += 1
-        else:
-            self.authenticated += 1
+        # server keeps serving; anything else the authenticator raises passes
+        # through, as in rpyc. Called through ``self``, as rpyc does, so the
+        # listener's wrapper of it is what runs.
+        credentials = None
+        if self.authenticator is not None:
+            try:
+                sock, credentials = self.authenticator(sock)
+            except AuthenticationError:
+                self.rejected += 1
+                return
+        self._serve_client(sock, credentials)
+
+    def _serve_client(self, sock: socket.socket, credentials: Any) -> None:
+        # rpyc builds the client's connection here and serves it through
+        # ``_handle_connection``; this fake speaks no rpyc protocol, so an
+        # admitted client is counted and goes no further.
+        self.authenticated += 1
 
     def _handle_connection(self, conn: Any) -> None:
         # The listener replaces this on every server it builds; this fake speaks
