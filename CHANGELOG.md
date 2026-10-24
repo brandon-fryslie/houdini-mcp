@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `mountain` found none of them. A name without a version also finds the
   type's older versions an old scene holds (`agentlookat` finds
   `agentlookat::2.0` beside `agentlookat::3.0`), and a namespaced name finds the
-  type it gives (`apex::controlextract` finds `apex::controlextract::2.0`). Needs
-  this release's plugin.
+  type it gives (`apex::controlextract` finds `apex::controlextract::2.0`), as
+  does an alias createNode takes (`apexautorigcomponent`). Needs this release's
+  plugin.
 
 - `set_node_flags(bypass=...)` sets the bypass flag on a node that has one,
   such as a SOP or a ROP (houdini-laws-etg.omw). It called `setBypass`, which

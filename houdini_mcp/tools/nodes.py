@@ -626,7 +626,7 @@ def find_nodes(
             **paging_fields(page),
         }
 
-        if node_type:
+        if node_type is not None:
             result["node_type_filter"] = node_type
 
         return result

@@ -176,6 +176,9 @@ class MockNodeType:
     def namespaceOrder(self) -> tuple[str, ...]:
         return self._row.namespace_order
 
+    def aliases(self) -> tuple[str, ...]:
+        return self._row.aliases
+
 
 class MockNodeTypeCategory:
     """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
@@ -483,6 +486,7 @@ class MockHouNode:
         mock_type.category = lambda: MockNodeTypeCategory(self._category())
         mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
         mock_type.namespaceOrder = lambda: self._row().namespace_order
+        mock_type.aliases = lambda: self._row().aliases
         return mock_type
 
     def _category(self) -> str:

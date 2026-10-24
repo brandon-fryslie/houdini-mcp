@@ -4,6 +4,7 @@
       "type": "root",
       "description": "Root",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Manager",
       "locked": false,
       "parms": {}
@@ -14,6 +15,7 @@
       "type": "obj",
       "description": "Object",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Object",
       "locked": false,
       "parms": {}
@@ -22,6 +24,7 @@
       "type": "out",
       "description": "Driver",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Driver",
       "locked": false,
       "parms": {}
@@ -30,6 +33,7 @@
       "type": "ch",
       "description": "ChopNet",
       "namespace_order": [],
+      "aliases": [],
       "holds": "ChopNet",
       "locked": false,
       "parms": {}
@@ -38,6 +42,7 @@
       "type": "shop",
       "description": "Shop",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Shop",
       "locked": false,
       "parms": {}
@@ -46,6 +51,7 @@
       "type": "img",
       "description": "CopNet",
       "namespace_order": [],
+      "aliases": [],
       "holds": "CopNet",
       "locked": false,
       "parms": {}
@@ -54,6 +60,7 @@
       "type": "vex",
       "description": "VopNet",
       "namespace_order": [],
+      "aliases": [],
       "holds": "VopNet",
       "locked": false,
       "parms": {}
@@ -62,6 +69,7 @@
       "type": "mat",
       "description": "Vop",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Vop",
       "locked": false,
       "parms": {}
@@ -70,6 +78,7 @@
       "type": "stage",
       "description": "Lop",
       "namespace_order": [],
+      "aliases": [],
       "holds": "Lop",
       "locked": false,
       "parms": {}
@@ -78,6 +87,7 @@
       "type": "tasks",
       "description": "TopNet",
       "namespace_order": [],
+      "aliases": [],
       "holds": "TopNet",
       "locked": false,
       "parms": {}
@@ -90,6 +100,7 @@
       "namespace_order": [
         "geo"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {
@@ -136,6 +147,7 @@
       "namespace_order": [
         "null"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {
@@ -173,6 +185,7 @@
       "namespace_order": [
         "light"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {
@@ -210,6 +223,7 @@
       "namespace_order": [
         "instance"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {}
@@ -220,6 +234,7 @@
       "namespace_order": [
         "fetch"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {
@@ -257,6 +272,7 @@
       "namespace_order": [
         "subnet"
       ],
+      "aliases": [],
       "holds": "Object",
       "locked": false,
       "parms": {
@@ -294,6 +310,7 @@
       "namespace_order": [
         "dopnet"
       ],
+      "aliases": [],
       "holds": "Dop",
       "locked": false,
       "parms": {
@@ -331,6 +348,7 @@
       "namespace_order": [
         "cam"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {
@@ -435,6 +453,7 @@
       "namespace_order": [
         "ropnet"
       ],
+      "aliases": [],
       "holds": "Driver",
       "locked": false,
       "parms": {}
@@ -445,6 +464,7 @@
       "namespace_order": [
         "chopnet"
       ],
+      "aliases": [],
       "holds": "Chop",
       "locked": false,
       "parms": {}
@@ -457,6 +477,7 @@
       "namespace_order": [
         "sphere"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -467,6 +488,7 @@
       "namespace_order": [
         "box"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -477,6 +499,7 @@
       "namespace_order": [
         "grid"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -487,6 +510,7 @@
       "namespace_order": [
         "tube"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -497,6 +521,7 @@
       "namespace_order": [
         "torus"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -507,6 +532,7 @@
       "namespace_order": [
         "circle"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -517,6 +543,7 @@
       "namespace_order": [
         "line"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -528,6 +555,7 @@
         "curve::2.0",
         "curve"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -539,6 +567,7 @@
         "mountain::2.0",
         "mountain"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -549,6 +578,9 @@
       "namespace_order": [
         "mountain::2.0",
         "mountain"
+      ],
+      "aliases": [
+        "v_mountain"
       ],
       "holds": null,
       "locked": false,
@@ -561,6 +593,7 @@
         "apex::controlextract::2.0",
         "apex::controlextract"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -572,6 +605,7 @@
         "attribnoise::2.0",
         "attribnoise"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -582,6 +616,7 @@
       "namespace_order": [
         "cloudnoise"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -592,6 +627,7 @@
       "namespace_order": [
         "heightfield_noise"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -602,6 +638,7 @@
       "namespace_order": [
         "xform"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -612,6 +649,7 @@
       "namespace_order": [
         "blast"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -622,6 +660,7 @@
       "namespace_order": [
         "delete"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -633,6 +672,7 @@
         "dissolve::2.0",
         "dissolve"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -644,6 +684,7 @@
         "fuse::2.0",
         "fuse"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -654,6 +695,7 @@
       "namespace_order": [
         "clean"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -664,6 +706,7 @@
       "namespace_order": [
         "merge"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -674,6 +717,7 @@
       "namespace_order": [
         "switch"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -684,6 +728,7 @@
       "namespace_order": [
         "copy"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -695,6 +740,7 @@
         "scatter::2.0",
         "scatter"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -706,6 +752,7 @@
         "copytopoints::2.0",
         "copytopoints"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -716,6 +763,7 @@
       "namespace_order": [
         "foreach"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {}
@@ -726,6 +774,7 @@
       "namespace_order": [
         "vex"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -736,6 +785,7 @@
       "namespace_order": [
         "attribwrangle"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -746,6 +796,7 @@
       "namespace_order": [
         "pointwrangle"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -756,6 +807,7 @@
       "namespace_order": [
         "volumewrangle"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -766,6 +818,7 @@
       "namespace_order": [
         "vdb"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -776,6 +829,7 @@
       "namespace_order": [
         "vdbfromparticles"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -786,6 +840,7 @@
       "namespace_order": [
         "vdbsmooth"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -796,6 +851,7 @@
       "namespace_order": [
         "vdbcombine"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -806,6 +862,7 @@
       "namespace_order": [
         "file"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -816,6 +873,7 @@
       "namespace_order": [
         "alembic"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -829,6 +887,7 @@
         "labs::filecache::2.0",
         "labs::filecache::1.0"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -839,6 +898,7 @@
       "namespace_order": [
         "cache"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -849,6 +909,7 @@
       "namespace_order": [
         "stash"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -859,6 +920,7 @@
       "namespace_order": [
         "group"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -869,6 +931,7 @@
       "namespace_order": [
         "groupcreate"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -879,6 +942,7 @@
       "namespace_order": [
         "groupcombine"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -889,6 +953,7 @@
       "namespace_order": [
         "groupexpression"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -899,6 +964,7 @@
       "namespace_order": [
         "subdivide"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -910,6 +976,7 @@
         "polyextrude::2.0",
         "polyextrude"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -922,6 +989,9 @@
         "polybevel::2.0",
         "polybevel"
       ],
+      "aliases": [
+        "polybevelnew"
+      ],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -933,6 +1003,7 @@
         "polyreduce::2.0",
         "polyreduce"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -943,6 +1014,7 @@
       "namespace_order": [
         "polyfill"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -953,6 +1025,7 @@
       "namespace_order": [
         "null"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -963,6 +1036,7 @@
       "namespace_order": [
         "output"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -972,6 +1046,9 @@
       "description": "Object Merge",
       "namespace_order": [
         "object_merge"
+      ],
+      "aliases": [
+        "proto_objectgroupmerge"
       ],
       "holds": null,
       "locked": false,
@@ -983,6 +1060,7 @@
       "namespace_order": [
         "timeshift"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -993,6 +1071,7 @@
       "namespace_order": [
         "trail"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1003,6 +1082,7 @@
       "namespace_order": [
         "material"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {
@@ -1033,6 +1113,7 @@
         "attribcreate::2.0",
         "attribcreate"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1043,6 +1124,7 @@
       "namespace_order": [
         "split"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1053,6 +1135,7 @@
       "namespace_order": [
         "add"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1063,6 +1146,7 @@
       "namespace_order": [
         "align"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1072,6 +1156,9 @@
       "description": "Attribute Blur",
       "namespace_order": [
         "attribblur"
+      ],
+      "aliases": [
+        "smoothcl"
       ],
       "holds": "Sop",
       "locked": true,
@@ -1083,6 +1170,7 @@
       "namespace_order": [
         "attribcast"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1093,6 +1181,7 @@
       "namespace_order": [
         "attribcopy"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1103,6 +1192,7 @@
       "namespace_order": [
         "attribdelete"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1113,6 +1203,7 @@
       "namespace_order": [
         "attribexpression"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1123,6 +1214,7 @@
       "namespace_order": [
         "attribfade"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1133,6 +1225,7 @@
       "namespace_order": [
         "attribpromote"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1143,6 +1236,7 @@
       "namespace_order": [
         "attribrandomize"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1153,6 +1247,7 @@
       "namespace_order": [
         "attribremap"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1163,6 +1258,7 @@
       "namespace_order": [
         "attribtransfer"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1173,6 +1269,7 @@
       "namespace_order": [
         "attribvop"
       ],
+      "aliases": [],
       "holds": "Vop",
       "locked": false,
       "parms": {}
@@ -1183,6 +1280,7 @@
       "namespace_order": [
         "bend"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1193,6 +1291,7 @@
       "namespace_order": [
         "blastbyattribute"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1203,6 +1302,7 @@
       "namespace_order": [
         "bound"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1213,6 +1313,7 @@
       "namespace_order": [
         "bridge"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1223,6 +1324,7 @@
       "namespace_order": [
         "bulge"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1233,6 +1335,7 @@
       "namespace_order": [
         "cap"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1243,6 +1346,7 @@
       "namespace_order": [
         "carve"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1253,6 +1357,7 @@
       "namespace_order": [
         "chain"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1263,6 +1368,7 @@
       "namespace_order": [
         "circlefromedges"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1274,6 +1380,7 @@
         "clip::2.0",
         "clip"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1284,6 +1391,7 @@
       "namespace_order": [
         "cluster"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1294,6 +1402,7 @@
       "namespace_order": [
         "color"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1304,6 +1413,7 @@
       "namespace_order": [
         "comb"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1314,6 +1424,7 @@
       "namespace_order": [
         "connectivity"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1324,6 +1435,7 @@
       "namespace_order": [
         "convert"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1334,6 +1446,7 @@
       "namespace_order": [
         "convertline"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1344,6 +1457,7 @@
       "namespace_order": [
         "convertvdb"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1354,6 +1468,7 @@
       "namespace_order": [
         "cookie"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1364,6 +1479,7 @@
       "namespace_order": [
         "copyxform"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1374,6 +1490,7 @@
       "namespace_order": [
         "crease"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1384,6 +1501,7 @@
       "namespace_order": [
         "creep"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1394,6 +1512,7 @@
       "namespace_order": [
         "deform"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {}
@@ -1405,6 +1524,7 @@
         "deltamush::2.0",
         "deltamush"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": true,
       "parms": {}
@@ -1415,6 +1535,7 @@
       "namespace_order": [
         "subnet"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {}
@@ -1425,6 +1546,7 @@
       "namespace_order": [
         "dopnet"
       ],
+      "aliases": [],
       "holds": "Dop",
       "locked": false,
       "parms": {}
@@ -1438,6 +1560,9 @@
         "pyrosolver::2.0",
         "pyrosolver"
       ],
+      "aliases": [
+        "pyrosolver_build"
+      ],
       "holds": "Dop",
       "locked": true,
       "parms": {}
@@ -1448,6 +1573,7 @@
       "namespace_order": [
         "subnet"
       ],
+      "aliases": [],
       "holds": "Dop",
       "locked": false,
       "parms": {}
@@ -1461,6 +1587,7 @@
         "principledshader::2.0",
         "principledshader"
       ],
+      "aliases": [],
       "holds": "Vop",
       "locked": true,
       "parms": {
@@ -1503,6 +1630,7 @@
       "namespace_order": [
         "subnet"
       ],
+      "aliases": [],
       "holds": "Vop",
       "locked": false,
       "parms": {}
@@ -1515,6 +1643,7 @@
       "namespace_order": [
         "opengl"
       ],
+      "aliases": [],
       "holds": null,
       "locked": false,
       "parms": {
@@ -1577,6 +1706,7 @@
       "namespace_order": [
         "karma"
       ],
+      "aliases": [],
       "holds": "Driver",
       "locked": true,
       "parms": {
@@ -1640,6 +1770,7 @@
       "namespace_order": [
         "subnet"
       ],
+      "aliases": [],
       "holds": "Driver",
       "locked": false,
       "parms": {}
@@ -1650,6 +1781,7 @@
       "namespace_order": [
         "sopnet"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {}
@@ -1662,6 +1794,7 @@
       "namespace_order": [
         "sopnet"
       ],
+      "aliases": [],
       "holds": "Sop",
       "locked": false,
       "parms": {}

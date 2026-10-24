@@ -44,7 +44,8 @@ class NodeType:
     ``namespace_order`` is every type its name without scope, namespace or version
     could mean, as ``namespaceOrder`` gives them (``mountain::2.0`` and the older
     ``mountain``); none for the root and its contexts, which Houdini registers no
-    type for. ``holds`` is the
+    type for. ``aliases`` is the other names createNode takes for it, as ``aliases``
+    gives them. ``holds`` is the
     category of the nodes it holds, None for a node that is not a network. A
     ``locked`` asset holds a category and refuses every child at once.
     """
@@ -52,6 +53,7 @@ class NodeType:
     type: str
     description: str
     namespace_order: tuple[str, ...]
+    aliases: tuple[str, ...]
     holds: str | None
     locked: bool
     parms: dict[str, ParmTuple]
@@ -71,6 +73,7 @@ def node_types(table: Table) -> dict[str, dict[str, NodeType]]:
                 type=facts["type"],
                 description=facts["description"],
                 namespace_order=tuple(facts["namespace_order"]),
+                aliases=tuple(facts["aliases"]),
                 holds=facts["holds"],
                 locked=facts["locked"],
                 parms={
@@ -119,6 +122,7 @@ def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
         "type": node.type().name(),
         "description": node.type().description(),
         "namespace_order": list(node.type().namespaceOrder()),
+        "aliases": list(node.type().aliases()),
         "holds": None if held is None else held.name(),
         "locked": node.isLockedHDA(),
         "parms": {name: _parm_tuple(node, name) for name in row["parms"]},

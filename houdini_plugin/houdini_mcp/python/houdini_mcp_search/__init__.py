@@ -23,28 +23,30 @@ TypeName = tuple[str, str]
 
 
 def types_named(hou: Any, name: str) -> tuple[TypeName, ...]:
-    """Every node type ``name`` names, sorted: in each category, of the types Houdini
-    says the type it resolves to could be (its ``namespaceOrder``), those that agree
-    with every part of ``name`` it gives - a scope, namespace or version it leaves out
-    matches any.
+    """Every node type ``name`` names, sorted: in each category, each type ``name``
+    resolves to, and those its namespaceOrder lists with its namespace and name, in
+    any scope and version ``name`` leaves out.
 
-    [LAW:one-source-of-truth] Houdini says what a name means: its parser splits the
-    names, its resolver picks the type createNode gives for ``name`` (or the one whose
-    own name it is), and that type lists every type its bare name could mean, in
-    every scope, namespace and version. So "mountain" names mountain::2.0 and the
-    older mountain an old scene can hold, and "mountain::2.0" names only itself;
-    "rbdconcretefracture" names the global rbdconcretefracture::4.0 a geo holds as
-    well as the one scoped to rbdmaterialfracture, which the resolver picks with no
-    parent to judge by. The resolver wants the category before the type's own name,
-    as Houdini's full names put it (apex::Sop/controlextract), and resolves nothing
-    for "Sop/apex::controlextract", so the query is rebuilt from the name's parts.
-    Names are case-sensitive, as createNode's are, so "GRID" names nothing; the root
-    and its contexts have no registered type, so "obj" names nothing either. Tuples
-    of strings, which rpyc sends by value.
+    [LAW:one-source-of-truth] Houdini says what a name means. A name resolves to the
+    type createNode gives for it (the resolver), the type whose own name it is, and
+    each type it is an alias of, which the resolver does not always find
+    (apexautorigcomponent). A resolved type's namespaceOrder lists every type its bare
+    name could mean; ``name`` names those sharing its namespace and name, so
+    "mountain" names mountain::2.0 and the older mountain an old scene can hold,
+    "mountain::2.0" only itself, and "filecache" not labs::filecache. A scope is left
+    open the same way as a version: "rbdconcretefracture" names the global
+    rbdconcretefracture::4.0 a geo holds as well as the one scoped to
+    rbdmaterialfracture, which the resolver picks with no parent to judge by.
+
+    The resolver wants the category before the type's own name, as Houdini's full
+    names put it (apex::Sop/controlextract), and resolves nothing for
+    "Sop/apex::controlextract", so the query is rebuilt from the name's parts. Names
+    are case-sensitive, as createNode's are, so "GRID" names nothing; the root and
+    its contexts have no registered type, so "obj" names nothing either. Tuples of
+    strings, which rpyc sends by value.
     """
     split = hou.hda.componentsFromFullNodeTypeName
-    given = split(name)
-    scope, namespace, base, version = given
+    scope, namespace, base, version = split(name)
     named = {
         (category_name, candidate)
         for category_name, category in hou.nodeTypeCategories().items()
@@ -55,12 +57,26 @@ def types_named(hou: Any, name: str) -> tuple[TypeName, ...]:
                 )
             ),
             category.nodeType(name),
+            *(aliased for aliased in category.nodeTypes().values() if name in aliased.aliases()),
         )
         if found is not None
         for candidate in found.namespaceOrder()
-        if all(part in ("", own) for part, own in zip(given, split(candidate), strict=True))
+        if _same_type(split(found.name()), split(candidate), scope, version)
     }
     return tuple(sorted(named))
+
+
+def _same_type(
+    found: tuple[str, str, str, str], candidate: tuple[str, str, str, str], scope: str, version: str
+) -> bool:
+    """Whether ``candidate`` has ``found``'s namespace and name, and the ``scope`` and
+    ``version`` a name gives (any, when it gives none). All are Houdini's parts."""
+    candidate_scope, candidate_namespace, candidate_base, candidate_version = candidate
+    return (
+        (candidate_namespace, candidate_base) == found[1:3]
+        and scope in ("", candidate_scope)
+        and version in ("", candidate_version)
+    )
 
 
 def matching_descendants(
