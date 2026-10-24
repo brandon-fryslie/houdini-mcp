@@ -50,7 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-laws-etg.lbc). The program reached Houdini off its main thread, where
   Houdini records no undo group, so a failed program left its edits and each
   edit was a step of its own. A scene-writing tool whose link to Houdini fails
-  mid-call is undone too, on a new link. Needs this release's plugin.
+  mid-call is undone too. A `hou` error a program lets through reads as Houdini
+  gave it (`hou.OperationFailed: Invalid node type name`), not as the class rpyc
+  rebuilt (`rpyc.core.vinegar/hou._get_exception_class.<locals>.Derived`).
+  Needs this release's plugin.
 
 - `get_geo_summary` reads the geometry inside Houdini, in the same few requests
   whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on
@@ -225,8 +228,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   main thread gives its call up, and the main thread closes the connection of
   a client it gives up on (houdini-laws-etg.lbc). `CLIENT_SILENCE_TIMEOUT` is
   gone: a tool body passes 60 seconds, an `execute_code` program its own
-  `timeout`, so a program that computes without touching `hou` for longer than
-  60 seconds is no longer cut off before its timeout.
+  `timeout` and 60 seconds more, so a program that computes without touching
+  `hou` for longer than 60 seconds is no longer cut off before its timeout, and
+  the call's own cut-off at its timeout always comes first.
 
 - **BREAKING (wire)**: each of `get_geo_summary`'s `sample_points` is
   `{"point": <number>, "values": {<attribute>: <value>}}` (houdini-laws-etg.4mz).

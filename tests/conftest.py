@@ -871,6 +871,8 @@ def main_thread_of(key):
 
         @staticmethod
         def call_as_step(fn, label, silence):
+            # How long the client asked Houdini to wait on it while it says nothing.
+            undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
                 try:

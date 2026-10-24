@@ -5,6 +5,7 @@ backs up the scene's unsaved work first."""
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import time
@@ -22,11 +23,15 @@ from houdini_mcp.tools import (
     set_parameter,
 )
 from houdini_mcp.tools._common import UNDOABLE, InvalidInput, tool, using
+from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.transactions import (
+    BODY_SILENCE,
     FILE_WRITE_ON_MAIN_THREAD,
     MainThread,
+    MainThreadRefused,
     ToolPolicy,
     TransactionPolicy,
+    UndoStep,
     policy_of,
 )
 from houdini_mcp.tools.workers import Admission
@@ -382,6 +387,60 @@ class TestUndoneOnFailure:
         assert result["message"].startswith("Houdini cannot import houdini_mcp_plugin.main_thread")
         assert "Install the plugin" in result["message"]
         assert mock_connection.node("/obj/made") is None
+
+
+@tool(UNDOABLE)
+def _creates_then_is_refused(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+    with using(host, port) as link:
+        link.hou.node("/obj").createNode("geo", "half_done")
+        raise MainThreadRefused("a nested call was refused")
+
+
+def _raises() -> str:
+    raise ValueError("raised")
+
+
+class TestTheStepsWork:
+    """Whether a step's work ended or was cut off is decided once."""
+
+    def test_a_refusal_the_work_raised_is_its_failure_and_undone(self, mock_connection):
+        result = _creates_then_is_refused()
+
+        assert result["message"].endswith("\nIts changes to the scene were undone."), result
+        assert mock_connection.node("/obj/half_done") is None
+
+    @pytest.mark.parametrize("work", [lambda: "returned", _raises], ids=["returned", "raised"])
+    def test_work_that_ended_is_not_cut_off(self, mock_connection, work):
+        from houdini_mcp.connection import houdini
+
+        link = houdini().ensure("localhost", 18811)
+        step = UndoStep("probe", BODY_SILENCE)
+
+        with contextlib.suppress(ValueError):
+            step.run(link, work)
+
+        assert step.cut_off() is False
+        assert houdini().link() is link and link.alive
+
+    def test_what_work_cut_off_returns_is_not_the_calls_and_its_step_is_undone(
+        self, mock_connection
+    ):
+        from houdini_mcp.connection import houdini
+
+        link = houdini().ensure("localhost", 18811)
+        step = UndoStep("probe", BODY_SILENCE)
+
+        def work() -> str:
+            link.hou.node("/obj").createNode("geo", "half")
+            assert step.cut_off() is True
+            return "done"
+
+        with pytest.raises(OperationFailed, match="returned after it was cut off") as raised:
+            step.run(link, work)
+
+        assert "Its changes to the scene were undone." in raised.value.__notes__
+        assert mock_connection.node("/obj/half") is None
+        assert houdini().link() is not link
 
 
 class TestUndoStep:

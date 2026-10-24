@@ -71,7 +71,7 @@ from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
 from .reads import reason
 from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
-from .transactions import MainThread
+from .transactions import BODY_SILENCE, MainThread
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -341,8 +341,8 @@ class _Fault:
     def told(self) -> str:
         """The exception's line, its type leading (some say nothing else: SystemExit(0)
         is "0"). Its notes are in ``traceback``, and a link's loss carries its own.
-        One Houdini raised, as its step can, reads as Houdini gave it, not as rpyc
-        rebuilt it."""
+        One Houdini raised - a ``hou`` error the program let through, or its step's
+        own - reads as Houdini gave it, not as rpyc rebuilt it."""
         if raised_inside_houdini(self.error):
             return _TOLD[self.step].format(reason(self.error))
         line = traceback.TracebackException.from_exception(self.error)
@@ -701,9 +701,11 @@ def execute_code(
     with using(host, port) as link:
         hou = link.hou
         # [LAW:one-source-of-truth] The program's timeout is the one bound on how
-        # long it holds Houdini's main thread: the call cuts it off then, and
-        # Houdini gives up a call silent that long.
-        step = main_thread.step(operation, timeout)
+        # long it holds Houdini's main thread: the call cuts it off then.
+        # [LAW:no-ambient-temporal-coupling] Houdini's own give-up, for a call whose
+        # client is gone, starts before that timeout's clock, so it waits a body's
+        # silence longer rather than racing the cut.
+        step = main_thread.step(operation, timeout + BODY_SILENCE)
 
         # [LAW:one-source-of-truth] Each capture holds its own bound, and every way
         # out of the call reports them through _reported_output.
@@ -861,15 +863,15 @@ def execute_code(
 
         # [LAW:one-source-of-truth] The program's own end says whether it is still
         # running - not the ledger slot, which the worker holds on through its step's
-        # recovery and the scene read after it - so a program that ended as the wait
-        # expired is reported as complete.
-        if not program_ends.is_set():
-            # Cut the program off from Houdini: once its link has ended, Houdini's
-            # main thread gives its call up after the request it is serving returns,
-            # closing the step's group, and the program's request fails. Its
-            # step is then recovered on a fresh link, behind that call on the main
-            # thread - by this call or the worker, whichever reaches it first.
-            houdini().cut_off(link)
+        # recovery and the scene read after it - and the step's verdict settles a
+        # program that ends as the wait expires: one that ended is reported as
+        # complete, one cut off as timed out.
+        if not program_ends.is_set() and step.cut_off():
+            # Once its link has ended, Houdini's main thread gives the program's call
+            # up after the request it is serving returns, closing the step's group,
+            # and the program's request fails. Its step is then recovered on a fresh
+            # link, behind that call on the main thread - by this call or the worker,
+            # whichever reaches it first.
             told = step.recover().told
             logger.warning(
                 "%s exceeded timeout of %ss; cut off worker code_sha256=%s: %s",

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import MockUndos
+from tests.conftest import MockUndos, raised_inside_houdini
 
 
 class TestDetectDangerousCode:
@@ -887,6 +887,44 @@ class TestAProgramThatFailedOnTheLink:
         assert result["message"] == "ValueError: mine\nIts changes to the scene were undone."
         assert mock_connection.node("/obj/half") is None
         assert "ValueError: mine" in result["traceback"]
+
+    def test_a_hou_error_the_program_let_through_reads_as_houdini_gave_it(
+        self, mock_connection, monkeypatch
+    ):
+        """rpyc rebuilds a hou error without its message, which Houdini 22 keeps outside
+        the exception's arguments; the program's failure tells Houdini's own."""
+
+        class HouError(Exception):
+            def __init__(self, message: str) -> None:
+                super().__init__()
+                self.message = message
+
+            def __str__(self) -> str:
+                return self.message
+
+        HouError.__name__ = HouError.__qualname__ = "OperationFailed"
+        HouError.__module__ = "hou"
+
+        def create() -> None:
+            raise raised_inside_houdini(HouError("Invalid node type name"))
+
+        monkeypatch.setattr(mock_connection, "create", create, raising=False)
+        result = _run("hou.create()")
+
+        assert result["message"] == "hou.OperationFailed: Invalid node type name", result
+
+    def test_houdini_never_gives_a_program_up_before_its_timeout_cuts_it_off(self, mock_connection):
+        from houdini_mcp.tools import execute_code
+
+        execute_code(
+            "hou.node('/obj').createNode('geo', 'made')",
+            timeout=5,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+
+        assert mock_connection.undos.silence > 5
 
     def test_a_program_that_raised_in_time_is_not_timed_out_by_its_undo(
         self, mock_connection, monkeypatch

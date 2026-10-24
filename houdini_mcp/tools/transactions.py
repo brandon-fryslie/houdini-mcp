@@ -5,9 +5,9 @@ body through :func:`recovering` and refuses a scene writer that is not sync, so
 every call that can leave an effect in the scene passes through it. An undoable
 call is one step on Houdini's undo stack, undone if it fails; a call that
 replaces the scene first backs up the scene's unsaved work. Two effects are
-their tool's own to undo, and the policy says so: a program's undo group, which
-outlives the call, and a render's temporary nodes, which it destroys before
-returning.
+their tool's own to undo, and the policy says so: a program's undo step, which
+it undoes when the program fails or is cut off at its timeout, and a render's
+temporary nodes, which it destroys before returning.
 """
 
 from __future__ import annotations
@@ -323,6 +323,14 @@ BODY_SILENCE = 60.0
 Houdini gives its call up: a body that stops talking that long has lost its link."""
 
 
+class _Work(StrEnum):
+    """Where an undo step's work stands."""
+
+    RUNNING = "running"
+    ENDED = "ended"
+    CUT = "cut"
+
+
 @dataclass(frozen=True)
 class Recovered:
     """What recovering an undo step found: what became of its changes, as notes,
@@ -344,7 +352,8 @@ class UndoStep:
     [LAW:single-enforcer] :meth:`recover` runs once, under the step's lock: the
     first caller undoes, every later one is told the same, so two ways out of
     one call that both reach it - a program's own failure and its timeout -
-    tell one outcome.
+    tell one outcome. Whether the work ended or was cut off is decided once,
+    under that lock too.
     """
 
     def __init__(self, operation: str, silence: float) -> None:
@@ -353,6 +362,7 @@ class UndoStep:
         self.label = f"houdini-mcp {operation} {uuid.uuid4().hex[:8]}"
         self._lock = threading.Lock()
         self._link: Link | None = None
+        self._work = _Work.RUNNING
         self._recovered: Recovered | None = None
 
     def run(self, link: Link, work: Callable[[], Result]) -> Result:
@@ -369,33 +379,61 @@ class UndoStep:
         """
         logger.info("%s runs as undo group %r", self.operation, self.label)
         self._link = link
+
+        def ending() -> Result:
+            try:
+                return work()
+            finally:
+                with self._lock:
+                    if self._work is _Work.RUNNING:
+                        self._work = _Work.ENDED
+
         try:
-            value = _on_main_thread(link, "call_as_step", work, self.label, self.silence).result()
-            # A step recovered while its work ran was cut off: what the work went on
-            # to return is not the call's.
-            with self._lock:
-                cut = self._recovered is not None
-            if cut:
-                raise OperationFailed(
-                    f"{self.operation} returned after it was cut off from Houdini"
-                )
-            return value
-        # A call the main thread refused never ran: nothing to undo.
+            outcome = _on_main_thread(link, "call_as_step", ending, self.label, self.silence)
+        # Only the plugin's refusal is a call that never ran, with nothing to undo:
+        # the work raising the same type is the work's failure.
         except MainThreadRefused:
             raise
-        # Every other way out - the work raised, Houdini failed the step, the link
-        # failed - leaves whatever the step holds to be recovered.
-        except BaseException as failure:
-            recovered = self.recover()
-            if recovered.lost is not None:
-                # A link that failed is the call's failure, telling the one it was undoing.
-                add_note(recovered.lost, f"{self.operation} had failed: {failure}")
-                for note in recovered.told:
-                    add_note(recovered.lost, note)
-                raise recovered.lost from failure
+        # Houdini failed the step, or the link failed with no word of the work.
+        except BaseException as raised:  # noqa: BLE001
+            outcome = _Raised(raised)
+        with self._lock:
+            cut = self._work is _Work.CUT
+        if isinstance(outcome, _Returned) and not cut:
+            return outcome.value
+        # Every other way out leaves whatever the step holds to be recovered. What
+        # work cut off went on to return is not the call's.
+        failure = (
+            outcome.failure
+            if isinstance(outcome, _Raised)
+            else OperationFailed(f"{self.operation} returned after it was cut off from Houdini")
+        )
+        recovered = self.recover()
+        if recovered.lost is not None:
+            # A link that failed is the call's failure, telling the one it was undoing.
+            add_note(recovered.lost, f"{self.operation} had failed: {failure}")
             for note in recovered.told:
-                add_note(failure, note)
-            raise
+                add_note(recovered.lost, note)
+            raise recovered.lost from failure
+        for note in recovered.told:
+            add_note(failure, note)
+        raise failure
+
+    def cut_off(self) -> bool:
+        """Cut the step's work off from Houdini unless it has ended, saying whether
+        it was cut (:meth:`HoudiniConnection.cut_off`).
+
+        [LAW:no-ambient-temporal-coupling] One verdict, under the step's lock: work
+        that ended is never cut, and what work that was cut returns is never the
+        call's. The link is cut under that lock too, so never under an undo.
+        """
+        with self._lock:
+            if self._work is _Work.ENDED:
+                return False
+            self._work = _Work.CUT
+            assert self._link is not None, "a step is cut off once it has run"
+            houdini().cut_off(self._link)
+            return True
 
     def recover(self) -> Recovered:
         """Undo this step if it is Houdini's latest, on Houdini's main thread, and
