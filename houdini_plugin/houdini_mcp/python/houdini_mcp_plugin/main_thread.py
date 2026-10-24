@@ -23,11 +23,18 @@ from typing import Any
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["PICKUP_TIMEOUT", "call", "call_as_step", "serve", "stop"]
+__all__ = ["PICKUP_TIMEOUT", "SERVE_ROUND_SECONDS", "call", "call_as_step", "serve", "stop"]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
 not run late, once they pass. How long the call then runs is the call's own."""
+
+SERVE_ROUND_SECONDS = 1.0
+"""Seconds one round of serving a client's connection waits for a request
+before its loop looks again: the longest such a loop outlives the listener's
+close of the connection when that close lands as the round's poll() is waking
+and swallows the wakeup (macOS). The next round fails on the closed socket.
+rpyc's own serve() default."""
 
 
 class _State(Enum):
@@ -117,13 +124,23 @@ def _call_while_heard(fn: Callable[[], Any], silence: float) -> Any:
 
     A client given up on has its connection closed: its later requests would
     otherwise be served off the main thread, outside the call they belong to.
+
+    The wait is served in rounds of ``SERVE_ROUND_SECONDS``, not as one wait
+    of ``silence``: a listener stop whose close missed the wait would
+    otherwise hold the main thread for the whole of ``silence`` and blame the
+    client for it. A round's failure on the closed socket ends the call; the
+    client's serving thread, not this one, records who ended the connection.
     """
     import rpyc
 
     reply = rpyc.async_(fn)()
     conn = object.__getattribute__(fn, "____conn__")
+    heard = time.monotonic()
     while not reply.ready:
-        if not conn.serve(silence):
+        # [LAW:no-ambient-temporal-coupling] the end of the wait is the socket's
+        # own closed state, read every round: a lost wakeup costs one round.
+        quiet = time.monotonic() - heard
+        if quiet >= silence:
             given_up = (
                 f"The client sent nothing for {silence}s while its call was out on "
                 "Houdini's main thread, so the main thread gave the call up and closed "
@@ -133,6 +150,8 @@ def _call_while_heard(fn: Callable[[], Any], silence: float) -> Any:
             logger.warning(given_up)
             conn.close()
             raise TimeoutError(given_up)
+        if conn.serve(min(SERVE_ROUND_SECONDS, silence - quiet)):
+            heard = time.monotonic()
     # ``value``: an async result raises what the call raised only when read.
     return reply.value
 

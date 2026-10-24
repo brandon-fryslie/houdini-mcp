@@ -8,6 +8,7 @@ refusals are the ones a headless Houdini gives.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import sys
@@ -21,7 +22,7 @@ from typing import Any
 import pytest
 import rpyc
 import rpyc.utils.server
-from houdini_mcp_plugin import main_thread
+from houdini_mcp_plugin import listener, main_thread
 
 from tests.conftest import _Heard, closing_once_served
 
@@ -137,6 +138,66 @@ class TestHeadless:
             assert conn.closed
         assert isinstance(raised, EOFError), raised
         assert "The client sent nothing for 0.3s" in caplog.text
+
+    def test_a_client_heard_from_keeps_its_call_past_the_silence_bound(self, houdini):
+        """Silence is the time since the client was last heard, not the call's length."""
+        ran: list[bool] = []
+        with houdini() as conn:
+
+            def fn() -> None:
+                for _ in range(10):
+                    conn.modules.time.sleep(0.1)
+                ran.append(True)
+
+            assert serving_main_thread(lambda: call_on_main(conn, fn, silence=0.3)) == []
+        assert ran == [True]
+
+    def test_stop_with_a_call_out_frees_the_main_thread_within_a_round(self, caplog):
+        """Stop Remote while a silent client's call is out frees the main thread
+        within a serving round, though the stop's close wakes nothing, and the
+        connection's end is the listener's, not the client's silence
+        (houdini-laws-etg.jsh)."""
+        server = rpyc.utils.server.ThreadedServer(
+            rpyc.core.SlaveService,
+            hostname="127.0.0.1",
+            port=0,
+            logger=logging.getLogger("test_main_thread.houdini"),
+        )
+        # Served as the listener serves each client it admits.
+        server._handle_connection = functools.partial(listener._serve_connection, server)
+        server._start_in_thread()
+        out, release = threading.Event(), threading.Event()
+        ended = _Heard("by the listener")
+        logging.getLogger("houdini_mcp_plugin.listener").addHandler(ended)
+        freed_after: list[float] = []
+
+        def stop_once_out() -> None:
+            assert out.wait(5)
+            # A close with no shutdown never wakes a poll() on the socket: the
+            # stop whose wakeup was lost, every time.
+            for sock in set(server.clients):
+                sock.close()
+            closed = time.monotonic()
+            server.close()
+            if ended.event.wait(main_thread.SERVE_ROUND_SECONDS + 1):
+                freed_after.append(time.monotonic() - closed)
+            release.set()
+
+        def fn() -> None:
+            out.set()
+            release.wait(60)
+
+        try:
+            with (
+                closing_once_served(server),
+                rpyc.classic.connect("127.0.0.1", server.port) as conn,
+                caplog.at_level(logging.INFO, "houdini_mcp_plugin"),
+            ):
+                serving_main_thread(lambda: call_on_main(conn, fn, silence=30.0), stop_once_out)
+        finally:
+            logging.getLogger("houdini_mcp_plugin.listener").removeHandler(ended)
+        assert freed_after, "the main thread held the call past a serving round after the stop"
+        assert "The client sent nothing" not in caplog.text
 
     def test_a_call_raises_what_the_function_raised(self, houdini):
         with houdini() as conn:

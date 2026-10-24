@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Houdini 22, turning a SOP's display or render flag off changes nothing, since
   its network keeps the flag on one node, and it answered success.
 
+- Stop Remote while a client's call is out on Houdini's main thread frees the
+  main thread within a second (houdini-laws-etg.jsh). On macOS the stop's close
+  of the connection could miss the main thread's wait, which then held the main
+  thread, and a graphical Houdini's interface, for the client's whole silence
+  bound: 60s for a tool, an `execute_code` program's timeout plus 60s for a
+  program. It also logged that the client had sent nothing. The plugin now
+  records the end as the listener's. Needs this release's plugin.
+
 - In Houdini's Manual update mode, which cooks nothing, `get_geo_summary` of a
   SOP changed since its last cook, or never cooked, returns `operation_failed`
   naming the update mode (houdini-laws-etg.7h1). It summarized what the node

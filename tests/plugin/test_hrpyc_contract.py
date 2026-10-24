@@ -270,7 +270,7 @@ class TestListenerAgainstRealRpyc:
 
         with parked_serving_thread(fake_hou, monkeypatch, caplog, resume) as parked:
             assert parked.listener.stop()["status"] == "success"
-            parked.thread.join(timeout=listener_module._SERVE_ROUND_SECONDS + 1)
+            parked.thread.join(timeout=listener_module.SERVE_ROUND_SECONDS + 1)
             assert not parked.thread.is_alive(), "serving thread did not end within a round"
             with pytest.raises(EOFError):
                 parked.conn.modules.math.sqrt(1.0)
