@@ -393,6 +393,64 @@ class TestBypassRequiresConfigAndRequest:
         assert "config" in result["message"].lower()
 
 
+# Each call discards the open scene on Houdini 22 (houdini-laws-etg.d1c): the
+# hipFile member it calls, and the pattern its refusal names.
+SCENE_DISCARDS = [
+    ("hou.hipFile.clear()", "clear", "hou.hipFile.clear() - scene wipe"),
+    ("hou.hipFile.load('/other.hip')", "load", "hou.hipFile.load() - discards the open scene"),
+    (
+        "hou.hipFile.importFBX('/other.fbx', merge_into_scene=False)",
+        "importFBX",
+        "hou.hipFile.importFBX() with merge_into_scene False - discarding the open scene",
+    ),
+]
+
+
+class TestSceneDiscardIsDangerous:
+    """Every program that discards the open scene gets hou.hipFile.clear's treatment."""
+
+    @pytest.mark.parametrize(("code", "member", "pattern"), SCENE_DISCARDS)
+    def test_normal_without_bypass_refuses(self, mock_connection, code, member, pattern):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "dangerous_pattern"
+        assert pattern in result["dangerous_patterns"]
+        getattr(mock_connection.hipFile, member).assert_not_called()
+
+    @pytest.mark.parametrize(("code", "member", "pattern"), SCENE_DISCARDS)
+    def test_normal_with_full_bypass_runs(self, mock_connection, code, member, pattern):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            code,
+            allow_dangerous=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=True,
+        )
+        assert result["status"] == "success"
+        getattr(mock_connection.hipFile, member).assert_called_once()
+
+    @pytest.mark.parametrize(("code", "member", "pattern"), SCENE_DISCARDS)
+    def test_read_only_refuses_whatever_the_flags(self, mock_connection, code, member, pattern):
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            code,
+            policy="read-only",
+            allow_dangerous=True,
+            allow_heavy_geometry=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=True,
+        )
+        assert result["status"] == "error"
+        assert result["audit"]["granted"]["dangerous"] is False
+        getattr(mock_connection.hipFile, member).assert_not_called()
+
+
 class TestHeavyGeometryCapability:
     def test_public_heavy_geometry_flag_still_requires_config(self, mock_connection):
         from houdini_mcp.tools import execute_code

@@ -25,7 +25,9 @@ code is made in one place, and the detectors are pure functions of the tree.
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 __all__ = [
     "parse_code",
@@ -248,10 +250,88 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
     "pdb": frozenset(),
 }
 
-# hou calls that destroy the session or the scene under any policy.
-DANGEROUS_HOU_PATHS: dict[str, str] = {
-    "hou.exit": "hou.exit() - will close Houdini",
-    "hou.hipFile.clear": "hou.hipFile.clear() - scene wipe",
+
+@dataclass(frozen=True)
+class _Refused:
+    """A callee refused wherever the program names it, called or not."""
+
+    reason: str
+
+    def at_reference(self, dotted: str, called: bool) -> str | None:
+        return self.reason
+
+    def at_call(self, dotted: str, call: ast.Call) -> str | None:
+        return None
+
+
+@dataclass(frozen=True)
+class _RefusedByArgument:
+    """A callee whose danger is one argument's value, so it is judged at its call.
+
+    The argument is read where the call passes it, by keyword or position. One
+    the gate cannot read - unpacked, computed, or a literal of another type -
+    is refused [LAW:no-silent-failure], and so is a reference that is not a
+    call (``o = open``), whose calls the gate never sees.
+    """
+
+    keyword: str
+    position: int
+    literal: type
+    dangerous: Callable[[Any], bool]
+    danger: str
+
+    def at_reference(self, dotted: str, called: bool) -> str | None:
+        if called:
+            return None
+        return f"{dotted} referenced without a call - {self.danger} cannot be ruled out"
+
+    def at_call(self, dotted: str, call: ast.Call) -> str | None:
+        if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
+            kw.arg is None for kw in call.keywords
+        ):
+            return f"{dotted}() with unpacked arguments - {self.danger} cannot be ruled out"
+        value: ast.expr | None = (
+            call.args[self.position] if len(call.args) > self.position else None
+        )
+        for kw in call.keywords:
+            if kw.arg == self.keyword:
+                value = kw.value
+        if value is None:
+            return None
+        if isinstance(value, ast.Constant) and isinstance(value.value, self.literal):
+            if self.dangerous(value.value):
+                return f"{dotted}() with {self.keyword} {value.value!r} - {self.danger}"
+            return None
+        return f"{dotted}() with non-literal {self.keyword} - {self.danger} cannot be ruled out"
+
+
+# Calls that close Houdini, discard the open scene, or write a file, by the
+# dotted path they resolve to. The detector finds them under every policy;
+# ExecutionGrant decides what a finding means: refused under read-only
+# whatever the flags, refused under normal unless the caller passes
+# allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
+# [LAW:one-source-of-truth] One row per callee, so a path cannot carry two verdicts.
+DANGEROUS_CALLEES: dict[tuple[str, ...], _Refused | _RefusedByArgument] = {
+    ("hou", "exit"): _Refused("hou.exit() - will close Houdini"),
+    ("hou", "hipFile", "clear"): _Refused("hou.hipFile.clear() - scene wipe"),
+    ("hou", "hipFile", "load"): _Refused("hou.hipFile.load() - discards the open scene"),
+    # importFBX(file_name, suppress_save_prompt, merge_into_scene, ...): merging is
+    # its default; merge_into_scene=False replaces the open scene with the file's.
+    ("hou", "hipFile", "importFBX"): _RefusedByArgument(
+        keyword="merge_into_scene",
+        position=2,
+        literal=bool,
+        dangerous=lambda merge: not merge,
+        danger="discarding the open scene",
+    ),
+    # open(file, mode, ...): a mode that creates or modifies the file.
+    ("open",): _RefusedByArgument(
+        keyword="mode",
+        position=1,
+        literal=str,
+        dangerous=lambda mode: bool(frozenset("wax+") & set(mode)),
+        danger="file writing",
+    ),
 }
 
 # Dynamic-execution builtins: a name the program evaluates or imports at runtime
@@ -259,9 +339,6 @@ DANGEROUS_HOU_PATHS: dict[str, str] = {
 DYNAMIC_EXECUTION_NAMES: frozenset[str] = frozenset(
     {"eval", "exec", "compile", "__import__", "__builtins__", "breakpoint"}
 )
-
-# open() modes that create or modify a file.
-_WRITING_MODE_CHARS = frozenset("wax+")
 
 
 def _rail_refusal(path: tuple[str, ...]) -> str | None:
@@ -282,48 +359,22 @@ def _rail_refusal(path: tuple[str, ...]) -> str | None:
     return None
 
 
-def _open_mode_is_writing(call: ast.Call) -> str | None:
-    """Describe why an ``open()`` call writes, or None when it only reads."""
-    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
-        kw.arg is None for kw in call.keywords
-    ):
-        # Unpacked arguments can carry a mode the gate cannot read [LAW:no-silent-failure].
-        return "open() with unpacked arguments - file writing cannot be ruled out"
-    mode: ast.expr | None = call.args[1] if len(call.args) > 1 else None
-    for kw in call.keywords:
-        if kw.arg == "mode":
-            mode = kw.value
-    if mode is None:
-        return None
-    if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
-        if _WRITING_MODE_CHARS & set(mode.value):
-            return f"open() with mode {mode.value!r} - file writing"
-        return None
-    # A mode the gate cannot read is a mode the gate refuses [LAW:no-silent-failure].
-    return "open() with non-literal mode - file writing cannot be ruled out"
-
-
 def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
     names = _names(tree)
     detected: list[str] = []
-    # ``open`` is judged at its call, where the mode is; any other reference to
-    # it (``o = open``, ``partial(open, ...)``) is a mode the gate cannot read.
-    open_callees = {
-        id(node.func)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
+    callees = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
 
-    def judge(chain: list[str]) -> None:
+    def judge(chain: list[str], reference: ast.expr) -> None:
         # A name the program binds itself is its own variable, not the module
         # that happens to share its spelling (``code = parm.eval()``).
         if names.is_local(chain[0]):
             return
         path, _ = names.resolve(chain)
-        dotted = ".".join(path)
-        if dotted in DANGEROUS_HOU_PATHS:
-            detected.append(DANGEROUS_HOU_PATHS[dotted])
+        if (callee := DANGEROUS_CALLEES.get(path)) and (
+            why := callee.at_reference(".".join(path), id(reference) in callees)
+        ):
+            detected.append(why)
         if why := _rail_refusal(path):
             detected.append(why)
 
@@ -339,23 +390,24 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
         elif isinstance(node, ast.Attribute):
             chain = _dotted_chain(node)
             if chain is not None:
-                judge(chain)
+                judge(chain, node)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if names.is_local(node.id):
                 continue
             if node.id in DYNAMIC_EXECUTION_NAMES and node.id not in names.aliases:
                 detected.append(f"{node.id} - dynamic code execution")
-            elif node.id == "open" and id(node) not in open_callees:
-                detected.append("open referenced without a call - file writing cannot be ruled out")
             else:
-                judge([node.id])
+                judge([node.id], node)
         elif (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "open"
-            and (why := _open_mode_is_writing(node))
+            and (chain := _dotted_chain(node.func)) is not None
+            and not names.is_local(chain[0])
         ):
-            detected.append(why)
+            path, _ = names.resolve(chain)
+            if (callee := DANGEROUS_CALLEES.get(path)) and (
+                why := callee.at_call(".".join(path), node)
+            ):
+                detected.append(why)
 
     return list(dict.fromkeys(detected))
 

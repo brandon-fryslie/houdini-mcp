@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from tests.conftest import MockUndos
 
 
@@ -46,6 +48,29 @@ class TestDetectDangerousCode:
         result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("clear" in r.lower() or "wipe" in r.lower() for r in result)
+
+    @pytest.mark.parametrize(
+        ("code", "refused"),
+        [
+            ("hou.hipFile.importFBX('/x.fbx')", False),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=True)", False),
+            ("hou.hipFile.importFBX('/x.fbx', True, True)", False),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=False)", True),
+            ("hou.hipFile.importFBX('/x.fbx', True, False)", True),
+            ("hf = hou.hipFile\nhf.importFBX('/x.fbx', merge_into_scene=False)", True),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=flag)", True),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)", True),
+            ("hou.hipFile.importFBX(*args)", True),
+            ("hou.hipFile.importFBX('/x.fbx', **options)", True),
+            ("fbx = hou.hipFile.importFBX", True),
+        ],
+    )
+    def test_import_fbx_is_judged_by_merge_into_scene(self, code, refused):
+        """importFBX replaces the open scene only with merge_into_scene=False; one the gate cannot read is refused."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(parse_code(code))
+        assert any("hou.hipFile.importFBX" in d for d in detected) is refused
 
     def test_detect_open_write_mode(self):
         """Test detection of open() with write mode."""
