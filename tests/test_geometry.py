@@ -191,6 +191,18 @@ class TestTheFakeScene:
         assert result["message"] == f"Node {path} has no geometry: geometry() returned None"
         assert result["errors"] == ["Invalid source /obj/geo1/box1/attribvop1."]
 
+    async def test_a_sop_whose_cook_failed_reads_once_a_cook_succeeds(
+        self, mock_connection: MockHouModule, sphere: str
+    ) -> None:
+        node = mock_connection.node(sphere)
+        node.fail_cook("Invalid parameter value")
+        # as fixing the parameter leaves it: no errors, and needing to cook
+        node._errors = []
+
+        result = await _summary(sphere)
+
+        assert (result["status"], result["point_count"]) == ("success", 3)
+
     async def test_a_sop_changed_in_manual_update_mode_is_not_its_last_cook(
         self, mock_connection: MockHouModule, sphere: str, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -136,12 +136,24 @@ class TestGetNodeInfoWithErrors:
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
             cook_info = get_node_info("/obj/geo1", cook_info="force_cook")["cook_info"]
 
-        reason = (
-            "houdini_mcp.tools.nodes.CookedNothing: Houdini ran no cook: the cook count stayed at 1"
-        )
+        reason = "houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at 1"
         assert cook_info["last_cook_time"] == {"unread": reason}
         assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (1, True)
         assert f"unread forced cook of /obj/geo1 reason={reason}" in caplog.messages
+
+    def test_a_forced_cook_of_a_hard_locked_node_has_no_cook_time(self, mock_connection):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mock_connection.add_node(geo1)
+        geo1.setHardLocked(True)
+
+        cook_info = get_node_info("/obj/geo1", cook_info="force_cook")["cook_info"]
+
+        assert cook_info["last_cook_time"] == {
+            "unread": "houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at 1"
+        }
+        assert cook_info["cook_count"] == 1
 
     def test_get_node_info_backward_compatible(self, mock_connection):
         """Test that cook_info="none" (default) doesn't include cook_info."""

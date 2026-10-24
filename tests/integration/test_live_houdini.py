@@ -327,8 +327,7 @@ def test_a_forced_cook_in_manual_update_mode_reports_no_cook_time(at: dict[str, 
 
     assert cook_info["cook_count"] == before, (before, cook_info)
     assert cook_info["last_cook_time"] == {
-        "unread": "houdini_mcp.tools.nodes.CookedNothing: Houdini ran no cook:"
-        f" the cook count stayed at {before}"
+        "unread": f"houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at {before}"
     }
 
 
@@ -344,8 +343,7 @@ def test_a_forced_cook_of_a_hard_locked_node_reports_no_cook_time(at: dict[str, 
 
     assert cook_info["cook_count"] == before, (before, cook_info)
     assert cook_info["last_cook_time"] == {
-        "unread": "houdini_mcp.tools.nodes.CookedNothing: Houdini ran no cook:"
-        f" the cook count stayed at {before}"
+        "unread": f"houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at {before}"
     }
 
 

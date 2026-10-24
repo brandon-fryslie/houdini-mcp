@@ -122,8 +122,9 @@ def get_node_info(
         no render flag). When cook_info is not "none",
         also includes cook_info with cook_count, needs_to_cook, errors and
         warnings (and last_cook_time after a forced cook: {unread} for a cook
-        that failed or did not run, as none runs in Houdini's Manual update
-        mode or on a hard-locked node). cook_count is how many
+        that failed or that the cook count does not show, as none runs in
+        Houdini's Manual update mode or on a hard-locked node, and a legacy
+        COP2's leaves the count unchanged). cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
         needsToCook(): for a SOP, True after a change and after a cook that failed.
         On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
@@ -252,23 +253,23 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     return cook_info
 
 
-class CookedNothing(Exception):
-    """A forced cook Houdini did not run, as in its Manual update mode or on a
-    hard-locked node."""
+class UncountedCook(Exception):
+    """A forced cook Houdini's cook count does not show."""
 
 
 def _cook(node: Any) -> float:
     """Cook ``node``, and the time the cook ran.
 
     [LAW:no-silent-failure] Houdini runs no cook, forced or not, in its Manual
-    update mode or on a hard-locked node, and says nothing; the cook count, which
-    every cook Houdini runs raises by one, is how a cook that did not run is told
-    from one that did - and all it tells, so the reason names no cause.
+    update mode or on a hard-locked node, and says nothing. The cook count, which
+    a cook raises by one, is the only witness to a cook that ran; one it does not
+    show has no time, and the reason claims no more than the count does (a legacy
+    COP2's forced cook leaves it unchanged too).
     """
     before = node.cookCount()
     node.cook(force=True)
     if node.cookCount() == before:
-        raise CookedNothing(f"Houdini ran no cook: the cook count stayed at {before}")
+        raise UncountedCook(f"the cook count stayed at {before}")
     return time.time()
 
 

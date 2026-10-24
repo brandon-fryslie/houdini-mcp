@@ -13,10 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SOP changed since its last cook, or never cooked, returns `operation_failed`
   naming the update mode (houdini-laws-etg.7h1). It summarized what the node
   last cooked, or no geometry at all, as a success. A SOP unchanged since its
-  last cook still reads. `get_node_info(cook_info="force_cook")` there, and on a
-  hard-locked node in any mode, reports `last_cook_time` as `{unread}`, saying
-  Houdini ran no cook, where it reported the current time for a cook that did
-  not run. Needs this release's plugin.
+  last cook still reads. `get_node_info(cook_info="force_cook")` reports
+  `last_cook_time` as `{unread}` for a cook the cook count does not show, as
+  there and on a hard-locked node in any mode, where it reported the current
+  time for a cook that did not run. Needs this release's plugin.
 
 - `get_parameter_schema` asked for one component of a tuple, such as `radx`,
   answers with that component as a scalar: its name, type `float`, its own
