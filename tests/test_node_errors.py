@@ -90,8 +90,8 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert len(result["cook_info"]["errors"]) == 1
-        assert len(result["cook_info"]["warnings"]) == 1
+        assert result["cook_info"]["errors"] == ["Critical error"]
+        assert result["cook_info"]["warnings"] == ["Minor warning"]
 
     @pytest.mark.parametrize("cook_count", [0, 2])
     @pytest.mark.parametrize("needs_to_cook", [False, True])

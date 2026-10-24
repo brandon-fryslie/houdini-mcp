@@ -126,7 +126,7 @@ def get_node_info(
         Houdini's Manual update mode or on a hard-locked node, and a legacy
         COP2's leaves the count unchanged). errors and warnings are each the
         list of messages Houdini lists on the node, as find_error_nodes gives
-        them. cook_count is how many
+        them; any part of cook_info Houdini would not give is {unread}. cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
         needsToCook(): for a SOP, True after a change and after a cook that failed.
         On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
