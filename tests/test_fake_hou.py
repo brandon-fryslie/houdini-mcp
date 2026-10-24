@@ -350,11 +350,42 @@ def test_a_tuple_and_its_components_are_one_value(mock_hou: MockHouModule) -> No
     assert (cam.parm("t"), cam.parmTuple("tx")) == (None, None)
 
 
-def test_a_type_carries_only_the_parameters_houdini_gives_it(mock_hou: MockHouModule) -> None:
+def test_a_menu_parm_set_by_a_token_holds_its_index(mock_hou: MockHouModule) -> None:
+    cam = mock_hou.node("/obj").createNode("cam")
+
+    cam.parm("rOrd").set("zyx")
+    cam.parmTuple("xOrd").set(["trs"])
+
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (5, 5)
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: .*\nInvalid menu item"):
+        cam.parm("rOrd").set("bogus")
+
+
+def test_a_parm_refuses_what_houdini_refuses(mock_hou: MockHouModule) -> None:
     geo = mock_hou.node("/obj").createNode("geo")
 
-    assert geo.createNode("null").parms() == []
-    assert [p.name() for p in geo.parms()] == ["tx", "ty", "tz", "rx", "ry", "rz"]
+    assert geo.parm("shop_materialpath").unexpandedString() == ""
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: .*\nOnly string parms"):
+        geo.parm("tx").unexpandedString()
+    with pytest.raises(Exception, match=r"hou\.InvalidSize: Invalid size\."):
+        geo.parmTuple("t").set([1.0, 2.0])
+    assert geo.parmTuple("t").eval() == (0.0, 0.0, 0.0)
+
+
+def test_a_type_carries_the_parameter_tuples_its_row_lists(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    # a SOP carries no object transform
+    assert geo.createNode("null").parm("tx") is None
+    assert [p.name() for p in geo.parms()] == [
+        "tx",
+        "ty",
+        "tz",
+        "rx",
+        "ry",
+        "rz",
+        "shop_materialpath",
+    ]
     assert mock_hou.node("/out").createNode("opengl").parmTuple("res").eval() == (1280, 720)
     assert mock_hou.node("/out").createNode("opengl").parm("res1").eval() == 1280
 
@@ -362,9 +393,14 @@ def test_a_type_carries_only_the_parameters_houdini_gives_it(mock_hou: MockHouMo
 @pytest.mark.parametrize(
     ("params", "message"),
     [
-        ({"tx": 1.0}, "'tx' is a component of geo's 't'"),
+        ({"tx": 1.0}, "'tx' is a component of 't', not 'tx'"),
         ({"size": [1.0, 2.0, 3.0]}, "geo has no tuple 'size': name its components"),
         ({"t": [1.0, 2.0]}, "'t' has components \\('tx', 'ty', 'tz'\\)"),
+        ({"t": ParmTuple(("a", "b", "c"), (1.0, 2.0, 3.0))}, "'t' has components"),
+        (
+            {"size": ParmTuple(("sizex", "sizey"), (1.0, 2.0)), "sizex": 3.0},
+            "'sizex' is a component of 'size', not 'sizex'",
+        ),
     ],
 )
 def test_given_parameters_name_no_component_houdini_does_not(

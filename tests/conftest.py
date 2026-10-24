@@ -10,7 +10,7 @@ import pathlib
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -56,13 +56,18 @@ def join_path(parent: str, name: str) -> str:
 # contexts of a fresh scene, each one's type name also its node name.
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
-# Every name createNode takes in each category, to the type it gives: the name the
-# table keys a type under and the type's own name (``mountain`` and
+# Every name createNode takes in each category, to the key of the type it gives in
+# NODE_TYPES: the key itself and the type's own name (``mountain`` and
 # ``mountain::2.0`` both give ``mountain::2.0``), as Houdini's createNode takes either.
-_ACCEPTED: dict[str, dict[str, NodeType]] = {
-    category: {**{row.type: row for row in rows.values()}, **rows}
+_ACCEPTED: dict[str, dict[str, str]] = {
+    category: {**{row.type: key for key, row in rows.items()}, **{key: key for key in rows}}
     for category, rows in NODE_TYPES.items()
 }
+
+
+def _offered(category: str, name: str) -> NodeType:
+    """The type ``name`` gives in ``category``, read from NODE_TYPES, its one record."""
+    return NODE_TYPES[category][_ACCEPTED[category][name]]
 
 
 class OperationFailed(Exception):
@@ -78,6 +83,13 @@ class HouPermissionError(Exception):
 
 HouPermissionError.__name__ = HouPermissionError.__qualname__ = "PermissionError"
 HouPermissionError.__module__ = "hou"
+
+
+class InvalidSize(Exception):
+    """hou.InvalidSize, which Houdini 22 raises for a tuple set to the wrong number of values."""
+
+
+InvalidSize.__module__ = "hou"
 
 
 class MockSubnetIndirectInput:
@@ -168,10 +180,12 @@ class MockNodeConnection:
 @dataclass
 class HeldTuple:
     """A placed node's parameter tuple: its components' names and the one list of
-    their values, which parm() and parmTuple() both read and write."""
+    their values, which parm() and parmTuple() both read and write, and a menu
+    parm's tokens."""
 
     components: tuple[str, ...]
     values: list[Any]
+    menu: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -186,39 +200,45 @@ def _placed_parms(node_type: NodeType, given: Mapping[str, Any] | None) -> dict[
     """``given`` as a node of ``node_type`` holds it, each tuple's components named once.
 
     [LAW:parse-dont-validate] [LAW:one-source-of-truth] a tuple the type carries has
-    the type's component names; a ``ParmTuple`` names its own; a scalar is a
-    one-component tuple of its own name, as every scalar parm is in Houdini. A name
-    no source gives is never made up: a list for a tuple the type lacks, a component
-    given as if it were a tuple, a list of the wrong length are a fixture lying.
+    the type's component names; a ``ParmTuple`` for one it lacks names its own; a
+    scalar is a one-component tuple of its own name, as every scalar parm is in
+    Houdini. Each component belongs to one tuple: the type's, or else the first given
+    that names it. A name no source gives is never made up: a list for a tuple the
+    type lacks, a component claimed by a second tuple, a list of the wrong length are
+    a fixture lying.
     """
     if given is None:
         return {
-            name: HeldTuple(parm.components, list(copy.deepcopy(parm.values)))
+            name: HeldTuple(parm.components, list(copy.deepcopy(parm.values)), parm.menu)
             for name, parm in node_type.parms.items()
         }
-    owned = {
-        component: name
-        for name, parm in node_type.parms.items()
-        if len(parm.components) > 1
-        for component in parm.components
-    }
-    held = {}
-    for name, value in given.items():
-        if name in owned:
-            raise ValueError(f"{name!r} is a component of {node_type.type}'s {owned[name]!r}")
-        if isinstance(value, ParmTuple):
-            components, values = value.components, list(value.values)
-        else:
-            values = list(value) if isinstance(value, (list, tuple)) else [value]
-            carried = node_type.parms.get(name)
-            components = carried.components if carried else _own_components(node_type, name, values)
-        if len(values) != len(components):
-            raise ValueError(f"{name!r} has components {components}, given {values!r}")
-        held[name] = HeldTuple(components, values)
+    held = {name: _given_tuple(node_type, name, value) for name, value in given.items()}
+    owners = {c: name for name, parm in node_type.parms.items() for c in parm.components}
+    for name, parm in held.items():
+        for component in parm.components:
+            owner = owners.setdefault(component, name)
+            if owner != name:
+                raise ValueError(f"{component!r} is a component of {owner!r}, not {name!r}")
     return held
 
 
-def _own_components(node_type: NodeType, name: str, values: list[Any]) -> tuple[str, ...]:
+def _given_tuple(node_type: NodeType, name: str, value: Any) -> HeldTuple:
+    """The tuple ``name`` holds, given ``value``, on a node of ``node_type``."""
+    carried = node_type.parms.get(name)
+    if isinstance(value, ParmTuple):
+        stated = value
+    else:
+        values = tuple(value) if isinstance(value, (list, tuple)) else (value,)
+        shape = carried or ParmTuple(_own_components(node_type, name, values), values)
+        stated = replace(shape, values=values)
+    if carried is not None and stated.components != carried.components:
+        raise ValueError(f"{name!r} has components {carried.components}, given {stated!r}")
+    if len(stated.values) != len(stated.components):
+        raise ValueError(f"{name!r} has components {stated.components}, given {stated.values!r}")
+    return HeldTuple(stated.components, list(stated.values), stated.menu)
+
+
+def _own_components(node_type: NodeType, name: str, values: tuple[Any, ...]) -> tuple[str, ...]:
     """The components of a tuple ``node_type`` does not carry: a scalar is its own,
     and a tuple of none (a folder, a separator) has none; any other names are unknown."""
     if len(values) > 1:
@@ -381,7 +401,7 @@ class MockHouNode:
 
     def _row(self) -> NodeType:
         """This node's type: what the name it was created with gives in its category."""
-        return _ACCEPTED[self._category()][self._node_type]
+        return _offered(self._category(), self._node_type)
 
     def _held(self) -> str | None:
         """The category of the nodes this network holds; None for a node that is not one."""
@@ -481,12 +501,16 @@ class MockHouNode:
             parm = MagicMock()
             parm.name.return_value = self._parms()[tuple_name].components[index]
             parm.eval = MagicMock(side_effect=lambda: values()[index])
-            # the fake holds values and expands no variables: what a string holds is
-            # what it evaluates to, and nothing is keyed
-            parm.unexpandedString = parm.eval
+            parm.unexpandedString = MagicMock(
+                side_effect=lambda: self._unexpanded(tuple_name, index)
+            )
             parm.keyframes.return_value = ()
-            parm.set = MagicMock(side_effect=lambda v: values().__setitem__(index, v))
+            parm.set = MagicMock(side_effect=lambda v: self._store(tuple_name, index, v))
             parm.tuple = lambda: self._tuple(tuple_name)
+            if self._parms()[tuple_name].menu:
+                template = parm.parmTemplate.return_value
+                template.type.return_value.name.return_value = "Menu"
+                template.menuItems.return_value = self._parms()[tuple_name].menu
             cache[(tuple_name, index)] = parm
         return cache[(tuple_name, index)]
 
@@ -508,14 +532,35 @@ class MockHouNode:
             cache[name] = parm_tuple
         return cache[name]
 
-    def _set_tuple(self, name: str, value: Any) -> None:
-        values = self._parms()[name].values
-        given = list(value) if isinstance(value, (list, tuple)) else [value]
-        if len(given) != len(values):
-            raise ValueError(
-                f"{self.path()}'s {name!r} has {len(values)} components, given {value!r}"
+    def _unexpanded(self, tuple_name: str, index: int) -> str:
+        """What a string parm holds: as it evaluates, since the fake expands no variables."""
+        value = self._parms()[tuple_name].values[index]
+        if not isinstance(value, str):
+            raise raised_inside_houdini(
+                OperationFailed(
+                    "The attempted operation failed.\nOnly string parms have unexpanded strings"
+                )
             )
-        values[:] = given
+        return value
+
+    def _store(self, tuple_name: str, index: int, value: Any) -> None:
+        """Set one component, as Houdini sets it: a menu parm set by a token holds
+        that token's index."""
+        held = self._parms()[tuple_name]
+        if held.menu and isinstance(value, str):
+            if value not in held.menu:
+                raise raised_inside_houdini(
+                    OperationFailed("The attempted operation failed.\nInvalid menu item")
+                )
+            value = held.menu.index(value)
+        held.values[index] = value
+
+    def _set_tuple(self, name: str, value: Any) -> None:
+        given = list(value) if isinstance(value, (list, tuple)) else [value]
+        if len(given) != len(self._parms()[name].values):
+            raise raised_inside_houdini(InvalidSize("Invalid size."))
+        for index, component in enumerate(given):
+            self._store(name, index, component)
 
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
         # Houdini uniquifies a taken or omitted name: the first free number after
@@ -818,7 +863,7 @@ def _admit(
     if refused is not None:
         refused.add_note(f"{node._node_type!r} in {network.path()!r} ({network_type.type})")
         raise raised_inside_houdini(refused)
-    node_type = offered[node._node_type]
+    node_type = _offered(held, node._node_type)
     parms = (
         node._params
         if isinstance(node._params, dict)

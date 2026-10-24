@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
-from tests.fake_node_types import ParmTuple
 
 
 class TestRenderViewportValidation:
@@ -1221,19 +1220,23 @@ class TestRenderFraming:
         """A studio's own defaults for a camera's rotate and transform orders do not move
         it: the render sets the orders camera_position and camera_rotation are stated in."""
         import houdini_mcp.tools as tools
-        from tests.conftest import _ACCEPTED
+        from tests.conftest import NODE_TYPES
 
         # the cam a studio's defaults give: rotate zxy, transform trs, as menu indices
-        cam = _ACCEPTED["Object"]["cam"]
-        orders = {"rOrd": ParmTuple(("rOrd",), (4,)), "xOrd": ParmTuple(("xOrd",), (5,))}
+        cam = NODE_TYPES["Object"]["cam"]
+        orders = {
+            name: dataclasses.replace(cam.parms[name], values=(index,))
+            for name, index in (("rOrd", 4), ("xOrd", 5))
+        }
         monkeypatch.setitem(
-            _ACCEPTED["Object"], "cam", dataclasses.replace(cam, parms={**cam.parms, **orders})
+            NODE_TYPES["Object"], "cam", dataclasses.replace(cam, parms={**cam.parms, **orders})
         )
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
         assert result["status"] == "success", result
-        assert {f["camera_orders"] for f in frames} == {("xyz", "srt")}
+        # xyz and srt, each its menu's first item
+        assert {f["camera_orders"] for f in frames} == {(0, 0)}
 
     def test_each_aim_logs_where_the_camera_stands_and_how_it_is_turned(
         self, frames: list[dict[str, Any]], caplog: pytest.LogCaptureFixture

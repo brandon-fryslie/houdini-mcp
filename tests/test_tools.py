@@ -2857,8 +2857,27 @@ class TestMaterialTools:
         assert created.parm("metallic").eval() == 1.0
         assert list(created.parmTuple("basecolor").eval()) == [1, 0, 0]
 
-    def test_assign_material_success(self, mock_connection):
-        """Test successful material assignment to geometry."""
+    def test_assign_material_without_a_group_sets_the_objects_material(self, mock_connection):
+        """A geo object carries shop_materialpath, as every geo in Houdini 22 does: the
+        material is assigned there, and no Material SOP is made."""
+        from houdini_mcp.tools import assign_material
+
+        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mock_connection.add_node(geo)
+        mat = MockHouNode(path="/mat/test_mat", name="test_mat", node_type="principledshader")
+        mock_connection.add_node(mat)
+
+        result = assign_material(
+            geometry_path="/obj/geo1", material_path="/mat/test_mat", host="localhost", port=18811
+        )
+
+        assert result["status"] == "success", result
+        assert result["method"] == "shop_materialpath"
+        assert geo.parm("shop_materialpath").eval() == "/mat/test_mat"
+        assert geo.children() == ()
+
+    def test_assign_material_to_a_group_makes_a_material_sop(self, mock_connection):
+        """A group is assigned by a Material SOP made inside the geo network."""
         from houdini_mcp.tools import assign_material
 
         # Create geometry node with a child SOP (required for material assignment)
@@ -2875,6 +2894,7 @@ class TestMaterialTools:
         result = assign_material(
             geometry_path="/obj/geo1",
             material_path="/mat/test_mat",
+            group="top",
             host="localhost",
             port=18811,
         )
@@ -2889,6 +2909,7 @@ class TestMaterialTools:
         assert mat_sop is not None, "expected a material SOP created inside /obj/geo1"
         assert result["material_sop_path"] == mat_sop.path()
         assert mat_sop.parm("shop_materialpath1").eval() == "/mat/test_mat"
+        assert mat_sop.parm("group1").eval() == "top"
 
     def test_assign_material_that_writes_nothing_to_an_existing_sop_is_an_error(
         self, mock_connection

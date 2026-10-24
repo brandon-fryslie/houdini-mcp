@@ -24,10 +24,15 @@ Table = dict[str, dict[str, dict[str, Any]]]
 
 @dataclass(frozen=True)
 class ParmTuple:
-    """A parameter tuple: the names of its parms, its components, and their values."""
+    """A parameter tuple: the names of its parms, its components, and their values.
+
+    ``menu`` is the tokens of a menu parm, whose value is the index of one; a parm
+    that is not a menu offers none.
+    """
 
     components: tuple[str, ...]
     values: tuple[Any, ...]
+    menu: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,7 +68,9 @@ def node_types(table: Table) -> dict[str, dict[str, NodeType]]:
                 holds=facts["holds"],
                 locked=facts["locked"],
                 parms={
-                    tuple_name: ParmTuple(tuple(parm["components"]), tuple(parm["values"]))
+                    tuple_name: ParmTuple(
+                        tuple(parm["components"]), tuple(parm["values"]), tuple(parm["menu"])
+                    )
                     for tuple_name, parm in facts["parms"].items()
                 },
             )
@@ -119,7 +126,13 @@ def _parm_tuple(node: Any, name: str) -> dict[str, Any]:
     if any(parm.keyframes() for parm in parm_tuple):
         # the fake holds values; a parm Houdini computes has no one value to hold
         raise ValueError(f"{node.path()}'s {name!r} is an expression, not a value")
-    return {"components": components, "values": [_held(parm) for parm in parm_tuple]}
+    template = parm_tuple.parmTemplate()
+    return {
+        "components": components,
+        "values": [_held(parm) for parm in parm_tuple],
+        # a menu parm holds an index and is set by a token, which names it
+        "menu": list(template.menuItems()) if template.type().name() == "Menu" else [],
+    }
 
 
 def _held(parm: Any) -> Any:
