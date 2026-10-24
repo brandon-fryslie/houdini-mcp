@@ -570,12 +570,13 @@ def test_a_step_whose_request_outlives_the_link_is_undone(at: dict[str, Any]) ->
             hou.node("/obj").createNode("geo", "it_slow")
             slow(2)
 
+        step = UndoStep("it_slow", silence=60.0)
         try:
-            with pytest.raises(Exception) as raised:
-                UndoStep("it_slow", silence=60.0).run(link, work)
+            with pytest.raises(TimeoutError):
+                step.run(link, work)
         finally:
             config["sync_request_timeout"] = expires
-    assert "Its changes to the scene were undone." in raised.value.__notes__
+    assert step.told() == ("Its changes to the scene were undone.",)
     assert _obj_children(at) == 0
 
 
@@ -591,14 +592,15 @@ def _quiet_work(hou: Any) -> Callable[[], None]:
 
 
 def test_a_step_silent_past_its_bound_is_cut_off_and_undone(at: dict[str, Any]) -> None:
-    with using(**at) as link, pytest.raises(Exception) as raised:
-        UndoStep("it_quiet", silence=1.0).run(link, _quiet_work(link.hou))
-    assert "Its changes to the scene were undone." in raised.value.__notes__
+    step = UndoStep("it_quiet", silence=1.0)
+    with using(**at) as link, pytest.raises(EOFError):
+        step.run(link, _quiet_work(link.hou))
+    assert step.told() == ("Its changes to the scene were undone.",)
     assert _obj_children(at) == 0
 
 
 def test_a_step_silent_within_its_bound_stands(at: dict[str, Any]) -> None:
-    """The bound is the caller's: 60s for a tool body, a program's own timeout."""
+    """The bound is the caller's: 60s for a tool body, a program's timeout and 60s more."""
     with using(**at) as link:
         UndoStep("it_quiet", silence=4.0).run(link, _quiet_work(link.hou))
     assert _obj_children(at) == 1
