@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from tests.conftest import MockUndos
 
 
@@ -47,6 +49,60 @@ class TestDetectDangerousCode:
         assert len(result) >= 1
         assert any("clear" in r.lower() or "wipe" in r.lower() for r in result)
 
+    @pytest.mark.parametrize(
+        ("code", "refused"),
+        [
+            ("hou.hipFile.importFBX('/x.fbx')", False),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=True)", False),
+            ("hou.hipFile.importFBX('/x.fbx', True, True)", False),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=False)", True),
+            ("hou.hipFile.importFBX('/x.fbx', True, False)", True),
+            ("hf = hou.hipFile\nhf.importFBX('/x.fbx', merge_into_scene=False)", True),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=flag)", True),
+            ("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)", True),
+            ("hou.hipFile.importFBX(*args)", True),
+            ("hou.hipFile.importFBX('/x.fbx', **options)", True),
+            ("fbx = hou.hipFile.importFBX", True),
+        ],
+    )
+    def test_import_fbx_is_judged_by_merge_into_scene(self, code, refused):
+        """importFBX replaces the open scene only with merge_into_scene=False; one the gate cannot read is refused."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(parse_code(code))
+        assert any("hou.hipFile.importFBX" in d for d in detected) is refused
+
+    @pytest.mark.parametrize(
+        ("code", "refused"),
+        [
+            ("hou.hipFile.merge('/x.hip')", False),
+            ("hou.hipFile.merge('/x.hip', '*', False)", False),
+            ("hou.hipFile.merge('/x.hip', overwrite_on_conflict=True)", True),
+            ("hou.hipFile.merge('/x.hip', '*', True)", True),
+            ("hou.hipFile.merge('/x.hip', overwrite_on_conflict=flag)", True),
+            ("hou.hipFile.merge(*args)", True),
+            ("m = hou.hipFile.merge", True),
+        ],
+    )
+    def test_merge_is_judged_by_overwrite_on_conflict(self, code, refused):
+        """merge replaces the open scene's clashing nodes only with overwrite_on_conflict=True."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(parse_code(code))
+        assert any("hou.hipFile.merge" in d for d in detected) is refused
+
+    def test_literal_of_another_type_is_named_as_one(self):
+        """A literal the gate cannot judge is named as the literal it is, not as a non-literal."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(
+            parse_code("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)")
+        )
+        assert detected == [
+            "hou.hipFile.importFBX() with merge_into_scene 0, not a bool"
+            " - discarding the open scene cannot be ruled out"
+        ]
+
     def test_detect_open_write_mode(self):
         """Test detection of open() with write mode."""
         from houdini_mcp.tools import _detect_dangerous_code, parse_code
@@ -55,6 +111,22 @@ class TestDetectDangerousCode:
         result = _detect_dangerous_code(parse_code(code))
         assert len(result) >= 1
         assert any("write" in r.lower() or "file" in r.lower() for r in result)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "open = open\nopen('/x', 'w')",
+            "def f(open=open):\n    open('/x', 'w')",
+            "for open in [open]:\n    open('/x', 'w')",
+            "def open(*a): pass\nopen('/x', 'w')",
+            "o = open\no('/x', 'w')",
+        ],
+    )
+    def test_open_rebound_is_judged_as_the_builtin(self, code):
+        """A program's binding of open cannot be told from the builtin, so its writing call is refused."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        assert "open() with mode 'w' - file writing" in _detect_dangerous_code(parse_code(code))
 
     def test_safe_code_no_detection(self):
         """Test that safe code returns empty list."""

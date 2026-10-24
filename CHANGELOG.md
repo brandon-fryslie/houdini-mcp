@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it as `operation_failed`, keeping the caches of the scene it had replaced.
   Needs this release's plugin, which adds `houdini_mcp_scene`.
 
+- `execute_code` refuses `hou.hipFile.load()`, `hou.hipFile.importFBX()` with
+  `merge_into_scene=False` and `hou.hipFile.merge()` with
+  `overwrite_on_conflict=True` (or a value the gate cannot read) as it refuses
+  `hou.hipFile.clear()` (houdini-laws-etg.d1c). They ran under policy `normal`
+  with no bypass and threw away unsaved work. They now need `allow_dangerous`
+  and `HOUDINI_MCP_ALLOW_BYPASS`, and `read-only` refuses them whatever the
+  flags. Their defaults, `importFBX` merging into the scene and `merge`
+  renaming a clashing node, still run. An `open` imported from another module
+  (`from wave import open`) is now judged as that module's member, as
+  `wave.open` already was, not as the builtin.
+
 - `get_geo_summary` reads the geometry inside Houdini, in the same few requests
   whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on
   Houdini 22 for 3 points and for 5000 points with ten attributes and ten

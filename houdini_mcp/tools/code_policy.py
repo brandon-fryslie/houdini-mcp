@@ -25,7 +25,9 @@ code is made in one place, and the detectors are pure functions of the tree.
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Generic, Protocol, TypeVar
 
 __all__ = [
     "parse_code",
@@ -67,7 +69,8 @@ class _Names:
 
     ``aliases`` maps an identifier to the dotted path it stands for:
     ``import os.path as p`` and ``from os import path as p`` both bind ``p`` to
-    ``("os", "path")``, the pre-injected ``hou`` stands for itself, and the
+    ``("os", "path")``, a name the program starts with (``hou``, and for the
+    dangerous gate the builtin ``open``) stands for itself, and the
     one-step ``q = p.x`` binds ``q`` to ``("os", "path", "x")``, so a rename
     never changes a verdict [LAW:one-source-of-truth]. ``bound``
     holds every other identifier the program binds itself - assignments, defs,
@@ -89,8 +92,9 @@ class _Names:
         return identifier in self.bound and identifier not in self.aliases
 
 
-def _names(tree: ast.Module) -> _Names:
-    aliases: dict[str, tuple[str, ...]] = {"hou": ("hou",)}
+def _names(tree: ast.Module, given: frozenset[str]) -> _Names:
+    """Read the program's names; ``given`` are the gate-judged names it starts with."""
+    aliases: dict[str, tuple[str, ...]] = {name: (name,) for name in given}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -248,10 +252,107 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
     "pdb": frozenset(),
 }
 
-# hou calls that destroy the session or the scene under any policy.
-DANGEROUS_HOU_PATHS: dict[str, str] = {
-    "hou.exit": "hou.exit() - will close Houdini",
-    "hou.hipFile.clear": "hou.hipFile.clear() - scene wipe",
+
+class _DangerousCallee(Protocol):
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
+        """Why a reference to the callee is refused, given the call it is the callee of."""
+        ...
+
+
+@dataclass(frozen=True)
+class _Refused:
+    """A callee refused wherever the program names it, called or not."""
+
+    reason: str
+
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
+        return self.reason
+
+
+Value = TypeVar("Value")
+
+
+@dataclass(frozen=True)
+class _RefusedByArgument(Generic[Value]):
+    """A callee whose danger is one argument's value, so it is judged at its call.
+
+    The argument is read where the call passes it, by keyword or position. One
+    the gate cannot read - unpacked, computed, or a literal of another type -
+    is refused [LAW:no-silent-failure], and so is a reference that is not a
+    call (``o = open``), whose calls the gate never sees.
+    """
+
+    keyword: str
+    position: int
+    # [LAW:types-are-the-program] dangerous is handed only values of this type.
+    literal: type[Value]
+    dangerous: Callable[[Value], bool]
+    danger: str
+
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
+        if call is None:
+            return f"{dotted} referenced without a call - {self.danger} cannot be ruled out"
+        if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
+            kw.arg is None for kw in call.keywords
+        ):
+            return f"{dotted}() with unpacked arguments - {self.danger} cannot be ruled out"
+        value: ast.expr | None = (
+            call.args[self.position] if len(call.args) > self.position else None
+        )
+        for kw in call.keywords:
+            if kw.arg == self.keyword:
+                value = kw.value
+        if value is None:
+            return None
+        if not isinstance(value, ast.Constant):
+            return f"{dotted}() with non-literal {self.keyword} - {self.danger} cannot be ruled out"
+        if not isinstance(value.value, self.literal):
+            return (
+                f"{dotted}() with {self.keyword} {value.value!r}, not a "
+                f"{self.literal.__name__} - {self.danger} cannot be ruled out"
+            )
+        if self.dangerous(value.value):
+            return f"{dotted}() with {self.keyword} {value.value!r} - {self.danger}"
+        return None
+
+
+# Calls that close Houdini, discard or overwrite the open scene, or open a file
+# for writing, by the dotted path they resolve to. The detector finds them
+# under every policy; ExecutionGrant decides what a finding means: refused
+# under read-only whatever the flags, refused under normal unless the caller
+# passes allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
+# [LAW:one-source-of-truth] One row per callee, so a path cannot carry two verdicts.
+DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
+    ("hou", "exit"): _Refused("hou.exit() - will close Houdini"),
+    ("hou", "hipFile", "clear"): _Refused("hou.hipFile.clear() - scene wipe"),
+    ("hou", "hipFile", "load"): _Refused("hou.hipFile.load() - discards the open scene"),
+    # importFBX(file_name, suppress_save_prompt, merge_into_scene, ...): merging is
+    # its default; merge_into_scene=False replaces the open scene with the file's.
+    ("hou", "hipFile", "importFBX"): _RefusedByArgument(
+        keyword="merge_into_scene",
+        position=2,
+        literal=bool,
+        dangerous=lambda merge: not merge,
+        danger="discarding the open scene",
+    ),
+    # merge(file_name, node_pattern, overwrite_on_conflict, ...): by default a
+    # clashing name is renamed; overwrite_on_conflict=True replaces the open
+    # scene's node with the file's.
+    ("hou", "hipFile", "merge"): _RefusedByArgument(
+        keyword="overwrite_on_conflict",
+        position=2,
+        literal=bool,
+        dangerous=lambda overwrite: overwrite,
+        danger="overwriting the open scene's nodes",
+    ),
+    # open(file, mode, ...): a mode that creates or modifies the file.
+    ("open",): _RefusedByArgument(
+        keyword="mode",
+        position=1,
+        literal=str,
+        dangerous=lambda mode: bool(frozenset("wax+") & set(mode)),
+        danger="file writing",
+    ),
 }
 
 # Dynamic-execution builtins: a name the program evaluates or imports at runtime
@@ -259,9 +360,6 @@ DANGEROUS_HOU_PATHS: dict[str, str] = {
 DYNAMIC_EXECUTION_NAMES: frozenset[str] = frozenset(
     {"eval", "exec", "compile", "__import__", "__builtins__", "breakpoint"}
 )
-
-# open() modes that create or modify a file.
-_WRITING_MODE_CHARS = frozenset("wax+")
 
 
 def _rail_refusal(path: tuple[str, ...]) -> str | None:
@@ -282,48 +380,25 @@ def _rail_refusal(path: tuple[str, ...]) -> str | None:
     return None
 
 
-def _open_mode_is_writing(call: ast.Call) -> str | None:
-    """Describe why an ``open()`` call writes, or None when it only reads."""
-    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
-        kw.arg is None for kw in call.keywords
-    ):
-        # Unpacked arguments can carry a mode the gate cannot read [LAW:no-silent-failure].
-        return "open() with unpacked arguments - file writing cannot be ruled out"
-    mode: ast.expr | None = call.args[1] if len(call.args) > 1 else None
-    for kw in call.keywords:
-        if kw.arg == "mode":
-            mode = kw.value
-    if mode is None:
-        return None
-    if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
-        if _WRITING_MODE_CHARS & set(mode.value):
-            return f"open() with mode {mode.value!r} - file writing"
-        return None
-    # A mode the gate cannot read is a mode the gate refuses [LAW:no-silent-failure].
-    return "open() with non-literal mode - file writing cannot be ruled out"
-
-
 def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
-    names = _names(tree)
+    # The builtins a row names start bound to themselves, as hou does, so
+    # ``open = open`` and ``def f(open=open)`` resolve to the builtin.
+    names = _names(tree, frozenset({"hou"} | {path[0] for path in DANGEROUS_CALLEES}))
     detected: list[str] = []
-    # ``open`` is judged at its call, where the mode is; any other reference to
-    # it (``o = open``, ``partial(open, ...)``) is a mode the gate cannot read.
-    open_callees = {
-        id(node.func)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
+    # Each reference is judged once, with the call it is the callee of, if any.
+    calls = {id(node.func): node for node in ast.walk(tree) if isinstance(node, ast.Call)}
 
-    def judge(chain: list[str]) -> None:
+    def judge(chain: list[str], reference: ast.expr) -> None:
         # A name the program binds itself is its own variable, not the module
         # that happens to share its spelling (``code = parm.eval()``).
         if names.is_local(chain[0]):
             return
         path, _ = names.resolve(chain)
-        dotted = ".".join(path)
-        if dotted in DANGEROUS_HOU_PATHS:
-            detected.append(DANGEROUS_HOU_PATHS[dotted])
+        if (callee := DANGEROUS_CALLEES.get(path)) and (
+            why := callee.judge(".".join(path), calls.get(id(reference)))
+        ):
+            detected.append(why)
         if why := _rail_refusal(path):
             detected.append(why)
 
@@ -339,23 +414,14 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
         elif isinstance(node, ast.Attribute):
             chain = _dotted_chain(node)
             if chain is not None:
-                judge(chain)
+                judge(chain, node)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if names.is_local(node.id):
                 continue
             if node.id in DYNAMIC_EXECUTION_NAMES and node.id not in names.aliases:
                 detected.append(f"{node.id} - dynamic code execution")
-            elif node.id == "open" and id(node) not in open_callees:
-                detected.append("open referenced without a call - file writing cannot be ruled out")
             else:
-                judge([node.id])
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "open"
-            and (why := _open_mode_is_writing(node))
-        ):
-            detected.append(why)
+                judge([node.id], node)
 
     return list(dict.fromkeys(detected))
 
@@ -1151,7 +1217,7 @@ def _detect_non_inspection_code(tree: ast.Module) -> list[str]:
     reported, so a mutator this module has never heard of is refused the same
     way as one it has.
     """
-    names = _names(tree)
+    names = _names(tree, frozenset({"hou"}))
     detected: list[str] = []
 
     # An aliased name (``hou``, an import, ``hf = hou.hipFile``) that the

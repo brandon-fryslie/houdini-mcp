@@ -536,7 +536,10 @@ def execute_code(
       anything else, including hou APIs added after this release, is refused,
       and bypass flags grant nothing) and "normal" (default; a guard rail
       against accidents, not a sandbox).
-    - Dangerous operation detection: hou.exit(), hou.hipFile.clear(), file
+    - Dangerous operation detection: hou.exit(), discarding the open scene
+      (hou.hipFile.clear(), hou.hipFile.load(), hou.hipFile.importFBX() with
+      merge_into_scene=False, hou.hipFile.merge() with
+      overwrite_on_conflict=True), file
       state changes (os and tempfile beyond their read side, shutil, pathlib,
       archive and database modules, open() for writing), shell and process
       access, dynamic import/execution, network egress (socket, urllib,
