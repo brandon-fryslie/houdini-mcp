@@ -359,6 +359,37 @@ def test_a_menu_parm_set_by_a_token_holds_its_index(mock_hou: MockHouModule) -> 
     assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (5, 5)
     with pytest.raises(Exception, match=r"hou\.OperationFailed: .*\nInvalid menu item"):
         cam.parm("rOrd").set("bogus")
+    # an index past either end holds the nearest item, as Houdini clamps it
+    cam.parm("rOrd").set(99)
+    cam.parm("xOrd").set(-1)
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (5, 0)
+
+
+def test_a_menu_parm_given_to_a_node_holds_an_index(mock_hou: MockHouModule) -> None:
+    """A given token is held as its index; a given ParmTuple keeps its type's menu."""
+    rOrd = NODE_TYPES["Object"]["cam"].parms["rOrd"]
+    params = {"rOrd": "zxy", "xOrd": ParmTuple(("xOrd",), (0,))}
+    mock_hou.add_node(MockHouNode(path="/obj/cam1", name="cam1", node_type="cam", params=params))
+    cam = mock_hou.node("/obj/cam1")
+
+    cam.parm("xOrd").set("trs")
+
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (rOrd.menu.index("zxy"), 5)
+
+
+def test_a_node_is_placed_again_only_where_its_name_gives_its_type(
+    mock_hou: MockHouModule,
+) -> None:
+    """A Sop subnet left by destroy is not placed under an Object network, which
+    would make it the Object subnet with a Sop subnet's parameters."""
+    geo = mock_hou.node("/obj").createNode("geo", "g")
+    sop_subnet = geo.createNode("subnet", "s")
+    sop_subnet.destroy()
+    geo.destroy()
+    mock_hou.node("/obj").createNode("subnet", "g")
+
+    with pytest.raises(ValueError, match="'/obj/g/s' was placed where 'subnet' gave another type"):
+        mock_hou.add_node(sop_subnet)
 
 
 def test_a_parm_refuses_what_houdini_refuses(mock_hou: MockHouModule) -> None:

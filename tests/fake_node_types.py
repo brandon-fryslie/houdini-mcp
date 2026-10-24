@@ -127,6 +127,10 @@ def _parm_tuple(node: Any, name: str) -> dict[str, Any]:
         # the fake holds values; a parm Houdini computes has no one value to hold
         raise ValueError(f"{node.path()}'s {name!r} is an expression, not a value")
     template = parm_tuple.parmTemplate()
+    if template.type().name() == "Int" and template.menuItems():
+        # an int menu parm holds a value, not an index into its tokens, which the
+        # fake's menu does not model
+        raise ValueError(f"{node.path()}'s {name!r} is an int parm with a menu")
     return {
         "components": components,
         "values": [_held(parm) for parm in parm_tuple],

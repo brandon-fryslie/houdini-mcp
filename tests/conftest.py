@@ -10,7 +10,7 @@ import pathlib
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -56,18 +56,14 @@ def join_path(parent: str, name: str) -> str:
 # contexts of a fresh scene, each one's type name also its node name.
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
-# Every name createNode takes in each category, to the key of the type it gives in
-# NODE_TYPES: the key itself and the type's own name (``mountain`` and
-# ``mountain::2.0`` both give ``mountain::2.0``), as Houdini's createNode takes either.
-_ACCEPTED: dict[str, dict[str, str]] = {
-    category: {**{row.type: key for key, row in rows.items()}, **{key: key for key in rows}}
-    for category, rows in NODE_TYPES.items()
-}
 
-
-def _offered(category: str, name: str) -> NodeType:
-    """The type ``name`` gives in ``category``, read from NODE_TYPES, its one record."""
-    return NODE_TYPES[category][_ACCEPTED[category][name]]
+def _offered(category: str, name: str) -> NodeType | None:
+    """The type createNode gives for ``name`` in ``category``: the one the table keys
+    under it, or the one whose own name it is (``mountain`` and ``mountain::2.0`` both
+    give ``mountain::2.0``, as Houdini's createNode takes either); None for a name it
+    refuses there."""
+    rows = NODE_TYPES[category]
+    return rows.get(name) or next((row for row in rows.values() if row.type == name), None)
 
 
 class OperationFailed(Exception):
@@ -189,6 +185,14 @@ class HeldTuple:
 
 
 @dataclass(frozen=True)
+class Placed:
+    """A placed node's parameter tuples, and the type that named them."""
+
+    row: NodeType
+    tuples: dict[str, HeldTuple]
+
+
+@dataclass(frozen=True)
 class Unplaced:
     """The parameters a node was built with, before it is in a scene: unread until
     its type, which its network decides, says what they name. None is its type's own."""
@@ -226,16 +230,29 @@ def _given_tuple(node_type: NodeType, name: str, value: Any) -> HeldTuple:
     """The tuple ``name`` holds, given ``value``, on a node of ``node_type``."""
     carried = node_type.parms.get(name)
     if isinstance(value, ParmTuple):
-        stated = value
+        if carried is not None and value.components != carried.components:
+            raise ValueError(f"{name!r} has components {carried.components}, given {value!r}")
+        values, shape = value.values, carried or value
     else:
         values = tuple(value) if isinstance(value, (list, tuple)) else (value,)
         shape = carried or ParmTuple(_own_components(node_type, name, values), values)
-        stated = replace(shape, values=values)
-    if carried is not None and stated.components != carried.components:
-        raise ValueError(f"{name!r} has components {carried.components}, given {stated!r}")
-    if len(stated.values) != len(stated.components):
-        raise ValueError(f"{name!r} has components {stated.components}, given {stated.values!r}")
-    return HeldTuple(stated.components, list(stated.values), stated.menu)
+    if len(values) != len(shape.components):
+        raise ValueError(f"{name!r} has components {shape.components}, given {values!r}")
+    return HeldTuple(shape.components, [_held_value(shape.menu, v) for v in values], shape.menu)
+
+
+def _held_value(menu: tuple[str, ...], value: Any) -> Any:
+    """A component's value as Houdini holds it: a menu parm holds an index, set by its
+    token or clamped into its items; any other parm, the value."""
+    if not menu:
+        return value
+    if isinstance(value, str):
+        if value not in menu:
+            raise raised_inside_houdini(
+                OperationFailed("The attempted operation failed.\nInvalid menu item")
+            )
+        return menu.index(value)
+    return min(max(value, 0), len(menu) - 1)
 
 
 def _own_components(node_type: NodeType, name: str, values: tuple[Any, ...]) -> tuple[str, ...]:
@@ -269,7 +286,7 @@ class MockHouNode:
         self._parent: MockHouNode | None = None
         # [LAW:types-are-the-program] read only once placed: what the parameters name
         # is the node's type's to say, and its network decides that type.
-        self._params: Unplaced | dict[str, HeldTuple] = Unplaced(params)
+        self._params: Unplaced | Placed = Unplaced(params)
         self._inputs: list[Any] = []
         # Source output index per connected input, as hou.NodeConnection.outputIndex()
         # reports it. A test that assigns ``_inputs`` directly wires from output 0,
@@ -401,7 +418,9 @@ class MockHouNode:
 
     def _row(self) -> NodeType:
         """This node's type: what the name it was created with gives in its category."""
-        return _offered(self._category(), self._node_type)
+        row = _offered(self._category(), self._node_type)
+        assert row is not None, "attach places no node whose type its network refuses"
+        return row
 
     def _held(self) -> str | None:
         """The category of the nodes this network holds; None for a node that is not one."""
@@ -412,13 +431,13 @@ class MockHouNode:
         built by hand has none until it is placed."""
         if isinstance(self._params, Unplaced):
             raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no parameters")
-        return self._params
+        return self._params.tuples
 
     def _take_parms(self) -> None:
         """Hold this node's parameters as its type names them: the root's, which no
         network places."""
         assert isinstance(self._params, Unplaced)
-        self._params = _placed_parms(self._row(), self._params.given)
+        self._params = Placed(self._row(), _placed_parms(self._row(), self._params.given))
 
     def children(self) -> tuple["MockHouNode", ...]:
         """The network's children, as hou.Node.children gives them: a tuple, which
@@ -544,23 +563,16 @@ class MockHouNode:
         return value
 
     def _store(self, tuple_name: str, index: int, value: Any) -> None:
-        """Set one component, as Houdini sets it: a menu parm set by a token holds
-        that token's index."""
         held = self._parms()[tuple_name]
-        if held.menu and isinstance(value, str):
-            if value not in held.menu:
-                raise raised_inside_houdini(
-                    OperationFailed("The attempted operation failed.\nInvalid menu item")
-                )
-            value = held.menu.index(value)
-        held.values[index] = value
+        held.values[index] = _held_value(held.menu, value)
 
     def _set_tuple(self, name: str, value: Any) -> None:
+        """Set every component or, refused, none."""
+        held = self._parms()[name]
         given = list(value) if isinstance(value, (list, tuple)) else [value]
-        if len(given) != len(self._parms()[name].values):
+        if len(given) != len(held.values):
             raise raised_inside_houdini(InvalidSize("Invalid size."))
-        for index, component in enumerate(given):
-            self._store(name, index, component)
+        held.values[:] = [_held_value(held.menu, v) for v in given]
 
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
         # Houdini uniquifies a taken or omitted name: the first free number after
@@ -831,12 +843,13 @@ def _admit(
     network_type: NodeType,
     node: MockHouNode,
     siblings: Sequence[MockHouNode],
-) -> list[tuple[MockHouNode, dict[str, HeldTuple]]]:
+) -> list[tuple[MockHouNode, Placed]]:
     """Refuse ``node`` and its subtree as a child of ``network`` (of ``network_type``),
     beside ``siblings``, unless Houdini could have built them there; else each node of
     the subtree with the parameters it holds once placed.
 
-    A node placed before keeps the parameters it had.
+    A node placed before keeps the parameters it had, so it is placed only where its
+    name gives the type it was.
     """
     parent_path, name = split_path(node.path())
     if parent_path != network.path() or name != node.name():
@@ -848,26 +861,28 @@ def _admit(
     if any(sibling.name() == name for sibling in siblings):
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
     held = network_type.holds
-    offered = {} if held is None else _ACCEPTED[held]
-    # Houdini's three refusals: a node that is not a network, a locked asset, and a
-    # type its network's category does not offer.
-    refused: BaseException | None = None
-    if held is None:
-        refused = OperationFailed(
-            "The attempted operation failed.\nThis node cannot contain other nodes"
+    node_type = (
+        _offered(held, node._node_type) if held is not None and not network_type.locked else None
+    )
+    if node_type is None:
+        # Houdini's three refusals: a node that is not a network, a locked asset, and
+        # a type its network's category does not offer.
+        refused: BaseException = (
+            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
+            if held is None
+            else HouPermissionError("Cannot create a node inside a locked asset")
+            if network_type.locked
+            else OperationFailed("The attempted operation failed.\nInvalid node type name")
         )
-    elif network_type.locked:
-        refused = HouPermissionError("Cannot create a node inside a locked asset")
-    elif node._node_type not in offered:
-        refused = OperationFailed("The attempted operation failed.\nInvalid node type name")
-    if refused is not None:
         refused.add_note(f"{node._node_type!r} in {network.path()!r} ({network_type.type})")
         raise raised_inside_houdini(refused)
-    node_type = _offered(held, node._node_type)
+    if isinstance(node._params, Placed) and node._params.row != node_type:
+        # Houdini moves no node to a network whose category makes it another type
+        raise ValueError(f"{node.path()!r} was placed where {node._node_type!r} gave another type")
     parms = (
         node._params
-        if isinstance(node._params, dict)
-        else _placed_parms(node_type, node._params.given)
+        if isinstance(node._params, Placed)
+        else Placed(node_type, _placed_parms(node_type, node._params.given))
     )
     placements = [(node, parms)]
     for index, child in enumerate(node._children):
