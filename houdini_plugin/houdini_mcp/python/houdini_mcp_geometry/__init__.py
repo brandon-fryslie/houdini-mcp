@@ -17,7 +17,7 @@ import functools
 import itertools
 import json
 from collections.abc import Callable
-from typing import Any, NotRequired, TypedDict, TypeVar, final
+from typing import Any, TypedDict, TypeVar, final
 
 from houdini_mcp_read import Reads, RefusedRead, Unread, format_reason, json_safe_hou_value
 
@@ -55,20 +55,27 @@ class Sample(TypedDict):
     values: dict[str, Any]
 
 
-@final
-class Summary(TypedDict):
-    """The geometry's counts and raw bounds, and what the caller asked to read of it."""
+class _Read(TypedDict):
+    """What every summary carries: the geometry's counts and raw bounds."""
 
     point_count: int
     primitive_count: int
     vertex_count: int
     bounds: list[float] | Unread
     """``(xmin, xmax, ymin, ymax, zmin, zmax)``; the server makes it a box."""
-    attributes: NotRequired[dict[str, list[dict[str, Any]]]]
-    groups: NotRequired[dict[str, list[str | Unread]]]
-    warning: NotRequired[str]
-    sample_points: NotRequired[list[Sample]]
     refused_reads: list[RefusedRead]
+
+
+# total=False, not NotRequired: the plugin runs in Houdini's Python, 3.10 among
+# them, whose typing has no NotRequired
+@final
+class Summary(_Read, total=False):
+    """The geometry's counts and raw bounds, and what the caller asked to read of it."""
+
+    attributes: dict[str, list[dict[str, Any]]]
+    groups: dict[str, list[str | Unread]]
+    warning: str
+    sample_points: list[Sample]
 
 
 Answer = NotASop | NoGeometry | Summary
@@ -117,11 +124,12 @@ def _answer(
         bounds=read("bounding_box", lambda: list(geo.intrinsicValue("bounds"))),
         refused_reads=reads.refused,
     )
+    point_attribs = geo.pointAttribs()
     if include_attributes:
         summary["attributes"] = {
             kind: [_attrib(read, f"attributes.{kind}[{i}]", a) for i, a in enumerate(attribs)]
             for kind, attribs in (
-                ("point", geo.pointAttribs()),
+                ("point", point_attribs),
                 ("primitive", geo.primAttribs()),
                 ("vertex", geo.vertexAttribs()),
                 ("detail", geo.globalAttribs()),
@@ -138,7 +146,7 @@ def _answer(
             summary["warning"] = (
                 f"Geometry has {point_count} points (>1M); samples are its first {sampled}."
             )
-        names = [a.name() for a in geo.pointAttribs()]
+        names = [a.name() for a in point_attribs]
         summary["sample_points"] = [
             Sample(
                 point=point.number(),

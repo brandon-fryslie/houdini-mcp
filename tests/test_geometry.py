@@ -329,7 +329,10 @@ class TestWhatHoudiniWillNotRead:
         # a summary's excerpt is the result's start, which the box must be in
         fields = list(result)
         assert fields.index("bounding_box") < fields.index("attributes")
-        assert f"Read geometry of /obj/geo1/box1: 1 points, bounding_box={box}" in caplog.text
+        assert (
+            f"Read geometry of /obj/geo1/box1: 1 points, bounding_box={box}, sampled=1, refused=0"
+            in caplog.text
+        )
         assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
         assert result["groups"]["point"] == ["top"]
         assert result["sample_points"] == [{"point": 0, "values": {"P": [0.0, 1.0, 2.0]}}]
@@ -394,8 +397,8 @@ class TestWhatHoudiniWillNotRead:
         assert result["point_count"] == 0
         assert "bounding_box" not in result
         assert (
-            "Read geometry of /obj/geo1/box1: 0 points, bounding_box=none (no point has a position)"
-            in caplog.text
+            "Read geometry of /obj/geo1/box1: 0 points, bounding_box=none (no point has a position), "
+            "sampled=0, refused=0" in caplog.text
         )
 
     async def test_a_bounding_box_houdini_will_not_give_is_unread_not_null(self, connected_to):
@@ -406,20 +409,22 @@ class TestWhatHoudiniWillNotRead:
         assert result["bounding_box"] == {"unread": "RuntimeError: no bounds"}
 
     async def test_an_attribute_or_group_houdini_will_not_read_stays_in_its_list(
-        self, connected_to
+        self, connected_to, caplog
     ):
         geo = self._geo(
             pointAttribs=lambda: [_Attrib("P"), _Attrib("Cd", data_type=_Raises("no type"))],
             pointGroups=lambda: [SimpleNamespace(name=_Raises("no name"))],
         )
 
-        result = await self._run(connected_to, self._node(geo), max_sample_points=0)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.geometry"):
+            result = await self._run(connected_to, self._node(geo), max_sample_points=0)
 
         assert result["attributes"]["point"] == [
             {"name": "P", "type": "float", "size": 3},
             {"name": "Cd", "type": {"unread": "RuntimeError: no type"}, "size": 3},
         ]
         assert result["groups"]["point"] == [{"unread": "RuntimeError: no name"}]
+        assert "sampled=0, refused=2" in caplog.text
 
     async def test_a_sample_value_houdini_will_not_read_is_unread_not_missing(self, connected_to):
         points = [SimpleNamespace(number=lambda: 0, attribValue=_Raises("no value"))]

@@ -156,16 +156,18 @@ def _read_geometry(
         elif key != "refused_reads":
             result[key] = value
     logger.info(
-        "Read geometry of %s: %s points, bounding_box=%s",
+        "Read geometry of %s: %s points, bounding_box=%s, sampled=%d, refused=%d",
         node_path,
         result["point_count"],
         result.get("bounding_box", "none (no point has a position)"),
+        len(result.get("sample_points", ())),
+        len(answer["refused_reads"]),
     )
     return result
 
 
 def _bounding_box(bounds: Any) -> dict[str, Any]:
-    """The bounding_box field the program's bounds read becomes: the box, the read
+    """The bounding_box field the read's raw bounds become: the box, the read
     Houdini refused, or no field for geometry with no point that has a position, as
     the render tools report a framing of nothing."""
     if is_unread(bounds):
