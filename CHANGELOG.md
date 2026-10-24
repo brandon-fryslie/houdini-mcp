@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_parameter_schema` asked for one component of a tuple, such as `radx`,
+  answers with that component as a scalar: its name, type `float`, its own
+  value and its own default, as `set_parameter` writes it
+  (houdini-laws-etg.2e6). It answered with the whole tuple (`rad`, type
+  `vector`, `tuple_size` 3). A tuple's name (`rad`, `t`) still answers the
+  vector. Needs this release's plugin.
+
 - `load_scene` of a file Houdini loads with warnings, such as a node whose
   asset definition is missing, reports the load as a success carrying
   Houdini's text under `warning` (houdini-laws-etg.79h). Houdini raises

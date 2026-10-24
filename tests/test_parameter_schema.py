@@ -79,10 +79,12 @@ def give_menu(parm: Any, tokens: list[str], labels: list[str]) -> None:
 
 
 def give_templates(node: MockHouNode, templates: list[MockParmTemplate]) -> None:
-    """Give each of the fake node's parameters its template, by name."""
+    """Give each of the fake node's parameters its template, by name: as in
+    Houdini, a tuple's components share its template."""
     for template in templates:
-        target = node.parm(template.name()) or node.parmTuple(template.name())
-        target.parmTemplate = MagicMock(return_value=template)
+        parm_tuple = node.parmTuple(template.name())
+        for target in (parm_tuple, *parm_tuple):
+            target.parmTemplate = MagicMock(return_value=template)
 
 
 def create_mock_hou_with_parm_types():
@@ -201,6 +203,49 @@ class TestGetParameterSchema:
         assert param["default"] == [0.0, 0.0, 0.0]
         assert param["current_value"] == [1.0, 2.0, 3.0]
         assert param["is_animatable"] is True
+
+    def test_a_named_component_is_described_as_itself_not_its_tuple(self, connected_to):
+        """rady is the scalar set_parameter("rady", ...) writes: its own value and its
+        own component's default, not rad's vector."""
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        mock_hou.node("/obj").createNode("geo", "geo1")
+        sphere = MockHouNode(
+            path="/obj/geo1/sphere1",
+            name="sphere1",
+            node_type="sphere",
+            params={"rad": ParmTuple(("radx", "rady", "radz"), (1.0, 5.0, 1.0))},
+        )
+        mock_hou.add_node(sphere)
+        rad = MockParmTemplate(
+            "rad", "Radius", mock_hou.parmTemplateType.Float, 3, [1.0, 2.0, 3.0], -1.0, 1.0
+        )
+        give_templates(sphere, [rad])
+        connected_to(mock_hou)
+
+        component = get_parameter_schema("/obj/geo1/sphere1", "rady")
+        whole = get_parameter_schema("/obj/geo1/sphere1", "rad")
+
+        assert component["parameters"] == [
+            {
+                "name": "rady",
+                "label": "Radius",
+                "current_value": 5.0,
+                "type": "float",
+                "is_animatable": True,
+                "default": 2.0,
+                "min": -1.0,
+                "max": 1.0,
+            }
+        ]
+        [vector] = whole["parameters"]
+        assert (vector["name"], vector["type"], vector["tuple_size"], vector["default"]) == (
+            "rad",
+            "vector",
+            3,
+            [1.0, 2.0, 3.0],
+        )
 
     def test_get_parameter_schema_menu(self, connected_to):
         """Test getting schema for a menu parameter."""

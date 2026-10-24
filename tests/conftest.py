@@ -537,6 +537,7 @@ class MockHouNode:
             values = lambda: self._parms()[tuple_name].values  # noqa: E731
             parm = MagicMock()
             parm.name.return_value = self._parms()[tuple_name].components[index]
+            parm.componentIndex.return_value = index
             parm.eval = MagicMock(side_effect=lambda: values()[index])
             parm.unexpandedString = MagicMock(
                 side_effect=lambda: self._unexpanded(tuple_name, index)

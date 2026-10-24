@@ -69,20 +69,23 @@ def parameter_schema(hou: Any, node: Any, parm_name: str | None, max_parms: int)
 def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answer:
     # [LAW:one-source-of-truth] The node's parm tuples are its parameters.
     # Its templates are not: a multiparm's template (type#) names no parm,
-    # where its instances (type1, type2) are parms the node has.
+    # where its instances (type1, type2) are parms the node has. A name is
+    # the parameter Houdini resolves it to, the one set_parameter writes: a
+    # component (radx) is described as itself, not as its tuple (rad).
     if parm_name is None:
-        parm_tuples = node.parmTuples()
+        parms = [of_tuple(pt) for pt in node.parmTuples()]
     else:
         try:
-            parm_tuples = (resolve(node, parm_name).parm_tuple(),)
+            parms = [resolve(node, parm_name)]
         except ParmNotFound as e:
             return Refused(refused=str(e))
 
     # Parameters this read does not list are dropped before the cut, so
     # max_parms, count and the warning all count what is listed.
     unlisted = _unlisted_types(hou)
-    templated = [(pt, pt.parmTemplate()) for pt in parm_tuples]
-    listed = [(pt, template) for pt, template in templated if template.type() not in unlisted]
+    # a component's template is its tuple's, as a scalar's is its own
+    templated = [(parm, parm.target.parmTemplate()) for parm in parms]
+    listed = [(parm, template) for parm, template in templated if template.type() not in unlisted]
     if parm_name is not None and not listed:
         # [LAW:no-silent-failure] a named folder tab, separator or label is no
         # parameter listed here; an empty success would read as "none".
@@ -96,7 +99,7 @@ def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answe
     # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
     # tuple, and max_parms is at least 1.
     parameters = [
-        _parameter(hou, of_tuple(pt), template, reads, menus) for pt, template in listed[:max_parms]
+        _parameter(hou, parm, template, reads, menus) for parm, template in listed[:max_parms]
     ]
     return Schema(
         parameters=parameters, listed=len(listed), menus=menus, refused_reads=reads.refused
@@ -149,7 +152,7 @@ def _parameter(
     if hasattr(parm_template, "defaultValue") and type_str != "ramp":
         param_info["default"] = reads.read(
             f"default of {name}",
-            lambda: json_safe_hou_value(hou, _default(parm_template.defaultValue(), is_tuple)),
+            lambda: json_safe_hou_value(hou, _default(parm_template.defaultValue(), parm)),
         )
 
     if type_str in ("float", "int", "vector"):
@@ -168,10 +171,13 @@ def _parameter(
     return param_info
 
 
-def _default(value: Any, is_tuple: bool) -> Any:
+def _default(value: Any, parm: Parm) -> Any:
     # Float, Int and String templates give a tuple of per-component defaults;
-    # Toggle, Menu and Ramp give one value.
-    return value[0] if isinstance(value, tuple) and not is_tuple else value
+    # Toggle, Menu and Ramp give one value. A component's is its own entry
+    # (rady's is rad's second), a scalar's the one there is.
+    if isinstance(value, tuple) and not parm.is_tuple:
+        return value[parm.target.componentIndex()]
+    return value
 
 
 _MENU_SEPARATOR = "_separator_"
