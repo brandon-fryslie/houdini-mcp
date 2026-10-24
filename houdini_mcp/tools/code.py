@@ -516,7 +516,8 @@ def execute_code(
       overwrite_on_conflict=True), file
       state changes (os and tempfile beyond their read side, shutil, pathlib,
       archive and database modules, open() for writing), shell and process
-      access, dynamic import/execution, network egress (socket, urllib,
+      access, dynamic import/execution, HScript (hou.hscript(), its expression
+      evaluators, and string expansion holding a backtick), network egress (socket, urllib,
       requests, httpx, http, ftplib, smtplib, ...) and the debugger. Judged on
       the parsed program, so text in comments and strings is not code.
     - Code that does not parse is refused before any rail runs.

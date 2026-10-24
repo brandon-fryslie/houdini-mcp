@@ -13,7 +13,7 @@ Two kinds of rail live here, and they fail in opposite directions on purpose:
   unrecognized, not because it was enumerated.
 * ``normal`` is a **denylist** against accidents. It refuses the operations
   that destroy work (process exit, scene wipe, file deletion, shell and
-  network access, dynamic execution) and admits everything else. It is a
+  network access, dynamic execution, HScript) and admits everything else. It is a
   guard rail, not a sandbox; a caller who needs a guarantee asks for
   ``read-only``.
 
@@ -25,9 +25,10 @@ code is made in one place, and the detectors are pure functions of the tree.
 from __future__ import annotations
 
 import ast
+import enum
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar
 
 __all__ = [
     "parse_code",
@@ -272,20 +273,33 @@ class _Refused:
 Value = TypeVar("Value")
 
 
+class _Required(enum.Enum):
+    """The default of a parameter that has none: one the gate cannot find was
+    passed under a name it does not know."""
+
+    REQUIRED = enum.auto()
+
+
+REQUIRED = _Required.REQUIRED
+
+
 @dataclass(frozen=True)
 class _RefusedByArgument(Generic[Value]):
     """A callee whose danger is one argument's value, so it is judged at its call.
 
-    The argument is read where the call passes it, by keyword or position. One
-    the gate cannot read - unpacked, computed, or a literal of another type -
-    is refused [LAW:no-silent-failure], and so is a reference that is not a
-    call (``o = open``), whose calls the gate never sees.
+    The argument is read where the call passes it, by keyword or position, and
+    a call that passes neither is judged on the parameter's default. One the
+    gate cannot read - unpacked, computed, a literal of another type, or a
+    required one it cannot find - is refused [LAW:no-silent-failure], and so
+    is a reference that is not a call (``o = open``), whose calls the gate
+    never sees.
     """
 
     keyword: str
     position: int
     # [LAW:types-are-the-program] dangerous is handed only values of this type.
     literal: type[Value]
+    default: Value | Literal[_Required.REQUIRED]
     dangerous: Callable[[Value], bool]
     danger: str
 
@@ -296,28 +310,33 @@ class _RefusedByArgument(Generic[Value]):
             kw.arg is None for kw in call.keywords
         ):
             return f"{dotted}() with unpacked arguments - {self.danger} cannot be ruled out"
-        value: ast.expr | None = (
+        given: ast.expr | None = (
             call.args[self.position] if len(call.args) > self.position else None
         )
         for kw in call.keywords:
             if kw.arg == self.keyword:
-                value = kw.value
-        if value is None:
-            return None
-        if not isinstance(value, ast.Constant):
+                given = kw.value
+        value: Value
+        if given is None:
+            if self.default is REQUIRED:
+                return f"{dotted}() without {self.keyword} - {self.danger} cannot be ruled out"
+            value = self.default
+        elif not isinstance(given, ast.Constant):
             return f"{dotted}() with non-literal {self.keyword} - {self.danger} cannot be ruled out"
-        if not isinstance(value.value, self.literal):
+        elif not isinstance(given.value, self.literal):
             return (
-                f"{dotted}() with {self.keyword} {value.value!r}, not a "
+                f"{dotted}() with {self.keyword} {given.value!r}, not a "
                 f"{self.literal.__name__} - {self.danger} cannot be ruled out"
             )
-        if self.dangerous(value.value):
-            return f"{dotted}() with {self.keyword} {value.value!r} - {self.danger}"
+        else:
+            value = given.value
+        if self.dangerous(value):
+            return f"{dotted}() with {self.keyword} {value!r} - {self.danger}"
         return None
 
 
-# Calls that close Houdini, discard or overwrite the open scene, or open a file
-# for writing, by the dotted path they resolve to. The detector finds them
+# Calls that close Houdini, discard or overwrite the open scene, open a file
+# for writing, or run HScript, by the dotted path they resolve to. The detector finds them
 # under every policy; ExecutionGrant decides what a finding means: refused
 # under read-only whatever the flags, refused under normal unless the caller
 # passes allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
@@ -332,6 +351,7 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
         keyword="merge_into_scene",
         position=2,
         literal=bool,
+        default=True,
         dangerous=lambda merge: not merge,
         danger="discarding the open scene",
     ),
@@ -342,6 +362,7 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
         keyword="overwrite_on_conflict",
         position=2,
         literal=bool,
+        default=False,
         dangerous=lambda overwrite: overwrite,
         danger="overwriting the open scene's nodes",
     ),
@@ -350,9 +371,53 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
         keyword="mode",
         position=1,
         literal=str,
+        default="r",
         dangerous=lambda mode: bool(frozenset("wax+") & set(mode)),
         danger="file writing",
     ),
+    # HScript is a second language the gate does not read, the same case as
+    # eval. A command string cannot be ruled out by reading it: on Houdini 22,
+    # mnew wipes the scene, unix runs a shell, python runs Python, `;` chains
+    # commands, and `alias opls mnew` makes even opls a wipe.
+    ("hou", "hscript"): _Refused(
+        "hou.hscript() - HScript, which can wipe the scene (mnew), "
+        "run a shell (unix) or run Python (python)"
+    ),
+    # An expression's system() runs a shell, and run() runs any HScript command.
+    **{
+        ("hou", evaluator): _Refused(
+            f"hou.{evaluator}() - an HScript expression, whose system() runs a shell "
+            "and run() any HScript command"
+        )
+        for evaluator in (
+            "hscriptExpression",
+            "hscriptFloatExpression",
+            "hscriptStringExpression",
+            "hscriptVectorExpression",
+            "hscriptMatrixExpression",
+        )
+    },
+    # expand(str, ...): a backtick is the one place an expanded string holds an
+    # expression; a variable's value is not expanded again, so "$HIP/x" is plain.
+    **{
+        path: _RefusedByArgument[str](
+            keyword=keyword,
+            position=0,
+            literal=str,
+            default=REQUIRED,
+            dangerous=lambda text: "`" in text,
+            danger="running a shell through a backtick expression's system()",
+        )
+        for path, keyword in (
+            (("hou", "text", "expandString"), "str"),
+            (("hou", "text", "expandStringAtFrame"), "str"),
+            # Houdini 22's deprecated spellings of the two above, which name it
+            # str_value.
+            (("hou", "expandString"), "str_value"),
+            (("hou", "expandStringAtFrame"), "str_value"),
+            (("hou", "hscriptExpandString"), "str_value"),
+        )
+    },
 }
 
 # Dynamic-execution builtins: a name the program evaluates or imports at runtime
