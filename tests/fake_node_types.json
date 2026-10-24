@@ -1,0 +1,1292 @@
+{
+  "Director": {
+    "root": {
+      "type": "root",
+      "description": "Root",
+      "holds": "Manager",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Manager": {
+    "obj": {
+      "type": "obj",
+      "description": "Object",
+      "holds": "Object",
+      "locked": false,
+      "parms": {}
+    },
+    "out": {
+      "type": "out",
+      "description": "Driver",
+      "holds": "Driver",
+      "locked": false,
+      "parms": {}
+    },
+    "ch": {
+      "type": "ch",
+      "description": "ChopNet",
+      "holds": "ChopNet",
+      "locked": false,
+      "parms": {}
+    },
+    "shop": {
+      "type": "shop",
+      "description": "Shop",
+      "holds": "Shop",
+      "locked": false,
+      "parms": {}
+    },
+    "img": {
+      "type": "img",
+      "description": "CopNet",
+      "holds": "CopNet",
+      "locked": false,
+      "parms": {}
+    },
+    "vex": {
+      "type": "vex",
+      "description": "VopNet",
+      "holds": "VopNet",
+      "locked": false,
+      "parms": {}
+    },
+    "mat": {
+      "type": "mat",
+      "description": "Vop",
+      "holds": "Vop",
+      "locked": false,
+      "parms": {}
+    },
+    "stage": {
+      "type": "stage",
+      "description": "Lop",
+      "holds": "Lop",
+      "locked": false,
+      "parms": {}
+    },
+    "tasks": {
+      "type": "tasks",
+      "description": "TopNet",
+      "holds": "TopNet",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Object": {
+    "geo": {
+      "type": "geo",
+      "description": "Geometry",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "shop_materialpath": {
+          "components": [
+            "shop_materialpath"
+          ],
+          "values": [
+            ""
+          ],
+          "menu": []
+        }
+      }
+    },
+    "null": {
+      "type": "null",
+      "description": "Null",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "light": {
+      "type": "light",
+      "description": "Light Template",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "instance": {
+      "type": "instance",
+      "description": "Instance",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {}
+    },
+    "fetch": {
+      "type": "fetch",
+      "description": "Fetch",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "subnet": {
+      "type": "subnet",
+      "description": "Subnetwork",
+      "holds": "Object",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "dopnet": {
+      "type": "dopnet",
+      "description": "DOP Network",
+      "holds": "Dop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "cam": {
+      "type": "cam",
+      "description": "Camera",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {
+        "t": {
+          "components": [
+            "tx",
+            "ty",
+            "tz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "r": {
+          "components": [
+            "rx",
+            "ry",
+            "rz"
+          ],
+          "values": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "menu": []
+        },
+        "rOrd": {
+          "components": [
+            "rOrd"
+          ],
+          "values": [
+            0
+          ],
+          "menu": [
+            "xyz",
+            "xzy",
+            "yxz",
+            "yzx",
+            "zxy",
+            "zyx"
+          ]
+        },
+        "xOrd": {
+          "components": [
+            "xOrd"
+          ],
+          "values": [
+            0
+          ],
+          "menu": [
+            "srt",
+            "str",
+            "rst",
+            "rts",
+            "tsr",
+            "trs"
+          ]
+        },
+        "res": {
+          "components": [
+            "resx",
+            "resy"
+          ],
+          "values": [
+            1280,
+            720
+          ],
+          "menu": []
+        },
+        "projection": {
+          "components": [
+            "projection"
+          ],
+          "values": [
+            0
+          ],
+          "menu": [
+            "perspective",
+            "ortho",
+            "sphere",
+            "cylinder",
+            "lens"
+          ]
+        },
+        "orthowidth": {
+          "components": [
+            "orthowidth"
+          ],
+          "values": [
+            2.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "ropnet": {
+      "type": "ropnet",
+      "description": "ROP Network",
+      "holds": "Driver",
+      "locked": false,
+      "parms": {}
+    },
+    "chopnet": {
+      "type": "chopnet",
+      "description": "CHOP Network",
+      "holds": "Chop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Sop": {
+    "sphere": {
+      "type": "sphere",
+      "description": "Sphere",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "box": {
+      "type": "box",
+      "description": "Box",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "grid": {
+      "type": "grid",
+      "description": "Grid",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "tube": {
+      "type": "tube",
+      "description": "Tube",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "torus": {
+      "type": "torus",
+      "description": "Torus",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "circle": {
+      "type": "circle",
+      "description": "Circle",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "line": {
+      "type": "line",
+      "description": "Line",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "curve": {
+      "type": "curve::2.0",
+      "description": "Curve",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "mountain": {
+      "type": "mountain::2.0",
+      "description": "Mountain",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribnoise": {
+      "type": "attribnoise::2.0",
+      "description": "Attribute Noise",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "cloudnoise": {
+      "type": "cloudnoise",
+      "description": "Cloud Noise",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "heightfield_noise": {
+      "type": "heightfield_noise",
+      "description": "HeightField Noise",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "xform": {
+      "type": "xform",
+      "description": "Transform",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "blast": {
+      "type": "blast",
+      "description": "Blast",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "delete": {
+      "type": "delete",
+      "description": "Delete",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "dissolve": {
+      "type": "dissolve::2.0",
+      "description": "Dissolve",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "fuse": {
+      "type": "fuse::2.0",
+      "description": "Fuse",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "clean": {
+      "type": "clean",
+      "description": "Clean",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "merge": {
+      "type": "merge",
+      "description": "Merge",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "switch": {
+      "type": "switch",
+      "description": "Switch",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "copy": {
+      "type": "copy",
+      "description": "Copy with Stamp",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "scatter": {
+      "type": "scatter::2.0",
+      "description": "Scatter",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "copytopoints": {
+      "type": "copytopoints::2.0",
+      "description": "Copy to Points",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "foreach": {
+      "type": "foreach",
+      "description": "For-Each Subnetwork",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {}
+    },
+    "vex": {
+      "type": "vex",
+      "description": "VEX",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribwrangle": {
+      "type": "attribwrangle",
+      "description": "Attribute Wrangle",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "pointwrangle": {
+      "type": "pointwrangle",
+      "description": "Point Wrangle",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "volumewrangle": {
+      "type": "volumewrangle",
+      "description": "Volume Wrangle",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "vdb": {
+      "type": "vdb",
+      "description": "VDB",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "vdbfromparticles": {
+      "type": "vdbfromparticles",
+      "description": "VDB from Particles",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "vdbsmooth": {
+      "type": "vdbsmooth",
+      "description": "VDB Smooth",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "vdbcombine": {
+      "type": "vdbcombine",
+      "description": "VDB Combine",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "file": {
+      "type": "file",
+      "description": "File",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "alembic": {
+      "type": "alembic",
+      "description": "Alembic",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "filecache": {
+      "type": "filecache::2.0",
+      "description": "File Cache",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "cache": {
+      "type": "cache",
+      "description": "Cache",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "stash": {
+      "type": "stash",
+      "description": "Stash",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "group": {
+      "type": "group",
+      "description": "Group",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "groupcreate": {
+      "type": "groupcreate",
+      "description": "Group Create",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "groupcombine": {
+      "type": "groupcombine",
+      "description": "Group Combine",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "groupexpression": {
+      "type": "groupexpression",
+      "description": "Group Expression",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "subdivide": {
+      "type": "subdivide",
+      "description": "Subdivide",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "polyextrude": {
+      "type": "polyextrude::2.0",
+      "description": "PolyExtrude",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "polybevel": {
+      "type": "polybevel::3.0",
+      "description": "PolyBevel",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "polyreduce": {
+      "type": "polyreduce::2.0",
+      "description": "PolyReduce",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "polyfill": {
+      "type": "polyfill",
+      "description": "PolyFill",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "null": {
+      "type": "null",
+      "description": "Null",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "output": {
+      "type": "output",
+      "description": "Output",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "object_merge": {
+      "type": "object_merge",
+      "description": "Object Merge",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "timeshift": {
+      "type": "timeshift",
+      "description": "Time Shift",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "trail": {
+      "type": "trail",
+      "description": "Trail",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "material": {
+      "type": "material",
+      "description": "Material",
+      "holds": null,
+      "locked": false,
+      "parms": {
+        "shop_materialpath1": {
+          "components": [
+            "shop_materialpath1"
+          ],
+          "values": [
+            ""
+          ],
+          "menu": []
+        },
+        "group1": {
+          "components": [
+            "group1"
+          ],
+          "values": [
+            ""
+          ],
+          "menu": []
+        }
+      }
+    },
+    "attribcreate": {
+      "type": "attribcreate::2.0",
+      "description": "Attribute Create",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "split": {
+      "type": "split",
+      "description": "Split",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "add": {
+      "type": "add",
+      "description": "Add",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "align": {
+      "type": "align",
+      "description": "Spline Align",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribblur": {
+      "type": "attribblur",
+      "description": "Attribute Blur",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribcast": {
+      "type": "attribcast",
+      "description": "Attribute Cast",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribcopy": {
+      "type": "attribcopy",
+      "description": "Attribute Copy",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribdelete": {
+      "type": "attribdelete",
+      "description": "Attribute Delete",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribexpression": {
+      "type": "attribexpression",
+      "description": "Attribute Expression",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribfade": {
+      "type": "attribfade",
+      "description": "Attribute Fade",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribpromote": {
+      "type": "attribpromote",
+      "description": "Attribute Promote",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribrandomize": {
+      "type": "attribrandomize",
+      "description": "Attribute Randomize",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribremap": {
+      "type": "attribremap",
+      "description": "Attribute Remap",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "attribtransfer": {
+      "type": "attribtransfer",
+      "description": "Attribute Transfer",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "attribvop": {
+      "type": "attribvop",
+      "description": "Attribute VOP",
+      "holds": "Vop",
+      "locked": false,
+      "parms": {}
+    },
+    "bend": {
+      "type": "bend",
+      "description": "Bend",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "blastbyattribute": {
+      "type": "blastbyattribute",
+      "description": "Blast by Attribute",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "bound": {
+      "type": "bound",
+      "description": "Bound",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "bridge": {
+      "type": "bridge",
+      "description": "Spline Bridge",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "bulge": {
+      "type": "bulge",
+      "description": "Bulge",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "cap": {
+      "type": "cap",
+      "description": "Spline Cap",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "carve": {
+      "type": "carve",
+      "description": "Carve",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "chain": {
+      "type": "chain",
+      "description": "Chain",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "circlefromedges": {
+      "type": "circlefromedges",
+      "description": "Circle from Edges",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "clip": {
+      "type": "clip::2.0",
+      "description": "Clip",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "cluster": {
+      "type": "cluster",
+      "description": "Cluster",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "color": {
+      "type": "color",
+      "description": "Color",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "comb": {
+      "type": "comb",
+      "description": "Comb",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "connectivity": {
+      "type": "connectivity",
+      "description": "Connectivity",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "convert": {
+      "type": "convert",
+      "description": "Convert",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "convertline": {
+      "type": "convertline",
+      "description": "Convert Line",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "convertvdb": {
+      "type": "convertvdb",
+      "description": "Convert VDB",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "cookie": {
+      "type": "cookie",
+      "description": "Cookie",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "copyxform": {
+      "type": "copyxform",
+      "description": "Copy and Transform",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "crease": {
+      "type": "crease",
+      "description": "Crease",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "creep": {
+      "type": "creep",
+      "description": "Creep",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "deform": {
+      "type": "deform",
+      "description": "Deform",
+      "holds": null,
+      "locked": false,
+      "parms": {}
+    },
+    "deltamush": {
+      "type": "deltamush::2.0",
+      "description": "Delta Mush",
+      "holds": "Sop",
+      "locked": true,
+      "parms": {}
+    },
+    "subnet": {
+      "type": "subnet",
+      "description": "Subnetwork",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {}
+    },
+    "dopnet": {
+      "type": "dopnet",
+      "description": "DOP Network",
+      "holds": "Dop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Dop": {
+    "pyrosolver": {
+      "type": "pyrosolver::2.0",
+      "description": "Pyro Solver",
+      "holds": "Dop",
+      "locked": true,
+      "parms": {}
+    },
+    "subnet": {
+      "type": "subnet",
+      "description": "Subnetwork",
+      "holds": "Dop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Vop": {
+    "principledshader": {
+      "type": "principledshader::2.0",
+      "description": "Principled Shader",
+      "holds": "Vop",
+      "locked": true,
+      "parms": {
+        "basecolor": {
+          "components": [
+            "basecolorr",
+            "basecolorg",
+            "basecolorb"
+          ],
+          "values": [
+            0.2,
+            0.2,
+            0.2
+          ],
+          "menu": []
+        },
+        "rough": {
+          "components": [
+            "rough"
+          ],
+          "values": [
+            0.3
+          ],
+          "menu": []
+        },
+        "metallic": {
+          "components": [
+            "metallic"
+          ],
+          "values": [
+            0.0
+          ],
+          "menu": []
+        }
+      }
+    },
+    "subnet": {
+      "type": "subnet",
+      "description": "Subnetwork",
+      "holds": "Vop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Driver": {
+    "opengl": {
+      "type": "opengl",
+      "description": "OpenGL",
+      "holds": null,
+      "locked": false,
+      "parms": {
+        "camera": {
+          "components": [
+            "camera"
+          ],
+          "values": [
+            "/obj/cam1"
+          ],
+          "menu": []
+        },
+        "picture": {
+          "components": [
+            "picture"
+          ],
+          "values": [
+            "ip"
+          ],
+          "menu": []
+        },
+        "tres": {
+          "components": [
+            "tres"
+          ],
+          "values": [
+            0
+          ],
+          "menu": []
+        },
+        "res": {
+          "components": [
+            "res1",
+            "res2"
+          ],
+          "values": [
+            1280,
+            720
+          ],
+          "menu": []
+        },
+        "trange": {
+          "components": [
+            "trange"
+          ],
+          "values": [
+            0
+          ],
+          "menu": [
+            "off",
+            "normal",
+            "on"
+          ]
+        }
+      }
+    },
+    "karma": {
+      "type": "karma",
+      "description": "Karma",
+      "holds": "Driver",
+      "locked": true,
+      "parms": {
+        "camera": {
+          "components": [
+            "camera"
+          ],
+          "values": [
+            "/obj/cam1"
+          ],
+          "menu": []
+        },
+        "picture": {
+          "components": [
+            "picture"
+          ],
+          "values": [
+            "$HIP/render/$HIPNAME.$OS.$F4.exr"
+          ],
+          "menu": []
+        },
+        "resolution": {
+          "components": [
+            "resolutionx",
+            "resolutiony"
+          ],
+          "values": [
+            1280,
+            720
+          ],
+          "menu": []
+        },
+        "engine": {
+          "components": [
+            "engine"
+          ],
+          "values": [
+            "cpu"
+          ],
+          "menu": []
+        },
+        "trange": {
+          "components": [
+            "trange"
+          ],
+          "values": [
+            0
+          ],
+          "menu": [
+            "off",
+            "normal",
+            "on",
+            "stage"
+          ]
+        }
+      }
+    },
+    "subnet": {
+      "type": "subnet",
+      "description": "Subnetwork",
+      "holds": "Driver",
+      "locked": false,
+      "parms": {}
+    },
+    "sopnet": {
+      "type": "sopnet",
+      "description": "SOP Network",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "Lop": {
+    "sopnet": {
+      "type": "sopnet",
+      "description": "SOP Network",
+      "holds": "Sop",
+      "locked": false,
+      "parms": {}
+    }
+  },
+  "ChopNet": {},
+  "Chop": {},
+  "Shop": {},
+  "CopNet": {},
+  "VopNet": {},
+  "TopNet": {}
+}

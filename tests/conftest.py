@@ -9,7 +9,8 @@ import math
 import pathlib
 import threading
 import time
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -26,6 +27,7 @@ from houdini_mcp.connection import TransportException
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
+from tests.fake_node_types import NodeType, ParmTuple, load_table, node_types
 
 # What the houdini-mcp command's tools run under when the environment names nothing.
 DEFAULT_SETTINGS = server_settings({})
@@ -48,56 +50,20 @@ def join_path(parent: str, name: str) -> str:
     return f"{parent.rstrip('/')}/{name}"
 
 
-# The SOPs a network of Sop category offers that hold no children; the custom
-# fillers give list_node_types more than one page to cut.
-_SOP_LEAVES = (
-    *("sphere", "box", "grid", "tube", "torus", "circle", "line", "curve", "noise"),
-    *("mountain", "attribnoise", "cloudnoise", "heightfield_noise", "transform", "xform"),
-    *("blast", "delete", "dissolve", "fuse", "clean", "merge", "switch", "copy", "scatter"),
-    *("copytopoints", "foreach", "vex", "wrangle", "attribwrangle", "pointwrangle"),
-    *("volumewrangle", "vdb", "vdbfromparticles", "vdbsmooth", "vdbreshape", "vdbcombine"),
-    *("file", "alembic", "filecache", "cache", "stash", "group", "groupcreate"),
-    *("groupcombine", "groupexpression", "subdivide", "polyextrude", "polybevel"),
-    *("polyreduce", "polyfill", "null", "output", "object_merge", "timeshift", "trail"),
-    *("material", "attribcreate", "split", "custom"),
-    *(f"custom_sop_{i}" for i in range(60)),
-)
+# [LAW:one-source-of-truth] the fake's node types are the table Houdini 22.0.466
+# wrote (tests/fake_node_types.py): category -> the name createNode is given -> its
+# type. A node's category is the one its network holds; the root's children are the
+# contexts of a fresh scene, each one's type name also its node name.
+NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
-# [LAW:one-source-of-truth] the fake's node types: for each category, the types it
-# offers and the category each one's network holds, None for a node that is not a
-# network. A node's category is the one its network holds; createNode admits
-# exactly the types listed under it, so none at all in a category the fake lists
-# no types for (/ch's ChopNet, /tasks' TopNet, ...). The root's children are the
-# contexts of a fresh Houdini 22.0.466 scene, as hython reads it
-# (houdini-tests-tct): each one's type name is also its node name.
-NODE_TYPES: dict[str, dict[str, str | None]] = {
-    "Director": {"root": "Manager"},
-    "Manager": {
-        "obj": "Object",
-        "out": "Driver",
-        "ch": "ChopNet",
-        "shop": "Shop",
-        "img": "CopNet",
-        "vex": "VopNet",
-        "mat": "Vop",
-        "stage": "Lop",
-        "tasks": "TopNet",
-    },
-    "Object": {
-        # every object holds SOPs in Houdini, a camera or a light as much as a geo
-        **dict.fromkeys(("geo", "null", "cam", "light", "instance", "fetch"), "Sop"),
-        "subnet": "Object",
-        "dopnet": "Dop",
-        "ropnet": "Driver",
-        "chopnet": "Chop",
-    },
-    "Sop": {**dict.fromkeys(_SOP_LEAVES), "subnet": "Sop", "hda": "Sop", "dopnet": "Dop"},
-    "Dop": {"pyrosolver": None, "subnet": "Dop"},
-    "Vop": {"principledshader": None, "subnet": "Vop"},
-    "Driver": {"opengl": None, "karma": None, "subnet": "Driver", "sopnet": "Sop"},
-    "Lop": {"sopnet": "Sop"},
-    **{category: {} for category in ("ChopNet", "Chop", "Shop", "CopNet", "VopNet", "TopNet")},
-}
+
+def _offered(category: str, name: str) -> NodeType | None:
+    """The type createNode gives for ``name`` in ``category``: the one the table keys
+    under it, or the one whose own name it is (``mountain`` and ``mountain::2.0`` both
+    give ``mountain::2.0``, as Houdini's createNode takes either); None for a name it
+    refuses there."""
+    rows = NODE_TYPES[category]
+    return rows.get(name) or next((row for row in rows.values() if row.type == name), None)
 
 
 class OperationFailed(Exception):
@@ -105,6 +71,21 @@ class OperationFailed(Exception):
 
 
 OperationFailed.__module__ = "hou"
+
+
+class HouPermissionError(Exception):
+    """hou.PermissionError, which Houdini 22 raises for a node created inside a locked asset."""
+
+
+HouPermissionError.__name__ = HouPermissionError.__qualname__ = "PermissionError"
+HouPermissionError.__module__ = "hou"
+
+
+class InvalidSize(Exception):
+    """hou.InvalidSize, which Houdini 22 raises for a tuple set to the wrong number of values."""
+
+
+InvalidSize.__module__ = "hou"
 
 
 class MockSubnetIndirectInput:
@@ -192,36 +173,94 @@ class MockNodeConnection:
         return self._input_index
 
 
-# The translate and rotate components every node carries, all zero.
-_TRANSFORM_PARAMS: dict[str, float] = dict.fromkeys(("tx", "ty", "tz", "rx", "ry", "rz"), 0.0)
+@dataclass
+class HeldTuple:
+    """A placed node's parameter tuple: its components' names and the one list of
+    their values, which parm() and parmTuple() both read and write, and a menu
+    parm's tokens."""
 
-# Default parameters a freshly created node of each type carries, beyond the
-# transform every node has. A type absent here has no extras.
-_TYPE_DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
-    "material": {"shop_materialpath1": "", "group1": ""},
-    "principledshader": {"basecolor": [1.0, 1.0, 1.0], "rough": 0.3, "metallic": 0.0},
-    "null": {"t": [0.0, 0.0, 0.0], "r": [0.0, 0.0, 0.0]},
-    "cam": {
-        "t": [0.0, 0.0, 0.0],
-        "r": [0.0, 0.0, 0.0],
-        "rOrd": "xyz",
-        "xOrd": "srt",
-        "resx": 1280,
-        "resy": 720,
-        "projection": 0,
-        "orthowidth": 1.0,
-    },
-    # Each ROP's resolution and frame-range parms carry the names the real ROP uses.
-    "opengl": {"camera": "", "picture": "", "tres": False, "res1": 0, "res2": 0, "trange": 0},
-    "karma": {
-        "camera": "",
-        "picture": "",
-        "resolutionx": 0,
-        "resolutiony": 0,
-        "engine": "cpu",
-        "trange": 0,
-    },
-}
+    components: tuple[str, ...]
+    values: list[Any]
+    menu: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Placed:
+    """A placed node's parameter tuples, and the type that named them."""
+
+    row: NodeType
+    tuples: dict[str, HeldTuple]
+
+
+@dataclass(frozen=True)
+class Unplaced:
+    """The parameters a node was built with, before it is in a scene: unread until
+    its type, which its network decides, says what they name. None is its type's own."""
+
+    given: Mapping[str, Any] | None
+
+
+def _placed_parms(node_type: NodeType, given: Mapping[str, Any] | None) -> dict[str, HeldTuple]:
+    """``given`` as a node of ``node_type`` holds it, each tuple's components named once.
+
+    [LAW:parse-dont-validate] [LAW:one-source-of-truth] a tuple the type carries has
+    the type's component names; a ``ParmTuple`` for one it lacks names its own; a
+    scalar is a one-component tuple of its own name, as every scalar parm is in
+    Houdini. Each component belongs to one tuple: the type's, or else the first given
+    that names it. A name no source gives is never made up: a list for a tuple the
+    type lacks, a component claimed by a second tuple, a list of the wrong length are
+    a fixture lying.
+    """
+    if given is None:
+        return {
+            name: HeldTuple(parm.components, list(copy.deepcopy(parm.values)), parm.menu)
+            for name, parm in node_type.parms.items()
+        }
+    held = {name: _given_tuple(node_type, name, value) for name, value in given.items()}
+    owners = {c: name for name, parm in node_type.parms.items() for c in parm.components}
+    for name, parm in held.items():
+        for component in parm.components:
+            owner = owners.setdefault(component, name)
+            if owner != name:
+                raise ValueError(f"{component!r} is a component of {owner!r}, not {name!r}")
+    return held
+
+
+def _given_tuple(node_type: NodeType, name: str, value: Any) -> HeldTuple:
+    """The tuple ``name`` holds, given ``value``, on a node of ``node_type``."""
+    carried = node_type.parms.get(name)
+    if isinstance(value, ParmTuple):
+        if carried is not None and value.components != carried.components:
+            raise ValueError(f"{name!r} has components {carried.components}, given {value!r}")
+        values, shape = value.values, carried or value
+    else:
+        values = tuple(value) if isinstance(value, (list, tuple)) else (value,)
+        shape = carried or ParmTuple(_own_components(node_type, name, values), values)
+    if len(values) != len(shape.components):
+        raise ValueError(f"{name!r} has components {shape.components}, given {values!r}")
+    return HeldTuple(shape.components, [_held_value(shape.menu, v) for v in values], shape.menu)
+
+
+def _held_value(menu: tuple[str, ...], value: Any) -> Any:
+    """A component's value as Houdini holds it: a menu parm holds an index, set by its
+    token or clamped into its items; any other parm, the value."""
+    if not menu:
+        return value
+    if isinstance(value, str):
+        if value not in menu:
+            raise raised_inside_houdini(
+                OperationFailed("The attempted operation failed.\nInvalid menu item")
+            )
+        return menu.index(value)
+    return min(max(value, 0), len(menu) - 1)
+
+
+def _own_components(node_type: NodeType, name: str, values: tuple[Any, ...]) -> tuple[str, ...]:
+    """The components of a tuple ``node_type`` does not carry: a scalar is its own,
+    and a tuple of none (a folder, a separator) has none; any other names are unknown."""
+    if len(values) > 1:
+        raise ValueError(f"{node_type.type} has no tuple {name!r}: name its components")
+    return (name,) * len(values)
 
 
 class MockHouNode:
@@ -232,21 +271,22 @@ class MockHouNode:
         path: str = "/obj/geo1",
         name: str = "geo1",
         node_type: str = "geo",
-        type_description: str = "Geometry",
         children: list["MockHouNode"] | None = None,
-        params: dict[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
     ):
         self._path = path
         self._name = name
+        # the name it is created with; its type is the row that name gives in its network
         self._node_type = node_type
-        self._type_description = type_description
         # [LAW:one-source-of-truth] the tree is the scene graph: a node is in the
         # scene exactly when it is in its parent's children, and hou.node() walks it.
         # A tree built by hand is only assembled here: unplaced, it has no category
         # to judge it by, so attach links and judges it when it enters a scene.
         self._children: list[MockHouNode] = list(children or [])
         self._parent: MockHouNode | None = None
-        self._params: dict[str, Any] = params if params is not None else dict(_TRANSFORM_PARAMS)
+        # [LAW:types-are-the-program] read only once placed: what the parameters name
+        # is the node's type's to say, and its network decides that type.
+        self._params: Unplaced | Placed = Unplaced(params)
         self._inputs: list[Any] = []
         # Source output index per connected input, as hou.NodeConnection.outputIndex()
         # reports it. A test that assigns ``_inputs`` directly wires from output 0,
@@ -282,7 +322,7 @@ class MockHouNode:
 
     # parm()/parmTuple() cache their mocks, whose setters write to this node; a
     # copy rebuilds its own instead of writing through to the original.
-    _PARM_CACHES = frozenset({"_parm_objects", "_parm_tuple_objects", "_scalar_tuple_objects"})
+    _PARM_CACHES = frozenset({"_parm_objects", "_parm_tuple_objects"})
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "MockHouNode":
         clone = object.__new__(type(self))
@@ -297,7 +337,7 @@ class MockHouNode:
         return (
             self._name,
             self._node_type,
-            repr(sorted(self._params.items())),
+            repr(sorted(self._parms().items())),
             tuple(
                 (index, source.path(), self._input_output_indexes.get(index, 0))
                 for index, source in enumerate(self._inputs)
@@ -324,12 +364,14 @@ class MockHouNode:
         fixture lying, ValueError; a type its network cannot hold is refused as
         Houdini's createNode refuses it.
         """
-        _admit(self, self._held(), child, self._children)
+        placements = _admit(self, self._row(), child, self._children)
         for network in [child, *child.allSubChildren()]:
             for node in network._children:
                 node._parent = network
         child._parent = self
         self._children.append(child)
+        for node, parms in placements:
+            node._params = parms
 
     def node(self, path: str) -> "MockHouNode | None":
         """hou.Node.node: walk a path from this node, or from the root when it is
@@ -352,12 +394,12 @@ class MockHouNode:
 
     def type(self) -> MagicMock:
         mock_type = MagicMock()
-        mock_type.name.return_value = self._node_type
-        mock_type.description.return_value = self._type_description
-        # Read when asked, not when type() is: a node's category is its network's,
-        # which a node built by hand has only once it is placed.
+        # Read when asked, not when type() is: a node's type is its network's to
+        # give, which a node built by hand has only once it is placed.
+        mock_type.name = MagicMock(side_effect=lambda: self._row().type)
+        mock_type.description = MagicMock(side_effect=lambda: self._row().description)
         mock_type.category = lambda: MockNodeTypeCategory(self._category())
-        mock_type.nameWithCategory = lambda: f"{self._category()}/{self._node_type}"
+        mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
         return mock_type
 
     def _category(self) -> str:
@@ -374,9 +416,28 @@ class MockHouNode:
             raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
         return "Director"
 
+    def _row(self) -> NodeType:
+        """This node's type: what the name it was created with gives in its category."""
+        row = _offered(self._category(), self._node_type)
+        assert row is not None, "attach places no node whose type its network refuses"
+        return row
+
     def _held(self) -> str | None:
         """The category of the nodes this network holds; None for a node that is not one."""
-        return NODE_TYPES[self._category()][self._node_type]
+        return self._row().holds
+
+    def _parms(self) -> dict[str, HeldTuple]:
+        """This node's parameter tuples. Houdini has no node outside a scene, so a node
+        built by hand has none until it is placed."""
+        if isinstance(self._params, Unplaced):
+            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no parameters")
+        return self._params.tuples
+
+    def _take_parms(self) -> None:
+        """Hold this node's parameters as its type names them: the root's, which no
+        network places."""
+        assert isinstance(self._params, Unplaced)
+        self._params = Placed(self._row(), _placed_parms(self._row(), self._params.given))
 
     def children(self) -> tuple["MockHouNode", ...]:
         """The network's children, as hou.Node.children gives them: a tuple, which
@@ -391,6 +452,9 @@ class MockHouNode:
         network, as hou.Node.childTypeCategory returns."""
         held = self._held()
         return MockNodeTypeCategory(held) if held is not None else None
+
+    def isLockedHDA(self) -> bool:
+        return self._row().locked
 
     def isNetwork(self) -> bool:
         """Whether this node holds nodes, read off the same category as childTypeCategory."""
@@ -422,102 +486,107 @@ class MockHouNode:
         )
 
     def parms(self) -> list[MagicMock]:
-        mock_parms = []
-        for name in self._params:
-            parm = self.parm(name)
-            if parm is not None:
-                mock_parms.append(parm)
-        return mock_parms
+        """Every parm, tuple by tuple: a vector's components, a scalar itself."""
+        return [
+            self._component(n, i)
+            for n, t in self._parms().items()
+            for i in range(len(t.components))
+        ]
 
     def parm(self, name: str) -> MagicMock | None:
-        # As in Houdini: a vector lives under parmTuple(); parm() does not answer
-        # to its name, only to its components.
-        if name not in self._params or isinstance(self._params[name], (list, tuple)):
-            return None
-
-        # Return stable mock objects so tests can patch attributes.
-        if not hasattr(self, "_parm_objects"):
-            self._parm_objects = {}
-
-        if name in self._parm_objects:
-            # Keep current value in sync.
-            self._parm_objects[name].eval.return_value = self._params[name]
-            return self._parm_objects[name]
-
-        mock_parm = MagicMock()
-        mock_parm.name.return_value = name
-        mock_parm.eval.return_value = self._params[name]
-
-        def _setter(v: Any, n: str = name) -> None:
-            self._params.update({n: v})
-            mock_parm.eval.return_value = v
-
-        mock_parm.set = _setter
-        mock_parm.tuple = lambda n=name: self.parmTuple(n)
-        self._parm_objects[name] = mock_parm
-        return mock_parm
+        """The parm a component's name names. As in Houdini, a vector's own name
+        names its tuple, not a parm: parm("t") is None and parm("tx") is t's first."""
+        found = (
+            (tuple_name, held.components.index(name))
+            for tuple_name, held in self._parms().items()
+            if name in held.components
+        )
+        return next((self._component(*at) for at in found), None)
 
     def parmTuples(self) -> list[MagicMock]:
         """Every parameter as a tuple, in the order they were given."""
-        return [self.parmTuple(name) for name in self._params]
+        return [self._tuple(name) for name in self._parms()]
 
     def parmTuple(self, name: str) -> MagicMock | None:
-        if name not in self._params:
-            return None
-        if not isinstance(self._params[name], (list, tuple)):
-            return self._one_component_tuple(name)
+        """The tuple ``name`` names; a component's name names none, as in Houdini."""
+        return self._tuple(name) if name in self._parms() else None
 
-        if not hasattr(self, "_parm_tuple_objects"):
-            self._parm_tuple_objects = {}
+    # parm() and parmTuple() give stable mocks, so a test can patch one; each reads
+    # and writes the node's one value list, so a write through either is read by both.
+    def _component(self, tuple_name: str, index: int) -> MagicMock:
+        cache: dict[tuple[str, int], MagicMock] = self.__dict__.setdefault("_parm_objects", {})
+        if (tuple_name, index) not in cache:
+            values = lambda: self._parms()[tuple_name].values  # noqa: E731
+            parm = MagicMock()
+            parm.name.return_value = self._parms()[tuple_name].components[index]
+            parm.eval = MagicMock(side_effect=lambda: values()[index])
+            parm.unexpandedString = MagicMock(
+                side_effect=lambda: self._unexpanded(tuple_name, index)
+            )
+            parm.keyframes.return_value = ()
+            parm.set = MagicMock(side_effect=lambda v: self._store(tuple_name, index, v))
+            parm.tuple = lambda: self._tuple(tuple_name)
+            if self._parms()[tuple_name].menu:
+                template = parm.parmTemplate.return_value
+                template.type.return_value.name.return_value = "Menu"
+                template.menuItems.return_value = self._parms()[tuple_name].menu
+            cache[(tuple_name, index)] = parm
+        return cache[(tuple_name, index)]
 
-        if name in self._parm_tuple_objects:
-            self._parm_tuple_objects[name].eval.return_value = tuple(self._params[name])
-            return self._parm_tuple_objects[name]
-
-        mock_parm = MagicMock()
-        mock_parm.name.return_value = name
-        mock_parm.__len__.return_value = len(self._params[name])
-        mock_parm.eval.return_value = tuple(self._params[name])
-
-        def _setter(v: Any, n: str = name) -> None:
-            self._params.update({n: v})
-            mock_parm.eval.return_value = tuple(v) if isinstance(v, (list, tuple)) else v
-
-        mock_parm.set = _setter
-        self._parm_tuple_objects[name] = mock_parm
-        return mock_parm
-
-    def _one_component_tuple(self, name: str) -> MagicMock:
-        # As in Houdini: a scalar is a one-component tuple of the same name,
-        # and the two share one template.
-        if not hasattr(self, "_scalar_tuple_objects"):
-            self._scalar_tuple_objects = {}
-        if name not in self._scalar_tuple_objects:
-            parm = self.parm(name)
+    def _tuple(self, name: str) -> MagicMock:
+        cache: dict[str, MagicMock] = self.__dict__.setdefault("_parm_tuple_objects", {})
+        if name not in cache:
+            held = self._parms()[name]
+            components = [self._component(name, i) for i in range(len(held.components))]
             parm_tuple = MagicMock()
             parm_tuple.name.return_value = name
-            parm_tuple.__len__.return_value = 1
-            parm_tuple.__getitem__.side_effect = [parm].__getitem__
-            parm_tuple.parmTemplate = lambda: parm.parmTemplate()
-            self._scalar_tuple_objects[name] = parm_tuple
-        return self._scalar_tuple_objects[name]
+            parm_tuple.__len__.return_value = len(components)
+            parm_tuple.__getitem__.side_effect = components.__getitem__
+            parm_tuple.__iter__.side_effect = lambda: iter(components)
+            parm_tuple.eval = MagicMock(side_effect=lambda: tuple(self._parms()[name].values))
+            parm_tuple.set = MagicMock(side_effect=lambda v: self._set_tuple(name, v))
+            if len(components) == 1:
+                # a scalar is a one-component tuple of the same name, sharing one template
+                parm_tuple.parmTemplate = lambda: components[0].parmTemplate()
+            cache[name] = parm_tuple
+        return cache[name]
+
+    def _unexpanded(self, tuple_name: str, index: int) -> str:
+        """What a string parm holds: as it evaluates, since the fake expands no variables."""
+        value = self._parms()[tuple_name].values[index]
+        if not isinstance(value, str):
+            raise raised_inside_houdini(
+                OperationFailed(
+                    "The attempted operation failed.\nOnly string parms have unexpanded strings"
+                )
+            )
+        return value
+
+    def _store(self, tuple_name: str, index: int, value: Any) -> None:
+        held = self._parms()[tuple_name]
+        held.values[index] = _held_value(held.menu, value)
+
+    def _set_tuple(self, name: str, value: Any) -> None:
+        """Set every component or, refused, none."""
+        held = self._parms()[name]
+        given = list(value) if isinstance(value, (list, tuple)) else [value]
+        if len(given) != len(held.values):
+            raise raised_inside_houdini(InvalidSize("Invalid size."))
+        held.values[:] = [_held_value(held.menu, v) for v in given]
 
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
         # Houdini uniquifies a taken or omitted name: the first free number after
         # the one the name carries ("geo5" taken gives "geo6"; "geo" gives "geo1").
-        stem = (name or node_type).rstrip("0123456789")
-        carried = (name or node_type)[len(stem) :]
+        # The name a type gives is its own, without its version ("curve::2.0" gives "curve1").
+        base = name or node_type.split("::")[0]
+        stem = base.rstrip("0123456789")
+        carried = base[len(stem) :]
         numbered = (f"{stem}{n}" for n in range(int(carried or 0) + 1, 10_000))
         free = (c for c in numbered if self.node(c) is None)
         new_name = name if name and self.node(name) is None else next(free)
         new_path = join_path(self._path, new_name)
 
-        # [LAW:dataflow-not-control-flow] a type's defaults are data looked up
-        # once, not a branch per type.
-        params: dict[str, Any] = dict(_TRANSFORM_PARAMS)
-        params.update(copy.deepcopy(_TYPE_DEFAULT_PARAMS.get(node_type, {})))
-
-        new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type, params=params)
+        new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type)
         self.attach(new_node)
         return new_node
 
@@ -556,17 +625,18 @@ class MockHouNode:
         about X, then Y, then Z, then its translate (Houdini's default rOrd xyz and
         xOrd srt). Parent objects are not composed."""
         cx, cy, cz, sx, sy, sz = (
-            f(math.radians(self._params[name]))
+            f(math.radians(self.parm(name).eval()))
             for f in (math.cos, math.sin)
             for name in ("rx", "ry", "rz")
         )
+        tx, ty, tz = self.parmTuple("t").eval()
         # Rows of Rx * Ry * Rz: a row vector turns about X first.
         return MockMatrix4(
             (
                 (cy * cz, cy * sz, -sy, 0.0),
                 (sx * sy * cz - cx * sz, sx * sy * sz + cx * cz, sx * cy, 0.0),
                 (cx * sy * cz + sx * sz, cx * sy * sz - sx * cz, cx * cy, 0.0),
-                (self._params["tx"], self._params["ty"], self._params["tz"], 1.0),
+                (tx, ty, tz, 1.0),
             )
         )
 
@@ -770,13 +840,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 def _admit(
     network: MockHouNode,
-    held: str | None,
+    network_type: NodeType,
     node: MockHouNode,
     siblings: Sequence[MockHouNode],
-) -> None:
-    """Refuse ``node`` and its subtree as a child of ``network``, beside ``siblings``,
-    unless Houdini could have built them there. ``held`` is the category the network
-    holds, None for a node that is not a network, which holds no type at all."""
+) -> list[tuple[MockHouNode, Placed]]:
+    """Refuse ``node`` and its subtree as a child of ``network`` (of ``network_type``),
+    beside ``siblings``, unless Houdini could have built them there; else each node of
+    the subtree with the parameters it holds once placed.
+
+    A node placed before keeps the parameters it had, so it is placed only where its
+    name gives the type it was.
+    """
     parent_path, name = split_path(node.path())
     if parent_path != network.path() or name != node.name():
         raise ValueError(
@@ -786,20 +860,34 @@ def _admit(
         raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
     if any(sibling.name() == name for sibling in siblings):
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
-    offered = {} if held is None else NODE_TYPES[held]
-    if node._node_type not in offered:
-        # Houdini's two refusals: a node that is not a network, and a type its network's
-        # category does not offer.
-        reason = (
-            "This node cannot contain other nodes" if held is None else "Invalid node type name"
+    held = network_type.holds
+    node_type = (
+        _offered(held, node._node_type) if held is not None and not network_type.locked else None
+    )
+    if node_type is None:
+        # Houdini's three refusals: a node that is not a network, a locked asset, and
+        # a type its network's category does not offer.
+        refused: BaseException = (
+            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
+            if held is None
+            else HouPermissionError("Cannot create a node inside a locked asset")
+            if network_type.locked
+            else OperationFailed("The attempted operation failed.\nInvalid node type name")
         )
-        refused = OperationFailed(f"The attempted operation failed.\n{reason}")
-        refused.add_note(
-            f"{node._node_type!r} in {network.path()!r}, which holds {held or 'no'} nodes"
-        )
+        refused.add_note(f"{node._node_type!r} in {network.path()!r} ({network_type.type})")
         raise raised_inside_houdini(refused)
+    if isinstance(node._params, Placed) and node._params.row != node_type:
+        # Houdini moves no node to a network whose category makes it another type
+        raise ValueError(f"{node.path()!r} was placed where {node._node_type!r} gave another type")
+    parms = (
+        node._params
+        if isinstance(node._params, Placed)
+        else Placed(node_type, _placed_parms(node_type, node._params.given))
+    )
+    placements = [(node, parms)]
     for index, child in enumerate(node._children):
-        _admit(node, offered[node._node_type], child, node._children[:index])
+        placements += _admit(node, node_type, child, node._children[:index])
+    return placements
 
 
 class MockNodeLacking(MockHouNode):
@@ -862,6 +950,7 @@ class MockHouModule:
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
         self._root = MockHouNode(path="/", name="", node_type="root")
+        self._root._take_parms()
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
@@ -949,13 +1038,14 @@ class MockHouModule:
         return next((i for i in parent.indirectInputs() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, Any]:
-        """Every category of NODE_TYPES, each offering its node types by name."""
+        """Every category of NODE_TYPES, each offering its node types under their own
+        names, each one a name createNode takes back."""
         categories = {}
         for category, offered in NODE_TYPES.items():
             types = {}
-            for name in offered:
-                types[name] = MagicMock()
-                types[name].description.return_value = f"{name.replace('_', ' ').title()} node"
+            for row in offered.values():
+                types[row.type] = MagicMock()
+                types[row.type].description.return_value = row.description
             categories[category] = MagicMock()
             categories[category].nodeTypes.return_value = types
         return categories

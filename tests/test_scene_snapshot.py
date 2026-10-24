@@ -479,12 +479,14 @@ class TestSerializeScene:
         self, mock_connection: MockHouModule
     ) -> None:
         mock_connection.add_node(
-            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.5})
+            MockHouNode(
+                path="/obj/geo1", name="geo1", node_type="geo", params={"t": [1.5, 0.0, 0.0]}
+            )
         )
         result = await serialize_scene(
             "/obj", True, 10, host="localhost", port=18811, summarizer=SUMMARIZER
         )
-        assert result["structure"]["children"][0]["parameters"] == {"tx": 1.5}
+        assert result["structure"]["children"][0]["parameters"] == {"tx": 1.5, "ty": 0.0, "tz": 0.0}
 
     async def test_the_scene_root_is_named_and_typed_by_its_node(
         self, mock_connection: MockHouModule

@@ -29,7 +29,7 @@ class TestWiringIntegration:
         # Step 1: Create initial network (grid → noise)
         grid = geo1.createNode("grid", "grid1")
 
-        noise = geo1.createNode("noise", "noise1")
+        noise = geo1.createNode("attribnoise", "noise1")
 
         # Connect grid → noise
         result = connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1", 0, 0, "localhost", 18811)
@@ -121,7 +121,7 @@ class TestWiringIntegration:
         # Create nodes
         grid = geo1.createNode("grid", "grid1")
         sphere = geo1.createNode("sphere", "sphere1")
-        noise = geo1.createNode("noise", "noise1")
+        noise = geo1.createNode("attribnoise", "noise1")
 
         # Connect grid → noise
         result = connect_nodes("/obj/geo1/grid1", "/obj/geo1/noise1", 0, 0, "localhost", 18811)
@@ -211,7 +211,7 @@ class TestWiringIntegration:
         # Create chain: grid → mountain → noise
         grid = geo1.createNode("grid", "grid1")
         mountain = geo1.createNode("mountain", "mountain1")
-        noise = geo1.createNode("noise", "noise1")
+        noise = geo1.createNode("attribnoise", "noise1")
 
         # Connect chain
         connect_nodes("/obj/geo1/grid1", "/obj/geo1/mountain1", 0, 0, "localhost", 18811)
@@ -270,7 +270,7 @@ class TestWiringIntegration:
 
         # Edge case 3: Connect nodes of same category (SOP→SOP)
         geo1.createNode("box", "box1")
-        geo1.createNode("transform", "transform1")
+        geo1.createNode("xform", "transform1")
 
         result = connect_nodes("/obj/geo1/box1", "/obj/geo1/transform1", 0, 0, "localhost", 18811)
         assert result["status"] == "success"

@@ -3,6 +3,7 @@
 import pytest
 
 from tests.conftest import HOUDINI_TURNED_MATRIX, NODE_TYPES, MockHouModule, MockHouNode
+from tests.fake_node_types import ParmTuple, load_table, read_node_types
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -188,7 +189,7 @@ def test_a_node_is_of_the_category_its_network_holds(mock_hou: MockHouModule) ->
     sop_subnet = geo.createNode("subnet", "subnet1")
 
     assert shader.type().category().name() == "Vop"
-    assert shader.type().nameWithCategory() == "Vop/principledshader"
+    assert shader.type().nameWithCategory() == "Vop/principledshader::2.0"
     assert geo.createNode("box", "box1").type().category().name() == "Sop"
     assert object_subnet.type().category().name() == "Object"
     assert object_subnet.childTypeCategory().name() == "Object"
@@ -199,7 +200,7 @@ def test_a_node_is_of_the_category_its_network_holds(mock_hou: MockHouModule) ->
 
 
 def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
-    held = {category for offered in NODE_TYPES.values() for category in offered.values()}
+    held = {row.holds for offered in NODE_TYPES.values() for row in offered.values()}
 
     assert held - {None} <= NODE_TYPES.keys()
 
@@ -287,3 +288,184 @@ def test_a_nested_duplicate_name_is_refused(mock_hou: MockHouModule) -> None:
 def test_a_node_outside_any_scene_has_no_category() -> None:
     with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene"):
         MockHouNode(path="/obj/geo1", name="geo1").type().category()
+
+
+def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> None:
+    """The reader that writes the table from Houdini reads the same table off the fake."""
+    table = load_table()
+
+    assert read_node_types(mock_hou, table) == table
+
+
+def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
+    mock_hou: MockHouModule,
+) -> None:
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    by_key, by_type = geo.createNode("mountain"), geo.createNode("mountain::2.0")
+
+    assert [n.type().name() for n in (by_key, by_type)] == ["mountain::2.0"] * 2
+    assert [n.name() for n in (by_key, by_type)] == ["mountain1", "mountain2"]
+
+
+def test_every_type_the_catalog_lists_is_one_create_node_gives(mock_hou: MockHouModule) -> None:
+    obj = mock_hou.node("/obj")
+    networks = {
+        "Object": obj,
+        "Sop": obj.createNode("geo"),
+        "Dop": obj.createNode("dopnet"),
+        "Vop": mock_hou.node("/mat"),
+        "Driver": mock_hou.node("/out"),
+        "Lop": mock_hou.node("/stage"),
+    }
+
+    for category, network in networks.items():
+        listed = mock_hou.nodeTypeCategories()[category].nodeTypes()
+        assert [network.createNode(name).type().name() for name in listed] == list(listed)
+
+
+def test_a_locked_asset_holds_a_category_and_refuses_every_child(
+    mock_hou: MockHouModule,
+) -> None:
+    wrangle = mock_hou.node("/obj").createNode("geo").createNode("attribwrangle")
+
+    assert (wrangle.childTypeCategory().name(), wrangle.isNetwork()) == ("Sop", True)
+    with pytest.raises(
+        Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
+    ):
+        wrangle.createNode("null")
+    assert wrangle.children() == ()
+
+
+def test_a_tuple_and_its_components_are_one_value(mock_hou: MockHouModule) -> None:
+    cam = mock_hou.node("/obj").createNode("cam")
+
+    cam.parmTuple("t").set([1.0, 2.0, 3.0])
+    cam.parm("rz").set(90.0)
+
+    assert [cam.parm(c).eval() for c in ("tx", "ty", "tz")] == [1.0, 2.0, 3.0]
+    assert cam.parmTuple("r").eval() == (0.0, 0.0, 90.0)
+    assert cam.worldTransform().asTupleOfTuples()[3] == (1.0, 2.0, 3.0, 1.0)
+    # as in Houdini: a vector's name names no parm, a component's no tuple
+    assert (cam.parm("t"), cam.parmTuple("tx")) == (None, None)
+
+
+def test_a_menu_parm_set_by_a_token_holds_its_index(mock_hou: MockHouModule) -> None:
+    cam = mock_hou.node("/obj").createNode("cam")
+
+    cam.parm("rOrd").set("zyx")
+    cam.parmTuple("xOrd").set(["trs"])
+
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (5, 5)
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: .*\nInvalid menu item"):
+        cam.parm("rOrd").set("bogus")
+    # an index past either end holds the nearest item, as Houdini clamps it
+    cam.parm("rOrd").set(99)
+    cam.parm("xOrd").set(-1)
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (5, 0)
+
+
+def test_a_menu_parm_given_to_a_node_holds_an_index(mock_hou: MockHouModule) -> None:
+    """A given token is held as its index; a given ParmTuple keeps its type's menu."""
+    rOrd = NODE_TYPES["Object"]["cam"].parms["rOrd"]
+    params = {"rOrd": "zxy", "xOrd": ParmTuple(("xOrd",), (0,))}
+    mock_hou.add_node(MockHouNode(path="/obj/cam1", name="cam1", node_type="cam", params=params))
+    cam = mock_hou.node("/obj/cam1")
+
+    cam.parm("xOrd").set("trs")
+
+    assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (rOrd.menu.index("zxy"), 5)
+
+
+def test_a_node_is_placed_again_only_where_its_name_gives_its_type(
+    mock_hou: MockHouModule,
+) -> None:
+    """A Sop subnet left by destroy is not placed under an Object network, which
+    would make it the Object subnet with a Sop subnet's parameters."""
+    geo = mock_hou.node("/obj").createNode("geo", "g")
+    sop_subnet = geo.createNode("subnet", "s")
+    sop_subnet.destroy()
+    geo.destroy()
+    mock_hou.node("/obj").createNode("subnet", "g")
+
+    with pytest.raises(ValueError, match="'/obj/g/s' was placed where 'subnet' gave another type"):
+        mock_hou.add_node(sop_subnet)
+
+
+def test_a_parm_refuses_what_houdini_refuses(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    assert geo.parm("shop_materialpath").unexpandedString() == ""
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: .*\nOnly string parms"):
+        geo.parm("tx").unexpandedString()
+    with pytest.raises(Exception, match=r"hou\.InvalidSize: Invalid size\."):
+        geo.parmTuple("t").set([1.0, 2.0])
+    assert geo.parmTuple("t").eval() == (0.0, 0.0, 0.0)
+
+
+def test_a_type_carries_the_parameter_tuples_its_row_lists(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    # a SOP carries no object transform
+    assert geo.createNode("null").parm("tx") is None
+    assert [p.name() for p in geo.parms()] == [
+        "tx",
+        "ty",
+        "tz",
+        "rx",
+        "ry",
+        "rz",
+        "shop_materialpath",
+    ]
+    assert mock_hou.node("/out").createNode("opengl").parmTuple("res").eval() == (1280, 720)
+    assert mock_hou.node("/out").createNode("opengl").parm("res1").eval() == 1280
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"tx": 1.0}, "'tx' is a component of 't', not 'tx'"),
+        ({"size": [1.0, 2.0, 3.0]}, "geo has no tuple 'size': name its components"),
+        ({"t": [1.0, 2.0]}, "'t' has components \\('tx', 'ty', 'tz'\\)"),
+        ({"t": ParmTuple(("a", "b", "c"), (1.0, 2.0, 3.0))}, "'t' has components"),
+        (
+            {"size": ParmTuple(("sizex", "sizey"), (1.0, 2.0)), "sizex": 3.0},
+            "'sizex' is a component of 'size', not 'sizex'",
+        ),
+    ],
+)
+def test_given_parameters_name_no_component_houdini_does_not(
+    mock_hou: MockHouModule, params: dict, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        mock_hou.add_node(MockHouNode(path="/obj/geo1", name="geo1", params=params))
+    assert mock_hou.node("/obj").children() == ()
+
+
+def test_given_parameters_take_their_type_s_component_names(mock_hou: MockHouModule) -> None:
+    shader = MockHouNode(
+        path="/mat/s",
+        name="s",
+        node_type="principledshader",
+        params={"basecolor": [1.0, 0.0, 0.0], "size": ParmTuple(("size1", "size2"), (4, 5))},
+    )
+    mock_hou.add_node(shader)
+
+    assert [shader.parm(c).eval() for c in ("basecolorr", "basecolorg", "size2")] == [1.0, 0.0, 5]
+
+
+def test_a_node_outside_any_scene_has_no_parameters() -> None:
+    with pytest.raises(
+        RuntimeError, match="'/obj/geo1' is not in a scene, so it has no parameters"
+    ):
+        MockHouNode(path="/obj/geo1", name="geo1", params={"t": [0.0, 0.0, 0.0]}).parm("tx")
+
+
+def test_a_node_placed_again_keeps_the_values_it_had(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+    geo.parm("tx").set(4.0)
+    geo.destroy()
+
+    mock_hou.add_node(geo)
+
+    assert geo.parm("tx").eval() == 4.0
