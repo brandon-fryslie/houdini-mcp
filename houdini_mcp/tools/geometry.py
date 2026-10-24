@@ -77,7 +77,8 @@ async def get_geo_summary(
 
     Edge Cases:
         - Uncooked or out-of-date geometry: Houdini cooks the node before the
-          read, except in its Manual update mode, which cooks nothing
+          read. Its Manual update mode cooks nothing: a node changed since its
+          last cook (or never cooked) returns error status, naming the update mode
         - Empty geometry: Returns zeros for counts and no bounding_box, not an error
         - Points all at NaN: Returns their count and no bounding_box
         - Massive geometry (>1M points): a warning names the point count; the
@@ -135,10 +136,15 @@ def _read_geometry(
         )
 
     # A node that is not a SOP is the caller's path to fix; a cook that raises or
-    # yields nothing is Houdini's.
+    # yields nothing, or has not run since the node changed, is Houdini's.
     if "not_a_sop" in answer:
         raise InvalidInput(
             f"Node {node_path} has no geometry: {answer['not_a_sop']}", path=node_path
+        )
+    if "not_current" in answer:
+        raise OperationFailed(
+            f"Node {node_path}'s geometry is not current: {answer['not_current']}",
+            path=node_path,
         )
     log_refused(answer["refused_reads"])
     if "no_geometry" in answer:

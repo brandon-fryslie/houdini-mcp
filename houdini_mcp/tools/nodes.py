@@ -121,7 +121,9 @@ def get_node_info(
         (on Houdini 22, a network such as /obj has neither and an object has
         no render flag). When cook_info is not "none",
         also includes cook_info with cook_count, needs_to_cook, errors and
-        warnings (and last_cook_time after a forced cook). cook_count is how many
+        warnings (and last_cook_time after a forced cook: {unread} for a cook
+        that failed or did not run, as none runs in Houdini's Manual update
+        mode). cook_count is how many
         times Houdini has cooked the node, and needs_to_cook is Houdini's
         needsToCook(): for a SOP, True after a change and after a cook that failed.
         On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
@@ -148,7 +150,7 @@ def get_node_info(
         # [LAW:dataflow-not-control-flow] cook_info is orthogonal to detail: it is
         # appended to any record, so no level silently drops it.
         if cook_info != "none":
-            info["cook_info"] = _cook_info(node, force=cook_info == "force_cook")
+            info["cook_info"] = _cook_info(hou, node, force=cook_info == "force_cook")
 
         logger.debug(
             "get_node_info path=%s detail=%s cook_info=%s keys=%s",
@@ -219,7 +221,7 @@ def _parameters(hou: Any, node: Any, max_params: int) -> dict[str, Any]:
     return params
 
 
-def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
+def _cook_info(hou: Any, node: Any, *, force: bool) -> dict[str, Any]:
     """Houdini's cook count, whether it needs to cook, errors and warnings; cooks
     the node first when ``force``.
 
@@ -230,7 +232,7 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     path = node.path()
     # Houdini 22's lastCookTime() reads 0.0 for every node; after a forced cook, now is it.
     if force:
-        cook_info["last_cook_time"] = read(f"forced cook of {path}", lambda: _cook(node))
+        cook_info["last_cook_time"] = read(f"forced cook of {path}", lambda: _cook(hou, node))
     # [LAW:types-are-the-program] Houdini's own two answers, not a state built from
     # them: no reading of them is true of every node (a VOP needs to cook after any
     # cook, a ROP never does), and every pair of them is one Houdini gives.
@@ -250,8 +252,21 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     return cook_info
 
 
-def _cook(node: Any) -> float:
+class CookedNothing(Exception):
+    """A forced cook Houdini did not run: its update mode cooks nothing."""
+
+
+def _cook(hou: Any, node: Any) -> float:
+    """Cook ``node``, and the time the cook ran.
+
+    [LAW:no-silent-failure] Houdini's Manual update mode runs no cook, forced or
+    not, and says nothing; the cook count, which every cook Houdini runs raises by
+    one, is how a cook that did not run is told from one that did.
+    """
+    before = node.cookCount()
     node.cook(force=True)
+    if node.cookCount() == before:
+        raise CookedNothing(f"Houdini's update mode is {hou.updateModeSetting().name()}")
     return time.time()
 
 

@@ -125,6 +125,22 @@ class TestGetNodeInfoWithErrors:
         assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (2, False)
         assert isinstance(cook_info["last_cook_time"], float)
 
+    def test_a_forced_cook_in_manual_update_mode_has_no_cook_time(self, mock_connection, caplog):
+        from houdini_mcp.tools import get_node_info
+
+        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        geo1._needs_to_cook = True
+        mock_connection.add_node(geo1)
+        mock_connection.setUpdateMode(mock_connection.updateMode.Manual)
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+            cook_info = get_node_info("/obj/geo1", cook_info="force_cook")["cook_info"]
+
+        reason = "houdini_mcp.tools.nodes.CookedNothing: Houdini's update mode is Manual"
+        assert cook_info["last_cook_time"] == {"unread": reason}
+        assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (1, True)
+        assert f"unread forced cook of /obj/geo1 reason={reason}" in caplog.messages
+
     def test_get_node_info_backward_compatible(self, mock_connection):
         """Test that cook_info="none" (default) doesn't include cook_info."""
         from houdini_mcp.tools import get_node_info

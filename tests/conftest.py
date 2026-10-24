@@ -319,6 +319,9 @@ class MockHouNode:
         # node has cooked once and is current.
         self._cook_count = 1
         self._needs_to_cook = False
+        # The scene's update mode, as hou.setUpdateMode sets it: the root holds
+        # it, and every placed node reads it there.
+        self._update_mode = MockUpdateMode.AutoUpdate
         self._errors: list[str] = []
         self._warnings: list[str] = []
         # Geometry
@@ -717,7 +720,10 @@ class MockHouNode:
         return self._warnings.copy()
 
     def cook(self, force: bool = False) -> None:
-        """Cook as Houdini 22 does: a node with errors fails the cook, raising."""
+        """Cook as Houdini 22 does: a node with errors fails the cook, raising, and
+        the Manual update mode cooks nothing, forced or not, and says nothing."""
+        if not self._cooks():
+            return
         self._count_cook()
         if self._errors:
             raise raised_inside_houdini(
@@ -735,8 +741,14 @@ class MockHouNode:
         self._cook_count += 1
         self._needs_to_cook = bool(self._errors)
 
+    def _cooks(self) -> bool:
+        return self.root()._update_mode is not MockUpdateMode.Manual
+
     def geometry(self) -> Optional["MockGeometry"]:
-        """Return geometry object if this is a SOP node."""
+        """The geometry this node last cooked; as Houdini's, it cooks a node that
+        needs to cook first, except in the Manual update mode."""
+        if self._needs_to_cook and self._cooks():
+            self._count_cook()
         return self._geometry
 
     def setGeometry(self, geo: "MockGeometry") -> None:
@@ -1001,6 +1013,7 @@ class MockHouModule:
         self.Vector4 = MockVector4
         self.Ramp = MockRamp
         self.networkItemType = MockNetworkItemType
+        self.updateMode = MockUpdateMode
 
         self.undos = MockUndos(self)
 
@@ -1010,6 +1023,12 @@ class MockHouModule:
 
     def applicationVersionString(self) -> str:
         return self._version
+
+    def setUpdateMode(self, mode: "MockEnumValue") -> None:
+        self._root._update_mode = mode
+
+    def updateModeSetting(self) -> "MockEnumValue":
+        return self._root._update_mode
 
     def applicationVersion(self) -> tuple:
         return self._version_tuple
@@ -1412,6 +1431,14 @@ class MockNetworkItemType:
     Node = MockEnumValue("Node")
     SubnetIndirectInput = MockEnumValue("SubnetIndirectInput")
     NetworkDot = MockEnumValue("NetworkDot")
+
+
+class MockUpdateMode:
+    """``hou.updateMode``: when Houdini cooks a node that changed."""
+
+    AutoUpdate = MockEnumValue("AutoUpdate")
+    OnMouseUp = MockEnumValue("OnMouseUp")
+    Manual = MockEnumValue("Manual")
 
 
 class MockPaneTabType:
