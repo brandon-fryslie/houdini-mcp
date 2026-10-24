@@ -211,7 +211,7 @@ class TestListenerAgainstRealRpyc:
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
         assert (
-            f"hrpyc client {peer} disconnected from port {port} by the client (end of stream)"
+            f"hrpyc client {peer} disconnected from port {port} by the client (EOFError: stream has been closed)"
             in caplog.messages
         )
 
@@ -249,7 +249,7 @@ class TestListenerAgainstRealRpyc:
         assert isinstance(error, OSError)
         assert (
             f"hrpyc client {parked.peer} disconnected from port {parked.port} by the listener"
-            f" ({error})" in caplog.messages
+            f" ({type(error).__name__}: {error})" in caplog.messages
         )
 
     def test_stop_ends_a_serving_thread_whose_poll_the_close_never_wakes(
@@ -269,6 +269,8 @@ class TestListenerAgainstRealRpyc:
             assert parked.listener.stop()["status"] == "success"
             parked.thread.join(timeout=listener_module._SERVE_ROUND_SECONDS + 1)
             assert not parked.thread.is_alive(), "serving thread did not end within a round"
+            with pytest.raises(EOFError):
+                parked.conn.modules.math.sqrt(1.0)
         assert (
             f"hrpyc client {parked.peer} disconnected from port {parked.port} by the listener"
             " (between rounds)" in caplog.messages

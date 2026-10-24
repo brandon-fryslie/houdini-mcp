@@ -440,15 +440,13 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     into the closed descriptor fails with an OSError, knowing the socket closed
     but not that it was closed on purpose. Either way it is the listener's own
     disconnect, recorded as one, not as a traceback. So is a socket error on a
-    connection another thread serving it (a main-thread call's) already closed,
-    as ``serve_all()`` had it. Any other socket error while the listener still
-    serves is a real failure, and is raised.
+    connection already closed, as ``serve_all()`` had it. Any other socket
+    error while the listener still serves is a real failure, and is raised.
 
-    The record says who ended the connection and how serving saw it end: end
-    of stream (a client's close request ends this way too), the socket error,
-    or between rounds, where a round ended with no error and found serving
-    over: a stop whose close the poll never heard, or the client's end read
-    by another thread serving the connection.
+    The record says who ended the connection and how serving saw it end: the
+    exception a round ended on (``EOFError`` for an end of stream, a peer's
+    reset included; ``OSError`` for a socket error), or "between rounds" when
+    a round ended with none and found serving over.
     """
     error: OSError | None = None
     ending = "between rounds"
@@ -458,11 +456,9 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
         # a wakeup the close lost delays it by one round, it cannot prevent it.
         while server.active and not conn.closed:
             conn.serve(_SERVE_ROUND_SECONDS)
-    except EOFError:
-        ending = "end of stream"
-    except OSError as exc:
-        ending = str(exc)
-        error = None if conn.closed else exc
+    except (EOFError, OSError) as exc:
+        ending = f"{type(exc).__name__}: {exc}"
+        error = exc if isinstance(exc, OSError) and not conn.closed else None
     finally:
         conn.close()
     # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,

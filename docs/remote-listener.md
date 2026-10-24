@@ -34,11 +34,10 @@ fails with a closed connection, and Houdini's log records
 `hrpyc client ('<host>', <port>) disconnected from port <port> by the listener (<how>)`
 for each, not an error. A client that closes its own connection is recorded
 `by the client`. `<how>` is how the thread serving the client saw the end:
-`end of stream`, the socket error it ran into, or `between rounds` when a
-one-second round ended with no error and found it over: `by the listener
-(between rounds)` is a stop that never woke the thread, `by the client
-(between rounds)` a client's end read by Houdini's main thread while it was
-serving a call for that client.
+the exception it ended on, such as `EOFError: connection closed by peer` or
+`OSError: [Errno 9] Bad file descriptor`, or `between rounds` when a
+one-second round ended with no exception and found serving over. A stop
+recorded `between rounds` is usually one whose close never woke the thread.
 
 ## Configuration (environment variables)
 

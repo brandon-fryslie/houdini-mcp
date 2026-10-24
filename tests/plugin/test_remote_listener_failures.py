@@ -702,16 +702,17 @@ def _client_closes(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     raise EOFError("connection closed by peer")
 
 
-def _client_end_read_on_another_thread(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
-    # A main-thread call's serve read the client's end and closed the
-    # connection; this round waited for it and returns with nothing to read.
+def _client_resets(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    # rpyc's SocketStream.read raises a socket error as an EOFError carrying it.
+    raise EOFError(OSError(errno.ECONNRESET, "Connection reset by peer"))
+
+
+def _round_closes_the_connection(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     conn.close()
     return True
 
 
-def _client_end_read_on_another_thread_under_poll(
-    server: SimpleNamespace, conn: SimpleNamespace
-) -> bool:
+def _socket_error_on_a_closed_connection(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
     conn.close()
     raise _closed_fd()
 
@@ -743,19 +744,27 @@ class TestClientDisconnect:
     @pytest.mark.parametrize(
         ("round_", "record"),
         [
-            (_client_closes, "by the client (end of stream)"),
-            (_client_end_read_on_another_thread, "by the client (between rounds)"),
+            (_client_closes, "by the client (EOFError: connection closed by peer)"),
             (
-                _client_end_read_on_another_thread_under_poll,
-                "by the client ([Errno 9] Bad file descriptor)",
+                _client_resets,
+                f"by the client (EOFError: [Errno {errno.ECONNRESET}] Connection reset by peer)",
+            ),
+            (_round_closes_the_connection, "by the client (between rounds)"),
+            (
+                _socket_error_on_a_closed_connection,
+                "by the client (OSError: [Errno 9] Bad file descriptor)",
             ),
             (_listener_closes_unheard, "by the listener (between rounds)"),
-            (_listener_closes_under_poll, "by the listener ([Errno 9] Bad file descriptor)"),
+            (
+                _listener_closes_under_poll,
+                "by the listener (OSError: [Errno 9] Bad file descriptor)",
+            ),
         ],
         ids=[
             "client-closed",
-            "client-end-read-on-another-thread",
-            "client-end-read-on-another-thread-under-poll",
+            "client-reset",
+            "connection-closed-in-a-round",
+            "socket-error-on-a-closed-connection",
             "listener-closed-unheard",
             "listener-closed-under-poll",
         ],
