@@ -205,6 +205,20 @@ def test_list_render_nodes_reads_each_rops_bypass_flag(at: dict[str, Any]) -> No
     assert (listed[rop], listed[network]) == (True, None)
 
 
+def test_find_nodes_filters_by_either_name_createnode_takes_for_a_type(at: dict[str, Any]) -> None:
+    """Houdini 22's createNode("mountain") gives a mountain::2.0, which a filter by
+    either name finds; type names are case-sensitive, so "Mountain" names none."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_find", **at)["node_path"]
+    peak = tools.create_node("mountain", geo, "peak", **at)["node_path"]
+    tools.create_node("box", geo, "box1", **at)
+
+    for node_type in ("mountain", "mountain::2.0"):
+        found = tools.find_nodes(geo, "*", node_type, **at)
+        assert found["matches"] == [{"path": peak, "name": "peak", "type": "mountain::2.0"}], found
+    refused = tools.find_nodes(geo, "*", "Mountain", **at)
+    assert refused["kind"] == "invalid_input", refused
+
+
 def test_set_node_flags_bypasses_a_sop_and_a_rop(at: dict[str, Any]) -> None:
     """Houdini 22 writes the bypass flag with bypass(on); no node class has setBypass."""
     geo = tools.create_node("geo", "/obj", "mcp_it_bypass", **at)["node_path"]

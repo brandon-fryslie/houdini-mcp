@@ -39,7 +39,7 @@ from ._common import (
 )
 from .cache import node_type_cache
 from .connections import input_connections, input_paths
-from .failure import Undone, batch_status
+from .failure import InvalidInput, Undone, batch_status
 from .parms import evaluated
 from .plugin import plugin_module
 from .reads import UNREAD, is_unread, read
@@ -556,7 +556,11 @@ def find_nodes(
         root_path: Root path to start search from (default: "/obj")
         pattern: Glob pattern or substring to match node names (default: "*")
                 Examples: "noise*", "*grid*", "sphere"
-        node_type: Optional node type filter (e.g., "sphere", "noise", "geo")
+        node_type: Optional node type filter: a name createNode takes, such as
+                "sphere" or "mountain" (which finds the mountain::2.0 nodes
+                createNode gives for it), or a type's full name as matches report
+                it ("mountain::2.0"). Case-sensitive, as Houdini's type names are;
+                a name that names no node type is refused.
         limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
 
@@ -574,6 +578,17 @@ def find_nodes(
         root = node_at(link.hou, root_path, "Root node")
 
         request = PageRequest(offset=cursor, limit=limit)
+        search = plugin_module(link, "houdini_mcp_search")
+
+        # [LAW:parse-dont-validate] The filter is parsed, inside Houdini, into the types
+        # it names; one that names none is refused rather than matching nothing.
+        types = None if node_type is None else search.types_named(link.hou, node_type)
+        if types == ():
+            raise InvalidInput(
+                f"node_type {node_type!r} names no node type; type names are "
+                "case-sensitive, as createNode takes them",
+                node_type=node_type,
+            )
 
         # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
         # the scene size, answered with the match count and the page's strings.
@@ -581,18 +596,18 @@ def find_nodes(
         # program; find_nodes has no code-execution path of its own.
         # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator
         # as an error instead of switching to a different result set.
-        total, found = plugin_module(link, "houdini_mcp_search").matching_descendants(
-            root, pattern, node_type, request.window
-        )
+        total, found = search.matching_descendants(root, pattern, types, request.window)
         page = page_from(total, found, request)
         matches = [
             {"path": path, "name": name, "type": type_name} for path, name, type_name in page.items
         ]
         logger.debug(
-            "find_nodes root=%s pattern=%s node_type=%s offset=%d total=%d returned=%d has_more=%s",
+            "find_nodes root=%s pattern=%s node_type=%s types=%s offset=%d total=%d "
+            "returned=%d has_more=%s",
             root_path,
             pattern,
             node_type,
+            types,
             page.offset,
             page.total,
             len(matches),

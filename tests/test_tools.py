@@ -1854,26 +1854,44 @@ class TestFindNodes:
         assert result["returned"] == 1
         assert result["matches"][0]["name"] == "my_noise_node"
 
-    def test_find_nodes_type_filter(self, mock_connection):
-        """Test finding nodes with type filter."""
+    @pytest.mark.parametrize("node_type", ["mountain", "mountain::2.0"])
+    def test_find_nodes_type_filter_takes_any_name_createnode_takes(
+        self, mock_connection, node_type
+    ):
+        """A filter by the name createNode was given, or by the versioned type it gave,
+        finds the nodes of that type: Houdini 22's mountain is mountain::2.0."""
         from houdini_mcp.tools import find_nodes
 
-        mock_connection.node("/obj").createNode("geo", "geo1")
-        sphere1 = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        mock_connection.add_node(sphere1)
-        sphere2 = MockHouNode(path="/obj/geo1/sphere2", name="sphere2", node_type="sphere")
-        mock_connection.add_node(sphere2)
-        box1 = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
-        mock_connection.add_node(box1)
+        geo = mock_connection.node("/obj").createNode("geo", "geo1")
+        geo.createNode("mountain", "peak1")
+        geo.createNode("mountain", "peak2")
+        geo.createNode("box", "box1")
 
-        result = find_nodes("/obj", "*", "sphere", host="localhost", port=18811)
+        result = find_nodes("/obj", "*", node_type, host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert result["returned"] == 2
-        assert result["node_type_filter"] == "sphere"
+        assert result["node_type_filter"] == node_type
+        assert result["matches"] == [
+            {"path": "/obj/geo1/peak1", "name": "peak1", "type": "mountain::2.0"},
+            {"path": "/obj/geo1/peak2", "name": "peak2", "type": "mountain::2.0"},
+        ]
 
-        for match in result["matches"]:
-            assert match["type"] == "sphere"
+    @pytest.mark.parametrize("node_type", ["GRID", "mountain::1.0", ""])
+    def test_find_nodes_refuses_a_type_filter_that_names_no_type(self, mock_connection, node_type):
+        """Houdini's type names are case-sensitive: a filter naming no type is refused,
+        not answered with no matches."""
+        from houdini_mcp.tools import find_nodes
+
+        mock_connection.node("/obj").createNode("geo", "geo1").createNode("grid")
+
+        result = find_nodes("/obj", "*", node_type, host="localhost", port=18811)
+
+        assert (result["status"], result["kind"], result["node_type"]) == (
+            "error",
+            "invalid_input",
+            node_type,
+        )
+        assert f"node_type {node_type!r} names no node type" in result["message"]
 
     def test_find_nodes_recursive(self, mock_connection):
         """Test finding nodes recursively in hierarchy."""
@@ -2029,29 +2047,37 @@ class TestFindNodes:
 
         with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.nodes"):
             find_nodes("/obj/geo1", "grid*", None, limit=2, host="localhost", port=18811)
+            find_nodes("/obj/geo1", "*", "grid", limit=2, host="localhost", port=18811)
 
         assert (
-            "find_nodes root=/obj/geo1 pattern=grid* node_type=None offset=0 "
+            "find_nodes root=/obj/geo1 pattern=grid* node_type=None types=None offset=0 "
+            "total=3 returned=2 has_more=True"
+        ) in caplog.text
+        assert (
+            "find_nodes root=/obj/geo1 pattern=* node_type=grid types=('Sop/grid',) offset=0 "
             "total=3 returned=2 has_more=True"
         ) in caplog.text
 
     def test_find_nodes_asks_houdini_once_and_pages_the_answer(self, mock_connection, monkeypatch):
-        """One call into Houdini's search carries the inputs as data; the server pages
-        the strings it answers and never walks the scene itself."""
+        """One call into Houdini's search carries the inputs as data, the filter as the
+        types Houdini says it names; the server pages the strings it answers and never
+        walks the scene itself."""
         from houdini_mcp.tools import find_nodes
 
         obj = mock_connection.node("/obj")
         obj.allSubChildren = MagicMock(side_effect=AssertionError("walked from the server"))
         search = SimpleNamespace(
+            types_named=MagicMock(return_value=("Object/null",)),
             matching_descendants=MagicMock(
                 return_value=(3, (("/obj/b", "b", "null"), ("/obj/c", "c", "null")))
-            )
+            ),
         )
         monkeypatch.setitem(sys.modules, "houdini_mcp_search", search)
 
         result = find_nodes("/obj", "*", "null", limit=2, cursor=1, host="localhost", port=18811)
 
-        search.matching_descendants.assert_called_once_with(obj, "*", "null", slice(1, 3))
+        search.types_named.assert_called_once_with(mock_connection, "null")
+        search.matching_descendants.assert_called_once_with(obj, "*", ("Object/null",), slice(1, 3))
         assert result["matches"] == [
             {"path": "/obj/b", "name": "b", "type": "null"},
             {"path": "/obj/c", "name": "c", "type": "null"},

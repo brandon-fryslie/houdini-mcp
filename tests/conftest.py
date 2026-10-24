@@ -124,6 +124,23 @@ class MockSubnetIndirectInput:
         return MockNetworkItemType.SubnetIndirectInput
 
 
+class MockNodeType:
+    """Mock hou.NodeType as its category holds it: a row of the table, in that category."""
+
+    def __init__(self, category: str, row: NodeType) -> None:
+        self._category = category
+        self._row = row
+
+    def name(self) -> str:
+        return self._row.type
+
+    def description(self) -> str:
+        return self._row.description
+
+    def nameWithCategory(self) -> str:
+        return f"{self._category}/{self._row.type}"
+
+
 class MockNodeTypeCategory:
     """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
     so rpyc reads it as it reads Houdini's."""
@@ -133,6 +150,14 @@ class MockNodeTypeCategory:
 
     def name(self) -> str:
         return self._name
+
+    def nodeTypes(self) -> dict[str, MockNodeType]:
+        """Every type the category offers, under its own name, a name createNode takes back."""
+        return {row.type: MockNodeType(self._name, row) for row in NODE_TYPES[self._name].values()}
+
+    def nodeType(self, name: str) -> MockNodeType | None:
+        """The type whose own name ``name`` is; None when no type has it."""
+        return self.nodeTypes().get(name)
 
 
 class _SopNodeClass(type):
@@ -1177,18 +1202,15 @@ class MockHouModule:
             return None
         return next((i for i in parent.indirectInputs() if i.name() == name), None)
 
-    def nodeTypeCategories(self) -> dict[str, Any]:
-        """Every category of NODE_TYPES, each offering its node types under their own
-        names, each one a name createNode takes back."""
-        categories = {}
-        for category, offered in NODE_TYPES.items():
-            types = {}
-            for row in offered.values():
-                types[row.type] = MagicMock()
-                types[row.type].description.return_value = row.description
-            categories[category] = MagicMock()
-            categories[category].nodeTypes.return_value = types
-        return categories
+    def nodeTypeCategories(self) -> dict[str, MockNodeTypeCategory]:
+        """Every category of NODE_TYPES."""
+        return {category: MockNodeTypeCategory(category) for category in NODE_TYPES}
+
+    def preferredNodeType(self, name: str) -> MockNodeType | None:
+        """The type createNode gives for ``Category/name``; None for a name it refuses."""
+        category, _, type_name = name.partition("/")
+        row = _offered(category, type_name)
+        return None if row is None else MockNodeType(category, row)
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""
