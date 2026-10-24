@@ -25,9 +25,10 @@ code is made in one place, and the detectors are pure functions of the tree.
 from __future__ import annotations
 
 import ast
+import enum
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar
 
 __all__ = [
     "parse_code",
@@ -272,6 +273,16 @@ class _Refused:
 Value = TypeVar("Value")
 
 
+class _Required(enum.Enum):
+    """The default of a parameter that has none: one the gate cannot find was
+    passed under a name it does not know."""
+
+    REQUIRED = enum.auto()
+
+
+REQUIRED = _Required.REQUIRED
+
+
 @dataclass(frozen=True)
 class _RefusedByArgument(Generic[Value]):
     """A callee whose danger is one argument's value, so it is judged at its call.
@@ -288,9 +299,7 @@ class _RefusedByArgument(Generic[Value]):
     position: int
     # [LAW:types-are-the-program] dangerous is handed only values of this type.
     literal: type[Value]
-    # None for a required parameter: one the gate cannot find was passed under
-    # a name it does not know.
-    default: Value | None
+    default: Value | Literal[_Required.REQUIRED]
     dangerous: Callable[[Value], bool]
     danger: str
 
@@ -309,7 +318,7 @@ class _RefusedByArgument(Generic[Value]):
                 given = kw.value
         value: Value
         if given is None:
-            if self.default is None:
+            if self.default is REQUIRED:
                 return f"{dotted}() without {self.keyword} - {self.danger} cannot be ruled out"
             value = self.default
         elif not isinstance(given, ast.Constant):
@@ -391,11 +400,11 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
     # expand(str, ...): a backtick is the one place an expanded string holds an
     # expression; a variable's value is not expanded again, so "$HIP/x" is plain.
     **{
-        path: _RefusedByArgument(
+        path: _RefusedByArgument[str](
             keyword=keyword,
             position=0,
             literal=str,
-            default=None,
+            default=REQUIRED,
             dangerous=lambda text: "`" in text,
             danger="running a shell through a backtick expression's system()",
         )

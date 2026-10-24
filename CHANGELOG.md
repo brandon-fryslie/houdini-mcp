@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `execute_code` refuses HScript as it refuses `eval` (houdini-laws-etg.dl2):
-  `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
+- `execute_code` refuses the calls that run HScript as it refuses `eval`
+  (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
   expansion (`hou.text.expandString()` and kin) of a string holding a backtick
   or one the gate cannot read. Under policy `normal` with no bypass,
   `hou.hscript("mnew")` wiped the scene and `hou.hscript("unix ...")` ran a
