@@ -327,7 +327,7 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 ### Pattern 2: Tool with Constrained Input
 
 ```python
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_viewport(
     resolution: Resolution = DEFAULT_RESOLUTION,
     ...

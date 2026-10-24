@@ -1002,6 +1002,7 @@ class TestRenderLeavesSceneUnchanged:
         assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
         assert "the render had already failed: " in result["message"], result
         assert "OpenGL ROP: no display" in result["message"], result
+        assert result["exception"] == "EOFError", result
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"karma_engine": "tpu"}])
@@ -1124,7 +1125,8 @@ class TestRenderLeavesSceneUnchanged:
     def test_nothing_is_sent_over_a_failed_link(
         self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
     ) -> None:
-        """A render that dies with the link ends as connection loss and attempts no destroy."""
+        """A render that dies with the link ends as connection loss and attempts no
+        destroy, nor removes its file."""
         import houdini_mcp.tools as tools
         from tests.conftest import MockHouNode, link_failure
 
@@ -1132,8 +1134,13 @@ class TestRenderLeavesSceneUnchanged:
             raise link_failure(EOFError("stream has been closed"))
 
         destroyed: list[str] = []
+        removed: list[str] = []
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
         monkeypatch.setattr(MockHouNode, "destroy", lambda self: destroyed.append(self.path()))
+        monkeypatch.setattr(
+            "houdini_mcp.tools.rendering._get_remote_modules",
+            lambda *_: (_RemoteOs(remove=removed.append), tempfile),
+        )
         before = self._scene(rendering_scene)
 
         result = getattr(tools, tool)(host="localhost", port=18811)
@@ -1141,6 +1148,8 @@ class TestRenderLeavesSceneUnchanged:
         assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
         assert result["operation"] == tool
         assert destroyed == []
+        assert removed == []
+        assert "temporary render file " in result["message"], result
         stranded = self._added(rendering_scene, before)
         assert stranded
         for path in stranded:

@@ -169,7 +169,7 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
                 failures = _destroy(created)
             except Exception as lost:
                 add_note(lost, f"the render had already failed: {body!r}")
-                raise
+                raise lost from body
             for path, failure in failures:
                 add_note(body, f"also failed to destroy temporary render node {path}: {failure!r}")
         else:
@@ -524,20 +524,33 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
             if transport_failure(e):
                 raise
             raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
-        if not image:
-            raise OperationFailed("Render completed but produced no image")
-        return base64.b64encode(image).decode("utf-8")
-    finally:
-        try:
-            remote_os.remove(output_path)
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            # [LAW:no-silent-failure] a file that would not go is reported where
-            # it was left; the image already read is still the answer
-            if transport_failure(e):
-                raise
-            logger.error("Leaked temporary render file %s: %r", output_path, e)
+    except BaseException as e:
+        # A link that failed is sent nothing more: the file is Houdini's to keep.
+        if transport_failure(e) is None:
+            _remove_picture(remote_os, output_path)
+        else:
+            add_note(
+                e, f"temporary render file {output_path} is still on Houdini's machine: {_LOST}"
+            )
+        raise
+    _remove_picture(remote_os, output_path)
+    if not image:
+        raise OperationFailed("Render completed but produced no image")
+    return base64.b64encode(image).decode("utf-8")
+
+
+def _remove_picture(remote_os: Any, output_path: str) -> None:
+    """Remove the render's file from Houdini's machine; a link failure is raised."""
+    try:
+        remote_os.remove(output_path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        # [LAW:no-silent-failure] a file that would not go is reported where
+        # it was left; the image already read is still the answer
+        if transport_failure(e):
+            raise
+        logger.error("Leaked temporary render file %s: %r", output_path, e)
 
 
 # =============================================================================
