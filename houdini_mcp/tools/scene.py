@@ -109,11 +109,13 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
     Args:
         file_path: Path to the .hip file to load
     """
-    with using(host, port) as link:
-        warning: str | None = plugin_module(link, "houdini_mcp_scene").load(link.hou, file_path)
-
-    # Invalidate caches since scene context changed
-    invalidate_all_caches()
+    try:
+        with using(host, port) as link:
+            warning: str | None = plugin_module(link, "houdini_mcp_scene").load(link.hou, file_path)
+    finally:
+        # [LAW:dataflow-not-control-flow] A load that raised, or outlived the link's
+        # timeout, may have replaced the scene first: every attempt drops the caches.
+        invalidate_all_caches()
     logger.info("Loaded %s; Houdini's load warnings: %s", file_path, warning)
 
     result = {"status": "success", "message": "Scene loaded", "file_path": file_path}

@@ -15,6 +15,7 @@ from tests.conftest import (
     LoadWarning,
     MockHouNode,
     MockNodeLacking,
+    OperationFailed,
     link_failure,
     raised_inside_houdini,
 )
@@ -1064,17 +1065,34 @@ class TestSceneOperations:
         assert result["status"] == "success"
         assert result["file_path"] == "/path/to/new.hip"
 
-    def test_load_scene_success(self, mock_connection):
+    def test_load_scene_success(self, mock_connection, caplog):
         """Test loading scene successfully."""
         from houdini_mcp.tools import load_scene
 
-        result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.scene"):
+            result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert "warning" not in result
         mock_connection.hipFile.load.assert_called_once_with(
             "/path/to/scene.hip", suppress_save_prompt=True
         )
+        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.scene"] == [
+            "Loaded /path/to/scene.hip; Houdini's load warnings: None"
+        ]
+
+    def test_a_load_that_failed_still_drops_the_caches(self, mock_connection):
+        """Houdini may have replaced the scene before the load raised."""
+        from houdini_mcp.tools import list_node_types, load_scene
+
+        mock_connection.hipFile.load.side_effect = OperationFailed(
+            "The attempted operation failed."
+        )
+        assert list_node_types()["_cache_info"]["hit"] is False
+        assert list_node_types()["_cache_info"]["hit"] is True
+
+        assert load_scene("/scenes/truncated.hip")["status"] == "error"
+        assert list_node_types()["_cache_info"]["hit"] is False
 
     def test_a_load_houdini_warned_about_is_a_load_carrying_its_warning(
         self, mock_connection, caplog
