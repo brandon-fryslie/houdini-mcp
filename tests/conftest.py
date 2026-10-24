@@ -281,13 +281,13 @@ class Placed:
     """What a placed node holds because of its type: its parameter tuples, its indirect
     inputs, and the type that gave them.
 
-    ``indirect`` is empty for a node that is not a subnetwork, whose indirectInputs()
+    ``indirect`` is None for a node that is not a subnetwork, whose indirectInputs()
     raises instead; the items it lists are made once, as each holds its own wires.
     """
 
     row: NodeType
     tuples: dict[str, HeldTuple]
-    indirect: tuple[MockSubnetIndirectInput, ...]
+    indirect: tuple[MockSubnetIndirectInput, ...] | None
 
 
 @dataclass(frozen=True)
@@ -304,8 +304,10 @@ def _place(node: "MockHouNode", node_type: NodeType, given: Mapping[str, Any] | 
     return Placed(
         node_type,
         _placed_parms(node_type, given),
-        tuple(
-            MockSubnetIndirectInput(node, n) for n in range(1, (node_type.indirect_inputs or 0) + 1)
+        None
+        if node_type.indirect_inputs is None
+        else tuple(
+            MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
         ),
     )
 
@@ -559,12 +561,17 @@ class MockHouNode:
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
         """The subnetwork's indirect inputs, as its type gives them; a node that is not
         one raises, as Houdini's does."""
-        placed = self._placed()
-        if placed.row.indirect_inputs is None:
+        indirect = self._placed().indirect
+        if indirect is None:
             raise raised_inside_houdini(
                 HouInvalidNodeType("The node type is invalid.\nNode is not a subnetwork.")
             )
-        return placed.indirect
+        return indirect
+
+    def _indirect_items(self) -> tuple[MockSubnetIndirectInput, ...]:
+        """The indirect inputs a path or allItems() finds in this network: none in a node
+        that is not a subnetwork, where indirectInputs() raises instead."""
+        return self._placed().indirect or ()
 
     def childTypeCategory(self) -> "MockNodeTypeCategory | None":
         """The category of this network's children; None for a node that is not a
@@ -581,7 +588,7 @@ class MockHouNode:
 
     def allItems(self) -> tuple[Any, ...]:
         """Every item in this network, of the kinds this double models."""
-        return (*self._children, *self._network_boxes, *self._placed().indirect)
+        return (*self._children, *self._network_boxes, *self._indirect_items())
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -1278,9 +1285,7 @@ class MockHouModule:
         parent = self.node(parent_path)
         if parent is None:
             return None
-        # the placed tuple, not indirectInputs(): a node that is not a subnetwork raises
-        # there, and hou.item finds no indirect input under it
-        return next((i for i in parent._placed().indirect if i.name() == name), None)
+        return next((i for i in parent._indirect_items() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, MockNodeTypeCategory]:
         """Every category of NODE_TYPES."""

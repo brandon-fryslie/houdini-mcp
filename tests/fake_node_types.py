@@ -143,8 +143,11 @@ def _indirect_inputs(node: Any) -> int | None:
     except Exception as e:
         # hython raises hou.InvalidNodeType itself; over rpyc it arrives as rpyc's
         # stand-in class, named "hou.InvalidNodeType", which no except clause can
-        # name, so the class is known by its own name in either form
-        if type(e).__name__.rpartition(".")[2] != "InvalidNodeType":
+        # name, so the class is known by its own name in either form, and its message
+        # says which fault of the type it reports
+        if type(e).__name__.rpartition(".")[
+            2
+        ] != "InvalidNodeType" or "Node is not a subnetwork" not in str(e):
             raise
         return None
     names = [item.name() for item in indirect]
