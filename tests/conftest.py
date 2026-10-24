@@ -118,6 +118,15 @@ HouPermissionError.__name__ = HouPermissionError.__qualname__ = "PermissionError
 HouPermissionError.__module__ = "hou"
 
 
+class HouInvalidNodeType(Exception):
+    """hou.InvalidNodeType, which Houdini 22 raises for indirectInputs() on a node that
+    is not a subnetwork."""
+
+
+HouInvalidNodeType.__name__ = HouInvalidNodeType.__qualname__ = "InvalidNodeType"
+HouInvalidNodeType.__module__ = "hou"
+
+
 class InvalidSize(Exception):
     """hou.InvalidSize, which Houdini 22 raises for a tuple set to the wrong number of values."""
 
@@ -269,10 +278,16 @@ class HeldTuple:
 
 @dataclass(frozen=True)
 class Placed:
-    """A placed node's parameter tuples, and the type that named them."""
+    """What a placed node holds because of its type: its parameter tuples, its indirect
+    inputs, and the type that gave them.
+
+    ``indirect`` is None for a node that is not a subnetwork, whose indirectInputs()
+    raises instead; the items it lists are made once, as each holds its own wires.
+    """
 
     row: NodeType
     tuples: dict[str, HeldTuple]
+    indirect: tuple[MockSubnetIndirectInput, ...] | None
 
 
 @dataclass(frozen=True)
@@ -281,6 +296,20 @@ class Unplaced:
     its type, which its network decides, says what they name. None is its type's own."""
 
     given: Mapping[str, Any] | None
+
+
+def _place(node: "MockHouNode", node_type: NodeType, given: Mapping[str, Any] | None) -> Placed:
+    """[LAW:single-enforcer] what ``node`` holds once placed as a ``node_type``, given
+    the parameters it was built with: the one place a node's type gives it anything."""
+    return Placed(
+        node_type,
+        _placed_parms(node_type, given),
+        None
+        if node_type.indirect_inputs is None
+        else tuple(
+            MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
+        ),
+    )
 
 
 def _placed_parms(node_type: NodeType, given: Mapping[str, Any] | None) -> dict[str, HeldTuple]:
@@ -367,9 +396,10 @@ class MockHouNode:
         # to judge it by, so attach links and judges it when it enters a scene.
         self._children: list[MockHouNode] = list(children or [])
         self._parent: MockHouNode | None = None
-        # [LAW:types-are-the-program] read only once placed: what the parameters name
-        # is the node's type's to say, and its network decides that type.
-        self._params: Unplaced | Placed = Unplaced(params)
+        # [LAW:types-are-the-program] read only once placed: what the parameters name,
+        # and which indirect inputs it has, is the node's type's to say, and its
+        # network decides that type.
+        self._placement: Unplaced | Placed = Unplaced(params)
         self._inputs: list[Any] = []
         # Source output index per connected input, as hou.NodeConnection.outputIndex()
         # reports it. A test that assigns ``_inputs`` directly wires from output 0,
@@ -399,11 +429,6 @@ class MockHouNode:
         self._network_box_counter = 0
         # Recorded layoutChildren invocations: (horizontal_spacing, vertical_spacing)
         self.layout_calls: list[tuple[float, float]] = []
-        # A subnet's indirect inputs, numbered 1..4 as Houdini names them; any
-        # other node has none.
-        self._indirect_inputs = tuple(
-            MockSubnetIndirectInput(self, n) for n in range(1, 5) if node_type == "subnet"
-        )
 
     # parm()/parmTuple() cache their mocks, whose setters write to this node; a
     # copy rebuilds its own instead of writing through to the original.
@@ -455,8 +480,8 @@ class MockHouNode:
                 node._parent = network
         child._parent = self
         self._children.append(child)
-        for node, parms in placements:
-            node._params = parms
+        for node, placement in placements:
+            node._placement = placement
 
     def node(self, path: str) -> "MockHouNode | None":
         """hou.Node.node: walk a path from this node, or from the root when it is
@@ -513,18 +538,20 @@ class MockHouNode:
         """The category of the nodes this network holds; None for a node that is not one."""
         return self._row().holds
 
-    def _parms(self) -> dict[str, HeldTuple]:
-        """This node's parameter tuples. Houdini has no node outside a scene, so a node
-        built by hand has none until it is placed."""
-        if isinstance(self._params, Unplaced):
-            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no parameters")
-        return self._params.tuples
+    def _placed(self) -> Placed:
+        """What this node's type gave it. Houdini has no node outside a scene, so a node
+        built by hand has nothing its type gives until it is placed."""
+        if isinstance(self._placement, Unplaced):
+            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no type")
+        return self._placement
 
-    def _take_parms(self) -> None:
-        """Hold this node's parameters as its type names them: the root's, which no
-        network places."""
-        assert isinstance(self._params, Unplaced)
-        self._params = Placed(self._row(), _placed_parms(self._row(), self._params.given))
+    def _parms(self) -> dict[str, HeldTuple]:
+        return self._placed().tuples
+
+    def _take_placement(self) -> None:
+        """Take what this node's type gives it: the root's, which no network places."""
+        assert isinstance(self._placement, Unplaced)
+        self._placement = _place(self, self._row(), self._placement.given)
 
     def children(self) -> tuple["MockHouNode", ...]:
         """The network's children, as hou.Node.children gives them: a tuple, which
@@ -532,7 +559,19 @@ class MockHouNode:
         return tuple(self._children)
 
     def indirectInputs(self) -> tuple[MockSubnetIndirectInput, ...]:
-        return self._indirect_inputs
+        """The subnetwork's indirect inputs, as its type gives them; a node that is not
+        one raises, as Houdini's does."""
+        indirect = self._placed().indirect
+        if indirect is None:
+            raise raised_inside_houdini(
+                HouInvalidNodeType("The node type is invalid.\nNode is not a subnetwork.")
+            )
+        return indirect
+
+    def _indirect_items(self) -> tuple[MockSubnetIndirectInput, ...]:
+        """The indirect inputs a path or allItems() finds in this network: none in a node
+        that is not a subnetwork, where indirectInputs() raises instead."""
+        return self._placed().indirect or ()
 
     def childTypeCategory(self) -> "MockNodeTypeCategory | None":
         """The category of this network's children; None for a node that is not a
@@ -549,7 +588,7 @@ class MockHouNode:
 
     def allItems(self) -> tuple[Any, ...]:
         """Every item in this network, of the kinds this double models."""
-        return (*self._children, *self._network_boxes, *self._indirect_inputs)
+        return (*self._children, *self._network_boxes, *self._indirect_items())
 
     def inputs(self) -> list[Any]:
         """HOM looks through a subnet indirect input to the node wired into the
@@ -1044,15 +1083,15 @@ def _admit(
         )
         refused.add_note(f"{node._node_type!r} in {network.path()!r} ({network_type.type})")
         raise raised_inside_houdini(refused)
-    if isinstance(node._params, Placed) and node._params.row != node_type:
+    if isinstance(node._placement, Placed) and node._placement.row != node_type:
         # Houdini moves no node to a network whose category makes it another type
         raise ValueError(f"{node.path()!r} was placed where {node._node_type!r} gave another type")
-    parms = (
-        node._params
-        if isinstance(node._params, Placed)
-        else Placed(node_type, _placed_parms(node_type, node._params.given))
+    placement = (
+        node._placement
+        if isinstance(node._placement, Placed)
+        else _place(node, node_type, node._placement.given)
     )
-    placements = [(node, parms)]
+    placements = [(node, placement)]
     for index, child in enumerate(node._children):
         placements += _admit(node, node_type, child, node._children[:index])
     return placements
@@ -1148,7 +1187,7 @@ class MockHouModule:
         # the scene's update mode, as hou.setUpdateMode sets it: every placed node
         # reads it off the root
         self._root._update_mode = MockUpdateMode.AutoUpdate
-        self._root._take_parms()
+        self._root._take_placement()
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
@@ -1246,7 +1285,7 @@ class MockHouModule:
         parent = self.node(parent_path)
         if parent is None:
             return None
-        return next((i for i in parent.indirectInputs() if i.name() == name), None)
+        return next((i for i in parent._indirect_items() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, MockNodeTypeCategory]:
         """Every category of NODE_TYPES."""

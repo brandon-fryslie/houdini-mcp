@@ -191,6 +191,21 @@ class TestSubnetIndirectInputs:
         assert made["connection"] == cut["disconnected"]
         assert _wires(merge) == [(0, "/obj/geo1/subnet1/1", 0), (1, "/obj/geo1/subnet1/box1", 0)]
 
+    def test_connect_nodes_wires_from_a_foreach_indirect_input(self, mock_connection):
+        """A foreach is a subnetwork too: its indirect input is a source as a subnet's is."""
+        from houdini_mcp.tools import connect_nodes
+
+        geo = mock_connection.node("/obj").createNode("geo", "geo1")
+        foreach = geo.createNode("foreach", "foreach1")
+        null = foreach.createNode("null", "null1")
+
+        made = connect_nodes(
+            "/obj/geo1/foreach1/1", "/obj/geo1/foreach1/null1", 0, 0, host="localhost", port=18811
+        )
+
+        assert made["status"] == "success"
+        assert _wires(null) == [(0, "/obj/geo1/foreach1/1", 0)]
+
     def test_get_node_info_reports_the_indirect_input(self, merge):
         from houdini_mcp.tools import get_node_info
 

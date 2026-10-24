@@ -102,12 +102,49 @@ def test_node_walks_a_relative_path_from_a_node(mock_hou: MockHouModule) -> None
     assert sphere.node("/obj/geo1") is sphere.parent()
 
 
-def test_only_a_subnet_has_indirect_inputs(mock_hou: MockHouModule) -> None:
-    geo = mock_hou.node("/obj").createNode("geo", "geo1")
-    subnet = geo.createNode("subnet", "subnet1")
+def _created(network: MockHouNode, *node_types: str) -> MockHouNode:
+    """The last of ``node_types``, each created in the one before it, the first in ``network``."""
+    for node_type in node_types:
+        network = network.createNode(node_type)
+    return network
 
-    assert mock_hou.item("/obj/geo1/subnet1/1") is subnet.indirectInputs()[0]
-    assert mock_hou.item("/obj/geo1/1") is None
+
+@pytest.mark.parametrize(
+    ("context", "node_types", "count"),
+    [
+        ("/obj", ("geo", "subnet"), 4),
+        ("/obj", ("geo", "foreach"), 4),
+        ("/obj", ("geo", "attribwrangle"), 4),
+        ("/obj", ("geo", "blastbyattribute"), 1),
+        ("/obj", ("geo", "null"), 0),
+        ("/obj", ("subnet",), 4),
+        ("/obj", ("geo", "attribvop", "subnet"), 0),
+        ("/out", ("subnet",), 31),
+    ],
+)
+def test_a_node_has_the_indirect_inputs_its_type_gives(
+    mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], count: int
+) -> None:
+    """What hython reads from indirectInputs() on each, created in a fresh Houdini
+    22.0.466 scene; each one resolves by its path."""
+    node = _created(mock_hou.node(context), *node_types)
+    names = [str(n) for n in range(1, count + 1)]
+
+    assert [i.name() for i in node.indirectInputs()] == names
+    assert [mock_hou.item(f"{node.path()}/{name}") for name in names] == list(node.indirectInputs())
+
+
+@pytest.mark.parametrize("node_types", [("geo",), ("geo", "attribvop")])
+def test_a_network_that_is_not_a_subnetwork_has_no_indirect_inputs(
+    mock_hou: MockHouModule, node_types: tuple[str, ...]
+) -> None:
+    """Houdini raises for indirectInputs() on an Object geo or a Sop attribvop, and no
+    path finds one under it."""
+    node = _created(mock_hou.node("/obj"), *node_types)
+
+    with pytest.raises(Exception, match=r"hou\.InvalidNodeType: .*\nNode is not a subnetwork"):
+        node.indirectInputs()
+    assert mock_hou.item(f"{node.path()}/1") is None
     assert mock_hou.item("/1") is None
 
 
@@ -458,9 +495,7 @@ def test_given_parameters_take_their_type_s_component_names(mock_hou: MockHouMod
 
 
 def test_a_node_outside_any_scene_has_no_parameters() -> None:
-    with pytest.raises(
-        RuntimeError, match="'/obj/geo1' is not in a scene, so it has no parameters"
-    ):
+    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene, so it has no type"):
         MockHouNode(path="/obj/geo1", name="geo1", params={"t": [0.0, 0.0, 0.0]}).parm("tx")
 
 
