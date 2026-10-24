@@ -19,7 +19,7 @@ from houdini_mcp.tools import (
     serialize_scene,
 )
 from houdini_mcp.tools.failure import OperationFailed
-from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
+from houdini_mcp.tools.snapshot import capped, scene_diff, scene_snapshot
 from tests.conftest import SUMMARIZER, MockHouModule, MockHouNode
 
 # Houdini 22.0.466's answers for /obj holding geo1 (box1, and hid, a hidden
@@ -137,6 +137,18 @@ class TestSceneDiff:
             "has_changes": True,
         }
 
+    def test_a_cap_names_every_list_it_cut_and_none_at_the_cap(self) -> None:
+        diff = scene_diff(
+            {"/obj/a": "box", "/obj/b": "null"}, {"/obj/a": "sphere", "/obj/c": "xform"}
+        )
+        lists = [key for key, value in diff.items() if isinstance(value, list)]
+        assert capped(diff, 0) == {
+            **{key: [] for key in lists},
+            "has_changes": True,
+            "truncated": lists,
+        }
+        assert capped(diff, 1) == {**diff, "truncated": []}
+
 
 class TestExecuteCodeDiff:
     def test_a_node_made_inside_a_network_is_added_at_its_own_path(
@@ -176,8 +188,7 @@ class TestExecuteCodeDiff:
             2,
             2,
         )
-        assert result["diff_truncated"] is True
-        assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
+        assert changes["truncated"] == ["added", "removed", "added_nodes"]
         assert get_last_scene_diff()["diff"] == changes
         assert any(
             m.startswith("execute_code scene diff of /obj, program took ")
@@ -196,7 +207,11 @@ class TestExecuteCodeDiff:
             "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
         )
         last = get_last_scene_diff()
-        assert (last["status"], last["diff"]["has_changes"]) == ("success", False)
+        assert (last["status"], last["diff"]["has_changes"], last["diff"]["truncated"]) == (
+            "success",
+            False,
+            [],
+        )
 
     def test_a_diff_that_could_not_be_read_leaves_the_run_a_success_and_says_why(
         self,

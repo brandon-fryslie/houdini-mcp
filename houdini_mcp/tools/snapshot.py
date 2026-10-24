@@ -12,7 +12,7 @@ the gate in ``code.py``; nothing here can carry one around it.
 """
 
 import logging
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from .failure import OperationFailed
 
@@ -50,12 +50,33 @@ def scene_snapshot(hou: Any, root_path: str) -> SceneSnapshot:
     return snapshot
 
 
-def scene_diff(before: SceneSnapshot, after: SceneSnapshot) -> dict[str, Any]:
+class SceneDiff(TypedDict):
     """What changed between two snapshots of one root, at every depth.
 
     ``modified`` names a path that holds a node of another type than before: the
     node there was replaced.
     """
+
+    added: list[str]
+    removed: list[str]
+    modified: list[str]
+    added_nodes: list[dict[str, str]]
+    has_changes: bool
+
+
+class CappedDiff(SceneDiff):
+    """A scene diff whose lists ``capped`` cut, naming under ``truncated`` the
+    ones it cut, ``[]`` when none was.
+
+    [LAW:types-are-the-program] Every capped diff says which lists were cut: a
+    list exactly at the cap reads the same cut or uncut.
+    """
+
+    truncated: list[str]
+
+
+def scene_diff(before: SceneSnapshot, after: SceneSnapshot) -> SceneDiff:
+    """What changed between two snapshots of one root, at every depth."""
     added = [p for p in after if p not in before]
     removed = [p for p in before if p not in after]
     modified = [p for p in after if p in before and before[p] != after[p]]
@@ -65,6 +86,24 @@ def scene_diff(before: SceneSnapshot, after: SceneSnapshot) -> dict[str, Any]:
         "modified": modified,
         "added_nodes": [{"path": p, "type": after[p]} for p in added],
         "has_changes": bool(added or removed or modified),
+    }
+
+
+def capped(diff: SceneDiff, max_nodes: int) -> CappedDiff:
+    """``diff`` with each list cut to ``max_nodes``."""
+    lists: tuple[Literal["added", "removed", "modified", "added_nodes"], ...] = (
+        "added",
+        "removed",
+        "modified",
+        "added_nodes",
+    )
+    return {
+        "added": diff["added"][:max_nodes],
+        "removed": diff["removed"][:max_nodes],
+        "modified": diff["modified"][:max_nodes],
+        "added_nodes": diff["added_nodes"][:max_nodes],
+        "has_changes": diff["has_changes"],
+        "truncated": [key for key in lists if len(diff[key]) > max_nodes],
     }
 
 

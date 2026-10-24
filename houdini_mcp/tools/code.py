@@ -69,7 +69,7 @@ from .code_policy import (
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
-from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
+from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -93,13 +93,13 @@ class LastSceneDiff:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._diff: dict[str, Any] | None = None
+        self._diff: CappedDiff | None = None
 
-    def record(self, diff: dict[str, Any] | None) -> None:
+    def record(self, diff: CappedDiff | None) -> None:
         with self._lock:
             self._diff = diff
 
-    def diff(self) -> dict[str, Any] | None:
+    def diff(self) -> CappedDiff | None:
         with self._lock:
             return self._diff
 
@@ -433,10 +433,9 @@ def _run_code_thread(
 
 @dataclass(frozen=True)
 class _Diff:
-    """What a program changed under ``_DIFF_ROOT``, capped, and which lists the cap cut."""
+    """What a program changed under ``_DIFF_ROOT``, capped."""
 
-    changes: dict[str, Any]
-    truncated: list[str]
+    changes: CappedDiff
 
 
 @dataclass(frozen=True)
@@ -625,8 +624,8 @@ def execute_code(
         depth. When the scene could not be read after the code ran, the code's
         result stands and scene_changes_error says why in place of scene_changes.
         stdout_truncated and stderr_truncated, on every result that carries the
-        output, say whether each was cut to its max size; diff_truncated is set
-        when a diff list was cut to max_diff_nodes.
+        output, say whether each was cut to its max size; scene_changes.truncated
+        names the diff lists cut to max_diff_nodes, empty when none was.
         If dangerous or heavy-geometry patterns are detected and not granted, returns
         error with the detected patterns and unmet_requirements: each of "policy"
         (re-run with policy='normal'), "request" (set the flag), "config" (enable
@@ -817,15 +816,16 @@ def _execute_with_grant(
             # last diff, so a program that outlived its caller's timeout still
             # leaves its diff once it ends.
             try:
-                changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
+                diff = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
             except Exception as error:  # noqa: BLE001
                 # [LAW:no-silent-failure] The program ran; only its diff is missing.
                 # [LAW:single-enforcer] Judged here, where the link was used: a worker
                 # that outlived its call has no caller left to drop a link that failed.
                 logger.warning("%s ran but its scene diff failed: %r", operation, error)
                 return _DiffFailed(failed_on(houdini(), link, error))
-            lists = ("added", "removed", "modified", "added_nodes")
-            over = [key for key in lists if len(changes[key]) > max_diff_nodes]
+            # [LAW:one-source-of-truth] Which lists were cut travels in the diff, so
+            # every result that carries it says so, get_last_scene_diff's too.
+            changes = capped(diff, max_diff_nodes)
             logger.info(
                 "%s scene diff of %s, program took %.3fs of timeout %ss: "
                 "added=%d removed=%d modified=%d truncated=%s",
@@ -833,12 +833,11 @@ def _execute_with_grant(
                 _DIFF_ROOT,
                 program_took,
                 timeout,
-                *(len(changes[key]) for key in ("added", "removed", "modified")),
-                over,
+                *(len(diff[key]) for key in ("added", "removed", "modified")),
+                changes["truncated"],
             )
-            changes.update({key: changes[key][:max_diff_nodes] for key in lists})
             LAST_SCENE_DIFF.record(changes)
-            return _Diff(changes, over)
+            return _Diff(changes)
 
         def run_code() -> None:
             # [LAW:no-ambient-temporal-coupling] Both reads of the scene happen in the
@@ -1022,11 +1021,6 @@ def _execute_with_grant(
         if isinstance(scene, _DiffFailed):
             result["scene_changes_error"] = failure_for(scene.error, operation).model_dump()
         if isinstance(scene, _Diff):
-            if scene.truncated:
-                result["diff_truncated"] = True
-                result["diff_warning"] = (
-                    f"{', '.join(scene.truncated)} truncated to {max_diff_nodes} nodes"
-                )
             result["scene_changes"] = scene.changes
 
         if detected.dangerous:
@@ -1044,7 +1038,8 @@ def get_last_scene_diff() -> dict[str, Any]:
     Get the scene diff of the execute_code run with capture_diff=True launched last.
 
     Shows the nodes under /obj that run added, removed, or replaced by a node of
-    another type ("modified"), at any depth. While that run has no diff - still
+    another type ("modified"), at any depth, capped as that run returned it:
+    "truncated" names the lists its max_diff_nodes cut. While that run has no diff - still
     running, timed out, raised, or its scene could not be read - there is none.
     """
     diff = LAST_SCENE_DIFF.diff()

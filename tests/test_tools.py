@@ -631,24 +631,24 @@ x = 1 + 2
 
         assert result["status"] == "success"
         assert len(result["scene_changes"]["added_nodes"]) == 5
-        assert result["diff_truncated"] is True
-        assert "diff_warning" in result
+        assert result["scene_changes"]["truncated"] == ["added", "added_nodes"]
 
-    def test_no_diff_truncation_within_limits(self, mock_connection):
-        """Test that scene diff is not truncated when within limits."""
+    def test_no_diff_truncation_at_limit(self, mock_connection):
+        """A diff list exactly max_diff_nodes long was not cut, and says so."""
         from houdini_mcp.tools import execute_code
 
         result = execute_code(
-            "x = 1",
+            "for i in range(5): hou.node('/obj').createNode('geo', f'node{i}')",
             host="localhost",
             port=18811,
             capture_diff=True,
-            max_diff_nodes=1000,
+            max_diff_nodes=5,
             bypass_config_enabled=False,
         )
 
         assert result["status"] == "success"
-        assert "diff_truncated" not in result
+        assert len(result["scene_changes"]["added_nodes"]) == 5
+        assert result["scene_changes"]["truncated"] == []
 
     # --- Timeout Tests ---
 
