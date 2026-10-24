@@ -138,10 +138,10 @@ def _call_while_heard(fn: Callable[[], Any], silence: float) -> Any:
     # [LAW:single-enforcer] only the rounds below serve the connection, so every
     # request the client is heard by restarts the silence clock: ``reply.ready``
     # would serve one itself, and its run would count as the client's silence.
-    arrived = threading.Event()
-    reply.add_callback(lambda _: arrived.set())
+    arrived: list[object] = []
+    reply.add_callback(arrived.append)
     heard = time.monotonic()
-    while not arrived.is_set():
+    while not arrived:
         # [LAW:no-ambient-temporal-coupling] each round polls the socket afresh, so
         # a close one round's poll missed fails the next: a lost wakeup costs one round.
         quiet = time.monotonic() - heard

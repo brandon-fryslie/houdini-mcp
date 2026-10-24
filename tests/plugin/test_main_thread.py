@@ -158,10 +158,10 @@ class TestHeadless:
         assert ran == [True]
 
     def test_stop_with_a_call_out_frees_the_main_thread_within_a_round(self, caplog):
-        """Stop Remote while a silent client's call is out frees the main thread
-        within a serving round, though the stop's close wakes nothing, and the
-        connection's end is the listener's, not the client's silence
-        (houdini-laws-etg.jsh)."""
+        """A stop made off the main thread while a silent client's call is out
+        frees the main thread within a serving round, though the stop's close
+        wakes nothing, and the connection's end is the listener's, not the
+        client's silence (houdini-laws-etg.jsh)."""
         server = rpyc.utils.server.ThreadedServer(
             rpyc.core.SlaveService,
             hostname="127.0.0.1",
@@ -177,16 +177,18 @@ class TestHeadless:
         freed_after: list[float] = []
 
         def stop_once_out() -> None:
-            assert out.wait(5)
-            # A close with no shutdown never wakes a poll() on the socket: the
-            # stop whose wakeup was lost, every time.
-            for sock in set(server.clients):
-                sock.close()
-            closed = time.monotonic()
-            server.close()
-            if ended.event.wait(main_thread.SERVE_ROUND_SECONDS + 1):
-                freed_after.append(time.monotonic() - closed)
-            release.set()
+            try:
+                assert out.wait(5)
+                # A close with no shutdown never wakes a poll() on the socket:
+                # the stop whose wakeup was lost, every time.
+                for sock in set(server.clients):
+                    sock.close()
+                closed = time.monotonic()
+                server.close()
+                if ended.event.wait(main_thread.SERVE_ROUND_SECONDS + 1):
+                    freed_after.append(time.monotonic() - closed)
+            finally:
+                release.set()
 
         def fn() -> None:
             out.set()
