@@ -124,10 +124,10 @@ def get_node_info(
         warnings (and last_cook_time after a forced cook: {unread} for a cook
         that failed or that the cook count does not show, as none runs in
         Houdini's Manual update mode or on a hard-locked node, and a legacy
-        COP2's leaves the count unchanged). errors and warnings are each the
-        list of messages Houdini lists on the node, as find_error_nodes gives
-        them; any part of cook_info Houdini would not give is {unread}. cook_count is how many
-        times Houdini has cooked the node, and needs_to_cook is Houdini's
+        COP2's leaves the count unchanged). Any part of cook_info Houdini would
+        not give is {unread}. errors and warnings are each the list of messages
+        Houdini lists on the node, as find_error_nodes gives them. cook_count is
+        how many times Houdini has cooked the node, and needs_to_cook is Houdini's
         needsToCook(): for a SOP, True after a change and after a cook that failed.
         On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
         and networks such as /obj always need to cook, and ROPs never do.
