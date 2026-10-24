@@ -2484,7 +2484,58 @@ class TestSetNodeFlags:
         assert result["flags_set"]["bypass"] is True
         assert "display" not in result["flags_set"]
         assert "render" not in result["flags_set"]
-        assert noise._bypass is True
+        assert noise.isBypassed() is True
+
+    def test_set_node_flags_logs_the_flags_it_set(self, mock_connection, caplog):
+        """Each call logs the flags it set, as Houdini holds them."""
+        from houdini_mcp.tools import set_node_flags
+
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        mock_connection.add_node(
+            MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
+        )
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.wiring"):
+            set_node_flags("/obj/geo1/noise1", render=False, bypass=True)
+
+        assert "Set flags on /obj/geo1/noise1: render=False, bypass=True" in caplog.messages
+
+    def test_set_node_flags_bypass_on_a_node_without_one(self, mock_connection):
+        """An object has no bypass flag on Houdini 22: the call is refused before any
+        flag is set."""
+        from houdini_mcp.tools import set_node_flags
+
+        geo = MockNodeLacking(
+            path="/obj/geo1", name="geo1", node_type="geo", lacks=("bypass", "isBypassed")
+        )
+        mock_connection.add_node(geo)
+
+        result = set_node_flags("/obj/geo1", display=False, bypass=True)
+
+        assert (result["kind"], result["flags"]) == ("invalid_input", ["bypass"]), result
+        assert result["message"].startswith("/obj/geo1 (geo) has no bypass flag")
+        assert geo.isDisplayFlagSet() is True
+
+    def test_set_node_flags_a_write_houdini_refuses_fails_and_is_undone(self, mock_connection):
+        """A flag Houdini holds unchanged after its write fails the call, and the flags
+        the call set before it are undone: on Houdini 22 a SOP's render flag cannot be
+        turned off, since its network keeps the flag on one node."""
+        from houdini_mcp.tools import set_node_flags
+
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
+        box._display_flag = False
+        box.setRenderFlag = lambda _on: None  # type: ignore[method-assign]
+        mock_connection.add_node(box)
+
+        result = set_node_flags("/obj/geo1/box1", display=True, render=False)
+
+        assert (result["kind"], result["flag"]) == ("operation_failed", "render"), result
+        assert result["message"].startswith(
+            "Houdini holds render=True on /obj/geo1/box1 after setting it to False"
+        )
+        assert result["message"].endswith("Its changes to the scene were undone.")
+        assert mock_connection.node("/obj/geo1/box1").isDisplayFlagSet() is False
 
     def test_set_node_flags_all_none(self, mock_connection):
         """Test setting no flags (all None)."""
@@ -2524,19 +2575,18 @@ class TestSetNodeFlags:
         assert "Node not found" in result["message"]
 
     def test_set_node_flags_mixed_values(self, mock_connection):
-        """Test setting mixed flag values."""
+        """Setting a SOP's display flag leaves its render flag as it was."""
         from houdini_mcp.tools import set_node_flags
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        sphere._display_flag = True
-        sphere._render_flag = True
+        sphere._display_flag = False
+        sphere._render_flag = False
         mock_connection.add_node(sphere)
 
-        # Turn off display, keep render on
         result = set_node_flags(
             "/obj/geo1/sphere1",
-            display=False,
+            display=True,
             render=None,
             bypass=None,
             host="localhost",
@@ -2544,9 +2594,24 @@ class TestSetNodeFlags:
         )
 
         assert result["status"] == "success"
-        assert result["flags_set"]["display"] is False
-        assert sphere._display_flag is False
-        assert sphere._render_flag is True  # Unchanged
+        assert result["flags_set"] == {"display": True}
+        assert sphere.isDisplayFlagSet() is True
+        assert sphere.isRenderFlagSet() is False  # Unchanged
+
+    def test_set_node_flags_a_flag_it_cannot_read_back_is_refused(self, mock_connection):
+        """A flag is the node's only when its class can both write and read it."""
+        from houdini_mcp.tools import set_node_flags
+
+        mock_connection.node("/obj").createNode("geo", "geo1")
+        noise = MockNodeLacking(
+            path="/obj/geo1/noise1", name="noise1", node_type="attribnoise", lacks=("isBypassed",)
+        )
+        mock_connection.add_node(noise)
+
+        result = set_node_flags("/obj/geo1/noise1", bypass=True)
+
+        assert (result["kind"], result["flags"]) == ("invalid_input", ["bypass"]), result
+        assert noise._bypass is False
 
 
 class TestReorderInputs:

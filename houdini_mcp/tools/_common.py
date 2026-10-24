@@ -10,7 +10,7 @@ This module contains common utilities used across all tool modules:
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Generic, TypeVar, cast
+from typing import Annotated, Any, Generic, NamedTuple, TypeVar, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as parsed_dataclass
@@ -341,6 +341,22 @@ def using(host: str, port: int) -> AbstractContextManager[Link]:
 def node_category(node: Any) -> str:
     """The name of the category a node's type belongs to: Object, Sop, Driver, ..."""
     return str(node.type().category().name())
+
+
+class FlagMethods(NamedTuple):
+    """The methods a node flag is read and written through, as Houdini 22 names them."""
+
+    read: str
+    write: str
+
+
+# [LAW:one-source-of-truth] Houdini's flag API, named once. Which flags a node has
+# follows its class: a SOP has all three, a ROP only bypass, an object only display.
+FLAGS = {
+    "display": FlagMethods("isDisplayFlagSet", "setDisplayFlag"),
+    "render": FlagMethods("isRenderFlagSet", "setRenderFlag"),
+    "bypass": FlagMethods("isBypassed", "bypass"),
+}
 
 
 def node_flag(node: Any, method: str) -> bool | None:

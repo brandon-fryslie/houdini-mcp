@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from ._common import (
+    FLAGS,
     UNDOABLE,
     InvalidInput,
     OperationFailed,
@@ -183,8 +184,12 @@ def set_node_flags(
     """
     Set display, render, and bypass flags on a node.
 
-    Only non-None values are set, allowing partial flag updates.
-    Checks for flag availability using hasattr() before setting.
+    Only non-None values are set, allowing partial flag updates. A flag the node's
+    class does not have is refused before any flag is set: an object has only a
+    display flag, a ROP only bypass. A flag Houdini does not set as asked fails the
+    call, and the flags it set before are undone: a SOP network keeps its display
+    and render flags on one node, so to move one, set it True on the node that
+    should have it; setting it False fails.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
@@ -193,7 +198,8 @@ def set_node_flags(
         bypass: Bypass flag value (True/False) or None to skip
 
     Returns:
-        Dict with result and flags that were set.
+        Dict with status, node_path, message, and flags_set: each flag set, read
+        back from Houdini.
 
     Examples:
         set_node_flags("/obj/geo1/sphere1", display=True, render=True)
@@ -205,53 +211,57 @@ def set_node_flags(
 
         node = node_at(hou, node_path)
 
+        requested = {
+            flag: value
+            for flag, value in (("display", display), ("render", render), ("bypass", bypass))
+            if value is not None
+        }
+        # A flag is the node's when its class has both its methods: one this call
+        # cannot read back is one it cannot report. [LAW:no-silent-failure] looked up,
+        # then called, as node_flag reads: an AttributeError Houdini raises while
+        # writing or reading is a refused call, not a flag the node lacks
+        found = {
+            flag: (getattr(node, FLAGS[flag].read, None), getattr(node, FLAGS[flag].write, None))
+            for flag in requested
+        }
+        methods = {flag: pair for flag, pair in found.items() if all(m is not None for m in pair)}
+        lacking = [flag for flag in requested if flag not in methods]
+        if lacking:
+            raise InvalidInput(
+                f"{node_path} ({node.type().name()}) has no {' or '.join(lacking)} flag; "
+                "no flag was set",
+                node_path=node_path,
+                flags=lacking,
+            )
+
         flags_set: dict[str, bool] = {}
-        flags_unavailable: list[str] = []
+        for flag, value in requested.items():
+            read, write = methods[flag]
+            write(value)
+            # Each flag is read back after its write, not taken as asked for: a SOP
+            # network keeps its display and render flags on one node, so turning
+            # either off writes nothing. [LAW:no-silent-failure]
+            held = bool(read())
+            if held != value:
+                raise OperationFailed(
+                    f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",
+                    node_path=node_path,
+                    flag=flag,
+                )
+            flags_set[flag] = value
 
-        # Set display flag
-        if display is not None:
-            if hasattr(node, "setDisplayFlag"):
-                node.setDisplayFlag(display)
-                flags_set["display"] = display
-            else:
-                flags_unavailable.append("display")
-
-        # Set render flag
-        if render is not None:
-            if hasattr(node, "setRenderFlag"):
-                node.setRenderFlag(render)
-                flags_set["render"] = render
-            else:
-                flags_unavailable.append("render")
-
-        # Set bypass flag
-        if bypass is not None:
-            if hasattr(node, "setBypass"):
-                node.setBypass(bypass)
-                flags_set["bypass"] = bypass
-            else:
-                flags_unavailable.append("bypass")
-
-        result: dict[str, Any] = {
+        message = (
+            f"Set flags on {node_path}: {', '.join(f'{k}={v}' for k, v in flags_set.items())}"
+            if flags_set
+            else "No flags were set (all values were None)"
+        )
+        logger.info(message)
+        return {
             "status": "success",
             "node_path": node_path,
             "flags_set": flags_set,
+            "message": message,
         }
-
-        if flags_unavailable:
-            result["flags_unavailable"] = flags_unavailable
-            result["warning"] = (
-                f"Some flags not available on this node type: {', '.join(flags_unavailable)}"
-            )
-
-        if not flags_set:
-            result["message"] = "No flags were set (all values were None or unavailable)"
-        else:
-            result["message"] = (
-                f"Set flags on {node_path}: {', '.join(f'{k}={v}' for k, v in flags_set.items())}"
-            )
-
-        return result
 
 
 @tool(UNDOABLE)

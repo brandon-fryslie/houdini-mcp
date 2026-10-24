@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `set_node_flags(bypass=...)` sets the bypass flag on a node that has one,
+  such as a SOP or a ROP (houdini-laws-etg.omw). It called `setBypass`, which
+  no Houdini 22 node class has, so it set nothing and reported `bypass` under
+  `flags_unavailable` with status `success`.
+
+- `set_node_flags` reports each flag as Houdini holds it after the write
+  (houdini-laws-etg.omw). A flag Houdini keeps unchanged fails the call
+  `operation_failed`, and the flags the call set before it are undone: on
+  Houdini 22, turning a SOP's display or render flag off changes nothing, since
+  its network keeps the flag on one node, and it answered success.
+
 - In Houdini's Manual update mode, which cooks nothing, `get_geo_summary` of a
   SOP changed since its last cook, or never cooked, returns `operation_failed`
   naming the update mode (houdini-laws-etg.7h1). It summarized what the node
@@ -220,6 +231,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "node_path"}`, so a client reading one tool's errors as `e["message"]` raised
   on the others'. The severity is the key a message is under, and the node is
   the result's `path`.
+
+- **BREAKING (wire)**: `set_node_flags` refuses, `invalid_input` naming them in
+  `flags`, the flags a node's class does not have, before it sets any flag
+  (houdini-laws-etg.omw): bypass on an object, render on an object or a ROP. It
+  set the others and answered `success`, listing the missing ones under
+  `flags_unavailable` beside a `warning`; neither field remains.
 
 - **BREAKING (wire)**: at its `timeout`, `execute_code` cuts its program off
   from Houdini and undoes its step (houdini-laws-etg.lbc): the program's link is

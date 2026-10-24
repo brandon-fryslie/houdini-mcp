@@ -17,6 +17,7 @@ from itertools import islice
 from typing import Any, Literal
 
 from ._common import (
+    FLAGS,
     READ,
     UNDOABLE,
     Count,
@@ -428,9 +429,7 @@ def list_children(
         def compact_flags(node: Any) -> str:
             # Three-character bitset: display/render/bypassed. `-` means the node
             # class does not expose that flag API.
-            flags = (
-                node_flag(node, m) for m in ("isDisplayFlagSet", "isRenderFlagSet", "isBypassed")
-            )
+            flags = (node_flag(node, FLAGS[f].read) for f in ("display", "render", "bypass"))
             return "".join("-" if f is None else "1" if f else "0" for f in flags)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:

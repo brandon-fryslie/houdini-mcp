@@ -674,8 +674,8 @@ class MockHouNode:
     def setRenderFlag(self, value: bool) -> None:
         self._render_flag = value
 
-    def setBypass(self, value: bool) -> None:
-        self._bypass = value
+    def bypass(self, on: bool) -> None:
+        self._bypass = on
 
     def isBypassed(self) -> bool:
         return self._bypass
