@@ -127,7 +127,7 @@ def _answer(
     point_attribs = geo.pointAttribs()
     if include_attributes:
         summary["attributes"] = {
-            kind: [_attrib(read, f"attributes.{kind}[{i}]", a) for i, a in enumerate(attribs)]
+            kind: [_attrib(hou, read, f"attributes.{kind}[{i}]", a) for i, a in enumerate(attribs)]
             for kind, attribs in (
                 ("point", point_attribs),
                 ("primitive", geo.primAttribs()),
@@ -164,13 +164,14 @@ def _answer(
 
 
 def _attrib(
-    read: Callable[[str, Callable[[], Any]], Any], where: str, attrib: Any
+    hou: Any, read: Callable[[str, Callable[[], Any]], Any], where: str, attrib: Any
 ) -> dict[str, Any]:
     # each part is its own read, so an attribute whose type will not read still
     # says which attribute it is
     return {
         "name": read(f"{where}.name", attrib.name),
-        "type": read(f"{where}.type", lambda: attrib.dataType().name().lower()),
+        # the data type is a hou.attribData, named as any Houdini value is
+        "type": read(f"{where}.type", lambda: json_safe_hou_value(hou, attrib.dataType()).lower()),
         "size": read(f"{where}.size", attrib.size),
     }
 

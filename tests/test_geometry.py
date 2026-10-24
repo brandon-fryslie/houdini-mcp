@@ -15,7 +15,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.conftest import NO_POINTS_EXTENT, SUMMARIZER, MockGeometry, MockHouModule
+from tests.conftest import (
+    NO_POINTS_EXTENT,
+    SUMMARIZER,
+    MockEnumValue,
+    MockGeometry,
+    MockHouModule,
+)
 
 # Houdini's bounds intrinsic for geometry with no points: every axis inverted.
 NO_POINTS_BOUNDS = [NO_POINTS_EXTENT, -NO_POINTS_EXTENT] * 3
@@ -242,7 +248,7 @@ class _Raises:
 class _Attrib:
     def __init__(self, name: str, data_type: Any = None) -> None:
         self._name = name
-        self.dataType = data_type or (lambda: SimpleNamespace(name=lambda: "Float"))
+        self.dataType = data_type or (lambda: MockEnumValue("Float"))
 
     def name(self) -> str:
         return self._name
@@ -274,7 +280,7 @@ class TestWhatHoudiniWillNotRead:
                 Vector3=_NotHou,
                 Vector4=_NotHou,
                 Color=_NotHou,
-                EnumValue=_NotHou,
+                EnumValue=MockEnumValue,
             )
         )
         return await _summary("/obj/geo1/box1", **kwargs)

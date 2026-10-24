@@ -1739,11 +1739,9 @@ class MockGeoAttrib:
     def name(self) -> str:
         return self._name
 
-    def dataType(self) -> Any:
-        """Return data type enum."""
-        mock_data_type = MagicMock()
-        mock_data_type.name.return_value = self._data_type
-        return mock_data_type
+    def dataType(self) -> "MockEnumValue":
+        """A member of hou.attribData."""
+        return MockEnumValue(self._data_type)
 
     def size(self) -> int:
         return self._size
