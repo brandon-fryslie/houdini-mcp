@@ -162,6 +162,70 @@ def test_a_tool_given_a_parent_that_is_not_a_network_refuses_it_and_leaves_the_s
     assert f"{tool_name} failed (invalid_input, retry fix_input): {message}" in caplog.messages
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: t.create_node("nosuchtype", "/obj"),
+        lambda t: t.create_material("nosuchtype"),
+        lambda t: t.create_render_node("nosuchtype"),
+    ],
+    ids=["create_node", "create_material", "create_render_node"],
+)
+def test_houdinis_refusal_of_the_node_asked_for_is_one_answer_in_every_tool_that_makes_one(
+    mock_connection, call
+):
+    """Houdini refuses a type its network does not offer. Each tool that makes the
+    node a caller asked for says so in Houdini's words, as an operation that failed:
+    not as a bug nobody classified, nor as a guess at the cause."""
+    from houdini_mcp import tools
+
+    before = mock_connection.node("/").state()
+
+    result = call(tools)
+
+    assert (result["kind"], result["node_type"]) == ("operation_failed", "nosuchtype")
+    assert result["message"].startswith("Houdini refused to create a 'nosuchtype' node: ")
+    assert "Invalid node type name" in result["message"]
+    assert "traceback" not in result
+    assert mock_connection.node("/").state() == before
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: t.create_node("null", "/obj", ""),
+        lambda t: t.create_material(name=""),
+        lambda t: t.create_render_node("opengl", ""),
+    ],
+    ids=["create_node", "create_material", "create_render_node"],
+)
+def test_an_empty_name_for_a_new_node_is_refused_before_houdini_sees_it(mock_connection, call):
+    """Houdini 22 refuses a node named "", so the wire does; a node Houdini is to
+    name is given no name at all."""
+    from houdini_mcp import tools
+
+    before = mock_connection.node("/").state()
+
+    result = call(tools)
+
+    assert (result["kind"], result["parameter"]) == ("invalid_input", "name")
+    assert mock_connection.node("/").state() == before
+
+
+def test_a_network_spelled_with_a_trailing_slash_is_that_network(mock_connection):
+    """hou.node resolves "/obj/geo1/" to /obj/geo1: a network box takes its children,
+    and both layout tools report the network's own path, not the caller's spelling."""
+    from houdini_mcp import tools
+
+    mock_connection.node("/obj").createNode("geo", "geo1").createNode("sphere", "sphere1")
+
+    boxed = tools.create_network_box("/obj/geo1/", ["/obj/geo1/sphere1"])
+    laid = tools.layout_children("/obj/geo1/")
+
+    assert (boxed["status"], boxed["parent_path"]) == ("success", "/obj/geo1")
+    assert (laid["status"], laid["node_path"]) == ("success", "/obj/geo1")
+
+
 class TestExecuteCode:
     """Tests for the execute_code function."""
 
@@ -2893,6 +2957,15 @@ class TestMaterialTools:
         assert created.name() == "red_metal"
         assert created.parm("metallic").eval() == 1.0
         assert list(created.parmTuple("basecolor").eval()) == [1, 0, 0]
+
+    def test_create_material_without_a_name_is_named_by_houdini(self, mock_connection):
+        """A name made from a versioned type ("principledshader::2.0_1") is one
+        Houdini refuses; Houdini names the node after its type, as create_node lets it."""
+        from houdini_mcp.tools import create_material
+
+        result = create_material("principledshader::2.0")
+
+        assert (result["status"], result["material_name"]) == ("success", "principledshader1")
 
     def test_assign_material_without_a_group_sets_the_objects_material(self, mock_connection):
         """A geo object carries shop_materialpath, as every geo in Houdini 22 does: the

@@ -22,11 +22,13 @@ from ._common import (
     RENDER,
     UNDOABLE,
     InvalidInput,
+    NodeName,
     OperationFailed,
     Resolution,
     Undone,
     Vec3,
     batch_status,
+    created_in,
     node_at,
     node_category,
     node_flag,
@@ -965,7 +967,7 @@ def set_render_settings(
 @tool(UNDOABLE)
 def create_render_node(
     rop_type: str,
-    name: str | None = None,
+    name: NodeName | None = None,
     settings: dict[str, Any] | None = None,
     host: str = "localhost",
     port: int = 18811,
@@ -1000,11 +1002,7 @@ def create_render_node(
 
         out_context = hou.node("/out")
 
-        # Create the node
-        node = out_context.createNode(rop_type, name) if name else out_context.createNode(rop_type)
-
-        if node is None:
-            raise OperationFailed(f"Failed to create ROP of type '{rop_type}'", rop_type=rop_type)
+        node = created_in(out_context, rop_type, name)
 
         return write_all(node, settings or {}).fields(
             rop_path=node.path(),

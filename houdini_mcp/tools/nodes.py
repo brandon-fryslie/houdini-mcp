@@ -21,9 +21,11 @@ from ._common import (
     UNDOABLE,
     Count,
     Cursor,
+    NodeName,
     PageLimit,
     PageRequest,
     ResultLimit,
+    created_in,
     join_warnings,
     network_at,
     node_at,
@@ -54,7 +56,7 @@ CookInfo = Literal["none", "inspect", "force_cook"]
 def create_node(
     node_type: str,
     parent_path: str = "/obj",
-    name: str | None = None,
+    name: NodeName | None = None,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -77,7 +79,7 @@ def create_node(
 
         parent = network_at(hou, parent_path, "Parent node")
 
-        node = parent.createNode(node_type, name) if name else parent.createNode(node_type)
+        node = created_in(parent, node_type, name)
 
         return {
             "status": "success",

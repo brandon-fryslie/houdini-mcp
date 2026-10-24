@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `create_node`, `create_material`, `create_network_box` and `layout_children`
+  refuse a parent that is not a network, such as a SOP box, as `invalid_input`
+  naming the network it sits in under `network`, as `render_node_network` does
+  (houdini-laws-etg.3tb). Each answered on its own before: a raw Houdini
+  error, an unavailable material type, a node "not a child of" the box, and a
+  success with nothing laid out. `create_network_box` and `layout_children`
+  take a network spelled with a trailing slash and report its own path.
+  Houdini's refusal of the node `create_node`, `create_material` or
+  `create_render_node` was asked to make is one `operation_failed` in Houdini's
+  words, where two of them reported it as an unclassified bug and
+  `create_material` blamed the material type. A `name` of `""` is refused as
+  `invalid_input`, since Houdini refuses it; with no name, `create_material`
+  lets Houdini name the node (`principledshader1`), where it made a name from
+  the type that Houdini refused for a versioned one.
+
 - A tool that changes the scene no longer answers a failed link with
   `retry: "call_again"` (houdini-laws-etg.uhu). rpyc's sync timeout leaves the
   request running in Houdini, and a closed link can follow a request Houdini

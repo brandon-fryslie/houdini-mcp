@@ -90,6 +90,7 @@ __all__ = [
     "batch_status",
     "node_at",
     "network_at",
+    "created_in",
     # Response pagination and bounds (houdini-mcp-2t6)
     "PAGE_LIMIT_MAX",
     "PageLimit",
@@ -113,6 +114,7 @@ __all__ = [
     "Vec3",
     "Count",
     "ResultLimit",
+    "NodeName",
     "SampleCount",
     "Seconds",
     "RGB",
@@ -410,6 +412,27 @@ Seconds = Annotated[int, Field(ge=1, le=86400)]
 """How long a call may wait: zero would give up before it began, and an unbounded wait
 can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is
 the ceiling."""
+NodeName = Annotated[str, Field(min_length=1)]
+"""The name a caller gives a new node. Houdini refuses an empty one, so the wire does;
+a node Houdini is to name is given None, its one spelling."""
+
+
+def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
+    """A new ``node_type`` node in ``network``, named ``name``, or by Houdini when None.
+
+    [LAW:one-source-of-truth] Every tool that creates the node a caller asked for
+    creates it here, so Houdini's refusal (a locked asset, a type the network does
+    not offer, a name it will not take) reaches each as the same ``operation_failed``
+    in Houdini's own words. The arm reads nothing over the link: a link that failed
+    under createNode would fail again, and the classifier reports that failure, the
+    cause, over this label.
+    """
+    try:
+        return network.createNode(node_type, name)
+    except Exception as e:
+        raise OperationFailed(
+            f"Houdini refused to create a {node_type!r} node: {e}", node_type=node_type
+        ) from e
 
 
 class ExecutionTimeoutError(Exception):

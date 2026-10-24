@@ -11,7 +11,8 @@ from ._common import (
     READ,
     UNDOABLE,
     InvalidInput,
-    OperationFailed,
+    NodeName,
+    created_in,
     network_at,
     node_at,
     node_category,
@@ -26,7 +27,7 @@ logger = logging.getLogger("houdini_mcp.tools.materials")
 @tool(UNDOABLE)
 def create_material(
     material_type: str = "principledshader",
-    name: str | None = None,
+    name: NodeName | None = None,
     parent_path: str = "/mat",
     parameters: dict[str, Any] | None = None,
     host: str = "localhost",
@@ -72,19 +73,7 @@ def create_material(
 
         parent = network_at(hou, parent_path, "Parent context")
 
-        # Generate name if not provided
-        if not name:
-            name = f"{material_type}_1"
-
-        # Create the material node
-        try:
-            mat_node = parent.createNode(material_type, name)
-        except Exception as e:
-            raise OperationFailed(
-                f"Failed to create material of type '{material_type}': {str(e)}. "
-                f"Check if this material type is available in your Houdini installation.",
-                material_type=material_type,
-            ) from e
+        mat_node = created_in(parent, material_type, name)
 
         return write_all(mat_node, parameters or {}).fields(
             material_path=mat_node.path(),

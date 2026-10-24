@@ -63,7 +63,7 @@ def layout_children(
         if child_count == 0:
             return {
                 "status": "success",
-                "node_path": node_path,
+                "node_path": node.path(),
                 "child_count": 0,
                 "message": "No children to layout",
             }
@@ -76,7 +76,7 @@ def layout_children(
 
         return {
             "status": "success",
-            "node_path": node_path,
+            "node_path": node.path(),
             "child_count": child_count,
             "horizontal_spacing": horizontal_spacing,
             "vertical_spacing": vertical_spacing,
@@ -195,14 +195,16 @@ def create_network_box(
 
         applied_color = None if color is None else _clamped(color)
         parent = network_at(hou, parent_path, "Parent node")
+        # [LAW:one-source-of-truth] the network's own path, not the caller's spelling of it
+        network = parent.path()
 
         # Validate all nodes exist and are children of parent
         nodes = []
         for path in node_paths:
             node = node_at(hou, path)
             # Check if it's a child of the parent
-            if node.parent().path() != parent_path:
-                raise InvalidInput(f"Node {path} is not a child of {parent_path}", path=path)
+            if node.parent().path() != network:
+                raise InvalidInput(f"Node {path} is not a child of {network}", path=path)
             nodes.append(node)
 
         if not nodes:
@@ -227,7 +229,7 @@ def create_network_box(
         box_name = netbox.name()
         logger.info(
             "network box created parent=%s name=%s nodes=%d color=%s",
-            parent_path,
+            network,
             box_name,
             len(nodes),
             applied_color,
@@ -236,7 +238,7 @@ def create_network_box(
         return {
             "status": "success",
             "network_box_name": box_name,
-            "parent_path": parent_path,
+            "parent_path": network,
             "nodes_contained": node_paths,
             "label": label,
             "color": applied_color,
