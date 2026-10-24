@@ -548,7 +548,7 @@ class MockHouNode:
     def _parms(self) -> dict[str, HeldTuple]:
         return self._placed().tuples
 
-    def _take_parms(self) -> None:
+    def _take_placement(self) -> None:
         """Take what this node's type gives it: the root's, which no network places."""
         assert isinstance(self._placement, Unplaced)
         self._placement = _place(self, self._row(), self._placement.given)
@@ -1187,7 +1187,7 @@ class MockHouModule:
         # the scene's update mode, as hou.setUpdateMode sets it: every placed node
         # reads it off the root
         self._root._update_mode = MockUpdateMode.AutoUpdate
-        self._root._take_parms()
+        self._root._take_placement()
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
