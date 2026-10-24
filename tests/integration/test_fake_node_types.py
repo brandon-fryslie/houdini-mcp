@@ -4,6 +4,7 @@ from typing import Any
 
 from houdini_mcp.settings import Target
 from houdini_mcp.tools._common import using
+from tests.conftest import _name_components
 from tests.fake_node_types import load_table, read_node_types
 
 
@@ -23,3 +24,24 @@ def test_every_row_of_the_fake_table_is_what_houdini_reads(houdini: Target) -> N
         }
 
     assert {category: differing(category) for category in table} == dict.fromkeys(table, {})
+
+
+NAMES = (
+    "mountain",
+    "mountain::2.0",
+    "mountain::",
+    "apex::controlextract",
+    "apex::Sop/controlextract::2.0",
+    "Sop/rbdmaterialfracture::rbdconcretefracture",
+    "a::b::c::f",
+    "Sop/grid",
+    "",
+)
+
+
+def test_the_fake_splits_a_type_name_as_houdini_does(houdini: Target) -> None:
+    """The fake's hou.hda.componentsFromFullNodeTypeName gives this Houdini's parts."""
+    with using(houdini.host, houdini.port) as link:
+        read = {name: tuple(link.hou.hda.componentsFromFullNodeTypeName(name)) for name in NAMES}
+
+    assert {name: _name_components(name) for name in NAMES} == read

@@ -3,7 +3,7 @@
     "root": {
       "type": "root",
       "description": "Root",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Manager",
       "locked": false,
       "parms": {}
@@ -13,7 +13,7 @@
     "obj": {
       "type": "obj",
       "description": "Object",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Object",
       "locked": false,
       "parms": {}
@@ -21,7 +21,7 @@
     "out": {
       "type": "out",
       "description": "Driver",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Driver",
       "locked": false,
       "parms": {}
@@ -29,7 +29,7 @@
     "ch": {
       "type": "ch",
       "description": "ChopNet",
-      "versions": [],
+      "namespace_order": [],
       "holds": "ChopNet",
       "locked": false,
       "parms": {}
@@ -37,7 +37,7 @@
     "shop": {
       "type": "shop",
       "description": "Shop",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Shop",
       "locked": false,
       "parms": {}
@@ -45,7 +45,7 @@
     "img": {
       "type": "img",
       "description": "CopNet",
-      "versions": [],
+      "namespace_order": [],
       "holds": "CopNet",
       "locked": false,
       "parms": {}
@@ -53,7 +53,7 @@
     "vex": {
       "type": "vex",
       "description": "VopNet",
-      "versions": [],
+      "namespace_order": [],
       "holds": "VopNet",
       "locked": false,
       "parms": {}
@@ -61,7 +61,7 @@
     "mat": {
       "type": "mat",
       "description": "Vop",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Vop",
       "locked": false,
       "parms": {}
@@ -69,7 +69,7 @@
     "stage": {
       "type": "stage",
       "description": "Lop",
-      "versions": [],
+      "namespace_order": [],
       "holds": "Lop",
       "locked": false,
       "parms": {}
@@ -77,7 +77,7 @@
     "tasks": {
       "type": "tasks",
       "description": "TopNet",
-      "versions": [],
+      "namespace_order": [],
       "holds": "TopNet",
       "locked": false,
       "parms": {}
@@ -87,7 +87,7 @@
     "geo": {
       "type": "geo",
       "description": "Geometry",
-      "versions": [
+      "namespace_order": [
         "geo"
       ],
       "holds": "Sop",
@@ -133,7 +133,7 @@
     "null": {
       "type": "null",
       "description": "Null",
-      "versions": [
+      "namespace_order": [
         "null"
       ],
       "holds": "Sop",
@@ -170,7 +170,7 @@
     "light": {
       "type": "light",
       "description": "Light Template",
-      "versions": [
+      "namespace_order": [
         "light"
       ],
       "holds": "Sop",
@@ -207,7 +207,7 @@
     "instance": {
       "type": "instance",
       "description": "Instance",
-      "versions": [
+      "namespace_order": [
         "instance"
       ],
       "holds": "Sop",
@@ -217,7 +217,7 @@
     "fetch": {
       "type": "fetch",
       "description": "Fetch",
-      "versions": [
+      "namespace_order": [
         "fetch"
       ],
       "holds": "Sop",
@@ -254,7 +254,7 @@
     "subnet": {
       "type": "subnet",
       "description": "Subnetwork",
-      "versions": [
+      "namespace_order": [
         "subnet"
       ],
       "holds": "Object",
@@ -291,7 +291,7 @@
     "dopnet": {
       "type": "dopnet",
       "description": "DOP Network",
-      "versions": [
+      "namespace_order": [
         "dopnet"
       ],
       "holds": "Dop",
@@ -328,7 +328,7 @@
     "cam": {
       "type": "cam",
       "description": "Camera",
-      "versions": [
+      "namespace_order": [
         "cam"
       ],
       "holds": "Sop",
@@ -432,7 +432,7 @@
     "ropnet": {
       "type": "ropnet",
       "description": "ROP Network",
-      "versions": [
+      "namespace_order": [
         "ropnet"
       ],
       "holds": "Driver",
@@ -442,7 +442,7 @@
     "chopnet": {
       "type": "chopnet",
       "description": "CHOP Network",
-      "versions": [
+      "namespace_order": [
         "chopnet"
       ],
       "holds": "Chop",
@@ -454,7 +454,7 @@
     "sphere": {
       "type": "sphere",
       "description": "Sphere",
-      "versions": [
+      "namespace_order": [
         "sphere"
       ],
       "holds": null,
@@ -464,7 +464,7 @@
     "box": {
       "type": "box",
       "description": "Box",
-      "versions": [
+      "namespace_order": [
         "box"
       ],
       "holds": null,
@@ -474,7 +474,7 @@
     "grid": {
       "type": "grid",
       "description": "Grid",
-      "versions": [
+      "namespace_order": [
         "grid"
       ],
       "holds": null,
@@ -484,7 +484,7 @@
     "tube": {
       "type": "tube",
       "description": "Tube",
-      "versions": [
+      "namespace_order": [
         "tube"
       ],
       "holds": null,
@@ -494,7 +494,7 @@
     "torus": {
       "type": "torus",
       "description": "Torus",
-      "versions": [
+      "namespace_order": [
         "torus"
       ],
       "holds": null,
@@ -504,7 +504,7 @@
     "circle": {
       "type": "circle",
       "description": "Circle",
-      "versions": [
+      "namespace_order": [
         "circle"
       ],
       "holds": null,
@@ -514,7 +514,7 @@
     "line": {
       "type": "line",
       "description": "Line",
-      "versions": [
+      "namespace_order": [
         "line"
       ],
       "holds": null,
@@ -524,7 +524,7 @@
     "curve": {
       "type": "curve::2.0",
       "description": "Curve",
-      "versions": [
+      "namespace_order": [
         "curve::2.0",
         "curve"
       ],
@@ -535,7 +535,7 @@
     "mountain": {
       "type": "mountain::2.0",
       "description": "Mountain",
-      "versions": [
+      "namespace_order": [
         "mountain::2.0",
         "mountain"
       ],
@@ -546,7 +546,7 @@
     "mountain::": {
       "type": "mountain",
       "description": "Mountain",
-      "versions": [
+      "namespace_order": [
         "mountain::2.0",
         "mountain"
       ],
@@ -557,7 +557,7 @@
     "apex::controlextract": {
       "type": "apex::controlextract::2.0",
       "description": "APEX Control Extract",
-      "versions": [
+      "namespace_order": [
         "apex::controlextract::2.0",
         "apex::controlextract"
       ],
@@ -568,7 +568,7 @@
     "attribnoise": {
       "type": "attribnoise::2.0",
       "description": "Attribute Noise",
-      "versions": [
+      "namespace_order": [
         "attribnoise::2.0",
         "attribnoise"
       ],
@@ -579,7 +579,7 @@
     "cloudnoise": {
       "type": "cloudnoise",
       "description": "Cloud Noise",
-      "versions": [
+      "namespace_order": [
         "cloudnoise"
       ],
       "holds": "Sop",
@@ -589,7 +589,7 @@
     "heightfield_noise": {
       "type": "heightfield_noise",
       "description": "HeightField Noise",
-      "versions": [
+      "namespace_order": [
         "heightfield_noise"
       ],
       "holds": "Sop",
@@ -599,7 +599,7 @@
     "xform": {
       "type": "xform",
       "description": "Transform",
-      "versions": [
+      "namespace_order": [
         "xform"
       ],
       "holds": null,
@@ -609,7 +609,7 @@
     "blast": {
       "type": "blast",
       "description": "Blast",
-      "versions": [
+      "namespace_order": [
         "blast"
       ],
       "holds": null,
@@ -619,7 +619,7 @@
     "delete": {
       "type": "delete",
       "description": "Delete",
-      "versions": [
+      "namespace_order": [
         "delete"
       ],
       "holds": null,
@@ -629,7 +629,7 @@
     "dissolve": {
       "type": "dissolve::2.0",
       "description": "Dissolve",
-      "versions": [
+      "namespace_order": [
         "dissolve::2.0",
         "dissolve"
       ],
@@ -640,7 +640,7 @@
     "fuse": {
       "type": "fuse::2.0",
       "description": "Fuse",
-      "versions": [
+      "namespace_order": [
         "fuse::2.0",
         "fuse"
       ],
@@ -651,7 +651,7 @@
     "clean": {
       "type": "clean",
       "description": "Clean",
-      "versions": [
+      "namespace_order": [
         "clean"
       ],
       "holds": "Sop",
@@ -661,7 +661,7 @@
     "merge": {
       "type": "merge",
       "description": "Merge",
-      "versions": [
+      "namespace_order": [
         "merge"
       ],
       "holds": null,
@@ -671,7 +671,7 @@
     "switch": {
       "type": "switch",
       "description": "Switch",
-      "versions": [
+      "namespace_order": [
         "switch"
       ],
       "holds": null,
@@ -681,7 +681,7 @@
     "copy": {
       "type": "copy",
       "description": "Copy with Stamp",
-      "versions": [
+      "namespace_order": [
         "copy"
       ],
       "holds": null,
@@ -691,7 +691,7 @@
     "scatter": {
       "type": "scatter::2.0",
       "description": "Scatter",
-      "versions": [
+      "namespace_order": [
         "scatter::2.0",
         "scatter"
       ],
@@ -702,7 +702,7 @@
     "copytopoints": {
       "type": "copytopoints::2.0",
       "description": "Copy to Points",
-      "versions": [
+      "namespace_order": [
         "copytopoints::2.0",
         "copytopoints"
       ],
@@ -713,7 +713,7 @@
     "foreach": {
       "type": "foreach",
       "description": "For-Each Subnetwork",
-      "versions": [
+      "namespace_order": [
         "foreach"
       ],
       "holds": "Sop",
@@ -723,7 +723,7 @@
     "vex": {
       "type": "vex",
       "description": "VEX",
-      "versions": [
+      "namespace_order": [
         "vex"
       ],
       "holds": null,
@@ -733,7 +733,7 @@
     "attribwrangle": {
       "type": "attribwrangle",
       "description": "Attribute Wrangle",
-      "versions": [
+      "namespace_order": [
         "attribwrangle"
       ],
       "holds": "Sop",
@@ -743,7 +743,7 @@
     "pointwrangle": {
       "type": "pointwrangle",
       "description": "Point Wrangle",
-      "versions": [
+      "namespace_order": [
         "pointwrangle"
       ],
       "holds": "Sop",
@@ -753,7 +753,7 @@
     "volumewrangle": {
       "type": "volumewrangle",
       "description": "Volume Wrangle",
-      "versions": [
+      "namespace_order": [
         "volumewrangle"
       ],
       "holds": "Sop",
@@ -763,7 +763,7 @@
     "vdb": {
       "type": "vdb",
       "description": "VDB",
-      "versions": [
+      "namespace_order": [
         "vdb"
       ],
       "holds": null,
@@ -773,7 +773,7 @@
     "vdbfromparticles": {
       "type": "vdbfromparticles",
       "description": "VDB from Particles",
-      "versions": [
+      "namespace_order": [
         "vdbfromparticles"
       ],
       "holds": null,
@@ -783,7 +783,7 @@
     "vdbsmooth": {
       "type": "vdbsmooth",
       "description": "VDB Smooth",
-      "versions": [
+      "namespace_order": [
         "vdbsmooth"
       ],
       "holds": null,
@@ -793,7 +793,7 @@
     "vdbcombine": {
       "type": "vdbcombine",
       "description": "VDB Combine",
-      "versions": [
+      "namespace_order": [
         "vdbcombine"
       ],
       "holds": null,
@@ -803,7 +803,7 @@
     "file": {
       "type": "file",
       "description": "File",
-      "versions": [
+      "namespace_order": [
         "file"
       ],
       "holds": null,
@@ -813,7 +813,7 @@
     "alembic": {
       "type": "alembic",
       "description": "Alembic",
-      "versions": [
+      "namespace_order": [
         "alembic"
       ],
       "holds": null,
@@ -823,9 +823,11 @@
     "filecache": {
       "type": "filecache::2.0",
       "description": "File Cache",
-      "versions": [
+      "namespace_order": [
         "filecache::2.0",
-        "filecache"
+        "filecache",
+        "labs::filecache::2.0",
+        "labs::filecache::1.0"
       ],
       "holds": "Sop",
       "locked": true,
@@ -834,7 +836,7 @@
     "cache": {
       "type": "cache",
       "description": "Cache",
-      "versions": [
+      "namespace_order": [
         "cache"
       ],
       "holds": null,
@@ -844,7 +846,7 @@
     "stash": {
       "type": "stash",
       "description": "Stash",
-      "versions": [
+      "namespace_order": [
         "stash"
       ],
       "holds": null,
@@ -854,7 +856,7 @@
     "group": {
       "type": "group",
       "description": "Group",
-      "versions": [
+      "namespace_order": [
         "group"
       ],
       "holds": null,
@@ -864,7 +866,7 @@
     "groupcreate": {
       "type": "groupcreate",
       "description": "Group Create",
-      "versions": [
+      "namespace_order": [
         "groupcreate"
       ],
       "holds": null,
@@ -874,7 +876,7 @@
     "groupcombine": {
       "type": "groupcombine",
       "description": "Group Combine",
-      "versions": [
+      "namespace_order": [
         "groupcombine"
       ],
       "holds": null,
@@ -884,7 +886,7 @@
     "groupexpression": {
       "type": "groupexpression",
       "description": "Group Expression",
-      "versions": [
+      "namespace_order": [
         "groupexpression"
       ],
       "holds": "Sop",
@@ -894,7 +896,7 @@
     "subdivide": {
       "type": "subdivide",
       "description": "Subdivide",
-      "versions": [
+      "namespace_order": [
         "subdivide"
       ],
       "holds": null,
@@ -904,7 +906,7 @@
     "polyextrude": {
       "type": "polyextrude::2.0",
       "description": "PolyExtrude",
-      "versions": [
+      "namespace_order": [
         "polyextrude::2.0",
         "polyextrude"
       ],
@@ -915,7 +917,7 @@
     "polybevel": {
       "type": "polybevel::3.0",
       "description": "PolyBevel",
-      "versions": [
+      "namespace_order": [
         "polybevel::3.0",
         "polybevel::2.0",
         "polybevel"
@@ -927,7 +929,7 @@
     "polyreduce": {
       "type": "polyreduce::2.0",
       "description": "PolyReduce",
-      "versions": [
+      "namespace_order": [
         "polyreduce::2.0",
         "polyreduce"
       ],
@@ -938,7 +940,7 @@
     "polyfill": {
       "type": "polyfill",
       "description": "PolyFill",
-      "versions": [
+      "namespace_order": [
         "polyfill"
       ],
       "holds": null,
@@ -948,7 +950,7 @@
     "null": {
       "type": "null",
       "description": "Null",
-      "versions": [
+      "namespace_order": [
         "null"
       ],
       "holds": null,
@@ -958,7 +960,7 @@
     "output": {
       "type": "output",
       "description": "Output",
-      "versions": [
+      "namespace_order": [
         "output"
       ],
       "holds": null,
@@ -968,7 +970,7 @@
     "object_merge": {
       "type": "object_merge",
       "description": "Object Merge",
-      "versions": [
+      "namespace_order": [
         "object_merge"
       ],
       "holds": null,
@@ -978,7 +980,7 @@
     "timeshift": {
       "type": "timeshift",
       "description": "Time Shift",
-      "versions": [
+      "namespace_order": [
         "timeshift"
       ],
       "holds": null,
@@ -988,7 +990,7 @@
     "trail": {
       "type": "trail",
       "description": "Trail",
-      "versions": [
+      "namespace_order": [
         "trail"
       ],
       "holds": null,
@@ -998,7 +1000,7 @@
     "material": {
       "type": "material",
       "description": "Material",
-      "versions": [
+      "namespace_order": [
         "material"
       ],
       "holds": null,
@@ -1027,7 +1029,7 @@
     "attribcreate": {
       "type": "attribcreate::2.0",
       "description": "Attribute Create",
-      "versions": [
+      "namespace_order": [
         "attribcreate::2.0",
         "attribcreate"
       ],
@@ -1038,7 +1040,7 @@
     "split": {
       "type": "split",
       "description": "Split",
-      "versions": [
+      "namespace_order": [
         "split"
       ],
       "holds": "Sop",
@@ -1048,7 +1050,7 @@
     "add": {
       "type": "add",
       "description": "Add",
-      "versions": [
+      "namespace_order": [
         "add"
       ],
       "holds": null,
@@ -1058,7 +1060,7 @@
     "align": {
       "type": "align",
       "description": "Spline Align",
-      "versions": [
+      "namespace_order": [
         "align"
       ],
       "holds": null,
@@ -1068,7 +1070,7 @@
     "attribblur": {
       "type": "attribblur",
       "description": "Attribute Blur",
-      "versions": [
+      "namespace_order": [
         "attribblur"
       ],
       "holds": "Sop",
@@ -1078,7 +1080,7 @@
     "attribcast": {
       "type": "attribcast",
       "description": "Attribute Cast",
-      "versions": [
+      "namespace_order": [
         "attribcast"
       ],
       "holds": null,
@@ -1088,7 +1090,7 @@
     "attribcopy": {
       "type": "attribcopy",
       "description": "Attribute Copy",
-      "versions": [
+      "namespace_order": [
         "attribcopy"
       ],
       "holds": null,
@@ -1098,7 +1100,7 @@
     "attribdelete": {
       "type": "attribdelete",
       "description": "Attribute Delete",
-      "versions": [
+      "namespace_order": [
         "attribdelete"
       ],
       "holds": "Sop",
@@ -1108,7 +1110,7 @@
     "attribexpression": {
       "type": "attribexpression",
       "description": "Attribute Expression",
-      "versions": [
+      "namespace_order": [
         "attribexpression"
       ],
       "holds": "Sop",
@@ -1118,7 +1120,7 @@
     "attribfade": {
       "type": "attribfade",
       "description": "Attribute Fade",
-      "versions": [
+      "namespace_order": [
         "attribfade"
       ],
       "holds": "Sop",
@@ -1128,7 +1130,7 @@
     "attribpromote": {
       "type": "attribpromote",
       "description": "Attribute Promote",
-      "versions": [
+      "namespace_order": [
         "attribpromote"
       ],
       "holds": null,
@@ -1138,7 +1140,7 @@
     "attribrandomize": {
       "type": "attribrandomize",
       "description": "Attribute Randomize",
-      "versions": [
+      "namespace_order": [
         "attribrandomize"
       ],
       "holds": "Sop",
@@ -1148,7 +1150,7 @@
     "attribremap": {
       "type": "attribremap",
       "description": "Attribute Remap",
-      "versions": [
+      "namespace_order": [
         "attribremap"
       ],
       "holds": "Sop",
@@ -1158,7 +1160,7 @@
     "attribtransfer": {
       "type": "attribtransfer",
       "description": "Attribute Transfer",
-      "versions": [
+      "namespace_order": [
         "attribtransfer"
       ],
       "holds": null,
@@ -1168,7 +1170,7 @@
     "attribvop": {
       "type": "attribvop",
       "description": "Attribute VOP",
-      "versions": [
+      "namespace_order": [
         "attribvop"
       ],
       "holds": "Vop",
@@ -1178,7 +1180,7 @@
     "bend": {
       "type": "bend",
       "description": "Bend",
-      "versions": [
+      "namespace_order": [
         "bend"
       ],
       "holds": "Sop",
@@ -1188,7 +1190,7 @@
     "blastbyattribute": {
       "type": "blastbyattribute",
       "description": "Blast by Attribute",
-      "versions": [
+      "namespace_order": [
         "blastbyattribute"
       ],
       "holds": "Sop",
@@ -1198,7 +1200,7 @@
     "bound": {
       "type": "bound",
       "description": "Bound",
-      "versions": [
+      "namespace_order": [
         "bound"
       ],
       "holds": null,
@@ -1208,7 +1210,7 @@
     "bridge": {
       "type": "bridge",
       "description": "Spline Bridge",
-      "versions": [
+      "namespace_order": [
         "bridge"
       ],
       "holds": null,
@@ -1218,7 +1220,7 @@
     "bulge": {
       "type": "bulge",
       "description": "Bulge",
-      "versions": [
+      "namespace_order": [
         "bulge"
       ],
       "holds": null,
@@ -1228,7 +1230,7 @@
     "cap": {
       "type": "cap",
       "description": "Spline Cap",
-      "versions": [
+      "namespace_order": [
         "cap"
       ],
       "holds": null,
@@ -1238,7 +1240,7 @@
     "carve": {
       "type": "carve",
       "description": "Carve",
-      "versions": [
+      "namespace_order": [
         "carve"
       ],
       "holds": null,
@@ -1248,7 +1250,7 @@
     "chain": {
       "type": "chain",
       "description": "Chain",
-      "versions": [
+      "namespace_order": [
         "chain"
       ],
       "holds": "Sop",
@@ -1258,7 +1260,7 @@
     "circlefromedges": {
       "type": "circlefromedges",
       "description": "Circle from Edges",
-      "versions": [
+      "namespace_order": [
         "circlefromedges"
       ],
       "holds": null,
@@ -1268,7 +1270,7 @@
     "clip": {
       "type": "clip::2.0",
       "description": "Clip",
-      "versions": [
+      "namespace_order": [
         "clip::2.0",
         "clip"
       ],
@@ -1279,7 +1281,7 @@
     "cluster": {
       "type": "cluster",
       "description": "Cluster",
-      "versions": [
+      "namespace_order": [
         "cluster"
       ],
       "holds": null,
@@ -1289,7 +1291,7 @@
     "color": {
       "type": "color",
       "description": "Color",
-      "versions": [
+      "namespace_order": [
         "color"
       ],
       "holds": "Sop",
@@ -1299,7 +1301,7 @@
     "comb": {
       "type": "comb",
       "description": "Comb",
-      "versions": [
+      "namespace_order": [
         "comb"
       ],
       "holds": null,
@@ -1309,7 +1311,7 @@
     "connectivity": {
       "type": "connectivity",
       "description": "Connectivity",
-      "versions": [
+      "namespace_order": [
         "connectivity"
       ],
       "holds": null,
@@ -1319,7 +1321,7 @@
     "convert": {
       "type": "convert",
       "description": "Convert",
-      "versions": [
+      "namespace_order": [
         "convert"
       ],
       "holds": null,
@@ -1329,7 +1331,7 @@
     "convertline": {
       "type": "convertline",
       "description": "Convert Line",
-      "versions": [
+      "namespace_order": [
         "convertline"
       ],
       "holds": "Sop",
@@ -1339,7 +1341,7 @@
     "convertvdb": {
       "type": "convertvdb",
       "description": "Convert VDB",
-      "versions": [
+      "namespace_order": [
         "convertvdb"
       ],
       "holds": null,
@@ -1349,7 +1351,7 @@
     "cookie": {
       "type": "cookie",
       "description": "Cookie",
-      "versions": [
+      "namespace_order": [
         "cookie"
       ],
       "holds": null,
@@ -1359,7 +1361,7 @@
     "copyxform": {
       "type": "copyxform",
       "description": "Copy and Transform",
-      "versions": [
+      "namespace_order": [
         "copyxform"
       ],
       "holds": null,
@@ -1369,7 +1371,7 @@
     "crease": {
       "type": "crease",
       "description": "Crease",
-      "versions": [
+      "namespace_order": [
         "crease"
       ],
       "holds": null,
@@ -1379,7 +1381,7 @@
     "creep": {
       "type": "creep",
       "description": "Creep",
-      "versions": [
+      "namespace_order": [
         "creep"
       ],
       "holds": null,
@@ -1389,7 +1391,7 @@
     "deform": {
       "type": "deform",
       "description": "Deform",
-      "versions": [
+      "namespace_order": [
         "deform"
       ],
       "holds": null,
@@ -1399,7 +1401,7 @@
     "deltamush": {
       "type": "deltamush::2.0",
       "description": "Delta Mush",
-      "versions": [
+      "namespace_order": [
         "deltamush::2.0",
         "deltamush"
       ],
@@ -1410,7 +1412,7 @@
     "subnet": {
       "type": "subnet",
       "description": "Subnetwork",
-      "versions": [
+      "namespace_order": [
         "subnet"
       ],
       "holds": "Sop",
@@ -1420,7 +1422,7 @@
     "dopnet": {
       "type": "dopnet",
       "description": "DOP Network",
-      "versions": [
+      "namespace_order": [
         "dopnet"
       ],
       "holds": "Dop",
@@ -1432,7 +1434,7 @@
     "pyrosolver": {
       "type": "pyrosolver::2.0",
       "description": "Pyro Solver",
-      "versions": [
+      "namespace_order": [
         "pyrosolver::2.0",
         "pyrosolver"
       ],
@@ -1443,7 +1445,7 @@
     "subnet": {
       "type": "subnet",
       "description": "Subnetwork",
-      "versions": [
+      "namespace_order": [
         "subnet"
       ],
       "holds": "Dop",
@@ -1455,7 +1457,7 @@
     "principledshader": {
       "type": "principledshader::2.0",
       "description": "Principled Shader",
-      "versions": [
+      "namespace_order": [
         "principledshader::2.0",
         "principledshader"
       ],
@@ -1498,7 +1500,7 @@
     "subnet": {
       "type": "subnet",
       "description": "Subnetwork",
-      "versions": [
+      "namespace_order": [
         "subnet"
       ],
       "holds": "Vop",
@@ -1510,7 +1512,7 @@
     "opengl": {
       "type": "opengl",
       "description": "OpenGL",
-      "versions": [
+      "namespace_order": [
         "opengl"
       ],
       "holds": null,
@@ -1572,7 +1574,7 @@
     "karma": {
       "type": "karma",
       "description": "Karma",
-      "versions": [
+      "namespace_order": [
         "karma"
       ],
       "holds": "Driver",
@@ -1635,7 +1637,7 @@
     "subnet": {
       "type": "subnet",
       "description": "Subnetwork",
-      "versions": [
+      "namespace_order": [
         "subnet"
       ],
       "holds": "Driver",
@@ -1645,7 +1647,7 @@
     "sopnet": {
       "type": "sopnet",
       "description": "SOP Network",
-      "versions": [
+      "namespace_order": [
         "sopnet"
       ],
       "holds": "Sop",
@@ -1657,7 +1659,7 @@
     "sopnet": {
       "type": "sopnet",
       "description": "SOP Network",
-      "versions": [
+      "namespace_order": [
         "sopnet"
       ],
       "holds": "Sop",

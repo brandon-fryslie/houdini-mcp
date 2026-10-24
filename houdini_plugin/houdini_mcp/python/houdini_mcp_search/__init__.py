@@ -23,23 +23,30 @@ TypeName = tuple[str, str]
 
 
 def types_named(hou: Any, name: str) -> tuple[TypeName, ...]:
-    """Every node type ``name`` names, sorted: in each category, the type createNode
-    resolves it to and the type whose own name it is - and, when ``name`` gives no
-    version, every version of those.
+    """Every node type ``name`` names, sorted: in each category, of the types Houdini
+    says the type it resolves to could be (its ``namespaceOrder``), those that agree
+    with every part of ``name`` it gives - a scope, namespace or version it leaves out
+    matches any.
 
     [LAW:one-source-of-truth] Houdini says what a name means: its parser splits the
-    name, its resolver picks the type, namespace preference included, and each type
-    lists its own versions. "mountain" names mountain::2.0 and the older mountain an
-    old scene can hold, while "mountain::2.0" names only itself. The resolver wants
-    the category before the type's own name, as Houdini's full names put it
-    (apex::Sop/controlextract), and resolves nothing for "Sop/apex::controlextract",
-    so the query is rebuilt from the name's parts. Names are case-sensitive, as
-    createNode's are, so "GRID" names nothing. Tuples of strings, which rpyc sends
-    by value.
+    names, its resolver picks the type createNode gives for ``name`` (or the one whose
+    own name it is), and that type lists every type its bare name could mean, in
+    every scope, namespace and version. So "mountain" names mountain::2.0 and the
+    older mountain an old scene can hold, and "mountain::2.0" names only itself;
+    "rbdconcretefracture" names the global rbdconcretefracture::4.0 a geo holds as
+    well as the one scoped to rbdmaterialfracture, which the resolver picks with no
+    parent to judge by. The resolver wants the category before the type's own name,
+    as Houdini's full names put it (apex::Sop/controlextract), and resolves nothing
+    for "Sop/apex::controlextract", so the query is rebuilt from the name's parts.
+    Names are case-sensitive, as createNode's are, so "GRID" names nothing; the root
+    and its contexts have no registered type, so "obj" names nothing either. Tuples
+    of strings, which rpyc sends by value.
     """
-    scope, namespace, base, version = hou.hda.componentsFromFullNodeTypeName(name)
+    split = hou.hda.componentsFromFullNodeTypeName
+    given = split(name)
+    scope, namespace, base, version = given
     named = {
-        (category_name, version_name)
+        (category_name, candidate)
         for category_name, category in hou.nodeTypeCategories().items()
         for found in (
             hou.preferredNodeType(
@@ -50,7 +57,8 @@ def types_named(hou: Any, name: str) -> tuple[TypeName, ...]:
             category.nodeType(name),
         )
         if found is not None
-        for version_name in (found.versionNamespaceOrder() if version == "" else (found.name(),))
+        for candidate in found.namespaceOrder()
+        if all(part in ("", own) for part, own in zip(given, split(candidate), strict=True))
     }
     return tuple(sorted(named))
 

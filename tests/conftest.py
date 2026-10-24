@@ -58,9 +58,19 @@ def join_path(parent: str, name: str) -> str:
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
 
+# Houdini 22 registers no type for the root and its contexts: their categories list
+# none, and no lookup by name finds one.
+UNREGISTERED = frozenset({"Director", "Manager"})
+
+
 def _own(category: str, name: str) -> NodeType | None:
     """The type in ``category`` whose own name ``name`` is; None when no type has it."""
     return next((row for row in NODE_TYPES[category].values() if row.type == name), None)
+
+
+def _registered(category: str, row: NodeType | None) -> "MockNodeType | None":
+    """``row`` as Houdini's registry answers it: None for a type it does not register."""
+    return None if row is None or category in UNREGISTERED else MockNodeType(row)
 
 
 def _offered(category: str, name: str) -> NodeType | None:
@@ -72,13 +82,20 @@ def _offered(category: str, name: str) -> NodeType | None:
 
 
 def _name_components(name: str) -> tuple[str, str, str, str]:
-    """hou.hda.componentsFromFullNodeTypeName for the names the table holds:
-    ``[[scope::]namespace::]name[::version]``, a version being digits and dots."""
-    *front, last = name.split("::")
-    version = last if front and last.replace(".", "").isdigit() else ""
-    *qualifiers, base = front if version else [*front, last]
-    namespace = qualifiers.pop() if qualifiers else ""
-    return "::".join(qualifiers), namespace, base, version
+    """hou.hda.componentsFromFullNodeTypeName: ``[scope::][namespace::]name[::version]``,
+    as Houdini 22 splits it. A version is digits and dots, or empty after a trailing
+    ``::`` (``mountain::`` is mountain); a scope is a leading ``Category/type``; the
+    namespace is everything between (``a::b::c`` has namespace ``a::b``)."""
+    parts = name.split("::")
+    trailing = parts[-1]
+    version = (
+        parts.pop()
+        if len(parts) > 1 and (trailing.replace(".", "").isdigit() or not trailing)
+        else ""
+    )
+    scope = parts.pop(0) if len(parts) > 1 and "/" in parts[0] else ""
+    base = parts.pop()
+    return scope, "::".join(parts), base, version
 
 
 def _full_name(scope: str, namespace: str, name: str, version: str) -> str:
@@ -156,8 +173,8 @@ class MockNodeType:
     def description(self) -> str:
         return self._row.description
 
-    def versionNamespaceOrder(self) -> tuple[str, ...]:
-        return self._row.versions
+    def namespaceOrder(self) -> tuple[str, ...]:
+        return self._row.namespace_order
 
 
 class MockNodeTypeCategory:
@@ -172,12 +189,12 @@ class MockNodeTypeCategory:
 
     def nodeTypes(self) -> dict[str, MockNodeType]:
         """Every type the category offers, under its own name, a name createNode takes back."""
-        return {row.type: MockNodeType(row) for row in NODE_TYPES[self._name].values()}
+        offered = NODE_TYPES[self._name].values()
+        return {row.type: MockNodeType(row) for row in offered if self._name not in UNREGISTERED}
 
     def nodeType(self, name: str) -> MockNodeType | None:
         """The type whose own name ``name`` is; None when no type has it."""
-        row = _own(self._name, name)
-        return None if row is None else MockNodeType(row)
+        return _registered(self._name, _own(self._name, name))
 
 
 class _SopNodeClass(type):
@@ -465,7 +482,7 @@ class MockHouNode:
         mock_type.description = MagicMock(side_effect=lambda: self._row().description)
         mock_type.category = lambda: MockNodeTypeCategory(self._category())
         mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
-        mock_type.versionNamespaceOrder = lambda: self._row().versions
+        mock_type.namespaceOrder = lambda: self._row().namespace_order
         return mock_type
 
     def _category(self) -> str:
@@ -1237,8 +1254,11 @@ class MockHouModule:
         for a name it refuses."""
         scope, namespace, qualified, version = _name_components(name)
         category, _, base = qualified.partition("/")
-        row = _offered(category, _full_name(scope, namespace, base, version))
-        return None if row is None else MockNodeType(row)
+        if category not in NODE_TYPES:
+            return None
+        return _registered(
+            category, _offered(category, _full_name(scope, namespace, base, version))
+        )
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""

@@ -57,6 +57,7 @@ def test_types_narrow_the_count(hou, geo):
         ("GRID", ()),
         ("mountain::1.0", ()),
         ("Sop/grid", ()),
+        ("obj", ()),
     ],
 )
 def test_a_name_names_the_type_createnode_gives_and_without_a_version_its_versions(

@@ -208,21 +208,31 @@ def test_list_render_nodes_reads_each_rops_bypass_flag(at: dict[str, Any]) -> No
 def test_find_nodes_filters_by_either_name_createnode_takes_for_a_type(at: dict[str, Any]) -> None:
     """Houdini 22's createNode("mountain") gives a mountain::2.0, which a filter by
     either name finds, and "mountain" also finds the older mountain ("mountain::"
-    creates it), as "agentlookat" finds agentlookat::2.0 beside its 3.0; createNode("apex::controlextract") gives apex::controlextract::2.0,
+    creates it), as "agentlookat" finds agentlookat::2.0 beside its 3.0 and
+    "rbdconcretefracture" the global rbdconcretefracture::4.0, though Houdini resolves
+    the bare name to the one scoped to rbdmaterialfracture; createNode("apex::controlextract") gives apex::controlextract::2.0,
     which Houdini resolves only with the category after the namespace. Type names are
-    case-sensitive, so "Mountain" names none."""
+    case-sensitive, so "Mountain" names none, and Houdini registers no type for a
+    context, so "obj" names none."""
     geo = tools.create_node("geo", "/obj", "mcp_it_find", **at)["node_path"]
     peak = tools.create_node("mountain", geo, "peak", **at)["node_path"]
     old = tools.create_node("mountain::", geo, "old", **at)["node_path"]
     extract = tools.create_node("apex::controlextract", geo, "extract", **at)["node_path"]
     lookat = tools.create_node("agentlookat::2.0", geo, "lookat", **at)["node_path"]
+    fracture = tools.create_node("rbdconcretefracture", geo, "fracture", **at)["node_path"]
     tools.create_node("box", geo, "box1", **at)
 
     found = {
         node_type: [
             (m["path"], m["type"]) for m in tools.find_nodes(geo, "*", node_type, **at)["matches"]
         ]
-        for node_type in ("mountain", "mountain::2.0", "apex::controlextract", "agentlookat")
+        for node_type in (
+            "mountain",
+            "mountain::2.0",
+            "apex::controlextract",
+            "agentlookat",
+            "rbdconcretefracture",
+        )
     }
 
     assert found == {
@@ -230,9 +240,11 @@ def test_find_nodes_filters_by_either_name_createnode_takes_for_a_type(at: dict[
         "mountain::2.0": [(peak, "mountain::2.0")],
         "apex::controlextract": [(extract, "apex::controlextract::2.0")],
         "agentlookat": [(lookat, "agentlookat::2.0")],
+        "rbdconcretefracture": [(fracture, "rbdconcretefracture::4.0")],
     }
-    refused = tools.find_nodes(geo, "*", "Mountain", **at)
-    assert refused["kind"] == "invalid_input", refused
+    for unnamed in ("Mountain", "obj"):
+        refused = tools.find_nodes(geo, "*", unnamed, **at)
+        assert refused["kind"] == "invalid_input", refused
 
 
 def test_set_node_flags_bypasses_a_sop_and_a_rop(at: dict[str, Any]) -> None:
