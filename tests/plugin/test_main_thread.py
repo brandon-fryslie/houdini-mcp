@@ -58,9 +58,9 @@ def houdini() -> Iterator[Callable[..., Any]]:
     yield connect
 
 
-def call_on_main(conn: Any, fn: Callable[[], None]) -> Any:
-    """``main_thread.call(fn)`` as a client makes it: Houdini's ``call``, unbounded."""
-    return rpyc.async_(conn.modules["houdini_mcp_plugin.main_thread"].call)(fn).value
+def call_on_main(conn: Any, fn: Callable[[], None], silence: float = 60.0) -> Any:
+    """``main_thread.call(fn, silence)`` as a client makes it: Houdini's ``call``, unbounded."""
+    return rpyc.async_(conn.modules["houdini_mcp_plugin.main_thread"].call)(fn, silence).value
 
 
 def serving_main_thread(*clients: Callable[[], None]) -> list[BaseException]:
@@ -125,13 +125,18 @@ class TestHeadless:
             assert serving_main_thread(lambda: call_on_main(conn, fn)) == []
         assert ran == [True]
 
-    def test_a_client_gone_silent_is_given_up_on(self, houdini, monkeypatch):
-        """The main thread is freed; how long the client's call may run while it
-        is heard from is the client's own."""
-        monkeypatch.setattr(main_thread, "CLIENT_SILENCE_TIMEOUT", 0.3)
-        with houdini() as conn:
-            (raised,) = serving_main_thread(lambda: call_on_main(conn, lambda: time.sleep(1.0)))
-        assert "The client sent nothing for 0.3s" in str(raised)
+    def test_a_client_gone_silent_is_given_up_on_and_cut_off(self, houdini, caplog):
+        """The main thread is freed once the client has been silent for the bound
+        the client set; how long its call may run while it is heard from is its
+        own. Its connection is closed, so nothing it sends later runs off the
+        main thread outside the call."""
+        with houdini() as conn, caplog.at_level(logging.WARNING, "houdini_mcp_plugin.main_thread"):
+            (raised,) = serving_main_thread(
+                lambda: call_on_main(conn, lambda: time.sleep(1.0), silence=0.3)
+            )
+            assert conn.closed
+        assert isinstance(raised, EOFError), raised
+        assert "The client sent nothing for 0.3s" in caplog.text
 
     def test_a_call_raises_what_the_function_raised(self, houdini):
         with houdini() as conn:
@@ -216,7 +221,7 @@ class TestHeadless:
                 raise ValueError("the client's own failure")
 
             step = conn.modules["houdini_mcp_plugin.main_thread"].call_as_step
-            (raised,) = serving_main_thread(lambda: rpyc.async_(step)(fn, "the call").value)
+            (raised,) = serving_main_thread(lambda: rpyc.async_(step)(fn, "the call", 60.0).value)
         assert "the client's own failure" in str(raised)
         assert seen == [("open", "the call", "MainThread"), ("close", "the call", "MainThread")]
 

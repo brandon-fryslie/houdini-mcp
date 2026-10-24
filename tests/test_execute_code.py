@@ -720,14 +720,14 @@ class TestAProgramThatFailedOnTheLink:
     def test_a_real_sync_timeout_resets_the_connection_and_keeps_the_programs_output(
         self, connected_to
     ):
-        from types import SimpleNamespace
-
         from houdini_mcp.connection import houdini
-        from tests.conftest import served_connection
+        from tests.conftest import MockHouModule, served_connection
 
         with served_connection("import time\ndef slow(): time.sleep(1)\n") as conn:
             conn._config["sync_request_timeout"] = 0.2
-            connected_to(SimpleNamespace(slow=conn.namespace["slow"]))
+            hou = MockHouModule()
+            hou.slow = conn.namespace["slow"]
+            connected_to(hou)
             link = houdini().link()
             result = _run("print('before')\nhou.slow()")
 
@@ -784,33 +784,60 @@ class TestAProgramThatFailedOnTheLink:
         assert result["message"].count("while framing") == 1
         assert result["message"].count("TimeoutError: result expired") == 1
 
-    def test_an_undo_group_that_failed_to_close_on_the_link_resets_the_connection(
+    def test_a_program_whose_link_closed_under_it_is_undone_on_a_fresh_link(
         self, mock_connection, monkeypatch
     ):
-        """The program caught the link's timeout and raised its own error; the undo
-        group's close then failed on the same link."""
+        """Houdini closes the step's group once its link closes; the step is undone on
+        the link the server opens to the same Houdini, and the link that failed is
+        not left installed."""
         from houdini_mcp.connection import houdini
-        from tests.conftest import MockUndos, link_failure
+        from tests.conftest import link_failure
 
-        def lose() -> None:
-            raise link_failure(TimeoutError("result expired"))
-
-        def close(self, *exc_info) -> bool:
-            raise link_failure(TimeoutError("result expired"))
-
-        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
-        monkeypatch.setattr(MockUndos, "group", _closing_with(close))
         link = houdini().link()
-        result = _run(
-            "try:\n    hou.lose()\nexcept TimeoutError:\n    raise RuntimeError('gave up')"
-        )
 
-        assert (result["kind"], result["connection_reset"]) == ("timeout", True)
-        assert "RuntimeError: gave up" in result["message"]
-        assert "The undo group did not open or close: TimeoutError" in result["message"]
-        assert link.conn.closed and houdini().link() is None
+        def cut() -> None:
+            link.conn.close()
+            raise link_failure(EOFError("stream has been closed"))
 
-    def test_an_undo_group_that_failed_to_close_is_told_after_the_programs_failure(
+        monkeypatch.setattr(mock_connection, "cut", cut, raising=False)
+        result = _run("hou.node('/obj').createNode('geo', 'half')\nhou.cut()")
+
+        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert mock_connection.node("/obj/half") is None
+        assert houdini().link() is not link and houdini().link().alive
+
+    def test_a_program_that_raises_is_undone(self, mock_connection):
+        result = _run("hou.node('/obj').createNode('geo', 'half')\nraise ValueError('mine')")
+
+        assert result["kind"] == "operation_failed"
+        assert result["message"] == "ValueError: mine\nIts changes to the scene were undone."
+        assert mock_connection.node("/obj/half") is None
+        assert "ValueError: mine" in result["traceback"]
+
+    def test_a_program_is_one_undo_step_labelled_as_the_call(self, mock_connection):
+        result = _run("hou.node('/obj').createNode('geo', 'made')")
+
+        assert result["status"] == "success", result
+        (label,) = mock_connection.undos.undoLabels()
+        assert label.startswith("houdini-mcp execute_code ")
+
+    def test_a_failed_program_that_changed_nothing_leaves_the_last_step_on_top(
+        self, mock_connection
+    ):
+        undos = mock_connection.undos
+        undos.enter_main_thread()
+        with undos.group("artist's edit"):
+            mock_connection.node("/obj").createNode("null", "artist_null")
+        undos.leave_main_thread()
+
+        result = _run("raise ValueError('mine')")
+
+        assert result["message"] == "ValueError: mine"
+        assert undos.undoLabels() == ("artist's edit",)
+        assert mock_connection.node("/obj/artist_null") is not None
+
+    def test_a_step_houdini_failed_to_close_is_told_after_the_programs_failure(
         self, mock_connection, monkeypatch
     ):
         from houdini_mcp.connection import houdini
@@ -826,12 +853,13 @@ class TestAProgramThatFailedOnTheLink:
         assert result["kind"] == "operation_failed"
         assert result["message"] == (
             "RuntimeError: gave up\n"
-            "The undo group did not open or close: ValueError: undo stack locked"
+            "Running it as one undo step on Houdini's main thread failed: "
+            "ValueError: undo stack locked"
         )
         assert "undo stack locked" in result["traceback"]
         assert houdini().link() is link and not link.conn.closed
 
-    def test_an_undo_group_that_failed_after_a_completed_program_is_the_groups(
+    def test_a_step_houdini_failed_to_close_after_a_completed_program_is_the_steps(
         self, mock_connection, monkeypatch
     ):
         from tests.conftest import MockUndos
@@ -844,11 +872,12 @@ class TestAProgramThatFailedOnTheLink:
 
         assert result["kind"] == "operation_failed"
         assert result["message"] == (
-            "The undo group did not open or close: ValueError: undo stack locked"
+            "Running it as one undo step on Houdini's main thread failed: "
+            "ValueError: undo stack locked"
         )
         assert result["stdout"] == "done\n"
 
-    def test_an_undo_group_that_failed_to_open_is_the_runs_failure(
+    def test_a_step_houdini_failed_to_open_never_ran_the_program(
         self, mock_connection, monkeypatch
     ):
         from tests.conftest import MockUndos
@@ -860,26 +889,10 @@ class TestAProgramThatFailedOnTheLink:
         result = _run("print('never')")
 
         assert result["kind"] == "operation_failed"
-        assert (
-            result["message"] == "The undo group did not open or close: ValueError: undo disabled"
+        assert result["message"] == (
+            "Running it as one undo step on Houdini's main thread failed: ValueError: undo disabled"
         )
         assert result["stdout"] == ""
-
-    def test_an_undo_group_that_failed_to_open_on_the_link_resets_the_connection(
-        self, mock_connection, monkeypatch
-    ):
-        from houdini_mcp.connection import houdini
-        from tests.conftest import MockUndos, link_failure
-
-        def lose(self, label: str):
-            raise link_failure(EOFError("stream has been closed"))
-
-        monkeypatch.setattr(MockUndos, "group", lose)
-        link = houdini().link()
-        result = _run("print('never')")
-
-        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
-        assert link.conn.closed and houdini().link() is None
 
     def test_a_judgment_of_the_link_that_raises_leaves_the_programs_failure(
         self, mock_connection, monkeypatch
@@ -922,7 +935,7 @@ class TestAProgramThatFailedOnTheLink:
             "faults=['program'] link_lost=link to Houdini at localhost:18811 failed: EOFError"
         )
 
-    def test_an_undo_group_close_that_raised_a_base_exception_is_the_runs_failure(
+    def test_a_step_close_that_raised_a_base_exception_is_the_runs_failure(
         self, mock_connection, monkeypatch
     ):
         from tests.conftest import MockUndos
@@ -935,7 +948,8 @@ class TestAProgramThatFailedOnTheLink:
 
         assert result["kind"] == "operation_failed"
         assert result["message"] == (
-            "The undo group did not open or close: SystemExit: closed the hard way"
+            "Running it as one undo step on Houdini's main thread failed: "
+            "SystemExit: closed the hard way"
         )
 
     def test_a_program_that_ended_in_time_is_not_timed_out_by_its_links_judgment(

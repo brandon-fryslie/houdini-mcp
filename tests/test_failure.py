@@ -242,8 +242,12 @@ class TestEveryFailureIsOneArm:
         """The program still holds the scene, so "call again" would only be
         refused: the arm is the worker's, naming it, with the link standing."""
 
+        from houdini_mcp.tools.transactions import MainThread
+
         @tool(PROGRAM)
-        def body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+        def body(
+            host: str = "localhost", port: int = 18811, *, main_thread: MainThread
+        ) -> dict[str, Any]:
             raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
 
         link = houdini().link()
