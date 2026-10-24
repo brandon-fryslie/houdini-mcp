@@ -316,9 +316,11 @@ class MockHouNode:
         self._bypass = False
         # Cook state, as Houdini 22 reads it: how many cooks were attempted,
         # whether the node needs another, and the last cook's messages. A fake
-        # node has cooked once and is current.
+        # node has cooked once, successfully, and is current.
         self._cook_count = 1
         self._needs_to_cook = False
+        self._cook_failed = False
+        self._hard_locked = False
         self._errors: list[str] = []
         self._warnings: list[str] = []
         # Geometry
@@ -717,7 +719,11 @@ class MockHouNode:
         return self._warnings.copy()
 
     def cook(self, force: bool = False) -> None:
-        """Cook as Houdini 22 does: a node with errors fails the cook, raising."""
+        """Cook as Houdini 22 does: a node with errors fails the cook, raising, and
+        the Manual update mode or a hard lock cooks nothing, forced or not, and
+        says nothing."""
+        if not self._cooks():
+            return
         self._count_cook()
         if self._errors:
             raise raised_inside_houdini(
@@ -731,13 +737,27 @@ class MockHouNode:
 
     def _count_cook(self) -> None:
         # [LAW:one-source-of-truth] what a cook leaves, failed or not: the attempt
-        # counts, and a node with errors still needs to cook
+        # counts, and a node with errors still needs to cook and, as Houdini 22's,
+        # has no geometry until a cook succeeds
         self._cook_count += 1
         self._needs_to_cook = bool(self._errors)
+        self._cook_failed = bool(self._errors)
+
+    def _cooks(self) -> bool:
+        return not self._hard_locked and self.root()._update_mode is not MockUpdateMode.Manual
+
+    def setHardLocked(self, on: bool) -> None:
+        self._hard_locked = on
+
+    def isHardLocked(self) -> bool:
+        return self._hard_locked
 
     def geometry(self) -> Optional["MockGeometry"]:
-        """Return geometry object if this is a SOP node."""
-        return self._geometry
+        """The geometry this node last cooked, none if that cook failed; as
+        Houdini's, it cooks a node that needs to cook first, unless nothing cooks it."""
+        if self._needs_to_cook and self._cooks():
+            self._count_cook()
+        return None if self._cook_failed else self._geometry
 
     def setGeometry(self, geo: "MockGeometry") -> None:
         """Helper to set geometry on this node."""
@@ -973,6 +993,9 @@ class MockHouModule:
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
         self._root = MockHouNode(path="/", name="", node_type="root")
+        # the scene's update mode, as hou.setUpdateMode sets it: every placed node
+        # reads it off the root
+        self._root._update_mode = MockUpdateMode.AutoUpdate
         self._root._take_parms()
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
@@ -1001,6 +1024,7 @@ class MockHouModule:
         self.Vector4 = MockVector4
         self.Ramp = MockRamp
         self.networkItemType = MockNetworkItemType
+        self.updateMode = MockUpdateMode
 
         self.undos = MockUndos(self)
 
@@ -1010,6 +1034,12 @@ class MockHouModule:
 
     def applicationVersionString(self) -> str:
         return self._version
+
+    def setUpdateMode(self, mode: "MockEnumValue") -> None:
+        self._root._update_mode = mode
+
+    def updateModeSetting(self) -> "MockEnumValue":
+        return self._root._update_mode
 
     def applicationVersion(self) -> tuple:
         return self._version_tuple
@@ -1412,6 +1442,14 @@ class MockNetworkItemType:
     Node = MockEnumValue("Node")
     SubnetIndirectInput = MockEnumValue("SubnetIndirectInput")
     NetworkDot = MockEnumValue("NetworkDot")
+
+
+class MockUpdateMode:
+    """``hou.updateMode``: when Houdini cooks a node that changed."""
+
+    AutoUpdate = MockEnumValue("AutoUpdate")
+    OnMouseUp = MockEnumValue("OnMouseUp")
+    Manual = MockEnumValue("Manual")
 
 
 class MockPaneTabType:

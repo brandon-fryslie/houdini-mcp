@@ -191,6 +191,61 @@ class TestTheFakeScene:
         assert result["message"] == f"Node {path} has no geometry: geometry() returned None"
         assert result["errors"] == ["Invalid source /obj/geo1/box1/attribvop1."]
 
+    async def test_a_sop_whose_cook_failed_reads_once_a_cook_succeeds(
+        self, mock_connection: MockHouModule, sphere: str
+    ) -> None:
+        node = mock_connection.node(sphere)
+        node.fail_cook("Invalid parameter value")
+        # as fixing the parameter leaves it: no errors, and needing to cook
+        node._errors = []
+
+        result = await _summary(sphere)
+
+        assert (result["status"], result["point_count"]) == ("success", 3)
+
+    async def test_a_sop_changed_in_manual_update_mode_is_not_its_last_cook(
+        self, mock_connection: MockHouModule, sphere: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_connection.setUpdateMode(mock_connection.updateMode.Manual)
+        # as an edit leaves it: Houdini cooks nothing until its update mode does
+        mock_connection.node(sphere)._needs_to_cook = True
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            result = await _summary(sphere)
+
+        message = (
+            f"Node {sphere}'s geometry is not current: Houdini needs to cook it;"
+            " its update mode is Manual"
+        )
+        assert (result["kind"], result["retry"], result["path"]) == (
+            "operation_failed",
+            "none",
+            sphere,
+        )
+        assert result["message"] == message
+        assert f"get_geo_summary failed (operation_failed, retry none): {message}" in (
+            caplog.messages
+        )
+
+    async def test_a_sop_unchanged_in_manual_update_mode_is_current(
+        self, mock_connection: MockHouModule, sphere: str
+    ) -> None:
+        mock_connection.setUpdateMode(mock_connection.updateMode.Manual)
+
+        result = await _summary(sphere)
+
+        assert (result["status"], result["point_count"]) == ("success", 3)
+
+    async def test_a_changed_sop_cooks_before_the_read_in_auto_update_mode(
+        self, mock_connection: MockHouModule, sphere: str
+    ) -> None:
+        mock_connection.node(sphere)._needs_to_cook = True
+
+        result = await _summary(sphere)
+
+        assert (result["status"], result["point_count"]) == ("success", 3)
+        assert mock_connection.node(sphere).cookCount() == 2
+
 
 class TestTheSeam:
     """What crosses between the server and Houdini."""
@@ -314,7 +369,12 @@ class TestWhatHoudiniWillNotRead:
         return geo
 
     def _node(self, geo: Any, **overrides: Any) -> _SopNode:
-        node = _SopNode(geometry=lambda: geo, errors=lambda: (), path=lambda: "/obj/geo1/box1")
+        node = _SopNode(
+            geometry=lambda: geo,
+            errors=lambda: (),
+            needsToCook=lambda: False,
+            path=lambda: "/obj/geo1/box1",
+        )
         for key, value in overrides.items():
             setattr(node, key, value)
         return node

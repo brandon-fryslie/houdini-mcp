@@ -1,6 +1,7 @@
 """Tool round trips against a live Houdini."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -266,6 +267,84 @@ async def test_a_geometry_summary_of_a_failed_cook_carries_the_errors_houdini_22
 
     assert failed["kind"] == "operation_failed", failed
     assert any("planted" in error for error in failed["errors"]), failed
+
+
+@contextmanager
+def _manual_update_mode(at: dict[str, Any]) -> Iterator[None]:
+    """Houdini in its Manual update mode, then in whichever mode it was in."""
+    with using(**at) as link:
+        was = link.hou.updateModeSetting().name()
+        link.hou.setUpdateMode(link.hou.updateMode.Manual)
+    try:
+        yield
+    finally:
+        with using(**at) as link:
+            link.hou.setUpdateMode(getattr(link.hou.updateMode, was))
+
+
+async def test_a_geometry_summary_in_manual_update_mode_is_of_current_geometry_or_refused(
+    at: dict[str, Any], summarizing: dict[str, Any]
+) -> None:
+    """Houdini 22's Manual update mode cooks nothing: a SOP cooked before it reads as
+    it is until it changes; changed, or never cooked, it would read its last cook,
+    or nothing, so the summary is refused."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_manual_geo", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    async def summary(path: str) -> dict[str, Any]:
+        return await tools.get_geo_summary(
+            path, max_sample_points=0, summarize=False, **summarizing
+        )
+
+    assert (await summary(box))["point_count"] == 8
+    with _manual_update_mode(at):
+        unchanged = await summary(box)
+        assert tools.set_parameter(box, "sizex", 5.0, **at)["status"] == "success"
+        changed = await summary(box)
+        sphere = tools.create_node("sphere", geo, "sphere1", **at)["node_path"]
+        uncooked = await summary(sphere)
+
+    assert (unchanged["status"], unchanged["bounding_box"]["size"]) == ("success", [1.0, 1.0, 1.0])
+    for refused, path in ((changed, box), (uncooked, sphere)):
+        assert (refused["kind"], refused["path"]) == ("operation_failed", path), refused
+        assert refused["message"] == (
+            f"Node {path}'s geometry is not current: Houdini needs to cook it;"
+            " its update mode is Manual"
+        )
+    # back in the mode it was in, the change cooks
+    assert (await summary(box))["bounding_box"]["size"] == [5.0, 1.0, 1.0]
+
+
+def test_a_forced_cook_in_manual_update_mode_reports_no_cook_time(at: dict[str, Any]) -> None:
+    """Houdini 22's Manual update mode runs no forced cook and raises nothing; the
+    cook count, unchanged, is what says the cook did not run."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_manual_cook", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    with _manual_update_mode(at):
+        before = tools.get_node_info(box, cook_info="inspect", **at)["cook_info"]["cook_count"]
+        cook_info = tools.get_node_info(box, cook_info="force_cook", **at)["cook_info"]
+
+    assert cook_info["cook_count"] == before, (before, cook_info)
+    assert cook_info["last_cook_time"] == {
+        "unread": f"houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at {before}"
+    }
+
+
+def test_a_forced_cook_of_a_hard_locked_node_reports_no_cook_time(at: dict[str, Any]) -> None:
+    """Houdini 22 runs no forced cook of a hard-locked node, in any update mode."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_locked_cook", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+    with using(**at) as link:
+        link.hou.node(box).setHardLocked(True)
+
+    before = tools.get_node_info(box, cook_info="inspect", **at)["cook_info"]["cook_count"]
+    cook_info = tools.get_node_info(box, cook_info="force_cook", **at)["cook_info"]
+
+    assert cook_info["cook_count"] == before, (before, cook_info)
+    assert cook_info["last_cook_time"] == {
+        "unread": f"houdini_mcp.tools.nodes.UncountedCook: the cook count stayed at {before}"
+    }
 
 
 async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(

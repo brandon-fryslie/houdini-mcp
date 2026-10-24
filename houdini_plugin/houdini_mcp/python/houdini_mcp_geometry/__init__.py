@@ -27,7 +27,7 @@ T = TypeVar("T")
 _MASSIVE_POINT_COUNT = 1_000_000
 
 
-# final, so a reader tells the three answers apart by their keys
+# final, so a reader tells the four answers apart by their keys
 @final
 class NotASop(TypedDict):
     """The node has no geometry because it is not a SOP: the caller's path to fix."""
@@ -42,6 +42,15 @@ class NoGeometry(TypedDict):
     no_geometry: str
     errors: list[str] | Unread
     refused_reads: list[RefusedRead]
+
+
+@final
+class NotCurrent(TypedDict):
+    """A SOP Houdini still needs to cook after geometry(), as in its Manual update
+    mode: what it last cooked, or nothing, which no summary may pass off as its
+    geometry."""
+
+    not_current: str
 
 
 class Sample(TypedDict):
@@ -78,7 +87,7 @@ class Summary(_Read, total=False):
     sample_points: list[Sample]
 
 
-Answer = NotASop | NoGeometry | Summary
+Answer = NotASop | NoGeometry | NotCurrent | Summary
 
 
 def geometry_summary(
@@ -105,6 +114,9 @@ def _answer(
     # [LAW:one-source-of-truth] geometry() cooks the node when Houdini's update
     # mode cooks at all, and a cook that fails leaves it None: the summary carries
     # no report of the cook of its own beside get_node_info's cook_info.
+    # In the Manual mode it cooks nothing, and hands back what the node last
+    # cooked, or empty geometry, which Houdini's needsToCook() tells apart from
+    # the node's current geometry.
     try:
         geo = node.geometry()
         reason = "geometry() returned None"
@@ -115,6 +127,12 @@ def _answer(
         # lists on the node
         errors = read("errors", lambda: list(node.errors()))
         return NoGeometry(no_geometry=reason, errors=errors, refused_reads=reads.refused)
+    # [LAW:no-silent-failure] a summary is of the node's geometry as it is now
+    if node.needsToCook():
+        return NotCurrent(
+            not_current="Houdini needs to cook it; its update mode is "
+            + hou.updateModeSetting().name()
+        )
 
     point_count: int = geo.intrinsicValue("pointcount")
     summary = Summary(
