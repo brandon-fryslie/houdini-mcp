@@ -856,7 +856,7 @@ class TestCapBoundaries:
             )
         assert result["status"] == "success"
         assert len(result["scene_changes"]["added_nodes"]) == 3
-        assert result.get("diff_truncated") is True
+        assert result["scene_changes"]["truncated"] == ["added", "added_nodes"]
 
 
 # ---------------------------------------------------------------------------

@@ -176,8 +176,7 @@ class TestExecuteCodeDiff:
             2,
             2,
         )
-        assert result["diff_truncated"] is True
-        assert result["diff_warning"] == "added, removed, added_nodes truncated to 2 nodes"
+        assert changes["truncated"] == ["added", "removed", "added_nodes"]
         assert get_last_scene_diff()["diff"] == changes
         assert any(
             m.startswith("execute_code scene diff of /obj, program took ")

@@ -156,6 +156,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `execute_code`'s `scene_changes` and
+  `get_last_scene_diff`'s `diff` name the lists `max_diff_nodes` cut under
+  `truncated`, `[]` when none was (houdini-laws-etg.frc). `diff_truncated` and
+  `diff_warning` are gone: `diff_truncated` was absent when nothing was cut, and
+  `diff_warning` said in a sentence which lists were. `get_last_scene_diff` did
+  not say its diff was cut at all.
+
 - **BREAKING (wire)**: `create_node`, `create_material` and
   `create_render_node` refuse a `name` of `""` as `invalid_input`
   (houdini-laws-etg.3tb). Houdini 22 refuses a node named `""`, which the tools
