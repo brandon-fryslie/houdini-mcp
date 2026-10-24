@@ -82,7 +82,9 @@ def get_parameter_schema(
 
     Args:
         node_path: Full path to the node (e.g., "/obj/geo1/sphere1")
-        parm_name: Optional specific parameter name. If provided, returns only that parameter's schema.
+        parm_name: Optional specific parameter name. If provided, returns only that parameter's schema:
+                  a tuple's name ("t") gives the vector, one component's ("tx") that component
+                  as a scalar, with its own value and default.
                   If None, returns schema for all parameters (up to max_parms)
         max_parms: Maximum number of parameters to return when parm_name is None (default: 100)
 
@@ -138,7 +140,11 @@ def get_parameter_schema(
         )
     log_refused(answer["refused_reads"])
     logger.info(
-        "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), answer["listed"]
+        "parameter schema node=%s parm=%s listed=%d of=%d",
+        node_path,
+        parm_name,
+        len(parameters),
+        answer["listed"],
     )
 
     result: dict[str, Any] = {

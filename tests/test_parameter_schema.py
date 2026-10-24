@@ -202,6 +202,51 @@ class TestGetParameterSchema:
         assert param["current_value"] == [1.0, 2.0, 3.0]
         assert param["is_animatable"] is True
 
+    def test_a_named_component_is_described_as_itself_not_its_tuple(self, connected_to, caplog):
+        """rady is the scalar set_parameter("rady", ...) writes: its own value and its
+        own component's default, not rad's vector."""
+        from houdini_mcp.tools import get_parameter_schema
+
+        mock_hou = create_mock_hou_with_parm_types()
+        mock_hou.node("/obj").createNode("geo", "geo1")
+        sphere = MockHouNode(
+            path="/obj/geo1/sphere1",
+            name="sphere1",
+            node_type="sphere",
+            params={"rad": ParmTuple(("radx", "rady", "radz"), (1.0, 5.0, 1.0))},
+        )
+        mock_hou.add_node(sphere)
+        rad = MockParmTemplate(
+            "rad", "Radius", mock_hou.parmTemplateType.Float, 3, [1.0, 2.0, 3.0], -1.0, 1.0
+        )
+        give_templates(sphere, [rad])
+        connected_to(mock_hou)
+
+        with caplog.at_level("INFO", logger="houdini_mcp.tools.parameters"):
+            component = get_parameter_schema("/obj/geo1/sphere1", "rady")
+        whole = get_parameter_schema("/obj/geo1/sphere1", "rad")
+
+        assert component["parameters"] == [
+            {
+                "name": "rady",
+                "label": "Radius",
+                "current_value": 5.0,
+                "type": "float",
+                "is_animatable": True,
+                "default": 2.0,
+                "min": -1.0,
+                "max": 1.0,
+            }
+        ]
+        assert "parameter schema node=/obj/geo1/sphere1 parm=rady listed=1 of=1" in caplog.messages
+        [vector] = whole["parameters"]
+        assert (vector["name"], vector["type"], vector["tuple_size"], vector["default"]) == (
+            "rad",
+            "vector",
+            3,
+            [1.0, 2.0, 3.0],
+        )
+
     def test_get_parameter_schema_menu(self, connected_to):
         """Test getting schema for a menu parameter."""
         from houdini_mcp.tools import get_parameter_schema
@@ -350,7 +395,7 @@ class TestGetParameterSchema:
         assert result["count"] == 5
         assert len(result["parameters"]) == 5
         assert result["warning"] == "Parameters limited to the first 5 of 20 parameters"
-        assert "parameter schema node=/obj/geo1/sphere1 listed=5 of=20" in caplog.messages
+        assert "parameter schema node=/obj/geo1/sphere1 parm=None listed=5 of=20" in caplog.messages
 
         assert "warning" not in get_parameter_schema("/obj/geo1/sphere1", max_parms=20)
 

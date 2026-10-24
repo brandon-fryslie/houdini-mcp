@@ -46,6 +46,26 @@ def test_parameter_schema_recurses_into_folders(at: dict[str, Any]) -> None:
     assert "remapramp" in names
 
 
+def test_a_named_component_is_described_as_the_parm_set_parameter_writes(
+    at: dict[str, Any],
+) -> None:
+    """Houdini gives rady rad's template, a torus's defaults (1, 0.5): rady is a float
+    with its own value and its own component's default, not the vector rad."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_component", **at)
+    torus = tools.create_node("torus", geo["node_path"], "torus1", **at)
+    assert tools.set_parameter(torus["node_path"], "rady", 3.0, **at)["status"] == "success"
+
+    [rady] = tools.get_parameter_schema(torus["node_path"], "rady", **at)["parameters"]
+
+    assert (rady["name"], rady["type"], rady["current_value"], rady["default"]) == (
+        "rady",
+        "float",
+        3.0,
+        0.5,
+    )
+    assert "tuple_size" not in rady
+
+
 def test_a_parameter_schema_costs_the_link_the_same_requests_whatever_the_node(
     at: dict[str, Any],
 ) -> None:

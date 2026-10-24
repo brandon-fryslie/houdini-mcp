@@ -122,10 +122,6 @@ class Parm:
     target: Any
     is_tuple: bool
 
-    def parm_tuple(self) -> Any:
-        """The ``hou.ParmTuple`` this parameter is, or is a component of."""
-        return self.target if self.is_tuple else self.target.tuple()
-
 
 def resolve(node: Any, name: str) -> Parm:
     """Find ``name`` on ``node`` as a scalar parm, else as a tuple.
