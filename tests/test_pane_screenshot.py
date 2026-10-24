@@ -278,13 +278,15 @@ def refusing(undos):
         PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call(fn):
+        def call(fn, silence):
             asked.append(True)
             return "Houdini's main thread did not begin the call within 30.0s"
     return main_thread
 """
     with served_namespace(plugin) as plugins:
-        monkeypatch.setattr(conftest, "served_main_thread", plugins["refusing"])
+        monkeypatch.setattr(
+            conftest, "served_main_thread", lambda undos, _conn: plugins["refusing"](undos)
+        )
         with (
             caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.pane_screenshot"),
             patch("houdini_mcp.tools.pane_screenshot._qt_core", return_value=_qt_core_double()),

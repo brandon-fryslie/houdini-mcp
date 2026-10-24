@@ -88,12 +88,23 @@ geo = node.createNode('geo', 'my_geo')
 }
 ```
 
-### Timeouts Leave a Running Worker
+### A Program Is One Undo Step
 
-A program that exceeds `timeout` cannot be stopped; it keeps running with its
-undo group open. The response is the `worker_still_running` arm, since waiting
-for that worker is the remedy, with `timeout`, a `warning`,
-`rollback.scene_consistency: "unknown"`, and the `worker` block:
+The program runs on Houdini's main thread as one step on its undo stack,
+labelled `houdini-mcp execute_code <id>`, so one undo reverts the whole call.
+A program that raises is undone, and the failure's message ends by saying so
+(or why its changes may remain). While a program runs, a graphical Houdini's
+interface does not redraw, and other calls wait for it.
+
+### Timeouts Cut the Program Off
+
+At `timeout` the program is cut off from Houdini: its link is shut down, which
+frees Houdini's main thread once the request it is serving returns, and its
+step is undone. Python cannot stop the program's thread, which runs on until it
+ends; a program waiting on Houdini, or that touches `hou` again, ends there. The response is the
+`worker_still_running` arm, since waiting for that thread is the remedy, with
+`timeout`, a `warning`, the `worker` block, and a message ending with what
+became of the program's changes:
 
 ```json
 {
@@ -133,9 +144,9 @@ held it) and how long it waited:
 
 A read runs beside any of them but a scene-writing tool that Houdini's undo
 can reverse (`set_parameter`, `create_node`, `connect_nodes`, `create_material`
-and the rest) and a pane capture (`capture_pane_screenshot`,
-`capture_multiple_panes`, `render_node_network`): those run on Houdini's main
-thread and have Houdini to themselves, so a read that arrives during one waits
+and the rest), an `execute_code` program, and a pane capture
+(`capture_pane_screenshot`, `capture_multiple_panes`, `render_node_network`):
+those run on Houdini's main thread and have Houdini to themselves, so a read that arrives during one waits
 for it, and carries `scene_wait` the same way. A capture is the pane as its own
 window draws it, so a window in front of Houdini is never in the picture, and
 like the undoable tools it needs the plugin installed in that Houdini.

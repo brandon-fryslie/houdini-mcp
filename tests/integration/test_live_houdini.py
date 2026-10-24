@@ -1,13 +1,17 @@
 """Tool round trips against a live Houdini."""
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from houdini_mcp import tools
 from houdini_mcp.tools._common import using
 from houdini_mcp.tools.pane_screenshot import _qt_core, png_bytes
-from houdini_mcp.tools.transactions import _on_main_thread
+from houdini_mcp.tools.transactions import BODY_SILENCE, UndoStep, _on_main_thread
+from houdini_mcp.tools.workers import WORKERS
 
 
 def test_check_connection_round_trip(at: dict[str, Any]) -> None:
@@ -333,7 +337,7 @@ async def test_a_geometry_summary_costs_the_link_the_same_requests_whatever_the_
 
 def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:
     """What ``work`` returns, run with its requests served on Houdini's main thread."""
-    return _on_main_thread(link, "call", work).result()
+    return _on_main_thread(link, "call", work, BODY_SILENCE).result()
 
 
 def _undo_labels(at: dict[str, Any]) -> tuple[str, ...]:
@@ -401,3 +405,101 @@ def test_houdini_22_loads_a_scene_whose_asset_is_missing_with_its_warning(
     with using(**at) as link:
         assert link.hou.hipFile.path() == str(hip)
     assert tools.get_node_info("/obj/it_g/it_s", **at)["status"] == "success"
+
+
+def _program(code: str, at: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return tools.execute_code(code, **at, **kwargs, bypass_config_enabled=False)
+
+
+def _obj_children(at: dict[str, Any]) -> int:
+    returned: int = tools.list_children("/obj", **at)["returned"]
+    return returned
+
+
+def test_a_program_is_one_undo_step_labelled_as_the_call(at: dict[str, Any]) -> None:
+    ran = _program("hou.node('/obj').createNode('geo', 'it_program')", at)
+    assert ran["status"] == "success", ran
+
+    (label, *_) = _undo_labels(at)
+    assert label.startswith("houdini-mcp execute_code ")
+    with using(**at) as link:
+        _on_houdinis_main_thread(link, link.hou.undos.performUndo)
+    assert _obj_children(at) == 0
+
+
+def test_a_program_that_raises_leaves_the_scene_as_it_found_it(at: dict[str, Any]) -> None:
+    failed = _program("hou.node('/obj').createNode('geo', 'it_half')\nraise ValueError('no')", at)
+
+    assert failed["kind"] == "operation_failed", failed
+    assert failed["message"] == "ValueError: no\nIts changes to the scene were undone."
+    assert _obj_children(at) == 0
+
+
+@pytest.mark.parametrize(
+    "loop",
+    [
+        "while True:\n    hou.node('/obj')",
+        "t = time.monotonic()\nwhile time.monotonic() - t < 5:\n    pass",
+    ],
+    ids=["calling_hou", "never_calling_hou"],
+)
+def test_a_timed_out_program_is_cut_off_and_undone(at: dict[str, Any], loop: str) -> None:
+    """Houdini's main thread is free once the timeout has passed: the next call runs
+    at once, and the program's edits are gone."""
+    timed_out = _program(
+        f"import time\nhou.node('/obj').createNode('geo', 'it_cut')\n{loop}", at, timeout=1
+    )
+
+    assert timed_out["kind"] == "worker_still_running", timed_out
+    assert timed_out["message"].endswith("\nIts changes to the scene were undone.")
+    started = time.monotonic()
+    assert _obj_children(at) == 0
+    assert time.monotonic() - started < 2
+    worker = WORKERS.running()
+    if worker is not None:
+        worker.thread.join(10)
+    assert WORKERS.running() is None
+
+
+def test_a_step_whose_request_outlives_the_link_is_undone(at: dict[str, Any]) -> None:
+    with using(**at) as link:
+        hou, slow = link.hou, link.conn.modules.time.sleep
+        config = link.conn._config
+        expires, config["sync_request_timeout"] = config["sync_request_timeout"], 1
+
+        def work() -> None:
+            hou.node("/obj").createNode("geo", "it_slow")
+            slow(2)
+
+        try:
+            with pytest.raises(Exception) as raised:
+                UndoStep("it_slow", silence=60.0).run(link, work)
+        finally:
+            config["sync_request_timeout"] = expires
+    assert "Its changes to the scene were undone." in raised.value.__notes__
+    assert _obj_children(at) == 0
+
+
+def _quiet_work(hou: Any) -> Callable[[], None]:
+    """Work that edits the scene, sends Houdini nothing for 2s, then asks it again."""
+
+    def work() -> None:
+        hou.node("/obj").createNode("geo", "it_quiet")
+        time.sleep(2)
+        hou.node("/obj")
+
+    return work
+
+
+def test_a_step_silent_past_its_bound_is_cut_off_and_undone(at: dict[str, Any]) -> None:
+    with using(**at) as link, pytest.raises(Exception) as raised:
+        UndoStep("it_quiet", silence=1.0).run(link, _quiet_work(link.hou))
+    assert "Its changes to the scene were undone." in raised.value.__notes__
+    assert _obj_children(at) == 0
+
+
+def test_a_step_silent_within_its_bound_stands(at: dict[str, Any]) -> None:
+    """The bound is the caller's: 60s for a tool body, a program's own timeout."""
+    with using(**at) as link:
+        UndoStep("it_quiet", silence=4.0).run(link, _quiet_work(link.hou))
+    assert _obj_children(at) == 1

@@ -31,7 +31,7 @@ from houdini_mcp.tools._common import (
     using,
 )
 from houdini_mcp.tools.failure import TimeoutFailure, failure_for
-from houdini_mcp.tools.transactions import ToolPolicy
+from houdini_mcp.tools.transactions import MainThread, ToolPolicy
 from tests.conftest import link_failure, raised_inside_houdini
 
 KINDS = {
@@ -243,7 +243,9 @@ class TestEveryFailureIsOneArm:
         refused: the arm is the worker's, naming it, with the link standing."""
 
         @tool(PROGRAM)
-        def body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+        def body(
+            host: str = "localhost", port: int = 18811, *, main_thread: MainThread
+        ) -> dict[str, Any]:
             raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
 
         link = houdini().link()
@@ -295,10 +297,24 @@ class TestAfterTheLinkFailsMidCall:
 
     @staticmethod
     def _under(policy: ToolPolicy, exc: BaseException) -> Any:
-        @tool(policy)
-        def probe(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+        def fails(host: str, port: int) -> dict[str, Any]:
             with using(host, port):
                 raise link_failure(exc)
+
+        # The boundary hands main_thread to a tool exactly when its policy drives it.
+        if policy.drives_main_thread:
+
+            @tool(policy)
+            def probe(
+                host: str = "localhost", port: int = 18811, *, main_thread: MainThread
+            ) -> dict[str, Any]:
+                return fails(host, port)
+
+        else:
+
+            @tool(policy)
+            def probe(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+                return fails(host, port)
 
         return arm(probe())
 

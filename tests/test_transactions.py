@@ -371,7 +371,7 @@ class TestUndoneOnFailure:
     def test_a_houdini_without_the_plugin_refuses_the_write_naming_it(
         self, mock_connection, monkeypatch
     ):
-        def not_installed(undos: MockUndos) -> Any:
+        def not_installed(undos: MockUndos, conn: Any) -> Any:
             raise ModuleNotFoundError("No module named 'houdini_mcp_plugin'")
 
         monkeypatch.setattr(conftest, "served_main_thread", not_installed)
@@ -439,7 +439,7 @@ def refusing(undos):
         PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call_as_step(fn, label):
+        def call_as_step(fn, label, silence):
             return "Houdini's main thread is not taking calls"
     return main_thread
 
@@ -448,7 +448,7 @@ def losing_the_link(undos):
         PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call_as_step(fn, label):
+        def call_as_step(fn, label, silence):
             _as_step(undos, fn, label)
             object.__getattribute__(fn, "____conn__").close()
     return main_thread
@@ -460,7 +460,7 @@ def never_answering(undos):
         PICKUP_TIMEOUT = 0.2
 
         @staticmethod
-        def call_as_step(fn, label):
+        def call_as_step(fn, label, silence):
             time.sleep(2)
     return main_thread
 
@@ -469,14 +469,16 @@ def failing_after(undos):
         PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call_as_step(fn, label):
+        def call_as_step(fn, label, silence):
             _as_step(undos, fn, label)
             raise RuntimeError("closing the group failed")
     return main_thread
 """
 
     def _served(self, monkeypatch, plugins, name):
-        monkeypatch.setattr(conftest, "served_main_thread", plugins[name])
+        monkeypatch.setattr(
+            conftest, "served_main_thread", lambda undos, _conn: plugins[name](undos)
+        )
 
     def test_a_refused_call_fails_saying_why_and_never_ran(self, mock_connection, monkeypatch):
         with conftest.served_namespace(self._PLUGINS) as plugins:
@@ -522,14 +524,18 @@ def failing_after(undos):
         assert "closing the group failed" in result["message"]
 
     def test_a_houdini_that_stops_answering_times_the_call_out(self, mock_connection, monkeypatch):
-        from houdini_mcp.connection import Link
+        """The call's wait, and the wait to undo it, are each bounded."""
+        from houdini_mcp.connection import houdini
 
-        monkeypatch.setattr(Link, "sync_timeout", property(lambda _link: 0.2))
-        with conftest.served_namespace(self._PLUGINS) as plugins:
-            self._served(monkeypatch, plugins, "never_answering")
+        houdini().link().conn._config["sync_request_timeout"] = 0.2
+        with conftest.served_connection(self._PLUGINS) as conn:
+            # Houdini bounds each request its link carries, the undo's too.
+            conn._config["sync_request_timeout"] = 0.2
+            self._served(monkeypatch, conn.namespace, "never_answering")
             started = time.monotonic()
             result = create_node("geo", "/obj", "made", host="localhost", port=18811)
             took = time.monotonic() - started
 
         assert took < 1.5
         assert result["kind"] == "timeout", result
+        assert result["message"].endswith("so the scene may hold part of them.")
