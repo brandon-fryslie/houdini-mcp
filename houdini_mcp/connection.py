@@ -51,7 +51,7 @@ class TransportFailure:
     exc: TransportException
 
 
-def _raised_inside_houdini(exc: BaseException) -> bool:
+def raised_inside_houdini(exc: BaseException) -> bool:
     """rpyc re-raises an exception from Houdini's side as a local instance of the same
     class, tagged with ``_remote_tb``; whatever its type, it crossed an intact link."""
     return hasattr(exc, "_remote_tb")
@@ -74,7 +74,7 @@ def _open_is_retryable(exc: BaseException) -> bool:
     # can raise an OSError - unreachable network, unresolved host, refused or denied
     # socket, a handshake that stalls - so at open time the whole family is the
     # link's and worth a retry. A rejected token is HandshakeError, which is not one.
-    return isinstance(exc, (OSError, EOFError)) and not _raised_inside_houdini(exc)
+    return isinstance(exc, (OSError, EOFError)) and not raised_inside_houdini(exc)
 
 
 def transport_failure(exc: BaseException) -> TransportFailure | None:
@@ -88,7 +88,7 @@ def transport_failure(exc: BaseException) -> TransportFailure | None:
     if (
         isinstance(exc, TransportException)
         and _raised_by_rpyc(exc)
-        and not _raised_inside_houdini(exc)
+        and not raised_inside_houdini(exc)
     ):
         return TransportFailure(exc)
     return None

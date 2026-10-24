@@ -175,19 +175,32 @@ def test_houdinis_refusal_of_the_node_asked_for_is_one_answer_in_every_tool_that
     mock_connection, call
 ):
     """Houdini refuses a type its network does not offer. Each tool that makes the
-    node a caller asked for says so in Houdini's words, as an operation that failed:
-    not as a bug nobody classified, nor as a guess at the cause."""
+    node a caller asked for says so in Houdini's words, as the caller's to fix: not
+    as a bug nobody classified, nor as a guess at the cause."""
     from houdini_mcp import tools
 
     before = mock_connection.node("/").state()
 
     result = call(tools)
 
-    assert (result["kind"], result["node_type"]) == ("operation_failed", "nosuchtype")
-    assert result["message"].startswith("Houdini refused to create a 'nosuchtype' node: ")
-    assert "Invalid node type name" in result["message"]
-    assert "traceback" not in result
+    assert (result["kind"], result["node_type"]) == ("invalid_input", "nosuchtype")
+    assert result["message"].startswith(
+        "Houdini refused to create a 'nosuchtype' node: hou.OperationFailed: "
+        "The attempted operation failed.\nInvalid node type name"
+    )
+    assert "Remote Traceback" not in result["message"]
     assert mock_connection.node("/").state() == before
+
+
+def test_a_create_that_fails_in_this_process_is_no_refusal_by_houdini(mock_connection):
+    """Only what Houdini raised is its refusal; an error raised here is the bug it is."""
+    from houdini_mcp import tools
+
+    mock_connection.node("/obj").createNode = MagicMock(side_effect=AttributeError("a bug"))
+
+    result = tools.create_node("null", "/obj")
+
+    assert (result["exception"], result["message"]) == ("AttributeError", "a bug")
 
 
 @pytest.mark.parametrize(

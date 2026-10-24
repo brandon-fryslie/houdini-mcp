@@ -22,6 +22,7 @@ from ..connection import (
     Link,
     houdini,
     is_connected,
+    raised_inside_houdini,
 )
 from .failure import (
     FAILURE,
@@ -38,6 +39,7 @@ from .failure import (
     failure_response,
     tool_error,
 )
+from .reads import reason
 from .transactions import (
     CHECKPOINTED,
     FILE_WRITE,
@@ -422,16 +424,18 @@ def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
 
     [LAW:one-source-of-truth] Every tool that creates the node a caller asked for
     creates it here, so Houdini's refusal (a locked asset, a type the network does
-    not offer, a name it will not take) reaches each as the same ``operation_failed``
-    in Houdini's own words. The arm reads nothing over the link: a link that failed
-    under createNode would fail again, and the classifier reports that failure, the
-    cause, over this label.
+    not offer, a name it will not take) reaches each as the same ``invalid_input``
+    in Houdini's own words: what Houdini judged is the request.
     """
     try:
         return network.createNode(node_type, name)
     except Exception as e:
-        raise OperationFailed(
-            f"Houdini refused to create a {node_type!r} node: {e}", node_type=node_type
+        # [LAW:no-silent-failure] a lost link or a bug in this process is not a
+        # refusal; it goes on raw, to be classified as what it is
+        if not raised_inside_houdini(e):
+            raise
+        raise InvalidInput(
+            f"Houdini refused to create a {node_type!r} node: {reason(e)}", node_type=node_type
         ) from e
 
 

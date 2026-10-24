@@ -56,6 +56,8 @@ def layout_children(
         hou = link.hou
 
         node = network_at(hou, node_path)
+        # [LAW:one-source-of-truth] the network's own path, not the caller's spelling of it
+        network = node.path()
 
         children = node.children()
         child_count = len(children)
@@ -63,7 +65,7 @@ def layout_children(
         if child_count == 0:
             return {
                 "status": "success",
-                "node_path": node.path(),
+                "node_path": network,
                 "child_count": 0,
                 "message": "No children to layout",
             }
@@ -76,7 +78,7 @@ def layout_children(
 
         return {
             "status": "success",
-            "node_path": node.path(),
+            "node_path": network,
             "child_count": child_count,
             "horizontal_spacing": horizontal_spacing,
             "vertical_spacing": vertical_spacing,

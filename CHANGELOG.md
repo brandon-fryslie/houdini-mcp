@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success with nothing laid out. `create_network_box` and `layout_children`
   take a network spelled with a trailing slash and report its own path.
   Houdini's refusal of the node `create_node`, `create_material` or
-  `create_render_node` was asked to make is one `operation_failed` in Houdini's
+  `create_render_node` was asked to make is one `invalid_input` in Houdini's
   words, where two of them reported it as an unclassified bug and
   `create_material` blamed the material type. A `name` of `""` is refused as
   `invalid_input`, since Houdini refuses it; with no name, `create_material`

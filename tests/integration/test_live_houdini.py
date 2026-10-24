@@ -129,13 +129,17 @@ def test_a_parent_that_is_not_a_network_is_refused_naming_its_network(
     assert tools.list_children(geo, **at)["returned"] == 1
 
 
-def test_houdinis_refusal_of_a_node_type_is_an_operation_that_failed(at: dict[str, Any]) -> None:
+def test_houdinis_refusal_of_a_node_type_is_the_callers_to_fix(at: dict[str, Any]) -> None:
     """Houdini 22's createNode refuses a type /obj does not offer, in its own words."""
+    before = tools.list_children("/obj", **at)["returned"]
+
     refused = tools.create_node("nosuchtype", "/obj", **at)
 
-    assert (refused["kind"], refused["node_type"]) == ("operation_failed", "nosuchtype")
-    assert "Invalid node type name" in refused["message"]
-    assert tools.list_children("/obj", **at)["returned"] == 0
+    assert (refused["kind"], refused["node_type"]) == ("invalid_input", "nosuchtype")
+    assert refused["message"].endswith(
+        "hou.OperationFailed: The attempted operation failed.\nInvalid node type name"
+    )
+    assert tools.list_children("/obj", **at)["returned"] == before
 
 
 def test_a_network_spelled_with_a_trailing_slash_is_that_network(at: dict[str, Any]) -> None:
