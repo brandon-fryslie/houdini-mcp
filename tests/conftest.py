@@ -1007,17 +1007,18 @@ class MockModuleNamespace:
 
 
 class MockRpycConnection:
-    """Mock rpyc connection object: ``modules``, ``closed``, ``close``, and the
-    ``_config`` rpyc reads its sync timeout from.
+    """Mock rpyc connection object: ``modules``, ``closed``, ``close``, ``fileno``,
+    and the ``_config`` rpyc reads its sync timeout from.
 
     Its calls to Houdini's main thread go on a real connection of its own, opened
-    on first use and closed with it, so closing it ends a call it has out there.
+    on first use and closed with it, so closing it ends a call it has out there;
+    that connection's socket is its ``fileno``, so cutting it off does too.
     """
 
     def __init__(self, hou_module: "MockHouModule"):
         self.modules = MockModuleNamespace(hou_module, self)
         self._config: dict[str, Any] = {"sync_request_timeout": 30.0}
-        self.closed = False
+        self._closed = False
         self._lock = threading.Lock()
         self._main_thread: Any = None
 
@@ -1027,11 +1028,21 @@ class MockRpycConnection:
                 self._main_thread = main_thread_connection(self._config["sync_request_timeout"])
             return self._main_thread
 
+    @property
+    def closed(self) -> bool:
+        """Closed by its holder, or by rpyc on reading its socket ended, as a link is."""
+        with self._lock:
+            return self._closed or (self._main_thread is not None and self._main_thread.closed)
+
     def close(self) -> None:
         with self._lock:
-            self.closed = True
+            self._closed = True
             if self._main_thread is not None:
                 self._main_thread.close()
+
+    def fileno(self) -> int:
+        fd: int = self.main_thread().fileno()
+        return fd
 
 
 class MockHouModule:

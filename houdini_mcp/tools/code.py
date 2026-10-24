@@ -30,7 +30,7 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
   grant, and is logged.
 * The program runs on Houdini's main thread as one undo step labelled as the
   call (:class:`~houdini_mcp.tools.transactions.UndoStep`), undone if it
-  raises. At its timeout it is cut off from Houdini: its link is closed, so
+  raises. At its timeout it is cut off from Houdini: its link is shut down, so
   Houdini's main thread gives it up once the request it is serving returns,
   and its step is undone on a fresh link. Python cannot kill the worker
   thread, so it stays recorded in :data:`~houdini_mcp.tools.workers.WORKERS`
@@ -859,12 +859,12 @@ def execute_code(
         # the worker holds on through the scene read after it - so a program that
         # ended as the wait expired is reported as complete.
         if not program_ends.is_set():
-            # Cut the program off from Houdini: once its link is closed, Houdini's
+            # Cut the program off from Houdini: once its link has ended, Houdini's
             # main thread gives its call up after the request it is serving returns,
-            # closing the step's group, and the program's next request fails. Its
+            # closing the step's group, and the program's request fails. Its
             # step is then recovered on a fresh link, behind that call on the main
             # thread - by this call or the worker, whichever reaches it first.
-            houdini().drop(link)
+            houdini().cut_off(link)
             told = step.recover().told
             logger.warning(
                 "%s exceeded timeout of %ss; cut off worker code_sha256=%s: %s",

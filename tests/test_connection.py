@@ -3,6 +3,7 @@
 import logging
 import socket
 import threading
+import time
 from typing import Any
 from unittest.mock import MagicMock, PropertyMock, patch
 
@@ -11,6 +12,7 @@ import pytest
 from houdini_mcp.connection import (
     HoudiniConnectionError,
     HoudiniTargetMismatch,
+    Link,
     TransportFailure,
     get_connection_info,
     houdini,
@@ -19,7 +21,13 @@ from houdini_mcp.connection import (
     remote_houdini,
     transport_failure,
 )
-from tests.conftest import MockHouModule, MockRpycConnection, link_failure, raised_inside_houdini
+from tests.conftest import (
+    MockHouModule,
+    MockRpycConnection,
+    link_failure,
+    raised_inside_houdini,
+    served_connection,
+)
 
 
 def installed_conn() -> Any:
@@ -349,6 +357,45 @@ class TestClose:
         houdini().close()
 
         assert installed_conn() is None
+
+
+class TestCutOff:
+    """A link ended under a request waiting on it, as execute_code's timeout ends its
+    program's."""
+
+    def test_a_request_waiting_on_a_link_cut_off_fails_at_once(self, reset_connection_state):
+        """Closed under it, the waiting request slept until its 30s sync timeout on
+        macOS. The pause lets the request reach its wait; sent after the cut-off, it
+        fails at once too."""
+        with served_connection("import time") as conn:
+            link = Link("127.0.0.1", 0, conn, hou=None)
+            failed: list[BaseException] = []
+
+            def waits() -> None:
+                try:
+                    conn.modules.time.sleep(4)
+                except BaseException as e:  # noqa: BLE001
+                    failed.append(e)
+
+            waiting = threading.Thread(target=waits)
+            waiting.start()
+            time.sleep(0.5)
+
+            houdini().cut_off(link)
+            waiting.join(3)
+
+            assert not waiting.is_alive()
+            assert [type(e) for e in failed] == [EOFError]
+            # rpyc closed it, from the thread that was waiting
+            assert conn.closed
+
+    def test_a_cut_off_link_is_uninstalled(self, mock_connection):
+        """It reads as open until its user closes it, so the next call opens another."""
+        link = houdini().link()
+
+        houdini().cut_off(link)
+
+        assert houdini().link() is None
 
 
 class TestEnsure:

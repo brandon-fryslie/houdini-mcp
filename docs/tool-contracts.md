@@ -98,10 +98,10 @@ interface does not redraw, and other calls wait for it.
 
 ### Timeouts Cut the Program Off
 
-At `timeout` the program is cut off from Houdini: its link is closed, which
+At `timeout` the program is cut off from Houdini: its link is shut down, which
 frees Houdini's main thread once the request it is serving returns, and its
 step is undone. Python cannot stop the program's thread, which runs on until it
-ends; a program that touches `hou` again ends there. The response is the
+ends; a program waiting on Houdini, or that touches `hou` again, ends there. The response is the
 `worker_still_running` arm, since waiting for that thread is the remedy, with
 `timeout`, a `warning`, the `worker` block, and a message ending with what
 became of the program's changes:
