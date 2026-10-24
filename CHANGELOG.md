@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `find_nodes`' `node_type` filter finds the nodes of the type any name
+  createNode takes resolves to (houdini-laws-etg.w8o): `mountain` and
+  `mountain::2.0` both find the `mountain::2.0` nodes Houdini 22's
+  `createNode("mountain")` gives. It compared the name to each node's type name,
+  so `mountain` found none of them. A name without a version also finds the
+  type's older versions an old scene holds (`agentlookat` finds
+  `agentlookat::2.0` beside `agentlookat::3.0`), and a namespaced name finds the
+  type it gives (`apex::controlextract` finds `apex::controlextract::2.0`), as
+  does an alias createNode takes (`apexautorigcomponent`). Needs this release's
+  plugin.
+
 - `set_node_flags(bypass=...)` sets the bypass flag on a node that has one,
   such as a SOP or a ROP (houdini-laws-etg.omw). It called `setBypass`, which
   no Houdini 22 node class has, so it set nothing and reported `bypass` under
@@ -233,6 +244,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: `find_nodes` refuses, `invalid_input` naming it in
+  `node_type`, a `node_type` that names no node type in any category
+  (houdini-laws-etg.w8o). Type names are case-sensitive, as createNode's are:
+  `GRID` matched the grid nodes and is now refused, where a misspelt type
+  answered success with no matches.
 
 - **BREAKING (wire)**: `get_node_info`'s `cook_info.errors` and
   `cook_info.warnings` are lists of the messages Houdini lists on the node, the
