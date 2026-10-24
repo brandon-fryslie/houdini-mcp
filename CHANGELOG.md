@@ -17,12 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success with nothing laid out. `create_network_box` and `layout_children`
   take a network spelled with a trailing slash and report its own path.
   Houdini's refusal of the node `create_node`, `create_material` or
-  `create_render_node` was asked to make is one `invalid_input` in Houdini's
-  words, where two of them reported it as an unclassified bug and
-  `create_material` blamed the material type. A `name` of `""` is refused as
-  `invalid_input`, since Houdini refuses it; with no name, `create_material`
-  lets Houdini name the node (`principledshader1`), where it made a name from
-  the type that Houdini refused for a versioned one.
+  `create_render_node` was asked to make, or `assign_material`'s Material SOP,
+  is one `operation_failed` in Houdini's words, where three of them reported it
+  as an unclassified bug and `create_material` blamed the material type. With
+  no name, `create_material` lets Houdini name the node (`principledshader1`),
+  where it made a name from the type that Houdini refused for a versioned one.
 
 - A tool that changes the scene no longer answers a failed link with
   `retry: "call_again"` (houdini-laws-etg.uhu). rpyc's sync timeout leaves the
@@ -156,6 +155,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: `create_node`, `create_material` and
+  `create_render_node` refuse a `name` of `""` as `invalid_input`
+  (houdini-laws-etg.3tb). Houdini 22 refuses a node named `""`, which the tools
+  read as no name. A node Houdini is to name is given no `name`.
 
 - **BREAKING (deployment)**: `get_parameter_schema` needs the houdini_mcp plugin
   installed in the Houdini it reaches, as `find_nodes` does

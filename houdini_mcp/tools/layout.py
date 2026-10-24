@@ -241,7 +241,7 @@ def create_network_box(
             "status": "success",
             "network_box_name": box_name,
             "parent_path": network,
-            "nodes_contained": node_paths,
+            "nodes_contained": [node.path() for node in nodes],
             "label": label,
             "color": applied_color,
         }

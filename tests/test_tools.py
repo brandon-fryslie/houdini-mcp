@@ -11,6 +11,7 @@ import pytest
 
 from tests.conftest import (
     SUMMARIZER,
+    HouPermissionError,
     MockHouNode,
     MockNodeLacking,
     link_failure,
@@ -175,21 +176,57 @@ def test_houdinis_refusal_of_the_node_asked_for_is_one_answer_in_every_tool_that
     mock_connection, call
 ):
     """Houdini refuses a type its network does not offer. Each tool that makes the
-    node a caller asked for says so in Houdini's words, as the caller's to fix: not
-    as a bug nobody classified, nor as a guess at the cause."""
+    node a caller asked for says so in Houdini's words, as an operation Houdini
+    refused: not as a bug nobody classified, nor as a guess at the cause."""
     from houdini_mcp import tools
 
     before = mock_connection.node("/").state()
 
     result = call(tools)
 
-    assert (result["kind"], result["node_type"]) == ("invalid_input", "nosuchtype")
+    assert (result["kind"], result["node_type"]) == ("operation_failed", "nosuchtype")
     assert result["message"].startswith(
-        "Houdini refused to create a 'nosuchtype' node: hou.OperationFailed: "
+        "Houdini did not create a 'nosuchtype' node: hou.OperationFailed: "
         "The attempted operation failed.\nInvalid node type name"
     )
     assert "Remote Traceback" not in result["message"]
     assert mock_connection.node("/").state() == before
+
+
+def test_a_node_asked_for_inside_a_locked_asset_is_houdinis_refusal(mock_connection):
+    """A locked asset is a network, so network_at takes it; Houdini refuses the node."""
+    from houdini_mcp import tools
+
+    geo = mock_connection.node("/obj").createNode("geo", "geo1")
+    geo.createNode("attribwrangle", "wrangle1")
+    before = mock_connection.node("/").state()
+
+    result = tools.create_node("null", "/obj/geo1/wrangle1")
+
+    assert result["kind"] == "operation_failed"
+    assert "Cannot create a node inside a locked asset" in result["message"]
+    assert mock_connection.node("/").state() == before
+
+
+def test_assign_materials_material_sop_houdini_refused_is_houdinis_refusal(mock_connection):
+    """assign_material makes its Material SOP as every tool makes a node it keeps."""
+    from houdini_mcp import tools
+
+    geo = mock_connection.node("/obj").createNode("geo", "geo1")
+    geo.createNode("box", "box1").setDisplayFlag(True)
+    mock_connection.node("/mat").createNode("principledshader", "m1")
+    geo.createNode = MagicMock(  # type: ignore[method-assign]
+        side_effect=raised_inside_houdini(
+            HouPermissionError("Cannot create a node inside a locked asset")
+        )
+    )
+
+    result = tools.assign_material("/obj/geo1", "/mat/m1", group="top")
+
+    assert (result["kind"], result["node_type"]) == ("operation_failed", "material")
+    assert result["message"].endswith(
+        "hou.PermissionError: Cannot create a node inside a locked asset"
+    )
 
 
 def test_a_create_that_fails_in_this_process_is_no_refusal_by_houdini(mock_connection):
@@ -227,15 +264,16 @@ def test_an_empty_name_for_a_new_node_is_refused_before_houdini_sees_it(mock_con
 
 def test_a_network_spelled_with_a_trailing_slash_is_that_network(mock_connection):
     """hou.node resolves "/obj/geo1/" to /obj/geo1: a network box takes its children,
-    and both layout tools report the network's own path, not the caller's spelling."""
+    and both layout tools report each node's own path, not the caller's spelling."""
     from houdini_mcp import tools
 
     mock_connection.node("/obj").createNode("geo", "geo1").createNode("sphere", "sphere1")
 
-    boxed = tools.create_network_box("/obj/geo1/", ["/obj/geo1/sphere1"])
+    boxed = tools.create_network_box("/obj/geo1/", ["/obj/geo1/sphere1/"])
     laid = tools.layout_children("/obj/geo1/")
 
     assert (boxed["status"], boxed["parent_path"]) == ("success", "/obj/geo1")
+    assert boxed["nodes_contained"] == ["/obj/geo1/sphere1"]
     assert (laid["status"], laid["node_path"]) == ("success", "/obj/geo1")
 
 

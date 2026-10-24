@@ -171,7 +171,7 @@ def assign_material(
             mat_sop = existing_mat_sop
         else:
             # Create new Material SOP
-            mat_sop = geo_node.createNode("material", "material1")
+            mat_sop = created_in(geo_node, "material", "material1")
             mat_sop.setFirstInput(display_node)
             mat_sop.setDisplayFlag(True)
             mat_sop.setRenderFlag(True)

@@ -422,10 +422,11 @@ a node Houdini is to name is given None, its one spelling."""
 def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
     """A new ``node_type`` node in ``network``, named ``name``, or by Houdini when None.
 
-    [LAW:one-source-of-truth] Every tool that creates the node a caller asked for
-    creates it here, so Houdini's refusal (a locked asset, a type the network does
-    not offer, a name it will not take) reaches each as the same ``invalid_input``
-    in Houdini's own words: what Houdini judged is the request.
+    [LAW:one-source-of-truth] Every node a tool makes for the scene to keep is
+    created here, so Houdini's refusal (a locked asset, a type the network does not
+    offer, a name it will not take) reaches each tool as the same
+    ``operation_failed`` in Houdini's own words, as a parameter set Houdini refused
+    does (parms.write_all).
     """
     try:
         return network.createNode(node_type, name)
@@ -434,8 +435,8 @@ def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
         # refusal; it goes on raw, to be classified as what it is
         if not raised_inside_houdini(e):
             raise
-        raise InvalidInput(
-            f"Houdini refused to create a {node_type!r} node: {reason(e)}", node_type=node_type
+        raise OperationFailed(
+            f"Houdini did not create a {node_type!r} node: {reason(e)}", node_type=node_type
         ) from e
 
 
