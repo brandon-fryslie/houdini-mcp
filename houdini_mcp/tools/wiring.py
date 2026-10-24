@@ -8,11 +8,13 @@ import logging
 from typing import Any
 
 from ._common import (
+    FLAGS,
     UNDOABLE,
     InvalidInput,
     OperationFailed,
     node_at,
     node_category,
+    node_flag,
     tool,
     using,
 )
@@ -25,11 +27,6 @@ from .connections import (
 )
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
-
-# [LAW:one-source-of-truth] the method each flag is written through, as Houdini 22
-# names it. Which of them a node has follows its class: a SOP has all three, a ROP
-# only bypass, an object only setDisplayFlag.
-FLAG_SETTERS = {"display": "setDisplayFlag", "render": "setRenderFlag", "bypass": "bypass"}
 
 
 @tool(UNDOABLE)
@@ -189,7 +186,8 @@ def set_node_flags(
     Set display, render, and bypass flags on a node.
 
     Only non-None values are set, allowing partial flag updates. A flag the node's
-    class does not have is listed under flags_unavailable rather than set.
+    class does not have is refused before any flag is set, and each flag set is
+    reported as Houdini holds it after the write.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
@@ -198,7 +196,8 @@ def set_node_flags(
         bypass: Bypass flag value (True/False) or None to skip
 
     Returns:
-        Dict with result and flags that were set.
+        Dict with status, node_path, message, and flags_set: each flag set, as
+        Houdini holds it.
 
     Examples:
         set_node_flags("/obj/geo1/sphere1", display=True, render=True)
@@ -210,42 +209,52 @@ def set_node_flags(
 
         node = node_at(hou, node_path)
 
-        requested = {"display": display, "render": render, "bypass": bypass}
-        flags_set: dict[str, bool] = {}
-        flags_unavailable: list[str] = []
-        for flag, value in requested.items():
-            if value is None:
-                continue
-            # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
-            # AttributeError Houdini raises while writing is a refused write, not a
-            # flag the node lacks
-            setter = getattr(node, FLAG_SETTERS[flag], None)
-            if setter is None:
-                flags_unavailable.append(flag)
-            else:
-                setter(value)
-                flags_set[flag] = value
+        requested = {
+            flag: value
+            for flag, value in (("display", display), ("render", render), ("bypass", bypass))
+            if value is not None
+        }
+        # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
+        # AttributeError Houdini raises while writing is a refused write, not a flag
+        # the node lacks
+        found = {flag: getattr(node, FLAGS[flag].write, None) for flag in requested}
+        setters = {flag: setter for flag, setter in found.items() if setter is not None}
+        lacking = [flag for flag in requested if flag not in setters]
+        if lacking:
+            raise InvalidInput(
+                f"{node_path} ({node.type().name()}) has no {' or '.join(lacking)} flag; "
+                "no flag was set",
+                node_path=node_path,
+                flags=lacking,
+            )
 
-        result: dict[str, Any] = {
+        flags_set: dict[str, bool] = {}
+        for flag, value in requested.items():
+            setters[flag](value)
+            # Each flag is reported as Houdini holds it after the write, not as it was
+            # asked for: a SOP network keeps its display and render flags on one node,
+            # so turning either off writes nothing. [LAW:no-silent-failure]
+            held = node_flag(node, FLAGS[flag].read)
+            if held != value:
+                raise OperationFailed(
+                    f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",
+                    node_path=node_path,
+                    flag=flag,
+                )
+            flags_set[flag] = value
+
+        message = (
+            f"Set flags on {node_path}: {', '.join(f'{k}={v}' for k, v in flags_set.items())}"
+            if flags_set
+            else "No flags were set (all values were None)"
+        )
+        logger.info(message)
+        return {
             "status": "success",
             "node_path": node_path,
             "flags_set": flags_set,
+            "message": message,
         }
-
-        if flags_unavailable:
-            result["flags_unavailable"] = flags_unavailable
-            result["warning"] = (
-                f"Some flags not available on this node type: {', '.join(flags_unavailable)}"
-            )
-
-        if not flags_set:
-            result["message"] = "No flags were set (all values were None or unavailable)"
-        else:
-            result["message"] = (
-                f"Set flags on {node_path}: {', '.join(f'{k}={v}' for k, v in flags_set.items())}"
-            )
-
-        return result
 
 
 @tool(UNDOABLE)

@@ -223,6 +223,21 @@ def test_set_node_flags_bypasses_a_sop_and_a_rop(at: dict[str, Any]) -> None:
         assert bypassed() == [on, on]
 
 
+def test_set_node_flags_refuses_a_flag_houdini_will_not_set(at: dict[str, Any]) -> None:
+    """An object has no bypass flag, and a SOP network keeps its display flag on one
+    node: Houdini 22 sets neither, and set_node_flags says so instead of succeeding."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_flags", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    lacking = tools.set_node_flags(geo, bypass=True, **at)
+    kept = tools.set_node_flags(box, display=False, **at)
+
+    assert (lacking["kind"], lacking["flags"]) == ("invalid_input", ["bypass"]), lacking
+    assert (kept["kind"], kept["flag"]) == ("operation_failed", "display"), kept
+    with using(**at) as link:
+        assert link.hou.node(box).isDisplayFlagSet() is True
+
+
 def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str, Any]) -> None:
     """A forced cook counts, for a manager and for a displayed SOP alike: compared with
     the count before it, so a viewer that already cooked the box changes nothing."""
