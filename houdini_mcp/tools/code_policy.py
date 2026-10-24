@@ -298,15 +298,20 @@ class _RefusedByArgument:
                 value = kw.value
         if value is None:
             return None
-        if isinstance(value, ast.Constant) and isinstance(value.value, self.literal):
-            if self.dangerous(value.value):
-                return f"{dotted}() with {self.keyword} {value.value!r} - {self.danger}"
-            return None
-        return f"{dotted}() with non-literal {self.keyword} - {self.danger} cannot be ruled out"
+        if not isinstance(value, ast.Constant):
+            return f"{dotted}() with non-literal {self.keyword} - {self.danger} cannot be ruled out"
+        if not isinstance(value.value, self.literal):
+            return (
+                f"{dotted}() with {self.keyword} {value.value!r}, not a "
+                f"{self.literal.__name__} - {self.danger} cannot be ruled out"
+            )
+        if self.dangerous(value.value):
+            return f"{dotted}() with {self.keyword} {value.value!r} - {self.danger}"
+        return None
 
 
-# Calls that close Houdini, discard the open scene, or write a file, by the
-# dotted path they resolve to. The detector finds them under every policy;
+# Calls that close Houdini, discard or overwrite the open scene, or open a file
+# for writing, by the dotted path they resolve to. The detector finds them under every policy;
 # ExecutionGrant decides what a finding means: refused under read-only
 # whatever the flags, refused under normal unless the caller passes
 # allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
@@ -323,6 +328,16 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _Refused | _RefusedByArgument] = {
         literal=bool,
         dangerous=lambda merge: not merge,
         danger="discarding the open scene",
+    ),
+    # merge(file_name, node_pattern, overwrite_on_conflict, ...): by default a
+    # clashing name is renamed; overwrite_on_conflict=True replaces the open
+    # scene's node with the file's.
+    ("hou", "hipFile", "merge"): _RefusedByArgument(
+        keyword="overwrite_on_conflict",
+        position=2,
+        literal=bool,
+        dangerous=lambda overwrite: overwrite,
+        danger="overwriting the open scene's nodes",
     ),
     # open(file, mode, ...): a mode that creates or modifies the file.
     ("open",): _RefusedByArgument(

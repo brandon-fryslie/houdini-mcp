@@ -538,7 +538,8 @@ def execute_code(
       against accidents, not a sandbox).
     - Dangerous operation detection: hou.exit(), discarding the open scene
       (hou.hipFile.clear(), hou.hipFile.load(), hou.hipFile.importFBX() with
-      merge_into_scene=False), file
+      merge_into_scene=False, hou.hipFile.merge() with
+      overwrite_on_conflict=True), file
       state changes (os and tempfile beyond their read side, shutil, pathlib,
       archive and database modules, open() for writing), shell and process
       access, dynamic import/execution, network egress (socket, urllib,

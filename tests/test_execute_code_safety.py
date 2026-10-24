@@ -393,8 +393,9 @@ class TestBypassRequiresConfigAndRequest:
         assert "config" in result["message"].lower()
 
 
-# Each call discards the open scene on Houdini 22 (houdini-laws-etg.d1c): the
-# hipFile member it calls, and the pattern its refusal names.
+# Each call discards or overwrites the open scene on Houdini 22
+# (houdini-laws-etg.d1c): the hipFile member it calls, and the pattern its
+# refusal names.
 SCENE_DISCARDS = [
     ("hou.hipFile.clear()", "clear", "hou.hipFile.clear() - scene wipe"),
     ("hou.hipFile.load('/other.hip')", "load", "hou.hipFile.load() - discards the open scene"),
@@ -402,6 +403,11 @@ SCENE_DISCARDS = [
         "hou.hipFile.importFBX('/other.fbx', merge_into_scene=False)",
         "importFBX",
         "hou.hipFile.importFBX() with merge_into_scene False - discarding the open scene",
+    ),
+    (
+        "hou.hipFile.merge('/other.hip', overwrite_on_conflict=True)",
+        "merge",
+        "hou.hipFile.merge() with overwrite_on_conflict True - overwriting the open scene's nodes",
     ),
 ]
 
@@ -448,6 +454,7 @@ class TestSceneDiscardIsDangerous:
         )
         assert result["status"] == "error"
         assert result["audit"]["granted"]["dangerous"] is False
+        assert pattern in result["audit"]["dangerous_patterns"]
         getattr(mock_connection.hipFile, member).assert_not_called()
 
 

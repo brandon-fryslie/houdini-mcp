@@ -72,6 +72,37 @@ class TestDetectDangerousCode:
         detected = _detect_dangerous_code(parse_code(code))
         assert any("hou.hipFile.importFBX" in d for d in detected) is refused
 
+    @pytest.mark.parametrize(
+        ("code", "refused"),
+        [
+            ("hou.hipFile.merge('/x.hip')", False),
+            ("hou.hipFile.merge('/x.hip', '*', False)", False),
+            ("hou.hipFile.merge('/x.hip', overwrite_on_conflict=True)", True),
+            ("hou.hipFile.merge('/x.hip', '*', True)", True),
+            ("hou.hipFile.merge('/x.hip', overwrite_on_conflict=flag)", True),
+            ("hou.hipFile.merge(*args)", True),
+            ("m = hou.hipFile.merge", True),
+        ],
+    )
+    def test_merge_is_judged_by_overwrite_on_conflict(self, code, refused):
+        """merge replaces the open scene's clashing nodes only with overwrite_on_conflict=True."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(parse_code(code))
+        assert any("hou.hipFile.merge" in d for d in detected) is refused
+
+    def test_literal_of_another_type_is_named_as_one(self):
+        """A literal the gate cannot judge is named as the literal it is, not as a non-literal."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        detected = _detect_dangerous_code(
+            parse_code("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)")
+        )
+        assert detected == [
+            "hou.hipFile.importFBX() with merge_into_scene 0, not a bool"
+            " - discarding the open scene cannot be ruled out"
+        ]
+
     def test_detect_open_write_mode(self):
         """Test detection of open() with write mode."""
         from houdini_mcp.tools import _detect_dangerous_code, parse_code
