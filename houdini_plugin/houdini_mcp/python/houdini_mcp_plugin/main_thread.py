@@ -135,10 +135,15 @@ def _call_while_heard(fn: Callable[[], Any], silence: float) -> Any:
 
     reply = rpyc.async_(fn)()
     conn = object.__getattribute__(fn, "____conn__")
+    # [LAW:single-enforcer] only the rounds below serve the connection, so every
+    # request the client is heard by restarts the silence clock: ``reply.ready``
+    # would serve one itself, and its run would count as the client's silence.
+    arrived = threading.Event()
+    reply.add_callback(lambda _: arrived.set())
     heard = time.monotonic()
-    while not reply.ready:
-        # [LAW:no-ambient-temporal-coupling] the end of the wait is the socket's
-        # own closed state, read every round: a lost wakeup costs one round.
+    while not arrived.is_set():
+        # [LAW:no-ambient-temporal-coupling] each round polls the socket afresh, so
+        # a close one round's poll missed fails the next: a lost wakeup costs one round.
         quiet = time.monotonic() - heard
         if quiet >= silence:
             given_up = (

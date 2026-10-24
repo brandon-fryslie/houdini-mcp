@@ -140,13 +140,18 @@ class TestHeadless:
         assert "The client sent nothing for 0.3s" in caplog.text
 
     def test_a_client_heard_from_keeps_its_call_past_the_silence_bound(self, houdini):
-        """Silence is the time since the client was last heard, not the call's length."""
+        """Silence is the time since the client was last heard, not the call's
+        length, and a request the main thread runs is not silence however long
+        it takes, though it was already waiting when a round ended."""
         ran: list[bool] = []
         with houdini() as conn:
+            sleep = conn.modules.time.sleep
 
             def fn() -> None:
-                for _ in range(10):
-                    conn.modules.time.sleep(0.1)
+                # Sent back to back, the second waits on the main thread's
+                # socket while the first runs.
+                pending = [rpyc.async_(sleep)(0.5) for _ in range(2)]
+                assert [reply.value for reply in pending] == [None, None]
                 ran.append(True)
 
             assert serving_main_thread(lambda: call_on_main(conn, fn, silence=0.3)) == []
@@ -193,9 +198,13 @@ class TestHeadless:
                 rpyc.classic.connect("127.0.0.1", server.port) as conn,
                 caplog.at_level(logging.INFO, "houdini_mcp_plugin"),
             ):
-                serving_main_thread(lambda: call_on_main(conn, fn, silence=30.0), stop_once_out)
+                raised = serving_main_thread(
+                    lambda: call_on_main(conn, fn, silence=30.0), stop_once_out
+                )
         finally:
             logging.getLogger("houdini_mcp_plugin.listener").removeHandler(ended)
+        # The client sees its connection end; the stop itself raised nothing.
+        assert [type(failure) for failure in raised] == [EOFError], raised
         assert freed_after, "the main thread held the call past a serving round after the stop"
         assert "The client sent nothing" not in caplog.text
 
