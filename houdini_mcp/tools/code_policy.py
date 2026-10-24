@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Generic, TypeVar
 
 __all__ = [
     "parse_code",
@@ -257,15 +257,15 @@ class _Refused:
 
     reason: str
 
-    def at_reference(self, dotted: str, called: bool) -> str | None:
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
         return self.reason
 
-    def at_call(self, dotted: str, call: ast.Call) -> str | None:
-        return None
+
+Value = TypeVar("Value")
 
 
 @dataclass(frozen=True)
-class _RefusedByArgument:
+class _RefusedByArgument(Generic[Value]):
     """A callee whose danger is one argument's value, so it is judged at its call.
 
     The argument is read where the call passes it, by keyword or position. One
@@ -276,16 +276,14 @@ class _RefusedByArgument:
 
     keyword: str
     position: int
-    literal: type
-    dangerous: Callable[[Any], bool]
+    # [LAW:types-are-the-program] dangerous is handed only values of this type.
+    literal: type[Value]
+    dangerous: Callable[[Value], bool]
     danger: str
 
-    def at_reference(self, dotted: str, called: bool) -> str | None:
-        if called:
-            return None
-        return f"{dotted} referenced without a call - {self.danger} cannot be ruled out"
-
-    def at_call(self, dotted: str, call: ast.Call) -> str | None:
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
+        if call is None:
+            return f"{dotted} referenced without a call - {self.danger} cannot be ruled out"
         if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
             kw.arg is None for kw in call.keywords
         ):
@@ -311,12 +309,14 @@ class _RefusedByArgument:
 
 
 # Calls that close Houdini, discard or overwrite the open scene, or open a file
-# for writing, by the dotted path they resolve to. The detector finds them under every policy;
-# ExecutionGrant decides what a finding means: refused under read-only
-# whatever the flags, refused under normal unless the caller passes
-# allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
+# for writing, by the dotted path they resolve to. The detector finds them
+# under every policy; ExecutionGrant decides what a finding means: refused
+# under read-only whatever the flags, refused under normal unless the caller
+# passes allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
 # [LAW:one-source-of-truth] One row per callee, so a path cannot carry two verdicts.
-DANGEROUS_CALLEES: dict[tuple[str, ...], _Refused | _RefusedByArgument] = {
+DANGEROUS_CALLEES: dict[
+    tuple[str, ...], _Refused | _RefusedByArgument[bool] | _RefusedByArgument[str]
+] = {
     ("hou", "exit"): _Refused("hou.exit() - will close Houdini"),
     ("hou", "hipFile", "clear"): _Refused("hou.hipFile.clear() - scene wipe"),
     ("hou", "hipFile", "load"): _Refused("hou.hipFile.load() - discards the open scene"),
@@ -378,7 +378,8 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
     names = _names(tree)
     detected: list[str] = []
-    callees = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    # Each reference is judged once, with the call it is the callee of, if any.
+    calls = {id(node.func): node for node in ast.walk(tree) if isinstance(node, ast.Call)}
 
     def judge(chain: list[str], reference: ast.expr) -> None:
         # A name the program binds itself is its own variable, not the module
@@ -387,7 +388,7 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
             return
         path, _ = names.resolve(chain)
         if (callee := DANGEROUS_CALLEES.get(path)) and (
-            why := callee.at_reference(".".join(path), id(reference) in callees)
+            why := callee.judge(".".join(path), calls.get(id(reference)))
         ):
             detected.append(why)
         if why := _rail_refusal(path):
@@ -413,16 +414,6 @@ def _detect_dangerous_code(tree: ast.Module) -> list[str]:
                 detected.append(f"{node.id} - dynamic code execution")
             else:
                 judge([node.id], node)
-        elif (
-            isinstance(node, ast.Call)
-            and (chain := _dotted_chain(node.func)) is not None
-            and not names.is_local(chain[0])
-        ):
-            path, _ = names.resolve(chain)
-            if (callee := DANGEROUS_CALLEES.get(path)) and (
-                why := callee.at_call(".".join(path), node)
-            ):
-                detected.append(why)
 
     return list(dict.fromkeys(detected))
 
