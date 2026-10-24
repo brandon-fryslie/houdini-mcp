@@ -275,6 +275,8 @@ def _on_main_thread(
         if not outcomes or transport_failure(raised) is None:
             raise
         logger.info("The link failed before the reply to a call Houdini ran: %r", raised)
+        # The thread that used the link closes it, as a link cut off under it is left for.
+        houdini().drop(link)
     else:
         if refusal is not None:
             raise MainThreadRefused(refusal)

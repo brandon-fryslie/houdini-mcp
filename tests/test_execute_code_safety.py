@@ -625,11 +625,12 @@ class TestTimeoutRollback:
     def test_a_timeout_cuts_the_program_off_and_undoes_its_step(
         self, mock_connection, stalled_program, caplog
     ):
-        """At its timeout the program's link is closed, so Houdini's main thread gives
+        """At its timeout the program's link is cut off, so Houdini's main thread gives
         its call up and closes its step, which is undone; the artist's step before
-        it stays."""
+        it stays. The program's thread closes the link once it next uses it."""
         from houdini_mcp.connection import houdini
         from houdini_mcp.tools import execute_code
+        from houdini_mcp.tools.workers import WORKERS
 
         undos = mock_connection.undos
         undos.enter_main_thread()
@@ -656,9 +657,14 @@ class TestTimeoutRollback:
         assert undos.undoLabels() == ("artist's edit",)
         assert mock_connection.node("/obj/half") is None
         assert mock_connection.node("/obj/artist_null") is not None
-        assert link.conn.closed and houdini().link() is not link
         assert "rollback" not in result
         assert "rollback_attempted" not in result["audit"]
+        assert houdini().link() is not link
+        with pytest.raises(EOFError):
+            link.conn.main_thread().ping()
+        mock_connection.stall_gate.set()
+        WORKERS.running().thread.join(5)
+        assert link.conn.closed
 
     def test_a_timeout_in_a_houdini_with_undo_off_says_the_changes_stay(
         self, mock_connection, stalled_program

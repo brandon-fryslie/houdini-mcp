@@ -212,7 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING (wire)**: at its `timeout`, `execute_code` cuts its program off
   from Houdini and undoes its step (houdini-laws-etg.lbc): the program's link is
-  closed, which frees Houdini's main thread once the request it is serving
+  shut down, which frees Houdini's main thread once the request it is serving
   returns. The program kept running with Houdini's main thread, so a timed-out
   program went on editing the scene. The timeout's message ends with what
   became of the program's changes; the `rollback` block and

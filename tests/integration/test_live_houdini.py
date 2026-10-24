@@ -11,7 +11,7 @@ import pytest
 from houdini_mcp import tools
 from houdini_mcp.tools._common import using
 from houdini_mcp.tools.pane_screenshot import _qt_core, png_bytes
-from houdini_mcp.tools.transactions import UndoStep, _on_main_thread
+from houdini_mcp.tools.transactions import BODY_SILENCE, UndoStep, _on_main_thread
 from houdini_mcp.tools.workers import WORKERS
 
 
@@ -436,7 +436,7 @@ async def test_a_geometry_summary_costs_the_link_the_same_requests_whatever_the_
 
 def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:
     """What ``work`` returns, run with its requests served on Houdini's main thread."""
-    return _on_main_thread(link, "call", work).result()
+    return _on_main_thread(link, "call", work, BODY_SILENCE).result()
 
 
 def _undo_labels(at: dict[str, Any]) -> tuple[str, ...]:
