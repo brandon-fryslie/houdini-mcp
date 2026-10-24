@@ -19,7 +19,7 @@ from ._common import (
 )
 from .parms import write_all
 from .plugin import plugin_module
-from .reads import Unread, log_unread
+from .reads import log_refused
 
 if TYPE_CHECKING:
     # [LAW:types-are-the-program] the answer's shape is the plugin module's, which
@@ -136,8 +136,7 @@ def get_parameter_schema(
             "separators=%(separators)d",
             menu,
         )
-    for refused in answer["refused_reads"]:
-        log_unread(refused["what"], Unread(unread=refused["reason"]))
+    log_refused(answer["refused_reads"])
     logger.info(
         "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), answer["listed"]
     )

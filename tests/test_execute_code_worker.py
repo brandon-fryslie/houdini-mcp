@@ -140,29 +140,23 @@ class TestWorkerBlocksMutation:
         assert result["kind"] == "worker_still_running"
         assert result["operation"] == render.__name__
 
-    async def test_program_running_read_is_refused_naming_itself(
-        self, mock_connection, stalled_program, caplog
+    async def test_a_geometry_summary_reads_beside_a_program_still_running(
+        self, mock_connection, stalled_program
     ):
-        """get_geo_summary runs a program in an undo group, so one worker refuses it."""
+        """get_geo_summary reads inside Houdini in its own call, so a running program
+        holds nothing it needs."""
+        from tests.conftest import MockGeometry
+
+        box = mock_connection.node("/obj").createNode("geo", "read1").createNode("box", "box1")
+        box.setGeometry(MockGeometry([(0.0, 0.0, 0.0)]))
         _time_out(stalled_program)
 
-        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.workers"):
-            result = await held(get_geo_summary)(
-                "/obj/geo1",
-                host="localhost",
-                port=18811,
-                summarizer=SUMMARIZER,
-                bypass_config_enabled=False,
-            )
-
-        assert result["status"] == "error"
-        assert result["kind"] == "worker_still_running"
-        assert result["operation"] == "get_geo_summary"
-        assert result["message"].startswith(
-            "get_geo_summary refused: a program launched by execute_code"
+        result = await held(get_geo_summary)(
+            box.path(), max_sample_points=0, host="localhost", port=18811, summarizer=SUMMARIZER
         )
-        [refusal] = [r for r in caplog.records if r.name == "houdini_mcp.tools.workers"]
-        assert refusal.getMessage().startswith("get_geo_summary refused: execute_code worker")
+
+        assert (result["status"], result["point_count"]) == ("success", 1)
+        assert WORKERS.running() is not None
 
     def test_writes_resume_once_the_worker_ends(self, mock_connection, stalled_program):
         _time_out(stalled_program)

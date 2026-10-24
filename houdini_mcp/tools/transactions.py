@@ -119,9 +119,6 @@ class ToolPolicy:
 
 
 READ = ToolPolicy(None, Admission.SHARED)
-# A read through a program in the one worker slot: it needs the scene to itself
-# for the call and changes nothing in it.
-HOLDS_SCENE = ToolPolicy(None, Admission.EXCLUSIVE)
 # A render: it adds a camera and a ROP for the call and removes them before returning.
 RENDER = ToolPolicy(TransactionPolicy.TEMPORARY_NODES, Admission.EXCLUSIVE)
 UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE_ON_MAIN_THREAD)

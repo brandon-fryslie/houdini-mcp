@@ -8,17 +8,17 @@ read" stay three different facts.
 
 [LAW:single-enforcer] ``houdini_mcp_read`` defines ``Unread`` and the one place a
 refusal becomes it, for the server and the plugin's modules alike; ``read`` here
-is that place as the server reaches Houdini, over the link. get_geo_summary's
-program spells the same ``UNREAD`` key in its own source.
+is that place as the server reaches Houdini, over the link; a plugin module's
+reads come back as the refusals it kept, which ``log_refused`` logs here.
 """
 
 import itertools
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any, TypeGuard, TypeVar
 
 import houdini_mcp_read
-from houdini_mcp_read import UNREAD, Unread, format_reason
+from houdini_mcp_read import UNREAD, RefusedRead, Unread, format_reason
 
 from ..connection import raised_inside_houdini, transport_failure
 
@@ -29,12 +29,11 @@ __all__ = [
     "Unread",
     "format_reason",
     "is_unread",
-    "log_unread",
+    "log_refused",
     "read",
     "reason",
     "reraise_transport_failure",
     "unread",
-    "unreads",
 ]
 
 T = TypeVar("T")
@@ -76,28 +75,23 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
 
     def explain(e: Exception) -> str:
         reraise_transport_failure(e)
-        found = unread(e)
-        log_unread(what, found)
-        return found["unread"]
+        why = reason(e)
+        _log_unread(what, why)
+        return why
 
     return houdini_mcp_read.read(fetch, explain)
 
 
-def log_unread(what: str, found: Unread) -> None:
+def _log_unread(what: str, reason: str) -> None:
     """The event for one read Houdini refused, wherever it was refused."""
-    logger.warning("unread %s reason=%s", what, found["unread"])
+    logger.warning("unread %s reason=%s", what, reason)
 
 
-def unreads(value: Any, where: str = "") -> Iterator[tuple[str, Unread]]:
-    """Every ``Unread`` inside ``value``, with the path of keys and indexes to it."""
-    if is_unread(value):
-        yield where, value
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield from unreads(item, f"{where}.{key}" if where else str(key))
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            yield from unreads(item, f"{where}[{index}]")
+def log_refused(refused_reads: list[RefusedRead]) -> None:
+    """The events for the reads a plugin module made inside Houdini and was refused:
+    that module cannot reach this log, so it hands its refusals back."""
+    for refused in refused_reads:
+        _log_unread(refused["what"], refused["reason"])
 
 
 def reraise_transport_failure(e: Exception) -> None:

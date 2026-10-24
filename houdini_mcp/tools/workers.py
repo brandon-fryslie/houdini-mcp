@@ -58,8 +58,7 @@ class RunningWorker:
     """One program running in its own thread, undo group open until it ends, and
     any reads its tool makes around it in that thread.
 
-    ``operation`` is the tool that launched it: ``execute_code`` for a caller's
-    program, ``get_geo_summary`` for the server's own.
+    ``operation`` is the tool that launched it.
     """
 
     operation: str

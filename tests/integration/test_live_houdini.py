@@ -207,7 +207,7 @@ def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str,
 
 
 async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
-    at: dict[str, Any], bound: dict[str, Any]
+    at: dict[str, Any], summarizing: dict[str, Any]
 ) -> None:
     """Houdini 22's boundingBox() of a SOP with no points is a box at the origin; the
     summary reports no box for it, and the sphere's own box for a sphere."""
@@ -215,8 +215,10 @@ async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
     empty = tools.create_node("null", geo, "empty1", **at)["node_path"]
     sphere = tools.create_node("sphere", geo, "sphere1", **at)["node_path"]
 
-    nothing = await tools.get_geo_summary(empty, max_sample_points=0, summarize=False, **bound)
-    ball = await tools.get_geo_summary(sphere, max_sample_points=0, summarize=False, **bound)
+    nothing = await tools.get_geo_summary(
+        empty, max_sample_points=0, summarize=False, **summarizing
+    )
+    ball = await tools.get_geo_summary(sphere, max_sample_points=0, summarize=False, **summarizing)
 
     assert nothing["point_count"] == 0 and "bounding_box" not in nothing
     assert ball["bounding_box"] == {
@@ -228,7 +230,7 @@ async def test_a_geometry_summary_boxes_only_geometry_houdini_22_gives_points(
 
 
 async def test_a_geometry_summary_of_a_failed_cook_carries_the_errors_houdini_22_lists(
-    at: dict[str, Any], bound: dict[str, Any]
+    at: dict[str, Any], summarizing: dict[str, Any]
 ) -> None:
     """Houdini 22 gives a SOP whose cook failed no geometry, and says why only in
     its errors(); the summary's failure carries them."""
@@ -237,14 +239,16 @@ async def test_a_geometry_summary_of_a_failed_cook_carries_the_errors_houdini_22
     planted = tools.set_parameter(failing, "python", "raise RuntimeError('planted')", **at)
     assert planted["status"] == "success"
 
-    failed = await tools.get_geo_summary(failing, max_sample_points=0, summarize=False, **bound)
+    failed = await tools.get_geo_summary(
+        failing, max_sample_points=0, summarize=False, **summarizing
+    )
 
     assert failed["kind"] == "operation_failed", failed
     assert any("planted" in error for error in failed["errors"]), failed
 
 
 async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
-    at: dict[str, Any], bound: dict[str, Any]
+    at: dict[str, Any], summarizing: dict[str, Any]
 ) -> None:
     """Houdini 22's bounds skip a point at NaN, so a stray one costs no box, and
     points all at NaN have no box though they have a count."""
@@ -254,7 +258,7 @@ async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
         sop = tools.create_node("python", geo, name, **at)["node_path"]
         code = f"g = hou.pwd().geometry()\nfor p in {positions}: g.createPoint().setPosition(p)"
         tools.set_parameter(sop, "python", code, **at)
-        return await tools.get_geo_summary(sop, max_sample_points=0, summarize=False, **bound)
+        return await tools.get_geo_summary(sop, max_sample_points=0, summarize=False, **summarizing)
 
     nan = "float('nan')"
     stray = await summary("stray1", f"[({nan}, 0, 0), (1, 1, 1), (2, 2, 2)]")
@@ -263,6 +267,67 @@ async def test_houdini_22_bounds_a_geometry_by_its_points_not_at_nan(
     assert stray["bounding_box"]["min"] == [1.0, 0.0, 0.0]
     assert stray["bounding_box"]["max"] == [2.0, 2.0, 2.0]
     assert lost["point_count"] == 3 and "bounding_box" not in lost
+
+
+async def test_a_geometry_summary_costs_the_link_the_same_requests_whatever_the_geometry(
+    at: dict[str, Any], summarizing: dict[str, Any]
+) -> None:
+    """Three points with P alone and five thousand with ten more attributes and ten
+    groups are read in the same requests: the read runs inside Houdini, and nothing
+    crosses the link per point, attribute or group."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_geo_requests", **at)["node_path"]
+
+    def sop(name: str, code: str) -> str:
+        path: str = tools.create_node("python", geo, name, **at)["node_path"]
+        assert tools.set_parameter(path, "python", code, **at)["status"] == "success"
+        return path
+
+    small = sop("small1", "hou.pwd().geometry().createPoints([(0, 0, 0)] * 3)")
+    large = sop(
+        "large1",
+        "g = hou.pwd().geometry()\n"
+        "for i in range(10): g.addAttrib(hou.attribType.Point, f'a{i}', 0.0)\n"
+        "points = g.createPoints([(i, 0, 0) for i in range(5000)])\n"
+        "for i in range(10): g.createPointGroup(f'g{i}').add(points[i])",
+    )
+
+    async def summary(path: str) -> dict[str, Any]:
+        return await tools.get_geo_summary(
+            path, max_sample_points=16, summarize=False, **summarizing
+        )
+
+    with using(**at) as link:
+        conn = link.conn
+    # the plugin module's import and rpyc's first sight of each class are paid
+    # once a link, not once a read
+    await summary(small)
+    send = conn.sync_request
+
+    async def requests_of(path: str) -> int:
+        sent: list[Any] = []
+
+        def counted(*request: Any) -> Any:
+            sent.append(request[0])
+            return send(*request)
+
+        conn.sync_request = counted
+        try:
+            read = await summary(path)
+        finally:
+            conn.sync_request = send
+        assert read["status"] == "success", read
+        return len(sent)
+
+    few, many = await requests_of(small), await requests_of(large)
+    # [LAW:verifiable-goals] at least one request, or the count measured nothing
+    assert few == many and 0 < many < 20, (few, many)
+    # a float attribute's sample is its value: over the link, checking it against
+    # hou's vector classes raised, and every one read as unread
+    sampled = (await summary(large))["sample_points"][1]
+    assert sampled == {
+        "point": 1,
+        "values": {"P": [1.0, 0.0, 0.0]} | {f"a{i}": 0.0 for i in range(10)},
+    }
 
 
 def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:

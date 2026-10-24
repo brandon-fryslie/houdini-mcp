@@ -18,6 +18,7 @@ open(sys.argv[1], "w").write(json.dumps({
         name: importlib.import_module(name).__file__
         for name in (
             "houdini_mcp_plugin",
+            "houdini_mcp_geometry",
             "houdini_mcp_handshake",
             "houdini_mcp_read",
             "houdini_mcp_schema",

@@ -18,7 +18,6 @@ from houdini_mcp.tools._common import (
     CHECKPOINTED,
     FAILURE,
     FILE_WRITE,
-    HOLDS_SCENE,
     PROGRAM,
     READ,
     RENDER,
@@ -215,7 +214,7 @@ class TestEveryFailureIsOneArm:
         assert houdini().link() is link and not link.conn.closed
 
     def test_a_transport_timeout_resets_the_connection_and_says_so(self) -> None:
-        @tool(HOLDS_SCENE)
+        @tool(READ)
         def body() -> dict[str, Any]:
             with using("localhost", 18811):
                 raise link_failure(TimeoutError("no answer"))
@@ -319,8 +318,8 @@ class TestAfterTheLinkFailsMidCall:
     @pytest.mark.parametrize(("exc", "kind"), LINK_FAILURES)
     @pytest.mark.parametrize(
         "policy",
-        [READ, HOLDS_SCENE, FILE_WRITE],
-        ids=["read", "holds_scene", "file_write"],
+        [READ, FILE_WRITE],
+        ids=["read", "file_write"],
     )
     def test_a_call_that_changes_nothing_is_called_again(
         self, policy: ToolPolicy, exc: BaseException, kind: str

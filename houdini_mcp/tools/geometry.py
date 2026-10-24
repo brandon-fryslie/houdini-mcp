@@ -4,35 +4,35 @@ This module provides tools for inspecting geometry data in Houdini,
 including point/primitive counts, attributes, groups, and sampling.
 """
 
-import inspect
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..settings import Summarizer
 from ._common import (
-    HOLDS_SCENE,
+    READ,
+    InvalidInput,
     OperationFailed,
     SampleCount,
+    node_at,
     on_the_scene,
     tool,
-    tool_error,
+    using,
 )
 from .bounds import box_center, box_of_bounds, box_sides
-from .reads import UNREAD, format_reason, is_unread, log_unread, unreads
+from .plugin import plugin_module
+from .reads import is_unread, log_refused
 from .summarization import GEOMETRY_BRIEF, summarized
+
+if TYPE_CHECKING:
+    # [LAW:types-are-the-program] the answer's shape is the plugin module's, which
+    # the server never imports: it only reaches it inside Houdini.
+    from houdini_mcp_geometry import Answer
 
 logger = logging.getLogger("houdini_mcp.tools.geometry")
 
-# [LAW:one-source-of-truth] the program run inside Houdini spells a reason
-# with reads.format_reason itself, so one failure reads the same from any tool
-_FORMAT_REASON_SOURCE = inspect.getsource(format_reason)
-# The most output a geometry read may print; a sample of many points with many
-# attributes can pass it, and that read fails naming this ceiling.
-_GEOMETRY_OUTPUT_LIMIT = 500000
 
-
-@tool(HOLDS_SCENE)
+@tool(READ)
 async def get_geo_summary(
     node_path: str,
     max_sample_points: SampleCount = 16,
@@ -43,7 +43,6 @@ async def get_geo_summary(
     host: str = "localhost",
     port: int = 18811,
     summarizer: Summarizer,
-    bypass_config_enabled: bool,
 ) -> dict[str, Any]:
     """
     Get geometry statistics and metadata for verification.
@@ -70,7 +69,8 @@ async def get_geo_summary(
           only points at NaN), which occupies no place
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
-        - sample_points: Optional array of first N points with their attribute values
+        - sample_points: Optional array of the first N points, each
+          {point: its number, values: {attribute name: its value}}
         - ai_summary: (if summarized) AI-generated insights about the geometry
         - summarized_bytes: (with ai_summary) how many bytes it covers, from result_file's start
         - ai_summary_error: (in place of ai_summary) why no summary could be made
@@ -108,7 +108,6 @@ async def get_geo_summary(
         max_sample_points,
         include_attributes,
         include_groups,
-        bypass_config_enabled,
         host,
         port,
     )
@@ -120,197 +119,55 @@ def _read_geometry(
     max_sample_points: SampleCount,
     include_attributes: bool,
     include_groups: bool,
-    bypass_config_enabled: bool,
     host: str,
     port: int,
 ) -> dict[str, Any]:
     """The geometry statistics of the SOP at node_path."""
-    # Imported here to avoid circular imports
-    from .code import ExecutionGrant, _execute_with_grant
+    with using(host, port) as link:
+        node = node_at(link.hou, node_path)
+        # [LAW:effects-at-boundaries] The read runs inside Houdini: one request
+        # whatever the geometry's points, attributes and groups, answered with one
+        # JSON string.
+        answer: Answer = json.loads(
+            plugin_module(link, "houdini_mcp_geometry").geometry_summary(
+                link.hou, node, max_sample_points, include_attributes, include_groups
+            )
+        )
 
-    # Build Houdini-side code that does all the heavy lifting locally
-    # This avoids slow RPC iteration over geometry elements
-    geo_analysis_code = f"""
-import json
-import traceback
-
-node_path = {repr(node_path)}
-max_sample_points = {max_sample_points}
-include_attributes = {include_attributes}
-include_groups = {include_groups}
-
-result = {{"status": "success", "node_path": node_path}}
-
-
-{_FORMAT_REASON_SOURCE}
-
-def _read(fetch):
-    # [LAW:single-enforcer] the program's spelling of reads.read: what Houdini
-    # will not give stands as Unread, never as a value it might have been
-    try:
-        return fetch()
-    except Exception as e:
-        return {{{UNREAD!r}: format_reason(e)}}
-
-
-def _attrib(attrib):
-    # each part is its own read, so an attribute whose type will not read still
-    # says which attribute it is
-    return {{"name": _read(attrib.name), "type": _read(lambda: _type_name(attrib)), "size": _read(attrib.size)}}
-
-
-def _type_name(attrib):
-    dt = attrib.dataType()
-    return (dt.name() if hasattr(dt, "name") else str(dt)).lower()
-
-
-def _point_value(pt, aname):
-    val = pt.attribValue(aname)
-    if isinstance(val, (tuple, list, hou.Vector2, hou.Vector3, hou.Vector4)):
-        return list(val)
-    return val
-
-
-# Get node
-node = hou.node(node_path)
-if node is None:
-    result = {{"status": "error", "kind": "invalid_input", "message": f"Node not found: {{node_path}}"}}
-else:
-    # Get geometry. A node that is not a SOP is the caller's path to fix; a cook
-    # that raises or yields nothing is Houdini's. The program says which.
-    # [LAW:one-source-of-truth] geometry() cooks the node when Houdini's update
-    # mode cooks at all, and a cook that fails leaves it None: the summary carries
-    # no report of the cook of its own beside get_node_info's cook_info.
-    geo = None
-    if not isinstance(node, hou.SopNode):
-        result = {{"status": "error", "kind": "invalid_input", "message": f"Node {{node_path}} has no geometry: it is not a SOP node"}}
-    else:
-        try:
-            geo = node.geometry()
-            reason = "geometry() returned None"
-        except Exception as e:
-            reason = format_reason(e)
-        if geo is None:
-            # a failed cook raises nothing; why it failed is in the errors
-            # Houdini lists on the node
-            result = {{
-                "status": "error",
-                "kind": "operation_failed",
-                "message": f"Node {{node_path}} has no geometry: {{reason}}",
-                "errors": _read(lambda: list(node.errors())),
-            }}
-
-    if geo is not None:
-        # Counts - these are fast native calls
-        result["point_count"] = geo.intrinsicValue("pointcount")
-        result["primitive_count"] = geo.intrinsicValue("primitivecount")
-        result["vertex_count"] = geo.intrinsicValue("vertexcount")
-
-        # [LAW:effects-at-boundaries] the raw read; the server makes it a box
-        result["bounds"] = _read(lambda: list(geo.intrinsicValue("bounds")))
-
-        if include_attributes:
-            result["attributes"] = {{
-                kind: [_attrib(a) for a in attribs]
-                for kind, attribs in (
-                    ("point", geo.pointAttribs()),
-                    ("primitive", geo.primAttribs()),
-                    ("vertex", geo.vertexAttribs()),
-                    ("detail", geo.globalAttribs()),
-                )
-            }}
-
-        if include_groups:
-            result["groups"] = {{
-                "point": [_read(g.name) for g in geo.pointGroups()],
-                "primitive": [_read(g.name) for g in geo.primGroups()],
-            }}
-
-        # Sample points - use numpy-style array access if possible
-        point_count = result["point_count"]
-        if max_sample_points > 0 and point_count > 0:
-            sample_count = min(max_sample_points, point_count)
-            if point_count > 1000000:
-                result["warning"] = f"Geometry has {{point_count}} points (>1M); samples are its first {{sample_count}}."
-            sample_points = []
-
-            # Get point attribute names
-            point_attrib_names = [a.name() for a in geo.pointAttribs()]
-
-            # Sample using efficient access
-            for i in range(sample_count):
-                pt = geo.point(i)
-                if pt is None:
-                    continue
-                point_data = {{"index": i}}
-                for aname in point_attrib_names:
-                    point_data[aname] = _read(lambda: _point_value(pt, aname))
-                sample_points.append(point_data)
-
-            result["sample_points"] = sample_points
-
-# Return JSON string
-print(json.dumps(result))
-"""
-
-    # The program above is server-authored and bounded by this tool's own
-    # sample/count limits, so it runs under the trusted heavy-geometry grant
-    # that the MCP surface cannot request.
-    exec_result = _execute_with_grant(
-        geo_analysis_code,
-        ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=bypass_config_enabled),
-        operation=get_geo_summary.__name__,
-        max_stdout_size=_GEOMETRY_OUTPUT_LIMIT,
-        host=host,
-        port=port,
-    )
-    # [LAW:no-silent-failure] a cut-off read is not malformed data: name the
-    # ceiling it hit and the knobs that shrink the read, rather than a parse error.
-    if exec_result["stdout_truncated"]:
+    # A node that is not a SOP is the caller's path to fix; a cook that raises or
+    # yields nothing is Houdini's.
+    if "not_a_sop" in answer:
+        raise InvalidInput(
+            f"Node {node_path} has no geometry: {answer['not_a_sop']}", path=node_path
+        )
+    log_refused(answer["refused_reads"])
+    if "no_geometry" in answer:
         raise OperationFailed(
-            f"Geometry data for {node_path} exceeded {_GEOMETRY_OUTPUT_LIMIT} characters with "
-            f"max_sample_points={max_sample_points}; each sample carries every point attribute, "
-            "so ask for fewer, or set include_groups=False if the node has many groups"
+            f"Node {node_path} has no geometry: {answer['no_geometry']}",
+            path=node_path,
+            errors=answer["errors"],
         )
-
-    # Parse the JSON output from stdout
-    stdout = exec_result["stdout"].strip()
-    if not stdout:
-        raise OperationFailed("No output from geometry analysis")
-
-    try:
-        result: dict[str, Any] = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise OperationFailed(f"Failed to parse geometry data: {e}", raw_output=stdout[:500]) from e
-    # the box stands where the program read its bounds, ahead of the attributes
-    # and samples a summary's excerpt may cut off (a failure has no bounds)
-    result = {
-        name: value
-        for key, read in result.items()
-        for name, value in (_bounding_box(read) if key == "bounds" else {key: read}).items()
-    }
-    # the program cannot reach this log; each field it could not read, a
-    # failure's errors among them, is an event here, as had the server read it
-    for where, found in unreads(result):
-        log_unread(f"{where} of {node_path}", found)
-    # The program names the kind of its own failure (no node there is the
-    # caller's path; a cook that yields no geometry is Houdini's), and the
-    # failure it wrote, kind and fields, crosses back into the one failure type.
-    if result["status"] == "error":
-        raise tool_error(
-            path=node_path, **{key: value for key, value in result.items() if key != "status"}
-        )
+    # the box stands where the read put its bounds, ahead of the attributes and
+    # samples a summary's excerpt may cut off
+    result: dict[str, Any] = {"status": "success", "node_path": node_path}
+    for key, value in answer.items():
+        if key == "bounds":
+            result |= _bounding_box(value)
+        elif key != "refused_reads":
+            result[key] = value
     logger.info(
-        "Read geometry of %s: %s points, bounding_box=%s",
+        "Read geometry of %s: %s points, bounding_box=%s, sampled=%d, refused=%d",
         node_path,
         result["point_count"],
         result.get("bounding_box", "none (no point has a position)"),
+        len(result.get("sample_points", ())),
+        len(answer["refused_reads"]),
     )
     return result
 
 
 def _bounding_box(bounds: Any) -> dict[str, Any]:
-    """The bounding_box field the program's bounds read becomes: the box, the read
+    """The bounding_box field the read's raw bounds become: the box, the read
     Houdini refused, or no field for geometry with no point that has a position, as
     the render tools report a framing of nothing."""
     if is_unread(bounds):
