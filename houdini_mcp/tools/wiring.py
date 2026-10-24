@@ -26,6 +26,11 @@ from .connections import (
 
 logger = logging.getLogger("houdini_mcp.tools.wiring")
 
+# [LAW:one-source-of-truth] the method each flag is written through, as Houdini 22
+# names it. Which of them a node has follows its class: a SOP has all three, a ROP
+# only bypass, an object only setDisplayFlag.
+FLAG_SETTERS = {"display": "setDisplayFlag", "render": "setRenderFlag", "bypass": "bypass"}
+
 
 @tool(UNDOABLE)
 def connect_nodes(
@@ -183,8 +188,8 @@ def set_node_flags(
     """
     Set display, render, and bypass flags on a node.
 
-    Only non-None values are set, allowing partial flag updates.
-    Checks for flag availability using hasattr() before setting.
+    Only non-None values are set, allowing partial flag updates. A flag the node's
+    class does not have is listed under flags_unavailable rather than set.
 
     Args:
         node_path: Path to the node (e.g., "/obj/geo1/sphere1")
@@ -205,32 +210,21 @@ def set_node_flags(
 
         node = node_at(hou, node_path)
 
+        requested = {"display": display, "render": render, "bypass": bypass}
         flags_set: dict[str, bool] = {}
         flags_unavailable: list[str] = []
-
-        # Set display flag
-        if display is not None:
-            if hasattr(node, "setDisplayFlag"):
-                node.setDisplayFlag(display)
-                flags_set["display"] = display
+        for flag, value in requested.items():
+            if value is None:
+                continue
+            # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
+            # AttributeError Houdini raises while writing is a refused write, not a
+            # flag the node lacks
+            setter = getattr(node, FLAG_SETTERS[flag], None)
+            if setter is None:
+                flags_unavailable.append(flag)
             else:
-                flags_unavailable.append("display")
-
-        # Set render flag
-        if render is not None:
-            if hasattr(node, "setRenderFlag"):
-                node.setRenderFlag(render)
-                flags_set["render"] = render
-            else:
-                flags_unavailable.append("render")
-
-        # Set bypass flag
-        if bypass is not None:
-            if hasattr(node, "setBypass"):
-                node.setBypass(bypass)
-                flags_set["bypass"] = bypass
-            else:
-                flags_unavailable.append("bypass")
+                setter(value)
+                flags_set[flag] = value
 
         result: dict[str, Any] = {
             "status": "success",

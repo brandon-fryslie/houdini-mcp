@@ -405,7 +405,7 @@ class TestListRenderNodes:
         caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.rendering")
 
         rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
-        rop.setBypass(True)
+        rop.bypass(True)
         mock_connection.add_node(rop)
         mock_connection.add_node(
             MockNodeLacking(

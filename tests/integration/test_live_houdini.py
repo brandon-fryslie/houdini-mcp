@@ -205,6 +205,24 @@ def test_list_render_nodes_reads_each_rops_bypass_flag(at: dict[str, Any]) -> No
     assert (listed[rop], listed[network]) == (True, None)
 
 
+def test_set_node_flags_bypasses_a_sop_and_a_rop(at: dict[str, Any]) -> None:
+    """Houdini 22 writes the bypass flag with bypass(on); no node class has setBypass."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_bypass", **at)["node_path"]
+    paths = (
+        tools.create_node("box", geo, "box1", **at)["node_path"],
+        tools.create_node("opengl", "/out", "mcp_it_bypass_rop", **at)["node_path"],
+    )
+
+    def bypassed() -> list[bool]:
+        with using(**at) as link:
+            return [link.hou.node(path).isBypassed() for path in paths]
+
+    for on in (True, False):
+        for path in paths:
+            assert tools.set_node_flags(path, bypass=on, **at)["flags_set"] == {"bypass": on}
+        assert bypassed() == [on, on]
+
+
 def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str, Any]) -> None:
     """A forced cook counts, for a manager and for a displayed SOP alike: compared with
     the count before it, so a viewer that already cooked the box changes nothing."""

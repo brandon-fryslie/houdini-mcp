@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `set_node_flags(bypass=...)` sets the bypass flag on a node that has one,
+  such as a SOP or a ROP (houdini-laws-etg.omw). It called `setBypass`, which
+  no Houdini 22 node class has, so it set nothing and reported `bypass` under
+  `flags_unavailable` with status `success`.
+
 - In Houdini's Manual update mode, which cooks nothing, `get_geo_summary` of a
   SOP changed since its last cook, or never cooked, returns `operation_failed`
   naming the update mode (houdini-laws-etg.7h1). It summarized what the node

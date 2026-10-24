@@ -2484,7 +2484,23 @@ class TestSetNodeFlags:
         assert result["flags_set"]["bypass"] is True
         assert "display" not in result["flags_set"]
         assert "render" not in result["flags_set"]
-        assert noise._bypass is True
+        assert noise.isBypassed() is True
+
+    def test_set_node_flags_bypass_on_a_node_without_one(self, mock_connection):
+        """An object has no bypass flag on Houdini 22: it is listed, not set."""
+        from houdini_mcp.tools import set_node_flags
+
+        geo = MockNodeLacking(
+            path="/obj/geo1", name="geo1", node_type="geo", lacks=("bypass", "isBypassed")
+        )
+        mock_connection.add_node(geo)
+
+        result = set_node_flags("/obj/geo1", display=False, bypass=True)
+
+        assert result["status"] == "success"
+        assert result["flags_set"] == {"display": False}
+        assert result["flags_unavailable"] == ["bypass"]
+        assert geo._display_flag is False
 
     def test_set_node_flags_all_none(self, mock_connection):
         """Test setting no flags (all None)."""
