@@ -34,7 +34,17 @@ import sys
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
+from typing import (
+    Any,
+    Concatenate,
+    Literal,
+    NewType,
+    ParamSpec,
+    Protocol,
+    TypeVar,
+    cast,
+    runtime_checkable,
+)
 
 from houdini_mcp_handshake import Authenticator, peer_name, token_authenticator, token_from
 
@@ -73,6 +83,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 IPV4_WILDCARD_HOST = "0.0.0.0"
 _WILDCARD_HOSTS = {IPV4_WILDCARD_HOST, "::"}
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
 # [LAW:parse-dont-validate] configuration text crosses into the program through
@@ -456,9 +467,13 @@ def _record_end(port: int, peer: object, how: str, *, active: bool) -> None:
     )
 
 
-def _ending_recorded(server: HrpycServer, step: Callable[..., None]) -> Callable[..., None]:
-    """``step``, a part of a client's thread before rpyc serves it, with the
-    connection ending under it recorded as that client's end.
+def _ending_recorded(
+    server: HrpycServer, step: Callable[Concatenate[socket.socket, P], None]
+) -> Callable[Concatenate[socket.socket, P], None]:
+    """``step``, a part of a client's thread, with the connection ending under
+    it before serving recorded as that client's end. ``_serve_client`` holds
+    serving too, but ``_serve_connection`` records serving's ends and raises
+    none of them here.
 
     Before serving there is no rpyc stream to turn a departure into EOFError,
     so a socket error here (a getpeername on a socket the client reset or the
@@ -469,10 +484,10 @@ def _ending_recorded(server: HrpycServer, step: Callable[..., None]) -> Callable
     socket can no longer say.
     """
 
-    def run(sock: socket.socket, *args: Any) -> None:
+    def run(sock: socket.socket, *args: P.args, **kwargs: P.kwargs) -> None:
         peer = peer_name(sock)
         try:
-            step(sock, *args)
+            step(sock, *args, **kwargs)
         except (EOFError, OSError) as exc:
             _record_end(server.port, peer, _how(exc), active=server.active)
 
@@ -891,22 +906,21 @@ class RemoteListener:
             authenticator=policy.authenticator,
             logger=_rpyc_logger,
         )
-        # Installed before ``_listen()``, so no client is admitted without them.
-        server._handle_connection = functools.partial(_serve_connection, server)
-        # [LAW:single-enforcer] a client's thread ends in the listener's record
-        # wherever it is: the entry covers the authenticator and the token's
-        # getpeername; ``_serve_client`` runs inside rpyc's own
-        # ``except Exception: logger.exception``, which the entry cannot reach under.
-        server._serve_client = _ending_recorded(server, server._serve_client)
-        server._authenticate_and_serve_client = _ending_recorded(
-            server, server._authenticate_and_serve_client
-        )
-
-        # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
-        # own ``active`` state, established here synchronously rather than raced
-        # against the serve thread. This is rpyc's readiness protocol: its own
-        # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``.
         try:
+            # Installed before ``_listen()``, so no client is admitted without them.
+            server._handle_connection = functools.partial(_serve_connection, server)
+            # [LAW:single-enforcer] a client's thread ends in the listener's record
+            # wherever it is: the entry covers the authenticator and the token's
+            # getpeername; ``_serve_client`` runs inside rpyc's own
+            # ``except Exception: logger.exception``, which the entry cannot reach under.
+            server._serve_client = _ending_recorded(server, server._serve_client)
+            server._authenticate_and_serve_client = _ending_recorded(
+                server, server._authenticate_and_serve_client
+            )
+            # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
+            # own ``active`` state, established here synchronously rather than raced
+            # against the serve thread. This is rpyc's readiness protocol: its own
+            # ``_start_in_thread`` is ``spawn_waitready(self._listen, self.start)``.
             server._listen()
             # [LAW:one-source-of-truth] rpyc's ``port`` is what the kernel handed out
             # for a port-0 bind; read inside the region whose failure closes the server.
