@@ -731,7 +731,9 @@ class TestAProgramThatFailedOnTheLink:
             link = houdini().link()
             result = _run("print('before')\nhou.slow()")
 
-        assert (result["kind"], result["retry"]) == ("timeout", "call_again")
+        # rpyc's timeout leaves the program running in Houdini: calling again could
+        # run it twice, so the client checks the scene first.
+        assert (result["kind"], result["retry"]) == ("timeout", "check_scene")
         assert result["connection_reset"] is True
         assert result["exception"] == "TimeoutError"
         assert result["stdout"] == "before\n"

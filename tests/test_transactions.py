@@ -15,6 +15,7 @@ import pytest
 from houdini_mcp.tools import (
     create_node,
     execute_code,
+    get_geo_summary,
     load_scene,
     new_scene,
     render_quad_view,
@@ -35,10 +36,18 @@ from tests.conftest import MockHouModule, MockUndos, link_failure, raised_inside
 
 
 @pytest.mark.parametrize("render_tool", [render_viewport, render_quad_view])
-def test_render_tools_need_no_recovery(render_tool):
-    """A render leaves the scene as it found it; that it still waits for a running
-    program is test_execute_code_worker's."""
-    assert policy_of(render_tool).recovery is None
+def test_a_render_changes_the_scene_while_it_runs(render_tool):
+    """A render's temporary nodes are its own to destroy, and a link that fails
+    mid-render leaves them; that it still waits for a running program is
+    test_execute_code_worker's."""
+    policy = policy_of(render_tool)
+    assert policy.recovery is TransactionPolicy.TEMPORARY_NODES
+    assert policy.changes_scene and not policy.writes_scene
+
+
+def test_a_read_through_a_program_changes_nothing():
+    """get_geo_summary holds the scene for its program's slot, and leaves it as it was."""
+    assert not policy_of(get_geo_summary).changes_scene
 
 
 @pytest.mark.parametrize(
@@ -47,9 +56,10 @@ def test_render_tools_need_no_recovery(render_tool):
         TransactionPolicy.UNDOABLE,
         TransactionPolicy.CHECKPOINT_REQUIRED,
         TransactionPolicy.PROGRAM_UNDO_GROUP,
+        TransactionPolicy.TEMPORARY_NODES,
     ],
 )
-def test_a_scene_writer_cannot_share_the_scene(recovery):
+def test_a_scene_changer_cannot_share_the_scene(recovery):
     with pytest.raises(ValueError, match="cannot share it"):
         ToolPolicy(recovery, Admission.SHARED)
 
@@ -206,7 +216,7 @@ class TestBackedUpFirst:
         assert result["message"] == refusal
         getattr(hip, replaces).assert_not_called()
         hip.saveAsBackup.assert_not_called()
-        assert f"{tool} failed (operation_failed): {refusal}" in caplog.text
+        assert f"{tool} failed (operation_failed, retry none): {refusal}" in caplog.text
 
     @pytest.mark.parametrize("tool", REPLACERS)
     def test_a_never_saved_empty_scene_is_replaced(self, tool, mock_connection, caplog):

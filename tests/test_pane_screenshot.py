@@ -534,7 +534,10 @@ def test_render_node_network_refuses_a_node_that_is_not_a_network(
     assert result["network"] == "/obj/geo1"
     assert (editor.network_path, editor.view) == ("/obj", "as left")
     assert mock_connection.ui.grabs == []
-    assert f"render_node_network failed (invalid_input): {result['message']}" in caplog.messages
+    assert (
+        f"render_node_network failed (invalid_input, retry fix_input): {result['message']}"
+        in caplog.messages
+    )
     assert not [m for m in caplog.messages if m.startswith("Took ")]
 
 

@@ -3356,9 +3356,13 @@ class TestConnectionErrorHandling:
         assert result["kind"] == "timeout"
         assert result["connection_reset"] is True
         assert "timed out" in result["message"]
+        # A read changes nothing, so calling it again is the remedy.
+        assert result["retry"] == "call_again"
+        assert "check the scene" not in result["message"]
 
     def test_create_node_handles_eof_error(self, mock_connection, monkeypatch):
-        """Test that create_node handles EOFError gracefully."""
+        """A writer whose link failed may have created its node: the client checks
+        the scene before calling again, which could create a second."""
         from houdini_mcp.tools import create_node
 
         monkeypatch.setattr(
@@ -3369,7 +3373,8 @@ class TestConnectionErrorHandling:
 
         assert result["status"] == "error"
         assert result["kind"] == "connection_lost"
-        assert result["retry"] == "call_again"
+        assert result["retry"] == "check_scene"
+        assert "check the scene before calling again" in result["message"]
 
 
 class TestParallelExecution:

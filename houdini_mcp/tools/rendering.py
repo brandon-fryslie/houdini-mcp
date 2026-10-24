@@ -18,8 +18,8 @@ from typing import Any, Literal, cast
 from ..connection import Link, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
-    HOLDS_SCENE,
     READ,
+    RENDER,
     UNDOABLE,
     InvalidInput,
     OperationFailed,
@@ -89,6 +89,9 @@ def _get_remote_modules(link: Link):
     return remote_os, remote_tempfile
 
 
+_LOST = "the link failed"
+
+
 def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
     """Destroy every node, last created first; the ones that refused, with why.
 
@@ -97,11 +100,16 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
     """
     removed: list[str] = []
     failures: list[tuple[str, Exception]] = []
-    for path, node in reversed(created):
+    remaining = list(reversed(created))
+    for at, (path, node) in enumerate(remaining):
         try:
             node.destroy()
         except Exception as e:
             if transport_failure(e):
+                # Houdini may have run the destroy the link failed under; the
+                # nodes that refused to go and the ones not yet reached remain.
+                add_note(e, f"temporary render node {path} may still be in the scene: {_LOST}")
+                _tell_stranded(e, [p for p, _ in (*failures, *remaining[at + 1 :])])
                 raise
             logger.error("Failed to destroy temporary render node %s: %r", path, e)
             failures.append((path, e))
@@ -109,6 +117,12 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
             removed.append(path)
     logger.debug("Removed temporary render nodes: %s", removed)
     return failures
+
+
+def _tell_stranded(lost: BaseException, paths: Sequence[str]) -> None:
+    """Tell, on the link failure ``lost``, each temporary node it left in the scene."""
+    for path in paths:
+        add_note(lost, f"temporary render node {path} is still in the scene: {_LOST}")
 
 
 @contextmanager
@@ -125,8 +139,19 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
     created: list[tuple[str, Any]] = []
 
     def create(parent: Any, node_type: str, name: str) -> Any:
-        node = parent.createNode(node_type, name)
-        created.append((node.path(), node))
+        try:
+            node = parent.createNode(node_type, name)
+            path = node.path()
+        except Exception as e:
+            # Houdini may have made the node the link failed under; it has no
+            # path here, only the name it was asked for.
+            if transport_failure(e):
+                add_note(
+                    e,
+                    f"a temporary {node_type} node asked for as {name} may be in the scene: {_LOST}",
+                )
+            raise
+        created.append((path, node))
         return node
 
     try:
@@ -136,10 +161,19 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
         # with its type intact for the error classifier; a node that refused to
         # go rides along as a note. A link that failed reaches nothing, so nothing
         # is sent over it: the connection owner tears the link down, and the nodes
-        # are Houdini's to keep.
+        # are Houdini's to keep. A link that fails under the cleanup is the one
+        # failure the connection owner must hear, so it is raised, carrying the
+        # body's.
         if transport_failure(body) is None:
-            for path, failure in _destroy(created):
+            try:
+                failures = _destroy(created)
+            except Exception as lost:
+                add_note(lost, f"the render had already failed: {body!r}")
+                raise lost from body
+            for path, failure in failures:
                 add_note(body, f"also failed to destroy temporary render node {path}: {failure!r}")
+        else:
+            _tell_stranded(body, [path for path, _ in created])
         raise
     else:
         failures = _destroy(created)
@@ -490,20 +524,33 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
             if transport_failure(e):
                 raise
             raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
-        if not image:
-            raise OperationFailed("Render completed but produced no image")
-        return base64.b64encode(image).decode("utf-8")
-    finally:
-        try:
-            remote_os.remove(output_path)
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            # [LAW:no-silent-failure] a file that would not go is reported where
-            # it was left; the image already read is still the answer
-            if transport_failure(e):
-                raise
-            logger.error("Leaked temporary render file %s: %r", output_path, e)
+    except BaseException as e:
+        # A link that failed is sent nothing more: the file is Houdini's to keep.
+        if transport_failure(e) is None:
+            _remove_picture(remote_os, output_path)
+        else:
+            add_note(
+                e, f"temporary render file {output_path} is still on Houdini's machine: {_LOST}"
+            )
+        raise
+    _remove_picture(remote_os, output_path)
+    if not image:
+        raise OperationFailed("Render completed but produced no image")
+    return base64.b64encode(image).decode("utf-8")
+
+
+def _remove_picture(remote_os: Any, output_path: str) -> None:
+    """Remove the render's file from Houdini's machine; a link failure is raised."""
+    try:
+        remote_os.remove(output_path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        # [LAW:no-silent-failure] a file that would not go is reported where
+        # it was left; the image already read is still the answer
+        if transport_failure(e):
+            raise
+        logger.error("Leaked temporary render file %s: %r", output_path, e)
 
 
 # =============================================================================
@@ -511,7 +558,7 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
 # =============================================================================
 
 
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 = _ISOMETRIC,
@@ -599,7 +646,7 @@ def render_viewport(
         return result
 
 
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_quad_view(
     resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: Renderer = "opengl",

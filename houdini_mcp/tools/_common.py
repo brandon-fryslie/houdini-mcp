@@ -47,6 +47,7 @@ from .transactions import (
     ON_MAIN_THREAD,
     PROGRAM,
     READ,
+    RENDER,
     UNDOABLE,
     ToolPolicy,
     declare_policy,
@@ -68,6 +69,7 @@ __all__ = [
     "tool",
     "READ",
     "HOLDS_SCENE",
+    "RENDER",
     "UNDOABLE",
     "CHECKPOINTED",
     "PROGRAM",
@@ -147,8 +149,9 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
     the function renames both. Its policy is declared here, on the function.
 
     Every exception the tool raises becomes the one arm of ``ToolFailure`` that
-    ``failure_response`` builds for it; the link a failed call used was already
-    dropped by its ``using`` scope. A sync tool's body runs through
+    ``failure_response`` builds for it, told from the policy whether the call may
+    have changed the scene; the link a failed call used was already dropped by
+    its ``using`` scope. A sync tool's body runs through
     :func:`~houdini_mcp.tools.transactions.recovering`, so an undoable call is
     one undo step, undone if it fails, and a call that replaces the scene has
     backed it up first. Who holds the scene while the tool's
@@ -276,7 +279,7 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
                     result: dict[str, Any] = await func(*call.args, **call.kwargs)
                     return result
                 except Exception as e:
-                    return failure_response(e, operation_name)
+                    return failure_response(e, operation_name, changes_scene=policy.changes_scene)
 
             declare_policy(async_wrapper, policy)
             return cast(ToolFn, async_wrapper)
@@ -295,7 +298,7 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
                     lambda: func(*call.args, **call.kwargs, **granted(policy)),
                 )
             except Exception as e:
-                return failure_response(e, operation_name)
+                return failure_response(e, operation_name, changes_scene=policy.changes_scene)
 
         # What callers and the server see: the tool's parameters, without the one
         # the boundary supplies.

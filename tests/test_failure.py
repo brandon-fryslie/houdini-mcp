@@ -15,11 +15,14 @@ from pydantic import ValidationError
 
 from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch, houdini
 from houdini_mcp.tools._common import (
+    CHECKPOINTED,
     FAILURE,
     FILE_WRITE,
     HOLDS_SCENE,
     PROGRAM,
     READ,
+    RENDER,
+    UNDOABLE,
     InvalidInput,
     OperationFailed,
     ProgramStillRunning,
@@ -28,6 +31,8 @@ from houdini_mcp.tools._common import (
     tool,
     using,
 )
+from houdini_mcp.tools.failure import TimeoutFailure, failure_for
+from houdini_mcp.tools.transactions import ToolPolicy
 from tests.conftest import link_failure, raised_inside_houdini
 
 KINDS = {
@@ -270,12 +275,81 @@ class TestEveryFailureIsOneArm:
             failing(InvalidInput("Node not found: /obj/x"))
             failing(KeyError("stdout"))
         assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
-            ("WARNING", "probe failed (invalid_input): Node not found: /obj/x"),
+            ("WARNING", "probe failed (invalid_input, retry fix_input): Node not found: /obj/x"),
             ("ERROR", "probe raised KeyError: 'stdout'"),
-            ("WARNING", "probe failed (operation_failed): 'stdout'"),
+            ("WARNING", "probe failed (operation_failed, retry none): 'stdout'"),
         ]
         [alarm] = [r for r in caplog.records if r.levelname == "ERROR"]
         assert alarm.exc_info is not None and alarm.exc_info[0] is KeyError
+
+
+LINK_FAILURES = [
+    pytest.param(EOFError("stream closed"), "connection_lost", id="eof"),
+    pytest.param(TimeoutError("result expired"), "timeout", id="timeout"),
+]
+
+
+class TestAfterTheLinkFailsMidCall:
+    """(houdini-laws-etg.uhu) rpyc's sync timeout leaves the request running in
+    Houdini, and an EOF can arrive after Houdini ran it: a call whose policy
+    changes the scene may have changed it, so calling again could repeat that."""
+
+    @staticmethod
+    def _under(policy: ToolPolicy, exc: BaseException) -> Any:
+        @tool(policy)
+        def probe(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+            with using(host, port):
+                raise link_failure(exc)
+
+        return arm(probe())
+
+    @pytest.mark.parametrize(("exc", "kind"), LINK_FAILURES)
+    @pytest.mark.parametrize(
+        "policy",
+        [UNDOABLE, CHECKPOINTED, PROGRAM, RENDER],
+        ids=["undoable", "checkpointed", "program", "render"],
+    )
+    def test_a_call_that_changes_the_scene_is_checked_before_it_is_called_again(
+        self, policy: ToolPolicy, exc: BaseException, kind: str
+    ) -> None:
+        result = self._under(policy, exc)
+        assert (result.kind, result.retry) == (kind, "check_scene")
+        assert "check the scene before calling again" in result.message
+
+    @pytest.mark.parametrize(("exc", "kind"), LINK_FAILURES)
+    @pytest.mark.parametrize(
+        "policy",
+        [READ, HOLDS_SCENE, FILE_WRITE],
+        ids=["read", "holds_scene", "file_write"],
+    )
+    def test_a_call_that_changes_nothing_is_called_again(
+        self, policy: ToolPolicy, exc: BaseException, kind: str
+    ) -> None:
+        result = self._under(policy, exc)
+        assert (result.kind, result.retry) == (kind, "call_again")
+        assert "check the scene" not in result.message
+
+    @pytest.mark.parametrize(("exc", "kind"), LINK_FAILURES)
+    def test_with_nothing_known_of_the_call_the_scene_is_checked(
+        self, exc: BaseException, kind: str
+    ) -> None:
+        """Outside the tool boundary nothing says the call left the scene alone."""
+        with pytest.raises(Exception) as lost, using("localhost", 18811):
+            raise link_failure(exc)
+        failure = failure_for(lost.value, "probe")
+        assert (failure.kind, failure.retry) == (kind, "check_scene")
+
+    def test_a_timeout_on_an_intact_link_has_no_change_to_check_for(self) -> None:
+        with pytest.raises(ValidationError, match="retry of a reset link only"):
+            TimeoutFailure(
+                operation="probe", message="m", retry="check_scene", connection_reset=False
+            )
+
+    def test_the_audit_line_carries_the_retry(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            self._under(UNDOABLE, EOFError("stream closed"))
+        [line] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert line.startswith("probe failed (connection_lost, retry check_scene): ")
 
 
 class TestNodeAt:

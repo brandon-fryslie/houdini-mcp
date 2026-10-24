@@ -59,20 +59,30 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
 
 **The failure arms** (one definition, `failure_for()` in `houdini_mcp/tools/failure.py`,
 which the decorator applies). Every failure is one arm of `ToolFailure`, a union
-discriminated on `kind`; each kind fixes its own `retry`:
+discriminated on `kind`. Each kind fixes its own `retry`, except the two link arms, whose
+`retry` the tool's policy picks:
 
 | Exception raised in the tool | `kind` | `retry` | Also carries |
 |------|-----------|----------|------|
 | `HoudiniConnectionError` | `connection_unavailable` | `start_houdini` | `target`: the Houdini that was wanted |
 | `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
-| A `LinkLost`: a `TransportFailure` raised inside a `using` scope (see below), not a timeout | `connection_lost` | `call_again` | `exception`; that call's link was dropped first |
-| A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again` | `connection_reset: true`, `exception` |
+| A `LinkLost`: a `TransportFailure` raised inside a `using` scope (see below), not a timeout | `connection_lost` | `call_again`, or `check_scene` (below) | `exception`; that call's link was dropped first |
+| A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again`, or `check_scene` (below) | `connection_reset: true`, `exception` |
 | `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
 | `ProgramStillRunning` (the program this call launched outlived its bound and holds the scene) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `rollback`, `audit`, ...) |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
 | Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error with the traceback |
+
+A link that fails mid-call says nothing about whether the call took effect: rpyc's sync
+timeout leaves the request running in Houdini, and an EOF can arrive after Houdini ran
+it. So the two link arms read `check_scene` under a tool whose policy changes the scene
+(`ToolPolicy.changes_scene`: `UNDOABLE`, `CHECKPOINTED`, `PROGRAM`, and `RENDER`, whose
+temporary nodes a failed link strands and names in the message), and their message says
+to check the scene before calling again. Any other tool reads `call_again`. The tool
+boundary passes the policy's fact to `failure_for`; a caller that knows nothing of the
+call gets `check_scene`, so forgetting never invites a repeated write.
 
 A tool body that wraps an exception as `raise OperationFailed(...) from e` has stated
 its cause, and the link's own failures in that cause outrank the label: a torn link,
@@ -227,7 +237,12 @@ All tools return consistent response dictionaries:
     | "invalid_input"
     | "operation_failed"
     | "worker_still_running",
-    "retry": "start_houdini" | "call_again" | "fix_input" | "wait_for_worker" | "none",
+    "retry": "start_houdini"
+    | "call_again"
+    | "check_scene"
+    | "fix_input"
+    | "wait_for_worker"
+    | "none",
     "operation": "tool_name",
     "message": "Human-readable error description",
     # Per kind: target / exception / connection_reset / worker (see the table above),
@@ -312,7 +327,7 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 ### Pattern 2: Tool with Constrained Input
 
 ```python
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_viewport(
     resolution: Resolution = DEFAULT_RESOLUTION,
     ...

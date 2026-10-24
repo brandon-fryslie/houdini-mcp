@@ -3,9 +3,9 @@
 [LAW:types-are-the-program] Every tool returns either its own success record or
 one arm of ``ToolFailure``: a closed union discriminated on ``kind``. Each arm
 declares what retrying takes, so a client decides mechanically whether to start
-Houdini, call again, fix its input, wait for a worker, or give up. A failure of
-one kind cannot be spelled as another, and none can be spelled as success:
-``status`` is the literal ``"error"`` on every arm.
+Houdini, call again, check the scene first, fix its input, wait for a worker, or
+give up. A failure of one kind cannot be spelled as another, and none can be
+spelled as success: ``status`` is the literal ``"error"`` on every arm.
 
 [LAW:single-enforcer] ``failure_response`` is the one place an exception becomes
 a response. Tool bodies raise ``InvalidInput``, ``OperationFailed`` or
@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Sequence, Sized
 from typing import Annotated, Any, Literal, NamedTuple, TypeVar, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from ..connection import (
     HoudiniConnection,
@@ -40,6 +40,7 @@ __all__ = [
     "CLOSED_FIELDS",
     "FailureKind",
     "Retry",
+    "LinkRetry",
     "ConnectionUnavailableFailure",
     "ConnectionMismatchFailure",
     "ConnectionLostFailure",
@@ -76,8 +77,16 @@ FailureKind = Literal[
 ]
 """The closed set of ways a tool call fails."""
 
-Retry = Literal["start_houdini", "call_again", "fix_input", "wait_for_worker", "none"]
-"""What a client does next. Each kind fixes its own, below."""
+Retry = Literal[
+    "start_houdini", "call_again", "check_scene", "fix_input", "wait_for_worker", "none"
+]
+"""What a client does next. Each kind fixes its own, below, except a link that
+failed mid-call: its retry is ``check_scene`` when the call may have changed the
+scene, since calling again could repeat a change that already landed."""
+
+LinkRetry = Literal["call_again", "check_scene"]
+"""What a client does after the link failed mid-call: call again when the call
+cannot have changed the scene, else find out whether it did first."""
 
 
 class _Failure(BaseModel):
@@ -126,7 +135,7 @@ class ConnectionLostFailure(_Failure):
     """The link failed mid-call. It has been torn down; the next call reconnects."""
 
     kind: Literal["connection_lost"] = "connection_lost"
-    retry: Literal["call_again"] = "call_again"
+    retry: LinkRetry
     exception: str
 
 
@@ -134,12 +143,21 @@ class TimeoutFailure(_Failure):
     """The operation exceeded its bound.
 
     ``connection_reset`` separates a link that never answered (torn down, the next
-    call reconnects) from a program that is still running on an intact link.
+    call reconnects) from a request that timed out on an intact link, where
+    nothing of it still runs and only calling again is the remedy.
     """
 
     kind: Literal["timeout"] = "timeout"
-    retry: Literal["call_again"] = "call_again"
+    retry: LinkRetry
     connection_reset: bool
+
+    @model_validator(mode="after")
+    def _checked_only_after_a_reset(self) -> TimeoutFailure:
+        # [LAW:types-are-the-program] a request that timed out on an intact link
+        # left nothing running, so it has no change to check for.
+        if self.retry == "check_scene" and not self.connection_reset:
+            raise ValueError("check_scene is the retry of a reset link only")
+        return self
 
 
 class InvalidInputFailure(_Failure):
@@ -293,7 +311,11 @@ class TimedOut(ToolError):
 
     def failure(self, operation: str) -> _Failure:
         return TimeoutFailure(
-            operation=operation, message=self.message, connection_reset=False, **self.fields
+            operation=operation,
+            message=self.message,
+            retry="call_again",
+            connection_reset=False,
+            **self.fields,
         )
 
 
@@ -408,16 +430,34 @@ def add_note(e: BaseException, note: str) -> None:
     BaseException.add_note(e, note)
 
 
-def failure_for(e: Exception, operation: str) -> _Failure:
+def failure_for(e: Exception, operation: str, *, changes_scene: bool = True) -> _Failure:
     """The one arm an exception raised during ``operation`` becomes, its message
     ending with the notes added on the way out (a temporary node that would not
-    go), each on its own line, as Python prints them."""
-    arm = _classify(e, operation)
+    go), each on its own line, as Python prints them.
+
+    ``changes_scene`` is whether ``operation`` may change the scene while it runs,
+    which decides what a client does after its link failed mid-call. Its default
+    is the truth when nothing better is known; the tool boundary knows better,
+    from the tool's policy.
+    """
+    arm = _classify(e, operation, changes_scene)
     told = "\n".join([arm.message, *getattr(e, "__notes__", ())])
     return arm.model_copy(update={"message": told})
 
 
-def _classify(e: Exception, operation: str) -> _Failure:
+_AFTER_LINK_LOSS: dict[bool, tuple[LinkRetry, str]] = {
+    False: ("call_again", ""),
+    True: (
+        "check_scene",
+        " The call may have changed the scene before the link failed: check the scene "
+        "before calling again, which could repeat a change that already landed.",
+    ),
+}
+"""By whether the call may change the scene: the retry after its link failed
+mid-call, and the sentence its message adds."""
+
+
+def _classify(e: Exception, operation: str, changes_scene: bool) -> _Failure:
     """The arm an exception raised during ``operation`` is.
 
     [LAW:effects-at-boundaries] Classification tears nothing down: connection
@@ -449,14 +489,21 @@ def _classify(e: Exception, operation: str) -> _Failure:
         )
     if isinstance(cause, LinkLost):
         lost = cause.lost
-        exception: dict[str, Any] = {**cause.fields, "exception": type(lost.exc).__name__}
+        # [LAW:one-source-of-truth] the retry and the sentence that explains it are
+        # read off one row, so the message never tells a client what retry denies.
+        retry, unknown = _AFTER_LINK_LOSS[changes_scene]
+        exception: dict[str, Any] = {
+            **cause.fields,
+            "retry": retry,
+            "exception": type(lost.exc).__name__,
+        }
         if isinstance(lost.exc, TimeoutError):
             return TimeoutFailure(
                 operation=operation,
                 message=(
                     f"Operation '{operation}' timed out. Houdini may be busy with a heavy "
                     "computation. The connection has been reset - subsequent calls will "
-                    "reconnect automatically."
+                    f"reconnect automatically.{unknown}"
                 ),
                 connection_reset=True,
                 **exception,
@@ -467,7 +514,7 @@ def _classify(e: Exception, operation: str) -> _Failure:
                 f"Connection to Houdini closed unexpectedly during '{operation}'. "
                 "Houdini may have crashed, the RPC server stopped, or the connection was "
                 "reset. The connection has been reset - subsequent calls will attempt to "
-                "reconnect."
+                f"reconnect.{unknown}"
             ),
             **exception,
         )
@@ -485,8 +532,11 @@ def _classify(e: Exception, operation: str) -> _Failure:
     return OperationFailure(operation=operation, message=str(e), **unclassified)
 
 
-def failure_response(e: Exception, operation: str) -> dict[str, Any]:
-    """The response ``operation`` returns for the exception it raised."""
-    failure = failure_for(e, operation)
-    logger.warning("%s failed (%s): %s", operation, failure.kind, failure.message)
+def failure_response(e: Exception, operation: str, *, changes_scene: bool = True) -> dict[str, Any]:
+    """The response ``operation`` returns for the exception it raised, as
+    :func:`failure_for` builds it."""
+    failure = failure_for(e, operation, changes_scene=changes_scene)
+    logger.warning(
+        "%s failed (%s, retry %s): %s", operation, failure.kind, failure.retry, failure.message
+    )
     return failure.model_dump()
