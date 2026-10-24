@@ -52,11 +52,11 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert len(result["cook_info"]["errors"]) == 2
-        assert result["cook_info"]["errors"][0]["severity"] == "error"
-        assert result["cook_info"]["errors"][0]["message"] == "Invalid parameter value"
-        assert result["cook_info"]["errors"][0]["node_path"] == "/obj/geo1"
-        assert result["cook_info"]["errors"][1]["message"] == "Missing input connection"
+        # the messages as Houdini lists them, the shape find_error_nodes gives them in
+        assert result["cook_info"]["errors"] == [
+            "Invalid parameter value",
+            "Missing input connection",
+        ]
 
     def test_get_node_info_with_warnings(self, mock_connection):
         """Test getting node info for a node with warnings."""
@@ -71,10 +71,10 @@ class TestGetNodeInfoWithErrors:
 
         assert result["status"] == "success"
         assert "cook_info" in result
-        assert len(result["cook_info"]["warnings"]) == 2
-        assert result["cook_info"]["warnings"][0]["severity"] == "warning"
-        assert result["cook_info"]["warnings"][0]["message"] == "Deprecated parameter used"
-        assert result["cook_info"]["warnings"][1]["message"] == "Performance warning: large dataset"
+        assert result["cook_info"]["warnings"] == [
+            "Deprecated parameter used",
+            "Performance warning: large dataset",
+        ]
 
     def test_get_node_info_with_errors_and_warnings(self, mock_connection):
         """Test getting node info for a node with both errors and warnings."""
@@ -110,7 +110,7 @@ class TestGetNodeInfoWithErrors:
         cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
 
         assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (cook_count, needs_to_cook)
-        assert [e["message"] for e in cook_info["errors"]] == ["Undefined node type"]
+        assert cook_info["errors"] == ["Undefined node type"]
         assert "cook_state" not in cook_info
 
     def test_a_forced_cook_of_a_stale_node_counts_and_needs_no_cook(self, mock_connection):
@@ -204,9 +204,12 @@ class TestGetNodeInfoWithErrors:
         result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert len(result["cook_info"]["errors"]) == 4
-        assert all(e["severity"] == "error" for e in result["cook_info"]["errors"])
-        assert all(e["node_path"] == "/obj/geo1" for e in result["cook_info"]["errors"])
+        assert result["cook_info"]["errors"] == [
+            "Error 1: Invalid geometry",
+            "Error 2: Missing attribute",
+            "Error 3: Division by zero",
+            "Error 4: Out of memory",
+        ]
 
     def test_get_node_info_combined_with_params(self, mock_connection):
         """Test that cook_info is reported alongside the full record."""
@@ -255,7 +258,7 @@ class TestGetNodeInfoWithErrors:
         cook_info = get_node_info("/obj/geo1", cook_info="inspect")["cook_info"]
 
         assert cook_info["errors"]["unread"].startswith("RuntimeError: no cook")
-        assert [w["message"] for w in cook_info["warnings"]] == ["Low memory"]
+        assert cook_info["warnings"] == ["Low memory"]
         assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (0, False)
 
     def test_a_needs_to_cook_houdini_will_not_read_is_unread_alone(self, mock_connection):
@@ -297,7 +300,7 @@ class TestGetNodeInfoWithErrors:
         )
         # the failed cook counts, and the node still needs to cook
         assert (cook_info["cook_count"], cook_info["needs_to_cook"]) == (2, True)
-        assert [e["message"] for e in cook_info["errors"]] == ["Invalid input"]
+        assert cook_info["errors"] == ["Invalid input"]
 
     def test_a_lost_link_while_reading_errors_fails_the_call(self, mock_connection):
         from houdini_mcp.tools import get_node_info
@@ -884,6 +887,10 @@ class TestEdgeCases:
         result = get_node_info("/obj/geo1", cook_info="inspect", host="localhost", port=18811)
 
         assert result["status"] == "success"
-        assert len(result["cook_info"]["errors"]) == 4
         # Messages should be preserved as-is
-        assert "quotes" in result["cook_info"]["errors"][0]["message"]
+        assert result["cook_info"]["errors"] == [
+            "Error with 'quotes'",
+            'Error with "double quotes"',
+            "Error with\nnewline",
+            "Error with\ttab",
+        ]
