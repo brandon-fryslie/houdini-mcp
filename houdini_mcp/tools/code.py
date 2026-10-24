@@ -69,7 +69,7 @@ from .code_policy import (
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
-from .snapshot import SceneSnapshot, scene_diff, scene_snapshot
+from .snapshot import SceneSnapshot, capped, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -817,15 +817,16 @@ def _execute_with_grant(
             # last diff, so a program that outlived its caller's timeout still
             # leaves its diff once it ends.
             try:
-                changes = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
+                diff = scene_diff(before, scene_snapshot(hou, _DIFF_ROOT))
             except Exception as error:  # noqa: BLE001
                 # [LAW:no-silent-failure] The program ran; only its diff is missing.
                 # [LAW:single-enforcer] Judged here, where the link was used: a worker
                 # that outlived its call has no caller left to drop a link that failed.
                 logger.warning("%s ran but its scene diff failed: %r", operation, error)
                 return _DiffFailed(failed_on(houdini(), link, error))
-            lists = ("added", "removed", "modified", "added_nodes")
-            over = [key for key in lists if len(changes[key]) > max_diff_nodes]
+            # [LAW:one-source-of-truth] Which lists were cut travels in the diff, so
+            # every result that carries it says so, get_last_scene_diff's too.
+            changes = capped(diff, max_diff_nodes)
             logger.info(
                 "%s scene diff of %s, program took %.3fs of timeout %ss: "
                 "added=%d removed=%d modified=%d truncated=%s",
@@ -833,14 +834,9 @@ def _execute_with_grant(
                 _DIFF_ROOT,
                 program_took,
                 timeout,
-                *(len(changes[key]) for key in ("added", "removed", "modified")),
-                over,
+                *(len(diff[key]) for key in ("added", "removed", "modified")),
+                changes["truncated"],
             )
-            # [LAW:one-source-of-truth] Which lists were cut travels in the diff, so
-            # every result that carries it, get_last_scene_diff's too, says so: a
-            # list exactly max_diff_nodes long reads the same cut or uncut.
-            changes.update({key: changes[key][:max_diff_nodes] for key in lists})
-            changes["truncated"] = over
             LAST_SCENE_DIFF.record(changes)
             return _Diff(changes)
 

@@ -195,7 +195,11 @@ class TestExecuteCodeDiff:
             "print(1)", capture_diff=True, host="localhost", port=18811, bypass_config_enabled=False
         )
         last = get_last_scene_diff()
-        assert (last["status"], last["diff"]["has_changes"]) == ("success", False)
+        assert (last["status"], last["diff"]["has_changes"], last["diff"]["truncated"]) == (
+            "success",
+            False,
+            [],
+        )
 
     def test_a_diff_that_could_not_be_read_leaves_the_run_a_success_and_says_why(
         self,

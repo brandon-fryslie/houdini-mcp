@@ -68,6 +68,24 @@ def scene_diff(before: SceneSnapshot, after: SceneSnapshot) -> dict[str, Any]:
     }
 
 
+_DIFF_LISTS = ("added", "removed", "modified", "added_nodes")
+
+
+def capped(diff: dict[str, Any], max_nodes: int) -> dict[str, Any]:
+    """``diff`` with each list cut to ``max_nodes``, naming under ``truncated``
+    the lists that were cut, ``[]`` when none was.
+
+    [LAW:one-source-of-truth] Beside ``scene_diff``, which owns the lists: a
+    list exactly ``max_nodes`` long reads the same cut or uncut, so only the
+    cap can say which were.
+    """
+    return {
+        **diff,
+        **{key: diff[key][:max_nodes] for key in _DIFF_LISTS},
+        "truncated": [key for key in _DIFF_LISTS if len(diff[key]) > max_nodes],
+    }
+
+
 def _hscript(hou: Any, command: str) -> str:
     """The output of an hscript command that reported no error."""
     out, err = hou.hscript(command)
