@@ -49,19 +49,19 @@ def test_parameter_schema_recurses_into_folders(at: dict[str, Any]) -> None:
 def test_a_named_component_is_described_as_the_parm_set_parameter_writes(
     at: dict[str, Any],
 ) -> None:
-    """Houdini gives rady rad's template, defaults (1, 1, 1): rady is a float with its
-    own value and default, not the vector rad."""
+    """Houdini gives rady rad's template, a torus's defaults (1, 0.5): rady is a float
+    with its own value and its own component's default, not the vector rad."""
     geo = tools.create_node("geo", "/obj", "mcp_it_component", **at)
-    sphere = tools.create_node("sphere", geo["node_path"], "sphere1", **at)
-    assert tools.set_parameter(sphere["node_path"], "rady", 3.0, **at)["status"] == "success"
+    torus = tools.create_node("torus", geo["node_path"], "torus1", **at)
+    assert tools.set_parameter(torus["node_path"], "rady", 3.0, **at)["status"] == "success"
 
-    [rady] = tools.get_parameter_schema(sphere["node_path"], "rady", **at)["parameters"]
+    [rady] = tools.get_parameter_schema(torus["node_path"], "rady", **at)["parameters"]
 
     assert (rady["name"], rady["type"], rady["current_value"], rady["default"]) == (
         "rady",
         "float",
         3.0,
-        1.0,
+        0.5,
     )
     assert "tuple_size" not in rady
 

@@ -140,7 +140,11 @@ def get_parameter_schema(
         )
     log_refused(answer["refused_reads"])
     logger.info(
-        "parameter schema node=%s listed=%d of=%d", node_path, len(parameters), answer["listed"]
+        "parameter schema node=%s parm=%s listed=%d of=%d",
+        node_path,
+        parm_name,
+        len(parameters),
+        answer["listed"],
     )
 
     result: dict[str, Any] = {

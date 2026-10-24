@@ -97,7 +97,7 @@ def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answe
     reads = Reads()
     menus: list[Menu] = []
     # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
-    # tuple, and max_parms is at least 1.
+    # parameter, and max_parms is at least 1.
     parameters = [
         _parameter(hou, parm, template, reads, menus) for parm, template in listed[:max_parms]
     ]
