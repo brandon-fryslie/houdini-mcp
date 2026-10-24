@@ -15,7 +15,6 @@ import pytest
 from houdini_mcp.tools import (
     create_node,
     execute_code,
-    get_geo_summary,
     load_scene,
     new_scene,
     render_quad_view,
@@ -43,11 +42,6 @@ def test_a_render_changes_the_scene_while_it_runs(render_tool):
     policy = policy_of(render_tool)
     assert policy.recovery is TransactionPolicy.TEMPORARY_NODES
     assert policy.changes_scene and not policy.writes_scene
-
-
-def test_a_read_through_a_program_changes_nothing():
-    """get_geo_summary holds the scene for its program's slot, and leaves it as it was."""
-    assert not policy_of(get_geo_summary).changes_scene
 
 
 @pytest.mark.parametrize(

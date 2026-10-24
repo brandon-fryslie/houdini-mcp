@@ -19,9 +19,9 @@ from fastmcp import Client, FastMCP
 
 from houdini_mcp.server import held, served
 from houdini_mcp.tools.transactions import (
-    HOLDS_SCENE,
     PROGRAM,
     READ,
+    RENDER,
     UNDOABLE,
     ToolPolicy,
     declare_policy,
@@ -104,9 +104,7 @@ class TestCallsHoldTheScene:
         monkeypatch.setattr(geometry, "_read_geometry", lambda *_: {"status": "success"})
         monkeypatch.setattr(geometry, "summarized", slow_summary)
         summary = asyncio.create_task(
-            held(geometry.get_geo_summary)(
-                "/obj/geo1", summarize=True, summarizer=SUMMARIZER, bypass_config_enabled=False
-            )
+            held(geometry.get_geo_summary)("/obj/geo1", summarize=True, summarizer=SUMMARIZER)
         )
         await asyncio.wait_for(summarizing.wait(), 5)
         try:
@@ -117,7 +115,7 @@ class TestCallsHoldTheScene:
             assert (await summary)["status"] == "success"
 
     async def test_a_reader_runs_beside_a_call_holding_the_scene_without_waiting(self):
-        render = _Gated("render_viewport", HOLDS_SCENE, [])
+        render = _Gated("render_viewport", RENDER, [])
         call = asyncio.create_task(held(render.tool)())
         await _until(render.entered)
         try:
@@ -151,7 +149,7 @@ class TestCallsHoldTheScene:
         assert result["scene_wait"]["waited_for"] == ["create_node"]
 
     async def test_an_async_tool_reads_off_the_event_loop(self, monkeypatch):
-        """get_geo_summary's read joins a worker; on the loop it would stall every call."""
+        """get_geo_summary's read waits on Houdini; on the loop it would stall every call."""
         from houdini_mcp.tools import geometry
 
         reading, release, read_over = threading.Event(), threading.Event(), threading.Event()
@@ -164,9 +162,7 @@ class TestCallsHoldTheScene:
 
         monkeypatch.setattr(geometry, "_read_geometry", stalled_read)
         summary = asyncio.create_task(
-            held(geometry.get_geo_summary)(
-                "/obj/geo1", summarizer=SUMMARIZER, bypass_config_enabled=False
-            )
+            held(geometry.get_geo_summary)("/obj/geo1", summarizer=SUMMARIZER)
         )
         await _until(reading)
         read = _named("get_scene_info", READ, lambda: {"status": "success"})
@@ -179,12 +175,12 @@ class TestCallsHoldTheScene:
     async def test_queued_calls_cost_no_thread_so_reads_still_run(self):
         """A waiting call holds no thread from the pool that runs tool bodies."""
         anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-        render = _Gated("render_viewport", HOLDS_SCENE, [])
+        render = _Gated("render_viewport", RENDER, [])
         holder = asyncio.create_task(held(render.tool)())
         await _until(render.entered)
         queued = [
             asyncio.create_task(
-                held(_named("render_quad_view", HOLDS_SCENE, lambda: {"status": "success"}))()
+                held(_named("render_quad_view", RENDER, lambda: {"status": "success"}))()
             )
             for _ in range(5)
         ]

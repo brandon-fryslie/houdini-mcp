@@ -17,13 +17,15 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypedDict, TypeVar
 
 __all__ = [
     "UNREAD",
     "Parm",
     "ParmNotFound",
+    "Reads",
+    "RefusedRead",
     "Unread",
     "evaluated_json",
     "format_reason",
@@ -64,6 +66,39 @@ def read(fetch: Callable[[], T], explain: Callable[[Exception], str]) -> T | Unr
         return fetch()
     except Exception as e:
         return Unread(unread=explain(e))
+
+
+class RefusedRead(TypedDict):
+    """A read Houdini refused: the facts its log event carries."""
+
+    what: str
+    reason: str
+
+
+@dataclass
+class Reads:
+    """Reads made inside Houdini, each refusal kept for the server to log.
+
+    [LAW:effects-at-boundaries] a plugin module cannot reach the server's log,
+    so its refusals cross back in its answer and the server logs them.
+    """
+
+    refused: list[RefusedRead] = field(default_factory=list)
+
+    def read(self, what: str, fetch: Callable[[], T]) -> T | Unread:
+        """``fetch()``'s value, or ``Unread``, its refusal kept as ``what``.
+
+        [LAW:one-source-of-truth] the read that is refused records it, as the
+        server's ``reads.read(what, fetch)`` logs it; nothing infers it later
+        from a value's shape.
+        """
+
+        def explain(e: Exception) -> str:
+            why = format_reason(e)
+            self.refused.append(RefusedRead(what=what, reason=why))
+            return why
+
+        return read(fetch, explain)
 
 
 class ParmNotFound(LookupError):

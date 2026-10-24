@@ -393,7 +393,7 @@ class TestBypassRequiresConfigAndRequest:
         assert "config" in result["message"].lower()
 
 
-class TestTrustedInternalGeometryCapability:
+class TestHeavyGeometryCapability:
     def test_public_heavy_geometry_flag_still_requires_config(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
@@ -425,57 +425,6 @@ class TestTrustedInternalGeometryCapability:
             "dangerous": True,
             "heavy_geometry": False,
         }
-
-    def test_trusted_grant_dangerous_hint_names_no_request_input(self, mock_connection):
-        """No flag or config admits dangerous code to a server-authored program, so the hint names none."""
-        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant
-        from houdini_mcp.tools.failure import InvalidInput
-
-        with pytest.raises(InvalidInput) as raised:
-            _execute_with_grant(
-                "import socket; socket.socket()",
-                ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False),
-                operation="get_geo_summary",
-                capture_diff=False,
-                max_stdout_size=1000,
-                max_stderr_size=1000,
-                max_diff_nodes=10,
-                host="localhost",
-                port=18811,
-            )
-        refusal = raised.value.fields
-        assert refusal["audit"]["blocked_reason"] == "dangerous_pattern"
-        assert refusal["unmet_requirements"] == ["source"]
-        assert refusal["audit"]["unmet"]["dangerous"] == ["source"]
-        assert "get_geo_summary" in refusal["hint"]
-        assert "allow_dangerous" not in refusal["hint"]
-        assert "HOUDINI_MCP_ALLOW_BYPASS" not in refusal["hint"]
-
-    def test_trusted_grant_runs_the_internal_bounded_program(self, mock_connection):
-        """The server-authored geometry program enters by the grant door, not a public flag."""
-        import inspect
-
-        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant, execute_code
-
-        assert "_trusted_internal_heavy_geometry" not in inspect.signature(execute_code).parameters
-        grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
-        assert grant.dangerous is False
-
-        result = _execute_with_grant(
-            "print(hou.node('/obj').geometry())",
-            grant,
-            operation="get_geo_summary",
-            capture_diff=False,
-            max_stdout_size=1000,
-            max_stderr_size=1000,
-            max_diff_nodes=10,
-            timeout=5,
-            host="localhost",
-            port=18811,
-        )
-        assert result["status"] == "success"
-        assert result["audit"]["granted"]["heavy_geometry"] is True
-        assert result["audit"]["bypass_config_enabled"] is False
 
 
 class TestAuditFields:
@@ -555,7 +504,7 @@ class TestAuditFields:
         [record] = [
             r.message for r in caplog.records if r.message.startswith("execute_code policy=")
         ]
-        assert "policy=normal source=request" in record
+        assert record.startswith("execute_code policy=normal granted=")
         assert "'mutation': True, 'dangerous': False, 'heavy_geometry': False" in record
         assert "config=False requested dangerous=True heavy=False" in record
 
@@ -581,31 +530,7 @@ class TestAuditFields:
         assert records
         assert all(secret_source not in message and "marker" not in message for message in records)
         assert result["audit"]["code_sha256"] in records[-1]
-        assert "source=request" in records[-1]
-
-    def test_trusted_grant_is_distinguishable_in_audit_and_log(self, mock_connection, caplog):
-        """A server-authored grant never reads as a public bypass that slipped past the config."""
-        import logging
-
-        from houdini_mcp.tools.code import ExecutionGrant, _execute_with_grant
-        from tests.conftest import MockHouNode
-
-        mock_connection.add_node(MockHouNode(path="/obj/geo1", name="geo1", node_type="geo"))
-        grant = ExecutionGrant.trusted_heavy_geometry(bypass_config_enabled=False)
-        with caplog.at_level(logging.DEBUG, logger="houdini_mcp.tools.code"):
-            result = _execute_with_grant(
-                "hou.node('/obj/geo1').geometry()",
-                grant,
-                operation="get_geo_summary",
-                host="localhost",
-                port=18811,
-            )
-        assert result["status"] == "success"
-        assert result["audit"]["source"] == "trusted"
-        assert result["audit"]["bypass_config_enabled"] is False
-        [record] = [r for r in caplog.records if "approved bypass" in r.message]
-        assert "source=trusted" in record.message
-        assert record.levelno == logging.DEBUG
+        assert "execute_code approved bypass policy=normal dangerous=" in records[-1]
 
     def test_refusal_before_the_gates_still_reports_the_scan(self, mock_connection, caplog):
         """import_hou stops the code, but the audit and trail still say what the scan found."""

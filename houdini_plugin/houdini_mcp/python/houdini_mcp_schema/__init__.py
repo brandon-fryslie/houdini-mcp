@@ -14,23 +14,18 @@ Houdini's path, and nowhere else - the server only ever reaches it inside Houdin
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, TypedDict, TypeVar, final
+from typing import Any, TypedDict, final
 
 from houdini_mcp_read import (
     Parm,
     ParmNotFound,
-    Unread,
+    Reads,
+    RefusedRead,
     evaluated_json,
-    format_reason,
     json_safe_hou_value,
     of_tuple,
-    read,
     resolve,
 )
-
-T = TypeVar("T")
 
 
 class Menu(TypedDict):
@@ -40,13 +35,6 @@ class Menu(TypedDict):
     use_token: bool
     offered: int
     separators: int
-
-
-class RefusedRead(TypedDict):
-    """A read Houdini refused: the facts its log event carries."""
-
-    what: str
-    reason: str
 
 
 # final, so a reader tells the two answers apart by their keys
@@ -78,29 +66,6 @@ def parameter_schema(hou: Any, node: Any, parm_name: str | None, max_parms: int)
     return json.dumps(_answer(hou, node, parm_name, max_parms))
 
 
-@dataclass
-class _Events:
-    """What this read reports for the server to log: the log is the server's."""
-
-    menus: list[Menu] = field(default_factory=list)
-    refused_reads: list[RefusedRead] = field(default_factory=list)
-
-    def read(self, what: str, fetch: Callable[[], T]) -> T | Unread:
-        """``fetch()``'s value, or ``Unread``, its refusal kept as ``what``.
-
-        [LAW:one-source-of-truth] the read that is refused records it, as the
-        server's ``reads.read(what, fetch)`` logs it; nothing infers it later
-        from a value's shape.
-        """
-
-        def explain(e: Exception) -> str:
-            why = format_reason(e)
-            self.refused_reads.append(RefusedRead(what=what, reason=why))
-            return why
-
-        return read(fetch, explain)
-
-
 def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answer:
     # [LAW:one-source-of-truth] The node's parm tuples are its parameters.
     # Its templates are not: a multiparm's template (type#) names no parm,
@@ -126,17 +91,15 @@ def _answer(hou: Any, node: Any, parm_name: str | None, max_parms: int) -> Answe
             refused=f"{parm_name} on {node.path()} is layout ({template.type()}), "
             "not a parameter with a schema"
         )
-    events = _Events()
+    reads = Reads()
+    menus: list[Menu] = []
     # [LAW:dataflow-not-control-flow] one slice for both: a named parm is one
     # tuple, and max_parms is at least 1.
     parameters = [
-        _parameter(hou, of_tuple(pt), template, events) for pt, template in listed[:max_parms]
+        _parameter(hou, of_tuple(pt), template, reads, menus) for pt, template in listed[:max_parms]
     ]
     return Schema(
-        parameters=parameters,
-        listed=len(listed),
-        menus=events.menus,
-        refused_reads=events.refused_reads,
+        parameters=parameters, listed=len(listed), menus=menus, refused_reads=reads.refused
     )
 
 
@@ -153,9 +116,12 @@ def _unlisted_types(hou: Any) -> tuple[Any, ...]:
     )
 
 
-def _parameter(hou: Any, parm: Parm, parm_template: Any, events: _Events) -> dict[str, Any]:
+def _parameter(
+    hou: Any, parm: Parm, parm_template: Any, reads: Reads, menus: list[Menu]
+) -> dict[str, Any]:
     """The schema entry of one parameter: its name, shape and value from the parm,
-    the rest from its template. Its reads' events are added to ``events``.
+    the rest from its template. Its refused reads are kept in ``reads``, and a
+    menu's read in ``menus``.
 
     [LAW:no-silent-failure] A part of the template Houdini will not give reads
     as ``Unread``; nothing is filled in with a guess. Every value read passes
@@ -170,7 +136,7 @@ def _parameter(hou: Any, parm: Parm, parm_template: Any, events: _Events) -> dic
     param_info: dict[str, Any] = {
         "name": name,
         "label": parm_template.label(),
-        "current_value": events.read(f"parameter {name}", lambda: evaluated_json(hou, parm.target)),
+        "current_value": reads.read(f"parameter {name}", lambda: evaluated_json(hou, parm.target)),
         "type": type_str,
         # Most parameters are animatable except menus, toggles, buttons
         "is_animatable": type_str not in ("menu", "toggle", "button", "string", "multiparm"),
@@ -181,22 +147,22 @@ def _parameter(hou: Any, parm: Parm, parm_template: Any, events: _Events) -> dic
     # A button has no default. A ramp's defaultValue() is its count of default
     # points, not a value it holds, so it has none here either.
     if hasattr(parm_template, "defaultValue") and type_str != "ramp":
-        param_info["default"] = events.read(
+        param_info["default"] = reads.read(
             f"default of {name}",
             lambda: json_safe_hou_value(hou, _default(parm_template.defaultValue(), is_tuple)),
         )
 
     if type_str in ("float", "int", "vector"):
-        param_info["min"] = events.read(
+        param_info["min"] = reads.read(
             f"min of {name}", lambda: json_safe_hou_value(hou, parm_template.minValue())
         )
-        param_info["max"] = events.read(
+        param_info["max"] = reads.read(
             f"max of {name}", lambda: json_safe_hou_value(hou, parm_template.maxValue())
         )
 
     if type_str == "menu":
-        param_info["menu_items"] = events.read(
-            f"menu items of {name}", lambda: _menu_items(parm, parm_template, events.menus)
+        param_info["menu_items"] = reads.read(
+            f"menu items of {name}", lambda: _menu_items(parm, parm_template, menus)
         )
 
     return param_info

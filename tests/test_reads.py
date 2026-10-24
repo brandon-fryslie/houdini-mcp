@@ -4,7 +4,14 @@ import logging
 
 import pytest
 
-from houdini_mcp.tools.reads import UNREAD, Unread, format_reason, is_unread, read, unreads
+from houdini_mcp.tools.reads import (
+    UNREAD,
+    Unread,
+    format_reason,
+    is_unread,
+    log_refused,
+    read,
+)
 from tests.conftest import link_failure, raised_inside_houdini
 
 
@@ -79,13 +86,16 @@ def test_a_reason_reads_the_same_inside_houdini_and_out():
     assert format_reason(exc) == "hou.OperationFailed: The attempted operation failed."
 
 
-def test_unreads_finds_every_unread_with_where_it_stands():
-    value = {
-        "bounding_box": {"unread": "a"},
-        "attributes": {"point": [{"name": "P"}, {"unread": "b"}]},
-    }
+def test_each_read_refused_inside_houdini_is_an_event_here(caplog):
+    refused = [
+        {"what": "bounding_box of /obj/geo1/box1", "reason": "a"},
+        {"what": "default of radx", "reason": "b"},
+    ]
 
-    assert list(unreads(value)) == [
-        ("bounding_box", {"unread": "a"}),
-        ("attributes.point[1]", {"unread": "b"}),
+    with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.reads"):
+        log_refused(refused)
+
+    assert caplog.messages == [
+        "unread bounding_box of /obj/geo1/box1 reason=a",
+        "unread default of radx reason=b",
     ]

@@ -72,6 +72,7 @@ def at(houdini: Target) -> dict[str, Any]:
 
 
 @pytest.fixture
-def bound(at: dict[str, Any]) -> dict[str, Any]:
-    """Every argument the suite's server binds into a tool, naming this session's Houdini."""
-    return DEFAULT_SETTINGS.bound() | at
+def summarizing(at: dict[str, Any]) -> dict[str, Any]:
+    """The arguments the suite's server binds into a summarizing tool, naming this
+    session's Houdini."""
+    return at | {"summarizer": DEFAULT_SETTINGS.summarizer}

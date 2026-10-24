@@ -53,7 +53,6 @@ __all__ = [
     "OperationFailed",
     "TimedOut",
     "ProgramStillRunning",
-    "tool_error",
     "add_note",
     "failure_for",
     "failure_response",
@@ -324,19 +323,6 @@ class ProgramStillRunning(ToolError):
     scene: the same arm as a refusal, since the remedy is to wait for that worker."""
 
     arm = WorkerBusyFailure
-
-
-_TOOL_ERROR: dict[str, type[ToolError]] = {
-    "invalid_input": InvalidInput,
-    "operation_failed": OperationFailed,
-}
-
-
-def tool_error(kind: str, message: str, **fields: Any) -> ToolError:
-    """The exception for a failure something else already classified by ``kind``:
-    a program Houdini ran, a ledger of writes. [LAW:one-source-of-truth] the
-    kind named there is the kind the caller reads, through this one table."""
-    return _TOOL_ERROR[kind](message, **fields)
 
 
 # =============================================================================

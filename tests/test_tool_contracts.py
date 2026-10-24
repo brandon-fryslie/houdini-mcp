@@ -289,8 +289,7 @@ class TestServedSchemas:
             "serving create_node with ['host', 'port'] bound by the server",
             "serving get_houdini_help with [] bound by the server",
             "serving execute_code with ['bypass_config_enabled', 'host', 'port'] bound by the server",
-            "serving get_geo_summary with "
-            "['bypass_config_enabled', 'host', 'port', 'summarizer'] bound by the server",
+            "serving get_geo_summary with ['host', 'port', 'summarizer'] bound by the server",
         ]
 
     async def test_execute_code_requires_only_the_program(
@@ -501,11 +500,11 @@ class TestServedSchemas:
     def test_a_default_outside_its_type_fails_the_tools_definition(self) -> None:
         """A default is served and bound without a caller's parse, so it is parsed
         where the tool is defined: a tool cannot serve a value it would refuse."""
-        from houdini_mcp.tools._common import HOLDS_SCENE, tool
+        from houdini_mcp.tools._common import RENDER, tool
 
         with pytest.raises(TypeError, match=r"render_viewport default .*camera_rotation"):
 
-            @tool(HOLDS_SCENE)
+            @tool(RENDER)
             def render_viewport(camera_rotation: Vec3 = (math.nan, 0.0, 0.0)) -> dict[str, Any]:
                 return {}
 

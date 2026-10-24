@@ -37,14 +37,12 @@ from .failure import (
     failed_on,
     failure_for,
     failure_response,
-    tool_error,
 )
 from .reads import reason
 from .transactions import (
     CHECKPOINTED,
     FILE_WRITE,
     FILE_WRITE_ON_MAIN_THREAD,
-    HOLDS_SCENE,
     MAIN_THREAD_PARAMETER,
     ON_MAIN_THREAD,
     PROGRAM,
@@ -70,7 +68,6 @@ __all__ = [
     # Error handling: the boundary, the one result type, and what a tool body raises
     "tool",
     "READ",
-    "HOLDS_SCENE",
     "RENDER",
     "UNDOABLE",
     "CHECKPOINTED",
@@ -87,7 +84,6 @@ __all__ = [
     "OperationFailed",
     "TimedOut",
     "ProgramStillRunning",
-    "tool_error",
     "Undone",
     "batch_status",
     "node_at",
@@ -408,8 +404,9 @@ RGB = tuple[float, float, float]
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
 SampleCount = Annotated[Count, Field(le=1000)]
-"""How many points a geometry read samples; a thousand points with a few attributes
-fit the read's output ceiling, where ten thousand never do."""
+"""How many points a geometry read samples. Each carries every point attribute, and
+the read holds Houdini's serving thread for all of them: a thousand is past what a
+caller reads of points it is looking at."""
 Seconds = Annotated[int, Field(ge=1, le=86400)]
 """How long a call may wait: zero would give up before it began, and an unbounded wait
 can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is

@@ -112,7 +112,6 @@ for that worker is the remedy, with `timeout`, a `warning`,
 ```
 
 Until that program ends, every scene-writing tool, another `execute_code`,
-`get_geo_summary` (which reads through a program in the same worker slot), and
 `render_viewport` and `render_quad_view` (which add a camera and a ROP for
 the call), and the pane captures (`capture_pane_screenshot`,
 `capture_multiple_panes`, `render_node_network`) return
@@ -123,7 +122,7 @@ worker; plain reads and
 ### Concurrent Calls Wait Their Turn
 
 Those same tools hold the scene while they work in Houdini, so two of them
-never run at once; `get_geo_summary` releases it before its AI summary. A call that arrives while another one is running waits for it to
+never run at once. A call that arrives while another one is running waits for it to
 finish, then runs. Its response, success or error, carries `scene_wait`,
 which names the calls that held the scene while it waited (in the order they
 held it) and how long it waited:
@@ -314,7 +313,7 @@ When other tools don't cover your use case, `execute_code` is the escape hatch. 
 3. Heavy geometry operations are blocked by default; `allow_heavy_geometry=True` unlocks them only under policy "normal" with `HOUDINI_MCP_ALLOW_BYPASS` set server-side (prefer `get_geo_summary`)
 4. Dangerous operations are blocked by default; `allow_dangerous=True` unlocks only them, under the same two conditions
 5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
-6. A refusal for either flag lists `unmet_requirements` - each of `policy`, `request` (the flag), `config` (`HOUDINI_MCP_ALLOW_BYPASS`), or `source` (a server-authored program, which no input admits) still missing - and the `hint` asks for exactly those; `audit.unmet` reports the same per capability on every run
+6. A refusal for either flag lists `unmet_requirements` - each of `policy`, `request` (the flag) or `config` (`HOUDINI_MCP_ALLOW_BYPASS`) still missing - and the `hint` asks for exactly those; `audit.unmet` reports the same per capability on every run
 
 ```python
 execute_code(

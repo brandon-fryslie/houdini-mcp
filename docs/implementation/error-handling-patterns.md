@@ -93,9 +93,7 @@ after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then c
 is under the same boundary, awaited.
 
 Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`,
-`TimedOut` or `ProgramStillRunning` with the fields their caller needs; a failure
-something else already classified by kind (a program Houdini ran, a ledger of
-parameter writes) becomes its exception through `tool_error(kind, ...)`; and `node_at(hou, path, what)`
+`TimedOut` or `ProgramStillRunning` with the fields their caller needs; and `node_at(hou, path, what)`
 resolves a path or raises `InvalidInput` for them. A caller parses any failure back
 through `FAILURE` (a pydantic `TypeAdapter` over the union) and lands in exactly one
 arm; the contract tests do exactly that.
@@ -256,8 +254,7 @@ All tools return consistent response dictionaries:
 When it times out, the program keeps running with its undo group open, and
 `WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
 ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (the policy
-its `@tool` declares, from `tools/transactions.py`: the scene writers,
-`get_geo_summary`, which reads through a program in the same worker slot, and
+its `@tool` declares, from `tools/transactions.py`: the scene writers and
 the render tools, which add a camera and a ROP for the call) is refused at
 the tool boundary:
 

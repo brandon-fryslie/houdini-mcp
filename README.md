@@ -452,7 +452,8 @@ houdini_plugin/            # Houdini plugin, laid out as a packages directory
 ├── houdini_mcp.json       # Package descriptor
 └── houdini_mcp/
     ├── python/            # The hrpyc remote listener, its handshake, the read vocabulary
-    │                      # both sides share, and find_nodes' and get_parameter_schema's reads
+    │                      # both sides share, and find_nodes', get_parameter_schema's
+    │                      # and get_geo_summary's reads
     └── toolbar/           # Shelf tools
 
 tests/                     # pytest suite

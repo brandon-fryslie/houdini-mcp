@@ -110,12 +110,9 @@ LAST_SCENE_DIFF = LastSceneDiff()
 Policy = Literal["read-only", "normal"]
 DEFAULT_POLICY: Policy = "normal"
 
-# Where a grant came from: the MCP request, or a server tool that wrote the code itself.
-GrantSource = Literal["request", "trusted"]
-
 # What a bypass capability can still lack: the "normal" policy, the request flag,
-# the server config - or, for a server-authored program, nothing any input can supply.
-Requirement = Literal["policy", "request", "config", "source"]
+# the server config.
+Requirement = Literal["policy", "request", "config"]
 
 # [LAW:one-source-of-truth] The execution limits, stated once for the public
 # tool and for every server-side entry.
@@ -138,7 +135,6 @@ class ExecutionGrant:
     """
 
     policy: str
-    source: GrantSource
     bypass_config_enabled: bool
     dangerous_requested: bool
     heavy_geometry_requested: bool
@@ -185,29 +181,11 @@ class ExecutionGrant:
 
         return cls(
             policy=policy,
-            source="request",
             bypass_config_enabled=bypass_config_enabled,
             dangerous_requested=allow_dangerous,
             heavy_geometry_requested=allow_heavy_geometry,
             dangerous_unmet=unmet(allow_dangerous),
             heavy_geometry_unmet=unmet(allow_heavy_geometry),
-        )
-
-    @classmethod
-    def trusted_heavy_geometry(cls, *, bypass_config_enabled: bool) -> "ExecutionGrant":
-        """The grant for a server-authored, bounded geometry program.
-
-        Not reachable from the MCP surface: only a tool that generated the code
-        itself can hold it, and it unlocks nothing but heavy-geometry access.
-        """
-        return cls(
-            policy=DEFAULT_POLICY,
-            source="trusted",
-            bypass_config_enabled=bypass_config_enabled,
-            dangerous_requested=False,
-            heavy_geometry_requested=True,
-            dangerous_unmet=("source",),
-            heavy_geometry_unmet=(),
         )
 
     def unmet_audit(self) -> dict[str, list[Requirement]]:
@@ -266,15 +244,6 @@ class DetectedPatterns:
         )
 
 
-# [LAW:dataflow-not-control-flow] The approved-bypass trail is always written;
-# its level is the grant's source: a request-side bypass is the event the
-# WARNING exists for, a server-authored program is routine.
-_BYPASS_AUDIT_LEVEL: dict[GrantSource, int] = {
-    "request": logging.WARNING,
-    "trusted": logging.DEBUG,
-}
-
-
 @dataclass(frozen=True)
 class _BypassGate:
     """One request-flag capability: where it is scanned, what it still lacks, how a refusal reads."""
@@ -320,20 +289,11 @@ _REQUIREMENT_STEP: dict[Requirement, str] = {
     "policy": "Re-run with policy='normal'.",
     "request": "Set {flag}=True.",
     "config": "Enable HOUDINI_MCP_ALLOW_BYPASS on the server.",
-    "source": (
-        "A program {operation} wrote is never granted {capability} access; "
-        "no request input admits it, so the program is {operation}'s defect."
-    ),
 }
 
 
-def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...], operation: str) -> str:
-    steps = (
-        _REQUIREMENT_STEP[requirement].format(
-            flag=gate.flag, capability=gate.capability, operation=operation
-        )
-        for requirement in unmet
-    )
+def _bypass_hint(gate: _BypassGate, unmet: tuple[Requirement, ...]) -> str:
+    steps = (_REQUIREMENT_STEP[requirement].format(flag=gate.flag) for requirement in unmet)
     return gate.alternative + " ".join(steps)
 
 
@@ -356,7 +316,7 @@ def _bypass_refusal(
                 f"Bypass requested ({gate.flag}=True) but server config "
                 "HOUDINI_MCP_ALLOW_BYPASS is disabled. Failing closed.",
             )
-        case "request" | "source":
+        case "request":
             return (gate.pattern_reason, gate.found)
 
 
@@ -496,7 +456,6 @@ def _build_audit(
     """Assemble the structured audit block returned with every response."""
     return {
         "policy": grant.policy,
-        "source": grant.source,
         "allow_dangerous_requested": grant.dangerous_requested,
         "allow_heavy_geometry_requested": grant.heavy_geometry_requested,
         "bypass_config_enabled": grant.bypass_config_enabled,
@@ -629,8 +588,8 @@ def execute_code(
         If dangerous or heavy-geometry patterns are detected and not granted, returns
         error with the detected patterns and unmet_requirements: each of "policy"
         (re-run with policy='normal'), "request" (set the flag), "config" (enable
-        HOUDINI_MCP_ALLOW_BYPASS) or "source" (a server-authored program no input
-        admits) still short of the grant; the hint asks for exactly these.
+        HOUDINI_MCP_ALLOW_BYPASS) still short of the grant; the hint asks for
+        exactly these.
         audit.granted reports the one permission decision the run was made under,
         and audit.unmet what each bypass capability still lacked.
         On timeout, a rollback block says whether an undo was attempted and
@@ -645,43 +604,11 @@ def execute_code(
         allow_heavy_geometry=allow_heavy_geometry,
         bypass_config_enabled=bypass_config_enabled,
     )
-    return _execute_with_grant(
-        code,
-        grant,
-        operation=execute_code.__name__,
-        capture_diff=capture_diff,
-        max_stdout_size=max_stdout_size,
-        max_stderr_size=max_stderr_size,
-        max_diff_nodes=max_diff_nodes,
-        timeout=timeout,
-        host=host,
-        port=port,
-    )
-
-
-def _execute_with_grant(
-    code: str,
-    grant: ExecutionGrant,
-    *,
-    operation: str,
-    capture_diff: bool = False,
-    max_stdout_size: Count = DEFAULT_MAX_STDOUT_SIZE,
-    max_stderr_size: Count = DEFAULT_MAX_STDERR_SIZE,
-    max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
-    timeout: Seconds = DEFAULT_TIMEOUT,
-    host: str,
-    port: int,
-) -> dict[str, Any]:
-    """Run ``code`` under an already-resolved grant.
-
-    ``execute_code`` is the public door; a server-side tool that generated the
-    program itself may enter here with :meth:`ExecutionGrant.trusted_heavy_geometry`.
-    ``operation`` is the tool the caller invoked, so a refusal names it.
-    """
+    # the tool a refusal, a log line and a failure name
+    operation = execute_code.__name__
     logger.debug(
-        "execute_code policy=%s source=%s granted=%s config=%s requested dangerous=%s heavy=%s",
+        "execute_code policy=%s granted=%s config=%s requested dangerous=%s heavy=%s",
         grant.policy,
-        grant.source,
         grant.as_audit(),
         grant.bypass_config_enabled,
         grant.dangerous_requested,
@@ -768,7 +695,7 @@ def _execute_with_grant(
                 detected=detected,
                 reason=reason,
                 message=message,
-                hint=_bypass_hint(gate, unmet, operation),
+                hint=_bypass_hint(gate, unmet),
                 unmet_requirements=list(unmet),
                 bypass_requested=gate.requested(grant),
                 bypass_config_enabled=grant.bypass_config_enabled,
@@ -778,11 +705,9 @@ def _execute_with_grant(
     # Emit the durable bypass audit BEFORE execution so a later exception
     # cannot skip the server-side trail. Source code and secrets are excluded.
     if detected.dangerous or detected.heavy_geometry:
-        logger.log(
-            _BYPASS_AUDIT_LEVEL[grant.source],
-            "execute_code approved bypass policy=%s source=%s dangerous=%s heavy=%s code_sha256=%s",
+        logger.warning(
+            "execute_code approved bypass policy=%s dangerous=%s heavy=%s code_sha256=%s",
             grant.policy,
-            grant.source,
             detected.dangerous,
             detected.heavy_geometry,
             detected.code_sha256,

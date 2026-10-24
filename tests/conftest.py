@@ -127,6 +127,16 @@ class MockNodeTypeCategory:
         return self._name
 
 
+class _SopNodeClass(type):
+    def __instancecheck__(cls, node: object) -> bool:
+        return isinstance(node, MockHouNode) and node._category() == "Sop"
+
+
+class MockSopNode(metaclass=_SopNodeClass):
+    """hou.SopNode: Houdini makes every node in a SOP network one, so a fake node
+    is one by the network it sits in."""
+
+
 class MockNodeConnection:
     """hou.NodeConnection: one wire, named from the downstream node's point of view.
 
@@ -971,6 +981,7 @@ class MockHouModule:
 
         # Houdini types
         self.Color = MockColor
+        self.SopNode = MockSopNode
         self.Vector2 = MockVector2
         self.Vector3 = MockVector3
         self.Vector4 = MockVector4
@@ -1825,7 +1836,12 @@ class MockGeometry:
             for axis in axes
             for end in (min(axis, default=NO_POINTS_EXTENT), max(axis, default=-NO_POINTS_EXTENT))
         )
-        return {"bounds": bounds}[name]
+        return {
+            "bounds": bounds,
+            "pointcount": len(self._points),
+            "primitivecount": len(self._prims),
+            "vertexcount": sum(prim.numVertices() for prim in self._prims),
+        }[name]
 
     def addPoint(self, position: tuple, attribs: dict[str, Any] | None = None) -> MockGeoPoint:
         """Helper to add a point."""

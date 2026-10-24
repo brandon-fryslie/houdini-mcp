@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_geo_summary` reads the geometry inside Houdini, in the same few requests
+  whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on
+  Houdini 22 for 3 points and for 5000 points with ten attributes and ten
+  groups, where its program, run in the server with `hou` over the link, sent
+  77 and 1151. A sampled point attribute that is not a vector reads its value;
+  every one read as `unread` (`AttributeError: 'NoneType' object has no
+  attribute 'instance'`). `get_geo_summary` no longer waits on or is refused by
+  a running `execute_code` program, and a read past 500000 characters no longer
+  fails: a result too large to read inline arrives as a file. Needs this
+  release's plugin, which adds `houdini_mcp_geometry`.
+
 - `create_node`, `create_material`, `create_network_box` and `layout_children`
   refuse a parent that is not a network, such as a SOP box, as `invalid_input`
   naming the network it sits in under `network`, as `render_node_network` does
@@ -155,6 +166,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: `execute_code`'s `audit` has no `source` field
+  (houdini-laws-etg.4mz). It was always `"request"` to a caller; `"trusted"`
+  marked `get_geo_summary`'s own program, which is gone.
 
 - **BREAKING (wire)**: `execute_code`'s `scene_changes` and
   `get_last_scene_diff`'s `diff` name the lists `max_diff_nodes` cut under
