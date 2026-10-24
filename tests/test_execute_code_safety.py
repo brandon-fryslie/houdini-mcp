@@ -505,13 +505,22 @@ HSCRIPT_RUNS = [
         ("text", "expandString"),
         f"hou.text.expandString() with non-literal str - {BACKTICK} cannot be ruled out",
     ),
+    # A required string the gate cannot find was passed under a name it does
+    # not know.
+    (
+        "hou.text.expandString(text='`system(\"echo ran\")`')",
+        ("text", "expandString"),
+        f"hou.text.expandString() without str - {BACKTICK} cannot be ruled out",
+    ),
     *(
         (
-            f"hou.{spelling}('`system(\"echo ran\")`')",
+            f"hou.{spelling}({given}'`system(\"echo ran\")`')",
             (spelling,),
-            f"hou.{spelling}() with str '`system(\"echo ran\")`' - {BACKTICK}",
+            f"hou.{spelling}() with str_value '`system(\"echo ran\")`' - {BACKTICK}",
         )
         for spelling in ("expandString", "expandStringAtFrame", "hscriptExpandString")
+        # Houdini 22 names the deprecated spellings' string str_value.
+        for given in ("", "str_value=")
     ),
 ]
 
