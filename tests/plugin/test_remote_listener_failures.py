@@ -779,14 +779,20 @@ class TestClientDisconnect:
         ]
         assert conn.closed is True
 
-    def test_a_socket_error_under_a_serving_listener_is_raised_not_recorded(self, caplog):
+    def test_a_socket_error_under_a_serving_listener_is_logged_as_a_failure_not_an_end(
+        self, caplog
+    ):
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
         server = SimpleNamespace(active=True, port=18811)
         conn = self.connection(server, _fails_under_a_serving_listener)
-        with pytest.raises(OSError) as caught:
-            listener_module._serve_connection(server, conn)
-        assert caught.value.errno == errno.EBADF
-        assert caplog.messages == []
+        listener_module._serve_connection(server, conn)
+        (failure,) = caplog.records
+        assert (failure.levelno, failure.getMessage()) == (
+            logging.ERROR,
+            "hrpyc client ('127.0.0.1', 50123) failed on port 18811"
+            " (OSError: [Errno 9] Bad file descriptor)",
+        )
+        assert failure.exc_info is not None and failure.exc_info[1].errno == errno.EBADF
         assert conn.closed is True
 
     def connection(

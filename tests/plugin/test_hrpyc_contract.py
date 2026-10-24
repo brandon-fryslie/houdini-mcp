@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import socket
+import struct
 import sys
 import threading
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import houdini_mcp_handshake as handshake
 import houdini_mcp_plugin.listener as listener_module
 import pytest
 import rpyc
@@ -275,6 +278,116 @@ class TestListenerAgainstRealRpyc:
             f"hrpyc client {parked.peer} disconnected from port {parked.port} by the listener"
             " (between rounds)" in caplog.messages
         )
+
+    @pytest.mark.parametrize("who", ["listener", "client"])
+    @pytest.mark.parametrize(
+        ("token", "park"),
+        [
+            pytest.param(
+                None, (rpyc.utils.server.Server, "_authenticate_and_serve_client"), id="no token"
+            ),
+            pytest.param(
+                "hunter2", (rpyc.utils.server.Server, "_authenticate_and_serve_client"), id="token"
+            ),
+            pytest.param("hunter2", (handshake, "_recv_framed"), id="in the handshake"),
+        ],
+    )
+    def test_a_connection_ending_before_it_is_served_is_recorded_once_with_no_traceback(
+        self, fake_hou, monkeypatch, caplog, token, park, who
+    ):
+        """Between rpyc's accept and serving, a client's thread calls getpeername,
+        the token handshake and getsockname on the accepted socket. The test parks
+        the thread on that path and ends the connection under it there, by
+        stopping the listener or by the client resetting: the end is recorded
+        once, naming who ended it, and nothing logs or raises a traceback."""
+        with parked_admission(fake_hou, monkeypatch, caplog, token, *park) as parked:
+            if who == "listener":
+                assert parked.listener.stop()["status"] == "success"
+            else:
+                reset(parked.client)
+            parked.release()
+            parked.thread.join(timeout=5)
+            assert not parked.thread.is_alive(), "client's thread did not end"
+        (record,) = [m for m in caplog.messages if " disconnected from port " in m]
+        assert re.fullmatch(
+            rf"hrpyc client .+ disconnected from port {parked.port} by the {who} \(\w+: .+\)",
+            record,
+        ), record
+
+    def test_a_client_stalling_past_the_handshake_deadline_is_rejected_not_disconnected(
+        self, fake_hou, monkeypatch, caplog
+    ):
+        """The deadline is the handshake's own: the listener hangs up on a client
+        that does not finish presenting its token, which is a rejection, not a
+        connection either side ended."""
+        monkeypatch.setattr(handshake, "HANDSHAKE_TIMEOUT", 0.3)
+        with parked_admission(
+            fake_hou, monkeypatch, caplog, "hunter2", handshake, "_recv_framed"
+        ) as parked:
+            parked.release()
+            parked.client.settimeout(5)
+            assert parked.client.recv(1) == b"", "the listener did not hang up"
+            parked.thread.join(timeout=5)
+            assert not parked.thread.is_alive(), "client's thread did not end"
+        assert [m for m in caplog.messages if " disconnected from port " in m] == []
+        assert any("did not complete the hrpyc token handshake" in m for m in caplog.messages)
+        assert any("failed to authenticate" in m for m in caplog.messages)
+
+
+def reset(sock: socket.socket) -> None:
+    """Close ``sock`` with a reset (SO_LINGER 0), as a client that aborts does."""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+
+
+@contextlib.contextmanager
+def parked_admission(
+    fake_hou: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    token: str | None,
+    owner: Any,
+    name: str,
+) -> Iterator[SimpleNamespace]:
+    """A real listener with one client connected and sending nothing, whose
+    thread is parked at the entry of ``owner.name`` on its way to being served,
+    until ``release()``.
+
+    Yields the listener, the client's socket, the bound port, the parked thread
+    and ``release``. On exit, on every path, the thread is released, the client
+    closed and the listener stopped; on the passing path nothing logged a
+    traceback and nothing reached threading.excepthook.
+    """
+    real = getattr(owner, name)
+    parked, released = threading.Event(), threading.Event()
+    threads: list[threading.Thread] = []
+
+    def gate(*args: Any) -> Any:
+        threads.append(threading.current_thread())
+        parked.set()
+        assert released.wait(timeout=5), "client's thread was never released"
+        return real(*args)
+
+    monkeypatch.setattr(owner, name, gate)
+    unhandled: list[BaseException | None] = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
+    caplog.set_level(logging.INFO)
+
+    listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
+    with contextlib.ExitStack() as teardown:
+        teardown.callback(listener.stop)
+        teardown.callback(released.set)  # unwound first: no thread is left parked
+        port = listener.start(ListenerConfig(host="127.0.0.1", port=0, token=token))["bound_port"]
+        client = teardown.enter_context(
+            contextlib.closing(socket.create_connection(("127.0.0.1", port)))
+        )
+        assert parked.wait(timeout=5)
+        (thread,) = threads
+        yield SimpleNamespace(
+            listener=listener, client=client, port=port, thread=thread, release=released.set
+        )
+    assert [r.getMessage() for r in caplog.records if r.exc_info] == []
+    assert unhandled == []
 
 
 @contextlib.contextmanager

@@ -36,7 +36,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, NewType, Protocol, TypeVar, cast, runtime_checkable
 
-from houdini_mcp_handshake import Authenticator, token_authenticator, token_from
+from houdini_mcp_handshake import Authenticator, peer_name, token_authenticator, token_from
 
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 # rpyc logs each accepted and finished connection at INFO through the logger the
@@ -186,13 +186,18 @@ class HrpycServer(Protocol):
     ``_listen()`` makes the bound socket accept connections, resolves ``port``
     for a port-0 bind, and sets ``active``; ``close()`` clears ``active`` and
     releases the socket. ``accept()`` admits one client, or raises ``EOFError``
-    when the listener was closed under it. ``_handle_connection`` is what each
-    admitted client's thread runs on its rpyc connection: rpyc's own hook for
-    serving one, which the listener replaces on the server it builds.
+    when the listener was closed under it. The rest is what each admitted
+    client's thread runs, in rpyc's order: ``_authenticate_and_serve_client``
+    on the accepted socket (the authenticator, then ``_serve_client``), and
+    ``_serve_client`` builds the rpyc connection and hands it to
+    ``_handle_connection``, rpyc's own hook for serving one. The listener wraps
+    the first two and replaces the third on the server it builds.
     """
 
     active: bool
     port: int
+    _authenticate_and_serve_client: Callable[[socket.socket], None]
+    _serve_client: Callable[[socket.socket, Any], None]
     _handle_connection: Callable[[HrpycConnection], None]
 
     def _listen(self) -> None: ...
@@ -428,6 +433,52 @@ def _serve(server: HrpycServer) -> None:
 _SERVE_ROUND_SECONDS = 1.0
 
 
+def _how(end: BaseException) -> str:
+    """How a client's thread saw its connection end, as the record prints it."""
+    return f"{type(end).__name__}: {end}"
+
+
+def _record_end(port: int, peer: object, how: str, *, active: bool) -> None:
+    """Record one client's connection ending: who ended it, and how.
+
+    [LAW:single-enforcer] the one rule for who ended a connection, wherever
+    its thread was when it ended: the listener when it no longer serves, the
+    client otherwise. ``active`` is rpyc's own, which close() clears before it
+    touches any client socket; the caller reads it once, after the end.
+    """
+    # The peer as rpyc's own "welcome"/"goodbye" lines print it.
+    logger.info(
+        "hrpyc client %s disconnected from port %s by the %s (%s)",
+        peer,
+        port,
+        "client" if active else "listener",
+        how,
+    )
+
+
+def _ending_recorded(server: HrpycServer, step: Callable[..., None]) -> Callable[..., None]:
+    """``step``, a part of a client's thread before rpyc serves it, with the
+    connection ending under it recorded as that client's end.
+
+    Before serving there is no rpyc stream to turn a departure into EOFError,
+    so a socket error here (a getpeername on a socket the client reset or the
+    listener's stop closed), like an end of stream in the token handshake, is
+    the connection ending, not a failure. Left to rpyc, it is logged as "client
+    connection terminated abruptly" with its traceback and raised to
+    threading.excepthook. The peer is read first: once the end has come, the
+    socket can no longer say.
+    """
+
+    def run(sock: socket.socket, *args: Any) -> None:
+        peer = peer_name(sock)
+        try:
+            step(sock, *args)
+        except (EOFError, OSError) as exc:
+            _record_end(server.port, peer, _how(exc), active=server.active)
+
+    return run
+
+
 def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     """Serve one client's rpyc connection until it ends, and record who ended it.
 
@@ -441,7 +492,9 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     but not that it was closed on purpose. Either way it is the listener's own
     disconnect, recorded as one, not as a traceback. So is a socket error on a
     connection already closed, as ``serve_all()`` had it. Any other socket
-    error while the listener still serves is a real failure, and is raised.
+    error while the listener still serves is a failure, logged with its
+    traceback; raised, it would reach the wrapper around ``_serve_client``,
+    which records what it catches as an end.
 
     The record says who ended the connection and how serving saw it end: the
     exception a round ended on (``EOFError`` for an end of stream, a peer's
@@ -449,7 +502,7 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
     a round ended with none and found serving over.
     """
     error: OSError | None = None
-    ending = "between rounds"
+    how = "between rounds"
     try:
         # [LAW:no-ambient-temporal-coupling] the thread's end is the listener's
         # ``active``, cleared before close() touches a socket, read every round;
@@ -457,24 +510,19 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
         while server.active and not conn.closed:
             conn.serve(_SERVE_ROUND_SECONDS)
     except (EOFError, OSError) as exc:
-        ending = f"{type(exc).__name__}: {exc}"
+        how = _how(exc)
         error = exc if isinstance(exc, OSError) and not conn.closed else None
     finally:
         conn.close()
-    # [LAW:one-source-of-truth] "the listener closed" is rpyc's own ``active``,
-    # cleared before close() touches any client socket; read once, so the
-    # raise and the record below agree on it.
+    # Read once, so the failure and the record below agree on it.
     active = server.active
+    peer = conn._config["endpoints"][1]
     if error is not None and active:
-        raise error
-    # The peer as rpyc's own "welcome"/"goodbye" lines print it.
-    logger.info(
-        "hrpyc client %s disconnected from port %s by the %s (%s)",
-        conn._config["endpoints"][1],
-        server.port,
-        "client" if active else "listener",
-        ending,
-    )
+        logger.error(
+            "hrpyc client %s failed on port %s (%s)", peer, server.port, how, exc_info=error
+        )
+        return
+    _record_end(server.port, peer, how, active=active)
 
 
 # libproc's PROC_PIDPATHINFO_MAXSIZE: the longest path proc_pidpath returns.
@@ -843,8 +891,16 @@ class RemoteListener:
             authenticator=policy.authenticator,
             logger=_rpyc_logger,
         )
-        # Installed before ``_listen()``, so no client is served without it.
+        # Installed before ``_listen()``, so no client is admitted without them.
         server._handle_connection = functools.partial(_serve_connection, server)
+        # [LAW:single-enforcer] a client's thread ends in the listener's record
+        # wherever it is: the entry covers the authenticator and the token's
+        # getpeername; ``_serve_client`` runs inside rpyc's own
+        # ``except Exception: logger.exception``, which the entry cannot reach under.
+        server._serve_client = _ending_recorded(server, server._serve_client)
+        server._authenticate_and_serve_client = _ending_recorded(
+            server, server._authenticate_and_serve_client
+        )
 
         # [LAW:no-ambient-temporal-coupling] "accepting connections" is the server's
         # own ``active`` state, established here synchronously rather than raced

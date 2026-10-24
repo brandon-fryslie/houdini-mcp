@@ -176,7 +176,7 @@ class TestSharedHandshake:
             for sock in stalled:
                 sock.settimeout(5 * handshake.HANDSHAKE_TIMEOUT)
                 assert _hung_up(sock), "the listener held the connection past 5x HANDSHAKE_TIMEOUT"
-        rejections = [r.getMessage() for r in caplog.records if "left before completing" in r.msg]
+        rejections = [r.getMessage() for r in caplog.records if "did not complete" in r.msg]
         assert len(rejections) == len(stalled)
         assert all("did not complete the handshake within" in r for r in rejections)
         assert all("of 65535 bytes arrived" in r for r in rejections)
@@ -247,9 +247,12 @@ class TestListenerDerivesFromSharedHandshake:
         ]
         assert "invalid hrpyc token" in caplog.records[0].getMessage()
 
-    def test_client_leaving_before_the_ack_fails_authentication(self, fake_hrpyc, fake_hou, caplog):
-        from rpyc.utils.authenticators import AuthenticationError
-
+    def test_client_leaving_before_the_ack_is_the_connections_end_not_a_rejection(
+        self, fake_hrpyc, fake_hou, caplog
+    ):
+        """Only the server knows whether it or the client ended a connection, so
+        the handshake raises that end as it is, for the server to record, and
+        names no one."""
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)
         started(listener.start(ListenerConfig(host="0.0.0.0", port=0, token=TOKEN)))
         authenticate = fake_hrpyc.servers[0].authenticator
@@ -259,10 +262,9 @@ class TestListenerDerivesFromSharedHandshake:
         with server_side, caplog.at_level(logging.INFO, logger="houdini_mcp_handshake"):
             client.sendall(sent)
             client.close()
-            with pytest.raises(AuthenticationError, match="incomplete"):
+            with pytest.raises(BrokenPipeError):
                 authenticate(server_side)
-        assert caplog.records[-1].levelno == logging.INFO
-        assert "left before completing" in caplog.records[-1].getMessage()
+        assert caplog.records == []
 
     def test_fake_server_runs_the_authenticator_on_accept(self, fake_hrpyc, fake_hou):
         listener = RemoteListener(hrpyc=fake_hrpyc, hou=fake_hou)

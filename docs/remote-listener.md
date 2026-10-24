@@ -38,6 +38,10 @@ the exception it ended on, such as `EOFError: connection closed by peer` or
 `OSError: [Errno 9] Bad file descriptor`, or `between rounds` when a
 one-second round ended with no exception and found serving over. A stop
 recorded `between rounds` is usually one whose close never woke the thread.
+A connection that ends before the client is served (as it connects, or in
+the token handshake) is recorded the same way, with `<unknown peer>` when the
+socket could no longer give the address. A client that does not finish the
+token handshake within its deadline is rejected, not recorded as disconnected.
 
 ## Configuration (environment variables)
 
