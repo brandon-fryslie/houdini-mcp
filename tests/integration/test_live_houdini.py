@@ -207,14 +207,30 @@ def test_list_render_nodes_reads_each_rops_bypass_flag(at: dict[str, Any]) -> No
 
 def test_find_nodes_filters_by_either_name_createnode_takes_for_a_type(at: dict[str, Any]) -> None:
     """Houdini 22's createNode("mountain") gives a mountain::2.0, which a filter by
-    either name finds; type names are case-sensitive, so "Mountain" names none."""
+    either name finds, and "mountain" also finds the older mountain ("mountain::"
+    creates it), as "agentlookat" finds agentlookat::2.0 beside its 3.0; createNode("apex::controlextract") gives apex::controlextract::2.0,
+    which Houdini resolves only with the category after the namespace. Type names are
+    case-sensitive, so "Mountain" names none."""
     geo = tools.create_node("geo", "/obj", "mcp_it_find", **at)["node_path"]
     peak = tools.create_node("mountain", geo, "peak", **at)["node_path"]
+    old = tools.create_node("mountain::", geo, "old", **at)["node_path"]
+    extract = tools.create_node("apex::controlextract", geo, "extract", **at)["node_path"]
+    lookat = tools.create_node("agentlookat::2.0", geo, "lookat", **at)["node_path"]
     tools.create_node("box", geo, "box1", **at)
 
-    for node_type in ("mountain", "mountain::2.0"):
-        found = tools.find_nodes(geo, "*", node_type, **at)
-        assert found["matches"] == [{"path": peak, "name": "peak", "type": "mountain::2.0"}], found
+    found = {
+        node_type: [
+            (m["path"], m["type"]) for m in tools.find_nodes(geo, "*", node_type, **at)["matches"]
+        ]
+        for node_type in ("mountain", "mountain::2.0", "apex::controlextract", "agentlookat")
+    }
+
+    assert found == {
+        "mountain": [(peak, "mountain::2.0"), (old, "mountain")],
+        "mountain::2.0": [(peak, "mountain::2.0")],
+        "apex::controlextract": [(extract, "apex::controlextract::2.0")],
+        "agentlookat": [(lookat, "agentlookat::2.0")],
+    }
     refused = tools.find_nodes(geo, "*", "Mountain", **at)
     assert refused["kind"] == "invalid_input", refused
 

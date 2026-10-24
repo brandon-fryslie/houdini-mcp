@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   createNode takes resolves to (houdini-laws-etg.w8o): `mountain` and
   `mountain::2.0` both find the `mountain::2.0` nodes Houdini 22's
   `createNode("mountain")` gives. It compared the name to each node's type name,
-  so `mountain` found none of them. Needs this release's plugin.
+  so `mountain` found none of them. A name without a version also finds the
+  type's older versions an old scene holds (`agentlookat` finds
+  `agentlookat::2.0` beside `agentlookat::3.0`), and a namespaced name finds the
+  type it gives (`apex::controlextract` finds `apex::controlextract::2.0`). Needs
+  this release's plugin.
 
 - `set_node_flags(bypass=...)` sets the bypass flag on a node that has one,
   such as a SOP or a ROP (houdini-laws-etg.omw). It called `setBypass`, which

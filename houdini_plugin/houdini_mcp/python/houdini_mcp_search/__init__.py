@@ -18,38 +18,52 @@ from typing import Any
 
 # (path, name, type name) of one matching node.
 Match = tuple[str, str, str]
+# (category name, type name) of one node type, as a type filter names it.
+TypeName = tuple[str, str]
 
 
-def types_named(hou: Any, name: str) -> tuple[str, ...]:
-    """Every node type ``name`` names, each as ``Category/type``, sorted: in each
-    category, the type createNode resolves it to and the type whose own name it is.
+def types_named(hou: Any, name: str) -> tuple[TypeName, ...]:
+    """Every node type ``name`` names, sorted: in each category, the type createNode
+    resolves it to and the type whose own name it is - and, when ``name`` gives no
+    version, every version of those.
 
-    [LAW:one-source-of-truth] Houdini's resolver says what a name means: "mountain"
-    names the mountain::2.0 createNode gives as well as the older mountain, while
-    "mountain::2.0" names only itself. Names are case-sensitive, as createNode's are,
-    so "GRID" names nothing. A tuple of strings, which rpyc sends by value.
+    [LAW:one-source-of-truth] Houdini says what a name means: its parser splits the
+    name, its resolver picks the type, namespace preference included, and each type
+    lists its own versions. "mountain" names mountain::2.0 and the older mountain an
+    old scene can hold, while "mountain::2.0" names only itself. The resolver wants
+    the category before the type's own name, as Houdini's full names put it
+    (apex::Sop/controlextract), and resolves nothing for "Sop/apex::controlextract",
+    so the query is rebuilt from the name's parts. Names are case-sensitive, as
+    createNode's are, so "GRID" names nothing. Tuples of strings, which rpyc sends
+    by value.
     """
+    scope, namespace, base, version = hou.hda.componentsFromFullNodeTypeName(name)
     named = {
-        found.nameWithCategory()
+        (category_name, version_name)
         for category_name, category in hou.nodeTypeCategories().items()
         for found in (
-            hou.preferredNodeType(f"{category_name}/{name}"),
+            hou.preferredNodeType(
+                hou.hda.fullNodeTypeNameFromComponents(
+                    scope, namespace, f"{category_name}/{base}", version
+                )
+            ),
             category.nodeType(name),
         )
         if found is not None
+        for version_name in (found.versionNamespaceOrder() if version == "" else (found.name(),))
     }
     return tuple(sorted(named))
 
 
 def matching_descendants(
-    root: Any, pattern: str, types: tuple[str, ...] | None, window: slice
+    root: Any, pattern: str, types: tuple[TypeName, ...] | None, window: slice
 ) -> tuple[int, tuple[Match, ...]]:
     """How many descendants of ``root`` match, and ``(path, name, type)`` of those
     inside ``window``, in walk order.
 
     Names compare case-insensitively against the glob ``pattern``; a pattern with
     no ``*`` or ``?`` also matches as a substring. ``types``, when given, is the
-    ``Category/type`` names of `types_named`, one of which a node's type must be.
+    types of `types_named`, one of which a node's type must be.
 
     Ints and string tuples because rpyc sends those by value, and only the
     window's matches, so a page costs the link its own size whatever the scene's.
@@ -67,7 +81,7 @@ def matching_descendants(
         ):
             continue
         node_type = node.type()
-        if types is None or node_type.nameWithCategory() in types:
+        if types is None or (node_type.category().name(), node_type.name()) in types:
             matches.append((node, name, node_type.name()))
     # only the page pays for path()
     return len(matches), tuple((node.path(), name, t) for node, name, t in matches[window])

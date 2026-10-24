@@ -557,10 +557,12 @@ def find_nodes(
         pattern: Glob pattern or substring to match node names (default: "*")
                 Examples: "noise*", "*grid*", "sphere"
         node_type: Optional node type filter: a name createNode takes, such as
-                "sphere" or "mountain" (which finds the mountain::2.0 nodes
-                createNode gives for it), or a type's full name as matches report
-                it ("mountain::2.0"). Case-sensitive, as Houdini's type names are;
-                a name that names no node type is refused.
+                "sphere", "mountain" or "apex::controlextract", or a type's full
+                name as matches report it ("mountain::2.0"). A name without a
+                version finds every version of its type ("mountain" finds
+                mountain::2.0 nodes and an old scene's mountain nodes); one with a
+                version finds that version. Case-sensitive, as Houdini's type
+                names are; a name that names no node type is refused.
         limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
 
@@ -585,13 +587,15 @@ def find_nodes(
         types = None if node_type is None else search.types_named(link.hou, node_type)
         if types == ():
             raise InvalidInput(
-                f"node_type {node_type!r} names no node type; type names are "
-                "case-sensitive, as createNode takes them",
+                f"node_type {node_type!r} names no node type: give a name createNode "
+                "takes, such as 'mountain', or a type's full name as matches report "
+                "it, such as 'mountain::2.0'; type names are case-sensitive",
                 node_type=node_type,
             )
 
         # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request whatever
-        # the scene size, answered with the match count and the page's strings.
+        # the scene size (after the filter's, above), answered with the match count
+        # and the page's strings.
         # [LAW:single-enforcer] Caller strings cross as arguments, never formatted into a
         # program; find_nodes has no code-execution path of its own.
         # [LAW:no-silent-failure] One traversal; a hou failure propagates to the decorator

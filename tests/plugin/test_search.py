@@ -47,21 +47,35 @@ def test_types_narrow_the_count(hou, geo):
 @pytest.mark.parametrize(
     ("name", "types"),
     [
-        ("mountain", ("Sop/mountain::2.0",)),
-        ("mountain::2.0", ("Sop/mountain::2.0",)),
-        ("null", ("Object/null", "Sop/null")),
+        ("mountain", (("Sop", "mountain"), ("Sop", "mountain::2.0"))),
+        ("mountain::2.0", (("Sop", "mountain::2.0"),)),
+        (
+            "apex::controlextract",
+            (("Sop", "apex::controlextract"), ("Sop", "apex::controlextract::2.0")),
+        ),
+        ("null", (("Object", "null"), ("Sop", "null"))),
         ("GRID", ()),
         ("mountain::1.0", ()),
+        ("Sop/grid", ()),
     ],
 )
-def test_a_name_names_the_type_createnode_gives_for_it_in_each_category(hou, name, types):
+def test_a_name_names_the_type_createnode_gives_and_without_a_version_its_versions(
+    hou, name, types
+):
     assert types_named(hou, name) == types
 
 
-@pytest.mark.parametrize("name", ["mountain", "mountain::2.0"])
-def test_a_type_is_found_by_either_name_createnode_takes_for_it(hou, geo, name):
+@pytest.mark.parametrize(
+    ("name", "found"),
+    [
+        ("mountain", (("peak", "mountain::2.0"), ("old", "mountain"))),
+        ("mountain::2.0", (("peak", "mountain::2.0"),)),
+    ],
+)
+def test_a_type_is_found_by_either_name_createnode_takes_for_it(hou, geo, name, found):
     geo.createNode("mountain", "peak")
+    geo.createNode("mountain::", "old")  # the older mountain, as Houdini 22 creates it
 
-    total, page = matching_descendants(geo, "*", types_named(hou, name), slice(0, 10))
+    _, page = matching_descendants(geo, "*", types_named(hou, name), slice(0, 10))
 
-    assert (total, page) == (1, (("/obj/geo1/peak", "peak", "mountain::2.0"),))
+    assert tuple((match_name, t) for _, match_name, t in page) == found

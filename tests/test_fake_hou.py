@@ -309,6 +309,8 @@ def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
 
 
 def test_every_type_the_catalog_lists_is_one_create_node_gives(mock_hou: MockHouModule) -> None:
+    """Each by the name the table keys it under: a type's own name can give a newer
+    version, as Houdini 22's createNode("mountain") gives mountain::2.0, not mountain."""
     obj = mock_hou.node("/obj")
     networks = {
         "Object": obj,
@@ -321,7 +323,8 @@ def test_every_type_the_catalog_lists_is_one_create_node_gives(mock_hou: MockHou
 
     for category, network in networks.items():
         listed = mock_hou.nodeTypeCategories()[category].nodeTypes()
-        assert [network.createNode(name).type().name() for name in listed] == list(listed)
+        created = [network.createNode(name).type().name() for name in NODE_TYPES[category]]
+        assert created == list(listed)
 
 
 def test_a_locked_asset_holds_a_category_and_refuses_every_child(

@@ -1854,29 +1854,51 @@ class TestFindNodes:
         assert result["returned"] == 1
         assert result["matches"][0]["name"] == "my_noise_node"
 
-    @pytest.mark.parametrize("node_type", ["mountain", "mountain::2.0"])
+    @pytest.mark.parametrize(
+        ("node_type", "found"),
+        [
+            (
+                "mountain",
+                [("peak1", "mountain::2.0"), ("peak2", "mountain::2.0"), ("old", "mountain")],
+            ),
+            ("mountain::2.0", [("peak1", "mountain::2.0"), ("peak2", "mountain::2.0")]),
+        ],
+    )
     def test_find_nodes_type_filter_takes_any_name_createnode_takes(
-        self, mock_connection, node_type
+        self, mock_connection, node_type, found
     ):
         """A filter by the name createNode was given, or by the versioned type it gave,
-        finds the nodes of that type: Houdini 22's mountain is mountain::2.0."""
+        finds the nodes of that type: Houdini 22's mountain is mountain::2.0. A name
+        without a version also finds the type's older versions, which an old scene holds."""
         from houdini_mcp.tools import find_nodes
 
         geo = mock_connection.node("/obj").createNode("geo", "geo1")
         geo.createNode("mountain", "peak1")
         geo.createNode("mountain", "peak2")
+        geo.createNode("mountain::", "old")  # the older mountain, as Houdini 22 creates it
         geo.createNode("box", "box1")
 
         result = find_nodes("/obj", "*", node_type, host="localhost", port=18811)
 
         assert result["status"] == "success"
         assert result["node_type_filter"] == node_type
+        assert [(match["name"], match["type"]) for match in result["matches"]] == found
+
+    def test_find_nodes_type_filter_takes_a_namespaced_name(self, mock_connection):
+        """A namespaced name finds the versioned type createNode gives for it, which
+        Houdini resolves only with the category after the namespace."""
+        from houdini_mcp.tools import find_nodes
+
+        geo = mock_connection.node("/obj").createNode("geo", "geo1")
+        geo.createNode("apex::controlextract", "extract")
+
+        result = find_nodes("/obj", "*", "apex::controlextract", host="localhost", port=18811)
+
         assert result["matches"] == [
-            {"path": "/obj/geo1/peak1", "name": "peak1", "type": "mountain::2.0"},
-            {"path": "/obj/geo1/peak2", "name": "peak2", "type": "mountain::2.0"},
+            {"path": "/obj/geo1/extract", "name": "extract", "type": "apex::controlextract::2.0"}
         ]
 
-    @pytest.mark.parametrize("node_type", ["GRID", "mountain::1.0", ""])
+    @pytest.mark.parametrize("node_type", ["GRID", "mountain::1.0", "", "Sop/grid"])
     def test_find_nodes_refuses_a_type_filter_that_names_no_type(self, mock_connection, node_type):
         """Houdini's type names are case-sensitive: a filter naming no type is refused,
         not answered with no matches."""
@@ -2054,20 +2076,22 @@ class TestFindNodes:
             "total=3 returned=2 has_more=True"
         ) in caplog.text
         assert (
-            "find_nodes root=/obj/geo1 pattern=* node_type=grid types=('Sop/grid',) offset=0 "
+            "find_nodes root=/obj/geo1 pattern=* node_type=grid types=(('Sop', 'grid'),) offset=0 "
             "total=3 returned=2 has_more=True"
         ) in caplog.text
 
-    def test_find_nodes_asks_houdini_once_and_pages_the_answer(self, mock_connection, monkeypatch):
-        """One call into Houdini's search carries the inputs as data, the filter as the
-        types Houdini says it names; the server pages the strings it answers and never
-        walks the scene itself."""
+    def test_find_nodes_asks_houdini_to_search_and_pages_the_answer(
+        self, mock_connection, monkeypatch
+    ):
+        """Houdini parses the filter into the types it names, then one call into its
+        search carries the inputs and those types as data; the server pages the strings
+        it answers and never walks the scene itself."""
         from houdini_mcp.tools import find_nodes
 
         obj = mock_connection.node("/obj")
         obj.allSubChildren = MagicMock(side_effect=AssertionError("walked from the server"))
         search = SimpleNamespace(
-            types_named=MagicMock(return_value=("Object/null",)),
+            types_named=MagicMock(return_value=(("Object", "null"),)),
             matching_descendants=MagicMock(
                 return_value=(3, (("/obj/b", "b", "null"), ("/obj/c", "c", "null")))
             ),
@@ -2077,7 +2101,9 @@ class TestFindNodes:
         result = find_nodes("/obj", "*", "null", limit=2, cursor=1, host="localhost", port=18811)
 
         search.types_named.assert_called_once_with(mock_connection, "null")
-        search.matching_descendants.assert_called_once_with(obj, "*", ("Object/null",), slice(1, 3))
+        search.matching_descendants.assert_called_once_with(
+            obj, "*", (("Object", "null"),), slice(1, 3)
+        )
         assert result["matches"] == [
             {"path": "/obj/b", "name": "b", "type": "null"},
             {"path": "/obj/c", "name": "c", "type": "null"},

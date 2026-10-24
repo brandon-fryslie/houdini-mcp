@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
@@ -57,13 +58,32 @@ def join_path(parent: str, name: str) -> str:
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
 
+def _own(category: str, name: str) -> NodeType | None:
+    """The type in ``category`` whose own name ``name`` is; None when no type has it."""
+    return next((row for row in NODE_TYPES[category].values() if row.type == name), None)
+
+
 def _offered(category: str, name: str) -> NodeType | None:
     """The type createNode gives for ``name`` in ``category``: the one the table keys
     under it, or the one whose own name it is (``mountain`` and ``mountain::2.0`` both
     give ``mountain::2.0``, as Houdini's createNode takes either); None for a name it
     refuses there."""
-    rows = NODE_TYPES[category]
-    return rows.get(name) or next((row for row in rows.values() if row.type == name), None)
+    return NODE_TYPES[category].get(name) or _own(category, name)
+
+
+def _name_components(name: str) -> tuple[str, str, str, str]:
+    """hou.hda.componentsFromFullNodeTypeName for the names the table holds:
+    ``[[scope::]namespace::]name[::version]``, a version being digits and dots."""
+    *front, last = name.split("::")
+    version = last if front and last.replace(".", "").isdigit() else ""
+    *qualifiers, base = front if version else [*front, last]
+    namespace = qualifiers.pop() if qualifiers else ""
+    return "::".join(qualifiers), namespace, base, version
+
+
+def _full_name(scope: str, namespace: str, name: str, version: str) -> str:
+    """hou.hda.fullNodeTypeNameFromComponents: the components joined, the empty ones left out."""
+    return "::".join(part for part in (scope, namespace, name, version) if part)
 
 
 class OperationFailed(Exception):
@@ -125,10 +145,9 @@ class MockSubnetIndirectInput:
 
 
 class MockNodeType:
-    """Mock hou.NodeType as its category holds it: a row of the table, in that category."""
+    """Mock hou.NodeType as its category holds it: a row of the table."""
 
-    def __init__(self, category: str, row: NodeType) -> None:
-        self._category = category
+    def __init__(self, row: NodeType) -> None:
         self._row = row
 
     def name(self) -> str:
@@ -137,8 +156,8 @@ class MockNodeType:
     def description(self) -> str:
         return self._row.description
 
-    def nameWithCategory(self) -> str:
-        return f"{self._category}/{self._row.type}"
+    def versionNamespaceOrder(self) -> tuple[str, ...]:
+        return self._row.versions
 
 
 class MockNodeTypeCategory:
@@ -153,11 +172,12 @@ class MockNodeTypeCategory:
 
     def nodeTypes(self) -> dict[str, MockNodeType]:
         """Every type the category offers, under its own name, a name createNode takes back."""
-        return {row.type: MockNodeType(self._name, row) for row in NODE_TYPES[self._name].values()}
+        return {row.type: MockNodeType(row) for row in NODE_TYPES[self._name].values()}
 
     def nodeType(self, name: str) -> MockNodeType | None:
         """The type whose own name ``name`` is; None when no type has it."""
-        return self.nodeTypes().get(name)
+        row = _own(self._name, name)
+        return None if row is None else MockNodeType(row)
 
 
 class _SopNodeClass(type):
@@ -445,6 +465,7 @@ class MockHouNode:
         mock_type.description = MagicMock(side_effect=lambda: self._row().description)
         mock_type.category = lambda: MockNodeTypeCategory(self._category())
         mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
+        mock_type.versionNamespaceOrder = lambda: self._row().versions
         return mock_type
 
     def _category(self) -> str:
@@ -1125,6 +1146,10 @@ class MockHouModule:
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
         self.LoadWarning = LoadWarning
+        self.hda = SimpleNamespace(
+            componentsFromFullNodeTypeName=_name_components,
+            fullNodeTypeNameFromComponents=_full_name,
+        )
 
         # Houdini types
         self.Color = MockColor
@@ -1207,10 +1232,13 @@ class MockHouModule:
         return {category: MockNodeTypeCategory(category) for category in NODE_TYPES}
 
     def preferredNodeType(self, name: str) -> MockNodeType | None:
-        """The type createNode gives for ``Category/name``; None for a name it refuses."""
-        category, _, type_name = name.partition("/")
-        row = _offered(category, type_name)
-        return None if row is None else MockNodeType(category, row)
+        """The type createNode gives for a name in Houdini's category-qualified form,
+        the category before the type's own name (``apex::Sop/controlextract``); None
+        for a name it refuses."""
+        scope, namespace, qualified, version = _name_components(name)
+        category, _, base = qualified.partition("/")
+        row = _offered(category, _full_name(scope, namespace, base, version))
+        return None if row is None else MockNodeType(row)
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""
