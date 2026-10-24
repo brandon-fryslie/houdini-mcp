@@ -102,11 +102,35 @@ def test_node_walks_a_relative_path_from_a_node(mock_hou: MockHouModule) -> None
     assert sphere.node("/obj/geo1") is sphere.parent()
 
 
-def test_only_a_subnet_has_indirect_inputs(mock_hou: MockHouModule) -> None:
-    geo = mock_hou.node("/obj").createNode("geo", "geo1")
-    subnet = geo.createNode("subnet", "subnet1")
+@pytest.mark.parametrize(
+    ("node_type", "names"),
+    [
+        ("subnet", ["1", "2", "3", "4"]),
+        ("foreach", ["1", "2", "3", "4"]),
+        ("attribwrangle", ["1", "2", "3", "4"]),
+        ("blastbyattribute", ["1"]),
+        ("null", []),
+    ],
+)
+def test_a_node_has_the_indirect_inputs_its_type_gives(
+    mock_hou: MockHouModule, node_type: str, names: list[str]
+) -> None:
+    """What hython reads from indirectInputs() on each, created in a fresh Houdini
+    22.0.466 scene; each one resolves by its path."""
+    node = mock_hou.node("/obj").createNode("geo", "geo1").createNode(node_type)
 
-    assert mock_hou.item("/obj/geo1/subnet1/1") is subnet.indirectInputs()[0]
+    assert [i.name() for i in node.indirectInputs()] == names
+    assert [mock_hou.item(f"{node.path()}/{name}") for name in names] == list(node.indirectInputs())
+
+
+def test_a_network_that_is_not_a_subnetwork_has_no_indirect_inputs(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini raises for an Object geo's indirectInputs(), and no path finds one."""
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+
+    with pytest.raises(Exception, match=r"hou\.InvalidNodeType: .*\nNode is not a subnetwork"):
+        geo.indirectInputs()
     assert mock_hou.item("/obj/geo1/1") is None
     assert mock_hou.item("/1") is None
 
@@ -458,9 +482,7 @@ def test_given_parameters_take_their_type_s_component_names(mock_hou: MockHouMod
 
 
 def test_a_node_outside_any_scene_has_no_parameters() -> None:
-    with pytest.raises(
-        RuntimeError, match="'/obj/geo1' is not in a scene, so it has no parameters"
-    ):
+    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene, so it has no type"):
         MockHouNode(path="/obj/geo1", name="geo1", params={"t": [0.0, 0.0, 0.0]}).parm("tx")
 
 

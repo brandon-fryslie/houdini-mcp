@@ -48,6 +48,9 @@ class NodeType:
     gives them. ``holds`` is the
     category of the nodes it holds, None for a node that is not a network. A
     ``locked`` asset holds a category and refuses every child at once.
+    ``indirect_inputs`` is how many indirect inputs, named "1" on, a node of it
+    has; None for a node Houdini says is not a subnetwork, whose indirectInputs()
+    raises. A node that is neither has none: a Sop null, or a karma ROP.
     """
 
     type: str
@@ -56,6 +59,7 @@ class NodeType:
     aliases: tuple[str, ...]
     holds: str | None
     locked: bool
+    indirect_inputs: int | None
     parms: dict[str, ParmTuple]
 
 
@@ -76,6 +80,7 @@ def node_types(table: Table) -> dict[str, dict[str, NodeType]]:
                 aliases=tuple(facts["aliases"]),
                 holds=facts["holds"],
                 locked=facts["locked"],
+                indirect_inputs=facts["indirect_inputs"],
                 parms={
                     tuple_name: ParmTuple(
                         tuple(parm["components"]), tuple(parm["values"]), tuple(parm["menu"])
@@ -125,8 +130,28 @@ def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
         "aliases": list(node.type().aliases()),
         "holds": None if held is None else held.name(),
         "locked": node.isLockedHDA(),
+        "indirect_inputs": _indirect_inputs(node),
         "parms": {name: _parm_tuple(node, name) for name in row["parms"]},
     }
+
+
+def _indirect_inputs(node: Any) -> int | None:
+    """How many indirect inputs ``node`` has; None when Houdini says it is not a
+    subnetwork, the one answer it gives by raising."""
+    try:
+        indirect = node.indirectInputs()
+    except Exception as e:
+        # hython raises hou.InvalidNodeType itself; over rpyc it arrives as rpyc's
+        # stand-in class, named "hou.InvalidNodeType", which no except clause can
+        # name, so the class is known by its own name in either form
+        if type(e).__name__.rpartition(".")[2] != "InvalidNodeType":
+            raise
+        return None
+    names = [item.name() for item in indirect]
+    if names != [str(n) for n in range(1, len(names) + 1)]:
+        # the fake names them by number, so a count holds them only when Houdini does
+        raise ValueError(f"{node.path()}'s indirect inputs are named {names}")
+    return len(names)
 
 
 def _parm_tuple(node: Any, name: str) -> dict[str, Any]:
