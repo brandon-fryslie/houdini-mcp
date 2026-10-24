@@ -88,6 +88,14 @@ class InvalidSize(Exception):
 InvalidSize.__module__ = "hou"
 
 
+class LoadWarning(Exception):
+    """hou.LoadWarning, which Houdini 22's hipFile.load raises once the file has loaded
+    with warnings, such as a node whose asset definition is missing."""
+
+
+LoadWarning.__module__ = "hou"
+
+
 class MockSubnetIndirectInput:
     """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
 
@@ -978,6 +986,7 @@ class MockHouModule:
         self.hipFile.saveAsBackup.return_value = "/path/to/backup/test_bak1.hip"
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
+        self.LoadWarning = LoadWarning
 
         # Houdini types
         self.Color = MockColor

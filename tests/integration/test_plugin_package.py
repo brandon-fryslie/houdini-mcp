@@ -21,6 +21,7 @@ open(sys.argv[1], "w").write(json.dumps({
             "houdini_mcp_geometry",
             "houdini_mcp_handshake",
             "houdini_mcp_read",
+            "houdini_mcp_scene",
             "houdini_mcp_schema",
             "houdini_mcp_search",
         )

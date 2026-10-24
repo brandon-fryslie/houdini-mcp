@@ -12,6 +12,7 @@ import pytest
 from tests.conftest import (
     SUMMARIZER,
     HouPermissionError,
+    LoadWarning,
     MockHouNode,
     MockNodeLacking,
     link_failure,
@@ -1070,9 +1071,54 @@ class TestSceneOperations:
         result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
 
         assert result["status"] == "success"
+        assert "warning" not in result
         mock_connection.hipFile.load.assert_called_once_with(
             "/path/to/scene.hip", suppress_save_prompt=True
         )
+
+    def test_a_load_houdini_warned_about_is_a_load_carrying_its_warning(
+        self, mock_connection, caplog
+    ):
+        """hipFile.load raises LoadWarning once the file has loaded: the scene is the
+        file's, so the caches that described the last one are dropped."""
+        from houdini_mcp.tools import list_node_types, load_scene
+
+        warned = (
+            "Warnings were generated during load.\n"
+            "Error loading: /scenes/next.hip\n"
+            'Warning:     "/obj/g/s" using incomplete asset definition (full definition not found).'
+        )
+        mock_connection.hipFile.load.side_effect = LoadWarning(warned)
+        assert list_node_types()["_cache_info"]["hit"] is False
+        assert list_node_types()["_cache_info"]["hit"] is True
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.scene"):
+            result = load_scene("/scenes/next.hip")
+
+        assert result == {
+            "status": "success",
+            "message": "Scene loaded",
+            "file_path": "/scenes/next.hip",
+            "warning": warned,
+        }
+        assert list_node_types()["_cache_info"]["hit"] is False
+        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.scene"] == [
+            f"Loaded /scenes/next.hip; Houdini's load warnings: {warned}"
+        ]
+
+    def test_a_load_houdini_warned_about_still_reports_its_backup(self, mock_connection):
+        from houdini_mcp.tools import load_scene
+
+        mock_connection.hipFile.hasUnsavedChanges.return_value = True
+        mock_connection.hipFile.load.side_effect = LoadWarning(
+            "Warnings were generated during load."
+        )
+
+        result = load_scene("/scenes/next.hip")
+
+        assert result["status"] == "success"
+        assert result["warning"] == "Warnings were generated during load."
+        assert result["checkpoint"] == "/path/to/backup/test_bak1.hip"
 
     def test_new_scene_success(self, mock_connection):
         """Test creating new scene successfully."""
