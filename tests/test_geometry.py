@@ -88,8 +88,14 @@ class TestTheFakeScene:
         assert result["groups"] == {"point": ["top", "bottom"], "primitive": ["front"]}
         # each sample carries every point attribute, a vector as a list
         assert result["sample_points"] == [
-            {"index": 0, "P": [0.0, 1.0, 0.0], "N": [0.0, 1.0, 0.0], "id": 7, "name": "top"},
-            {"index": 1, "P": [0.0, -1.0, 0.0], "N": [0.0, -1.0, 0.0], "id": 8, "name": "bottom"},
+            {
+                "point": 0,
+                "values": {"P": [0.0, 1.0, 0.0], "N": [0.0, 1.0, 0.0], "id": 7, "name": "top"},
+            },
+            {
+                "point": 1,
+                "values": {"P": [0.0, -1.0, 0.0], "N": [0.0, -1.0, 0.0], "id": 8, "name": "bottom"},
+            },
         ]
         assert "refused_reads" not in result
 
@@ -104,7 +110,20 @@ class TestTheFakeScene:
     async def test_a_sample_is_no_more_than_the_points_there_are(self, sphere: str) -> None:
         result = await _summary(sphere, max_sample_points=1000)
 
-        assert [p["index"] for p in result["sample_points"]] == [0, 1, 2]
+        assert [p["point"] for p in result["sample_points"]] == [0, 1, 2]
+
+    async def test_an_attribute_named_as_the_point_number_is_its_own_value(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        geometry = MockGeometry()
+        geometry.addPoint((0.0, 0.0, 0.0), {"index": 42, "point": 7})
+        geometry.addPointAttrib("index", "Int", 1)
+        geometry.addPointAttrib("point", "Int", 1)
+
+        result = await _summary(_sop(mock_connection, geometry), max_sample_points=1)
+
+        # an Enumerate SOP writes an int attribute named index
+        assert result["sample_points"] == [{"point": 0, "values": {"index": 42, "point": 7}}]
 
     async def test_empty_geometry_counts_zero_and_has_no_box(
         self, mock_connection: MockHouModule
@@ -132,9 +151,9 @@ class TestTheFakeScene:
             result = await _summary(_sop(mock_connection, geometry), max_sample_points=1)
 
         [sample] = result["sample_points"]
-        assert sample["P"] == [0.0, 0.0, 0.0]
-        assert sample["loop"]["unread"].startswith("RecursionError: ")
-        assert "unread sample_points[0].loop of /obj/geo1/box1 reason=RecursionError: " in (
+        assert sample["values"]["P"] == [0.0, 0.0, 0.0]
+        assert sample["values"]["loop"]["unread"].startswith("RecursionError: ")
+        assert "unread sample_points[0].values.loop of /obj/geo1/box1 reason=RecursionError: " in (
             caplog.text
         )
 
@@ -313,7 +332,7 @@ class TestWhatHoudiniWillNotRead:
         assert f"Read geometry of /obj/geo1/box1: 1 points, bounding_box={box}" in caplog.text
         assert result["attributes"]["point"] == [{"name": "P", "type": "float", "size": 3}]
         assert result["groups"]["point"] == ["top"]
-        assert result["sample_points"] == [{"index": 0, "P": [0.0, 1.0, 2.0]}]
+        assert result["sample_points"] == [{"point": 0, "values": {"P": [0.0, 1.0, 2.0]}}]
 
     async def test_a_massive_geometry_says_so_and_still_samples(self, connected_to):
         geo = self._geo(counts={"pointcount": 1_500_000})
@@ -321,7 +340,7 @@ class TestWhatHoudiniWillNotRead:
         result = await self._run(connected_to, self._node(geo), max_sample_points=2)
 
         assert result["warning"] == "Geometry has 1500000 points (>1M); samples are its first 2."
-        assert [p["index"] for p in result["sample_points"]] == [0, 1]
+        assert [p["point"] for p in result["sample_points"]] == [0, 1]
 
     async def test_a_node_whose_cook_failed_carries_the_errors_on_it(self, connected_to, caplog):
         # Houdini 22: a failed cook leaves geometry() None, its reason only in errors()
@@ -408,7 +427,9 @@ class TestWhatHoudiniWillNotRead:
 
         result = await self._run(connected_to, self._node(geo), max_sample_points=1)
 
-        assert result["sample_points"] == [{"index": 0, "P": {"unread": "RuntimeError: no value"}}]
+        assert result["sample_points"] == [
+            {"point": 0, "values": {"P": {"unread": "RuntimeError: no value"}}}
+        ]
 
     async def test_each_field_houdini_would_not_read_is_logged(self, connected_to, caplog):
         node = self._node(self._geo(bounds=_Raises("no bounds")))

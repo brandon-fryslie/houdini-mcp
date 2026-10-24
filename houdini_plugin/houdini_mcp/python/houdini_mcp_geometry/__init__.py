@@ -44,6 +44,17 @@ class NoGeometry(TypedDict):
     refused_reads: list[RefusedRead]
 
 
+class Sample(TypedDict):
+    """One sampled point: its number, and its value of each point attribute.
+
+    [LAW:types-are-the-program] The values have a key of their own: an attribute
+    may take any name, ``index`` or ``point`` among them (an Enumerate SOP's).
+    """
+
+    point: int
+    values: dict[str, Any]
+
+
 @final
 class Summary(TypedDict):
     """The geometry's counts and raw bounds, and what the caller asked to read of it."""
@@ -56,7 +67,7 @@ class Summary(TypedDict):
     attributes: NotRequired[dict[str, list[dict[str, Any]]]]
     groups: NotRequired[dict[str, list[str | Unread]]]
     warning: NotRequired[str]
-    sample_points: NotRequired[list[dict[str, Any]]]
+    sample_points: NotRequired[list[Sample]]
     refused_reads: list[RefusedRead]
 
 
@@ -129,16 +140,16 @@ def _answer(
             )
         names = [a.name() for a in geo.pointAttribs()]
         summary["sample_points"] = [
-            {
-                "index": point.number(),
-                **{
+            Sample(
+                point=point.number(),
+                values={
                     name: read(
-                        f"sample_points[{i}].{name}",
+                        f"sample_points[{i}].values.{name}",
                         functools.partial(_value, hou, point, name),
                     )
                     for name in names
                 },
-            }
+            )
             for i, point in enumerate(itertools.islice(geo.iterPoints(), max_sample_points))
         ]
     return summary

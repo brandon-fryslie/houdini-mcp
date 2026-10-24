@@ -324,7 +324,10 @@ async def test_a_geometry_summary_costs_the_link_the_same_requests_whatever_the_
     # a float attribute's sample is its value: over the link, checking it against
     # hou's vector classes raised, and every one read as unread
     sampled = (await summary(large))["sample_points"][1]
-    assert sampled == {"index": 1, "P": [1.0, 0.0, 0.0]} | {f"a{i}": 0.0 for i in range(10)}
+    assert sampled == {
+        "point": 1,
+        "values": {"P": [1.0, 0.0, 0.0]} | {f"a{i}": 0.0 for i in range(10)},
+    }
 
 
 def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:

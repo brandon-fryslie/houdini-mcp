@@ -167,6 +167,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: each of `get_geo_summary`'s `sample_points` is
+  `{"point": <number>, "values": {<attribute>: <value>}}` (houdini-laws-etg.4mz).
+  The number was `index` among the attribute values, so a point attribute named
+  `index`, as an Enumerate SOP writes, replaced it.
+
 - **BREAKING (wire)**: `execute_code`'s `audit` has no `source` field
   (houdini-laws-etg.4mz). It was always `"request"` to a caller; `"trusted"`
   marked `get_geo_summary`'s own program, which is gone.

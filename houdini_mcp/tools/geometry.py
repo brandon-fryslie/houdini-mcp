@@ -69,7 +69,8 @@ async def get_geo_summary(
           only points at NaN), which occupies no place
         - attributes: Metadata for point/primitive/vertex/detail attributes
         - groups: Names of point and primitive groups
-        - sample_points: Optional array of first N points with their attribute values
+        - sample_points: Optional array of the first N points, each
+          {point: its number, values: {attribute name: its value}}
         - ai_summary: (if summarized) AI-generated insights about the geometry
         - summarized_bytes: (with ai_summary) how many bytes it covers, from result_file's start
         - ai_summary_error: (in place of ai_summary) why no summary could be made

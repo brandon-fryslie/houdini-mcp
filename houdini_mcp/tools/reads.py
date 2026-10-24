@@ -30,7 +30,6 @@ __all__ = [
     "format_reason",
     "is_unread",
     "log_refused",
-    "log_unread",
     "read",
     "reason",
     "reraise_transport_failure",
@@ -76,23 +75,23 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
 
     def explain(e: Exception) -> str:
         reraise_transport_failure(e)
-        found = unread(e)
-        log_unread(what, found)
-        return found["unread"]
+        why = reason(e)
+        _log_unread(what, why)
+        return why
 
     return houdini_mcp_read.read(fetch, explain)
 
 
-def log_unread(what: str, found: Unread) -> None:
+def _log_unread(what: str, reason: str) -> None:
     """The event for one read Houdini refused, wherever it was refused."""
-    logger.warning("unread %s reason=%s", what, found["unread"])
+    logger.warning("unread %s reason=%s", what, reason)
 
 
 def log_refused(refused_reads: list[RefusedRead]) -> None:
     """The events for the reads a plugin module made inside Houdini and was refused:
     that module cannot reach this log, so it hands its refusals back."""
     for refused in refused_reads:
-        log_unread(refused["what"], Unread(unread=refused["reason"]))
+        _log_unread(refused["what"], refused["reason"])
 
 
 def reraise_transport_failure(e: Exception) -> None:
