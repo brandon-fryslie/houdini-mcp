@@ -3,9 +3,9 @@
 [LAW:types-are-the-program] Every tool returns either its own success record or
 one arm of ``ToolFailure``: a closed union discriminated on ``kind``. Each arm
 declares what retrying takes, so a client decides mechanically whether to start
-Houdini, call again, fix its input, wait for a worker, or give up. A failure of
-one kind cannot be spelled as another, and none can be spelled as success:
-``status`` is the literal ``"error"`` on every arm.
+Houdini, call again, check the scene first, fix its input, wait for a worker, or
+give up. A failure of one kind cannot be spelled as another, and none can be
+spelled as success: ``status`` is the literal ``"error"`` on every arm.
 
 [LAW:single-enforcer] ``failure_response`` is the one place an exception becomes
 a response. Tool bodies raise ``InvalidInput``, ``OperationFailed`` or
@@ -80,9 +80,9 @@ FailureKind = Literal[
 Retry = Literal[
     "start_houdini", "call_again", "check_scene", "fix_input", "wait_for_worker", "none"
 ]
-"""What a client does next. Each kind fixes its own, below; a link that failed
-mid-call fixes ``check_scene`` when the call may have changed the scene, since
-calling again could repeat a change that already landed."""
+"""What a client does next. Each kind fixes its own, below, except a link that
+failed mid-call: its retry is ``check_scene`` when the call may have changed the
+scene, since calling again could repeat a change that already landed."""
 
 LinkRetry = Literal["call_again", "check_scene"]
 """What a client does after the link failed mid-call: call again when the call

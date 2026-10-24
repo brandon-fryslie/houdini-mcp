@@ -913,11 +913,95 @@ class TestRenderLeavesSceneUnchanged:
         assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
         assert len(destroyed) == 1, destroyed
         # Every node the failed link left is named, so a client checking the scene
-        # knows what to look for.
+        # knows what to look for; the one whose destroy the link failed under may
+        # be gone, since Houdini may have run it.
         stranded = self._added(rendering_scene, before)
         assert stranded and destroyed[0] in stranded
-        for path in stranded:
+        assert (
+            f"temporary render node {destroyed[0]} may still be in the scene" in result["message"]
+        )
+        for path in set(stranded) - {destroyed[0]}:
             assert f"temporary render node {path} is still in the scene" in result["message"]
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_node_that_refused_to_go_is_named_when_a_later_destroy_loses_the_link(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """The ROP refuses to go, then the camera's destroy loses the link: both are named."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import MockHouNode, link_failure
+
+        prefix = {"render_viewport": "_mcp_", "render_quad_view": "_mcp_quad_"}[tool]
+
+        def destroy(self: Any) -> None:
+            if self.type().name() == "cam":
+                raise link_failure(EOFError("stream has been closed"))
+            raise RuntimeError("ROP is locked")
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
+        assert (
+            f"temporary render node /out/{prefix}opengl_rop is still in the scene"
+            in result["message"]
+        ), result
+        assert (
+            f"temporary render node /obj/{prefix}render_cam may still be in the scene"
+            in result["message"]
+        ), result
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_a_node_whose_creation_lost_the_link_is_named_by_the_name_asked_for(
+        self, rendering_scene: Any, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        """Houdini may have made the ROP the link failed under: it is named as asked for."""
+        import houdini_mcp.tools as tools
+        from tests.conftest import link_failure
+
+        prefix = {"render_viewport": "_mcp_", "render_quad_view": "_mcp_quad_"}[tool]
+        out = rendering_scene.node("/out")
+        create = out.createNode
+
+        def lose_the_link(node_type: str, name: str | None = None) -> Any:
+            if node_type == "opengl":
+                create(node_type, name)
+                raise link_failure(EOFError("stream has been closed"))
+            return create(node_type, name)
+
+        monkeypatch.setattr(out, "createNode", lose_the_link)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
+        assert (
+            f"a temporary opengl node asked for as {prefix}opengl_rop may be in the scene"
+            in result["message"]
+        ), result
+        assert (
+            f"temporary render node /obj/{prefix}render_cam is still in the scene"
+            in result["message"]
+        ), result
+
+    def test_a_link_lost_under_the_cleanup_carries_the_render_failure(
+        self, render_raises: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The render fails, then its cleanup loses the link: the loss is raised, so the
+        link is torn down, and the render's own failure rides on it."""
+        from houdini_mcp.tools import render_viewport
+        from tests.conftest import MockHouNode, link_failure
+
+        def destroy(self: Any) -> None:
+            raise link_failure(EOFError("stream has been closed"))
+
+        monkeypatch.setattr(MockHouNode, "destroy", destroy)
+
+        result = render_viewport(host="localhost", port=18811)
+
+        assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
+        assert "the render had already failed: " in result["message"], result
+        assert "OpenGL ROP: no display" in result["message"], result
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"karma_engine": "tpu"}])

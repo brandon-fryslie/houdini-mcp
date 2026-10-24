@@ -59,7 +59,8 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
 
 **The failure arms** (one definition, `failure_for()` in `houdini_mcp/tools/failure.py`,
 which the decorator applies). Every failure is one arm of `ToolFailure`, a union
-discriminated on `kind`; each kind fixes its own `retry`:
+discriminated on `kind`. Each kind fixes its own `retry`, except the two link arms, whose
+`retry` the tool's policy picks:
 
 | Exception raised in the tool | `kind` | `retry` | Also carries |
 |------|-----------|----------|------|

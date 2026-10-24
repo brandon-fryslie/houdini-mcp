@@ -89,6 +89,9 @@ def _get_remote_modules(link: Link):
     return remote_os, remote_tempfile
 
 
+_LOST = "the link failed"
+
+
 def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
     """Destroy every node, last created first; the ones that refused, with why.
 
@@ -103,7 +106,10 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
             node.destroy()
         except Exception as e:
             if transport_failure(e):
-                _tell_stranded(e, remaining[at:])
+                # Houdini may have run the destroy the link failed under; the
+                # nodes that refused to go and the ones not yet reached remain.
+                add_note(e, f"temporary render node {path} may still be in the scene: {_LOST}")
+                _tell_stranded(e, [p for p, _ in (*failures, *remaining[at + 1 :])])
                 raise
             logger.error("Failed to destroy temporary render node %s: %r", path, e)
             failures.append((path, e))
@@ -113,10 +119,10 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
     return failures
 
 
-def _tell_stranded(lost: BaseException, nodes: Sequence[tuple[str, Any]]) -> None:
+def _tell_stranded(lost: BaseException, paths: Sequence[str]) -> None:
     """Tell, on the link failure ``lost``, each temporary node it left in the scene."""
-    for path, _ in nodes:
-        add_note(lost, f"temporary render node {path} is still in the scene: the link failed")
+    for path in paths:
+        add_note(lost, f"temporary render node {path} is still in the scene: {_LOST}")
 
 
 @contextmanager
@@ -133,8 +139,19 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
     created: list[tuple[str, Any]] = []
 
     def create(parent: Any, node_type: str, name: str) -> Any:
-        node = parent.createNode(node_type, name)
-        created.append((node.path(), node))
+        try:
+            node = parent.createNode(node_type, name)
+            path = node.path()
+        except Exception as e:
+            # Houdini may have made the node the link failed under; it has no
+            # path here, only the name it was asked for.
+            if transport_failure(e):
+                add_note(
+                    e,
+                    f"a temporary {node_type} node asked for as {name} may be in the scene: {_LOST}",
+                )
+            raise
+        created.append((path, node))
         return node
 
     try:
@@ -144,12 +161,19 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
         # with its type intact for the error classifier; a node that refused to
         # go rides along as a note. A link that failed reaches nothing, so nothing
         # is sent over it: the connection owner tears the link down, and the nodes
-        # are Houdini's to keep.
+        # are Houdini's to keep. A link that fails under the cleanup is the one
+        # failure the connection owner must hear, so it is raised, carrying the
+        # body's.
         if transport_failure(body) is None:
-            for path, failure in _destroy(created):
+            try:
+                failures = _destroy(created)
+            except Exception as lost:
+                add_note(lost, f"the render had already failed: {body!r}")
+                raise
+            for path, failure in failures:
                 add_note(body, f"also failed to destroy temporary render node {path}: {failure!r}")
         else:
-            _tell_stranded(body, created)
+            _tell_stranded(body, [path for path, _ in created])
         raise
     else:
         failures = _destroy(created)
