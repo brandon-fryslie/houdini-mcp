@@ -69,7 +69,7 @@ from .code_policy import (
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
-from .snapshot import SceneSnapshot, capped, scene_diff, scene_snapshot
+from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
 from .workers import HOW_A_WORKER_ENDS, WORKERS
 
 logger = logging.getLogger("houdini_mcp.tools.code")
@@ -93,13 +93,13 @@ class LastSceneDiff:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._diff: dict[str, Any] | None = None
+        self._diff: CappedDiff | None = None
 
-    def record(self, diff: dict[str, Any] | None) -> None:
+    def record(self, diff: CappedDiff | None) -> None:
         with self._lock:
             self._diff = diff
 
-    def diff(self) -> dict[str, Any] | None:
+    def diff(self) -> CappedDiff | None:
         with self._lock:
             return self._diff
 
@@ -433,10 +433,9 @@ def _run_code_thread(
 
 @dataclass(frozen=True)
 class _Diff:
-    """What a program changed under ``_DIFF_ROOT``, capped, naming under
-    ``truncated`` the lists the cap cut."""
+    """What a program changed under ``_DIFF_ROOT``, capped."""
 
-    changes: dict[str, Any]
+    changes: CappedDiff
 
 
 @dataclass(frozen=True)

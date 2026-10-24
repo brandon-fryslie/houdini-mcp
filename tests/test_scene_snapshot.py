@@ -19,7 +19,7 @@ from houdini_mcp.tools import (
     serialize_scene,
 )
 from houdini_mcp.tools.failure import OperationFailed
-from houdini_mcp.tools.snapshot import scene_diff, scene_snapshot
+from houdini_mcp.tools.snapshot import capped, scene_diff, scene_snapshot
 from tests.conftest import SUMMARIZER, MockHouModule, MockHouNode
 
 # Houdini 22.0.466's answers for /obj holding geo1 (box1, and hid, a hidden
@@ -136,6 +136,18 @@ class TestSceneDiff:
             "added_nodes": [{"path": "/obj/geo1/xf", "type": "xform"}],
             "has_changes": True,
         }
+
+    def test_a_cap_names_every_list_it_cut_and_none_at_the_cap(self) -> None:
+        diff = scene_diff(
+            {"/obj/a": "box", "/obj/b": "null"}, {"/obj/a": "sphere", "/obj/c": "xform"}
+        )
+        lists = [key for key, value in diff.items() if isinstance(value, list)]
+        assert capped(diff, 0) == {
+            **{key: [] for key in lists},
+            "has_changes": True,
+            "truncated": lists,
+        }
+        assert capped(diff, 1) == {**diff, "truncated": []}
 
 
 class TestExecuteCodeDiff:
