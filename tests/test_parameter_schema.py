@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from tests.conftest import MockHouModule, MockHouNode, served_connection
+from tests.fake_node_types import ParmTuple
 
 
 class MockParmTemplate:
@@ -713,7 +714,12 @@ class TestMultiparmInstances:
             path="/obj/geo1/n",
             name="n",
             node_type="attribcreate",
-            params={"numattr": 2, "type1": 0, "value1v": [1.0, 0.0], "type2": 2},
+            params={
+                "numattr": 2,
+                "type1": 0,
+                "value1v": ParmTuple(("value1v1", "value1v2"), (1.0, 0.0)),
+                "type2": 2,
+            },
         )
         mock_hou.node("/obj").createNode("geo", "geo1").attach(node)
         give_templates(

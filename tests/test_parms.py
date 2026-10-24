@@ -19,11 +19,14 @@ from houdini_mcp.tools.parms import (
     write,
     write_all,
 )
-from tests.conftest import MockHouNode, link_failure
+from tests.conftest import MockHouModule, MockHouNode, link_failure
 
 
 def node_with(**params):
-    return MockHouNode(path="/obj/n", name="n", node_type="geo", params=params)
+    """A geo in a scene of its own, holding ``params``."""
+    node = MockHouNode(path="/obj/n", name="n", node_type="geo", params=params)
+    MockHouModule().add_node(node)
+    return node
 
 
 class TestResolve:
@@ -59,14 +62,14 @@ class TestReadAndWrite:
         node = node_with(radx=2.5, t=[0.0, 0.0, 0.0])
         write(resolve(node, "radx"), 4.0)
         write(resolve(node, "t"), [1.0, 2.0, 3.0])
-        assert node._params["radx"] == 4.0
-        assert list(node._params["t"]) == [1.0, 2.0, 3.0]
+        assert node.parm("radx").eval() == 4.0
+        assert list(node.parmTuple("t").eval()) == [1.0, 2.0, 3.0]
 
     def test_a_tuple_refuses_a_scalar_before_touching_houdini(self):
         node = node_with(t=[0.0, 0.0, 0.0])
         with pytest.raises(ParmValueError, match="t is a tuple"):
             write(resolve(node, "t"), 1.0)
-        assert list(node._params["t"]) == [0.0, 0.0, 0.0]
+        assert list(node.parmTuple("t").eval()) == [0.0, 0.0, 0.0]
 
 
 class TestReadPresent:
@@ -141,7 +144,7 @@ class TestWriteAll:
             "invalid_input",
             "operation_failed",
         ]
-        assert node._params["radx"] == 3.0
+        assert node.parm("radx").eval() == 3.0
         assert (
             "updated=['radx'] failed=[{'name': 't', 'kind': 'invalid_input', 'reason': "
             in caplog.text
@@ -172,7 +175,9 @@ class TestToolsShareTheOwner:
     def test_set_parameter_refuses_a_scalar_for_a_tuple(self, mock_connection, caplog):
         from houdini_mcp.tools import set_parameter
 
-        mock_connection.add_node(node_with(t=[0.0, 0.0, 0.0]))
+        mock_connection.add_node(
+            MockHouNode(path="/obj/n", name="n", node_type="geo", params={"t": [0.0, 0.0, 0.0]})
+        )
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
             result = set_parameter("/obj/n", "t", 1.0, host="localhost", port=18811)
         assert "parameters written node=/obj/n updated=[] failed=[{'name': 't'" in caplog.text
@@ -212,10 +217,10 @@ class TestToolsShareTheOwner:
         from houdini_mcp.tools import create_render_node
 
         result = create_render_node(
-            "karma", "k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811
+            "karma", "k", {"resolutionx": 1920, "nope": 1}, host="localhost", port=18811
         )
         assert result["kind"] == "invalid_input", result
-        assert result["updated"] == [{"name": "tx", "value": 1.0}]
+        assert result["updated"] == [{"name": "resolutionx", "value": 1920}]
         assert result["failed"] == [
             {
                 "name": "nope",
@@ -229,10 +234,12 @@ class TestToolsShareTheOwner:
         from houdini_mcp.tools import set_render_settings
 
         mock_connection.add_node(MockHouNode(path="/out/k", name="k", node_type="karma"))
-        before = mock_connection.node("/out/k").parm("tx").eval()
-        result = set_render_settings("/out/k", {"tx": 1.0, "nope": 1}, host="localhost", port=18811)
+        before = mock_connection.node("/out/k").parm("resolutionx").eval()
+        result = set_render_settings(
+            "/out/k", {"resolutionx": 1920, "nope": 1}, host="localhost", port=18811
+        )
         assert result["kind"] == "invalid_input", result
-        assert result["updated"] == [{"name": "tx", "value": 1.0}]
+        assert result["updated"] == [{"name": "resolutionx", "value": 1920}]
         assert result["failed"] == [
             {
                 "name": "nope",
@@ -240,7 +247,7 @@ class TestToolsShareTheOwner:
                 "reason": "Parameter not found: nope on /out/k",
             }
         ]
-        assert mock_connection.node("/out/k").parm("tx").eval() == before
+        assert mock_connection.node("/out/k").parm("resolutionx").eval() == before
 
     def test_set_render_settings_that_writes_nothing_is_an_error(self, mock_connection):
         """Every setting refused: the caller is told which settings and why, as
@@ -286,7 +293,13 @@ class TestToolsShareTheOwner:
             )
         )
         settings = get_render_settings("/out/k", host="localhost", port=18811)
-        assert settings["settings"] == {"engine": "xpu", "f1": 1}
+        # Karma's resolution is one tuple whose components the schema names
+        assert settings["settings"] == {
+            "engine": "xpu",
+            "f1": 1,
+            "resolutionx": 1920,
+            "resolutiony": 1080,
+        }
 
 
 class TestJsonSafeHouValue:

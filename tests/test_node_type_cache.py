@@ -144,7 +144,7 @@ class TestNodeTypeCacheReadsThroughTheProxy:
             for name in types_of.nodeTypes()
         }
         assert types.filter(category="Object", name_filter="geo") == [
-            {"category": "Object", "name": "geo", "description": "Geo node"}
+            {"category": "Object", "name": "geo", "description": "Geometry"}
         ]
 
 

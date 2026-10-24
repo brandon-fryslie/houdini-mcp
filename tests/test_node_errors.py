@@ -184,7 +184,7 @@ class TestGetNodeInfoWithErrors:
 
         # Create a test node with params and errors
         geo1 = MockHouNode(
-            path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.0, "ty": 2.0, "tz": 3.0}
+            path="/obj/geo1", name="geo1", node_type="geo", params={"t": [1.0, 2.0, 3.0]}
         )
         geo1._warnings = ["Test warning"]
         mock_connection.add_node(geo1)

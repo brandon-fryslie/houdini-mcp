@@ -690,7 +690,7 @@ class TestSetParameter:
 
         # Add a node with params
         geo1 = MockHouNode(
-            path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 0.0, "ty": 0.0, "tz": 0.0}
+            path="/obj/geo1", name="geo1", node_type="geo", params={"t": [0.0, 0.0, 0.0]}
         )
         mock_connection.add_node(geo1)
 
@@ -714,7 +714,9 @@ class TestSetParameter:
         """Test setting non-existent parameter."""
         from houdini_mcp.tools import set_parameter
 
-        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 0.0})
+        geo1 = MockHouNode(
+            path="/obj/geo1", name="geo1", node_type="geo", params={"t": [0.0, 0.0, 0.0]}
+        )
         mock_connection.add_node(geo1)
 
         result = set_parameter("/obj/geo1", "nonexistent", 5.0, host="localhost", port=18811)
@@ -750,8 +752,7 @@ class TestGetNodeInfo:
             path="/obj/geo1",
             name="geo1",
             node_type="geo",
-            type_description="Geometry Container",
-            params={"tx": 1.0, "ty": 2.0, "tz": 3.0},
+            params={"t": [1.0, 2.0, 3.0]},
         )
         mock_connection.add_node(geo1)
 
@@ -833,7 +834,7 @@ class TestGetNodeInfo:
             name="geo1",
             node_type="geo",
             children=[child1],
-            params={"tx": 1.0, "ty": 2.0},
+            params={"t": [1.0, 2.0, 0.0]},
         )
         mock_connection.add_node(geo1)
 
@@ -1008,7 +1009,9 @@ class TestSerializeScene:
         """Test serializing scene includes params when requested."""
         from houdini_mcp.tools import serialize_scene
 
-        geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", params={"tx": 1.0})
+        geo1 = MockHouNode(
+            path="/obj/geo1", name="geo1", node_type="geo", params={"t": [1.0, 0.0, 0.0]}
+        )
         mock_connection.add_node(geo1)
 
         result = await serialize_scene(
@@ -1203,7 +1206,7 @@ class TestListChildren:
 
         # Create a parent with children
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
 
         # Set up connection: noise input 0 -> grid output 0
         noise._inputs = [grid]
@@ -1229,7 +1232,7 @@ class TestListChildren:
         # Check noise node (has input from grid)
         noise_info = next(c for c in result["children"] if c["name"] == "noise1")
         assert noise_info["path"] == "/obj/geo1/noise1"
-        assert noise_info["type"] == "noise"
+        assert noise_info["type"] == "attribnoise::2.0"
         assert len(noise_info["inputs"]) == 1
         assert noise_info["inputs"][0] == {
             "input_index": 0,
@@ -1302,7 +1305,7 @@ class TestListChildren:
     ):
         from houdini_mcp.tools import list_children
 
-        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="attribwrangle")
         locked.children = MagicMock(  # type: ignore[method-assign]
             side_effect=raised_inside_houdini(RuntimeError("locked asset"))
         )
@@ -1324,7 +1327,7 @@ class TestListChildren:
     ):
         from houdini_mcp.tools import list_children
 
-        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="hda")
+        locked = MockHouNode(path="/obj/geo1/hda", name="hda", node_type="attribwrangle")
         locked.children = MagicMock(  # type: ignore[method-assign]
             side_effect=raised_inside_houdini(RuntimeError("locked asset"))
         )
@@ -1431,7 +1434,7 @@ class TestListChildren:
         from houdini_mcp.tools import list_children
 
         def locked(name: str) -> MockHouNode:
-            node = MockHouNode(path=f"/obj/geo1/{name}", name=name, node_type="hda")
+            node = MockHouNode(path=f"/obj/geo1/{name}", name=name, node_type="attribwrangle")
             node.children = MagicMock(  # type: ignore[method-assign]
                 side_effect=raised_inside_houdini(RuntimeError("locked asset"))
             )
@@ -1495,7 +1498,7 @@ class TestListChildren:
 
         # Create a parent with children
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
         noise._inputs = [grid]
         grid._outputs = [noise]
 
@@ -1523,13 +1526,17 @@ class TestListChildren:
     def test_compact_flags_are_optional_per_node(self, mock_connection):
         from houdini_mcp.tools import list_children
 
+        # a DopNode has a display flag and no render flag, in Houdini 22
         child = MockNodeLacking(
-            path="/obj/geo1/custom", name="custom", node_type="custom", lacks=("isRenderFlagSet",)
+            path="/obj/dopnet1/solver",
+            name="solver",
+            node_type="subnet",
+            lacks=("isRenderFlagSet",),
         )
         mock_connection.add_node(
-            MockHouNode(path="/obj/geo1", name="geo1", node_type="geo", children=[child])
+            MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet", children=[child])
         )
-        result = list_children("/obj/geo1", compact=True, host="localhost", port=18811)
+        result = list_children("/obj/dopnet1", compact=True, host="localhost", port=18811)
         assert result["returned"] == 1
         assert result["children"][0]["flags"][1] == "-"
 
@@ -1585,9 +1592,9 @@ class TestFindNodes:
         from houdini_mcp.tools import find_nodes
 
         mock_connection.node("/obj").createNode("geo", "geo1")
-        noise1 = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise1 = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
         mock_connection.add_node(noise1)
-        noise2 = MockHouNode(path="/obj/geo1/noise2", name="noise2", node_type="noise")
+        noise2 = MockHouNode(path="/obj/geo1/noise2", name="noise2", node_type="attribnoise")
         mock_connection.add_node(noise2)
         grid1 = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
         mock_connection.add_node(grid1)
@@ -1609,7 +1616,7 @@ class TestFindNodes:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         my_noise = MockHouNode(
-            path="/obj/geo1/my_noise_node", name="my_noise_node", node_type="noise"
+            path="/obj/geo1/my_noise_node", name="my_noise_node", node_type="attribnoise"
         )
         mock_connection.add_node(my_noise)
         other = MockHouNode(path="/obj/other", name="other", node_type="null")
@@ -1647,7 +1654,9 @@ class TestFindNodes:
         from houdini_mcp.tools import find_nodes
 
         # Create nested structure
-        deep_noise = MockHouNode(path="/obj/geo1/subnet1/noise1", name="noise1", node_type="noise")
+        deep_noise = MockHouNode(
+            path="/obj/geo1/subnet1/noise1", name="noise1", node_type="attribnoise"
+        )
         subnet = MockHouNode(
             path="/obj/geo1/subnet1", name="subnet1", node_type="subnet", children=[deep_noise]
         )
@@ -1916,7 +1925,7 @@ class TestGetNodeInfoExtended:
         # Create connected nodes
         mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
 
         # Connect: noise input 0 -> grid output 0
         noise._inputs = [grid]
@@ -2005,7 +2014,7 @@ class TestConnectNodes:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
 
         mock_connection.add_node(grid)
         mock_connection.add_node(noise)
@@ -2053,7 +2062,7 @@ class TestConnectNodes:
         from houdini_mcp.tools import connect_nodes
 
         mock_connection.node("/obj").createNode("geo", "geo1")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
         mock_connection.add_node(noise)
 
         result = connect_nodes(
@@ -2085,7 +2094,7 @@ class TestConnectNodes:
         mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
 
         mock_connection.add_node(grid)
         mock_connection.add_node(sphere)
@@ -2143,7 +2152,7 @@ class TestDisconnectNodeInput:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         grid = MockHouNode(path="/obj/geo1/grid1", name="grid1", node_type="grid")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
 
         mock_connection.add_node(grid)
         mock_connection.add_node(noise)
@@ -2196,7 +2205,7 @@ class TestDisconnectNodeInput:
         from houdini_mcp.tools import disconnect_node_input
 
         mock_connection.node("/obj").createNode("geo", "geo1")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
         noise._inputs = [None]
         mock_connection.add_node(noise)
 
@@ -2238,7 +2247,7 @@ class TestSetNodeFlags:
         from houdini_mcp.tools import set_node_flags
 
         mock_connection.node("/obj").createNode("geo", "geo1")
-        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="noise")
+        noise = MockHouNode(path="/obj/geo1/noise1", name="noise1", node_type="attribnoise")
         mock_connection.add_node(noise)
 
         result = set_node_flags(
@@ -2808,7 +2817,7 @@ class TestMaterialTools:
 
         assert result["status"] == "success"
         assert result["material_name"] == "principledshader1"
-        assert result["material_type"] == "principledshader"
+        assert result["material_type"] == "principledshader::2.0"
 
     def test_create_material_success(self, mock_connection):
         """Test successful material creation."""
@@ -2845,8 +2854,8 @@ class TestMaterialTools:
         assert result["failed"] == []
         created = mock_connection.node("/mat").children()[-1]
         assert created.name() == "red_metal"
-        assert created._params["metallic"] == 1.0
-        assert list(created._params["basecolor"]) == [1, 0, 0]
+        assert created.parm("metallic").eval() == 1.0
+        assert list(created.parmTuple("basecolor").eval()) == [1, 0, 0]
 
     def test_assign_material_success(self, mock_connection):
         """Test successful material assignment to geometry."""
@@ -2879,7 +2888,7 @@ class TestMaterialTools:
         mat_sop = next((c for c in geo.children() if c.type().name() == "material"), None)
         assert mat_sop is not None, "expected a material SOP created inside /obj/geo1"
         assert result["material_sop_path"] == mat_sop.path()
-        assert mat_sop._params.get("shop_materialpath1") == "/mat/test_mat"
+        assert mat_sop.parm("shop_materialpath1").eval() == "/mat/test_mat"
 
     def test_assign_material_that_writes_nothing_to_an_existing_sop_is_an_error(
         self, mock_connection
@@ -2890,7 +2899,13 @@ class TestMaterialTools:
         from houdini_mcp.tools.failure import FAILURE, InvalidInputFailure
 
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        mat_sop = MockHouNode(path="/obj/geo1/material1", name="material1", node_type="material")
+        # its material slots removed: no shop_materialpath1 or group1 to write
+        mat_sop = MockHouNode(
+            path="/obj/geo1/material1",
+            name="material1",
+            node_type="material",
+            params={"num_materials": 0},
+        )
         mat_sop._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(mat_sop)

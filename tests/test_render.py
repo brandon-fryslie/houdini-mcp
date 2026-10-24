@@ -1,6 +1,7 @@
 """Tests for the render_viewport function."""
 
 import base64
+import dataclasses
 import logging
 import math
 import os
@@ -12,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
+from tests.fake_node_types import ParmTuple
 
 
 class TestRenderViewportValidation:
@@ -1219,12 +1221,13 @@ class TestRenderFraming:
         """A studio's own defaults for a camera's rotate and transform orders do not move
         it: the render sets the orders camera_position and camera_rotation are stated in."""
         import houdini_mcp.tools as tools
-        from tests.conftest import _TYPE_DEFAULT_PARAMS
+        from tests.conftest import _ACCEPTED
 
+        # the cam a studio's defaults give: rotate zxy, transform trs, as menu indices
+        cam = _ACCEPTED["Object"]["cam"]
+        orders = {"rOrd": ParmTuple(("rOrd",), (4,)), "xOrd": ParmTuple(("xOrd",), (5,))}
         monkeypatch.setitem(
-            _TYPE_DEFAULT_PARAMS,
-            "cam",
-            {**_TYPE_DEFAULT_PARAMS["cam"], "rOrd": "zxy", "xOrd": "trs"},
+            _ACCEPTED["Object"], "cam", dataclasses.replace(cam, parms={**cam.parms, **orders})
         )
 
         result = getattr(tools, tool)(host="localhost", port=18811)
