@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `load_scene` of a file Houdini loads with warnings, such as a node whose
+  asset definition is missing, reports the load as a success carrying
+  Houdini's text under `warning` (houdini-laws-etg.79h). Houdini raises
+  `hou.LoadWarning` once such a file has loaded, and `load_scene` reported
+  it as `operation_failed`, keeping the caches of the scene it had replaced.
+  Needs this release's plugin, which adds `houdini_mcp_scene`.
+
 - `get_geo_summary` reads the geometry inside Houdini, in the same few requests
   whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on
   Houdini 22 for 3 points and for 5000 points with ten attributes and ten

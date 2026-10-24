@@ -12,8 +12,10 @@ import pytest
 from tests.conftest import (
     SUMMARIZER,
     HouPermissionError,
+    LoadWarning,
     MockHouNode,
     MockNodeLacking,
+    OperationFailed,
     link_failure,
     raised_inside_houdini,
 )
@@ -1063,16 +1065,88 @@ class TestSceneOperations:
         assert result["status"] == "success"
         assert result["file_path"] == "/path/to/new.hip"
 
-    def test_load_scene_success(self, mock_connection):
+    def test_load_scene_success(self, mock_connection, caplog):
         """Test loading scene successfully."""
         from houdini_mcp.tools import load_scene
 
-        result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.scene"):
+            result = load_scene("/path/to/scene.hip", host="localhost", port=18811)
 
         assert result["status"] == "success"
+        assert "warning" not in result
         mock_connection.hipFile.load.assert_called_once_with(
             "/path/to/scene.hip", suppress_save_prompt=True
         )
+        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.scene"] == [
+            "Loaded /path/to/scene.hip; Houdini's load warnings: None"
+        ]
+
+    @pytest.mark.parametrize(
+        ("replace", "houdini_call"),
+        [
+            (lambda tools: tools.load_scene("/scenes/truncated.hip"), "load"),
+            (lambda tools: tools.new_scene(), "clear"),
+        ],
+        ids=["load_scene", "new_scene"],
+    )
+    def test_a_scene_replacement_that_failed_still_drops_the_caches(
+        self, mock_connection, replace, houdini_call
+    ):
+        """Houdini may have replaced the scene before the call raised."""
+        from houdini_mcp import tools
+
+        getattr(mock_connection.hipFile, houdini_call).side_effect = OperationFailed(
+            "The attempted operation failed."
+        )
+        assert tools.list_node_types()["_cache_info"]["hit"] is False
+        assert tools.list_node_types()["_cache_info"]["hit"] is True
+
+        assert replace(tools)["status"] == "error"
+        assert tools.list_node_types()["_cache_info"]["hit"] is False
+
+    def test_a_load_houdini_warned_about_is_a_load_carrying_its_warning(
+        self, mock_connection, caplog
+    ):
+        """hipFile.load raises LoadWarning once the file has loaded: the scene is the
+        file's, so the caches that described the last one are dropped."""
+        from houdini_mcp.tools import list_node_types, load_scene
+
+        warned = (
+            "Warnings were generated during load.\n"
+            "Error loading: /scenes/next.hip\n"
+            'Warning:     "/obj/g/s" using incomplete asset definition (full definition not found).'
+        )
+        mock_connection.hipFile.load.side_effect = LoadWarning(warned)
+        assert list_node_types()["_cache_info"]["hit"] is False
+        assert list_node_types()["_cache_info"]["hit"] is True
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.scene"):
+            result = load_scene("/scenes/next.hip")
+
+        assert result == {
+            "status": "success",
+            "message": "Scene loaded",
+            "file_path": "/scenes/next.hip",
+            "warning": warned,
+        }
+        assert list_node_types()["_cache_info"]["hit"] is False
+        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.scene"] == [
+            f"Loaded /scenes/next.hip; Houdini's load warnings: {warned}"
+        ]
+
+    def test_a_load_houdini_warned_about_still_reports_its_backup(self, mock_connection):
+        from houdini_mcp.tools import load_scene
+
+        mock_connection.hipFile.hasUnsavedChanges.return_value = True
+        mock_connection.hipFile.load.side_effect = LoadWarning(
+            "Warnings were generated during load."
+        )
+
+        result = load_scene("/scenes/next.hip")
+
+        assert result["status"] == "success"
+        assert result["warning"] == "Warnings were generated during load."
+        assert result["checkpoint"] == "/path/to/backup/test_bak1.hip"
 
     def test_new_scene_success(self, mock_connection):
         """Test creating new scene successfully."""

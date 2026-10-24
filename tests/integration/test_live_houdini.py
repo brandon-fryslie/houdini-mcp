@@ -1,6 +1,7 @@
 """Tool round trips against a live Houdini."""
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from houdini_mcp import tools
@@ -378,3 +379,25 @@ def test_a_failed_write_that_changed_nothing_leaves_the_last_step_on_top(
     assert "undone" not in refused["message"]
     assert _undo_labels(at) == before
     assert tools.get_node_info("/obj/it_kept", **at)["status"] == "success"
+
+
+def test_houdini_22_loads_a_scene_whose_asset_is_missing_with_its_warning(
+    at: dict[str, Any], tmp_path: Path
+) -> None:
+    hip, hda = tmp_path / "missing_asset.hip", tmp_path / "gone.hda"
+    with using(**at) as link:
+        hou = link.hou
+        subnet = hou.node("/obj").createNode("geo", "it_g").createNode("subnet", "it_s")
+        subnet.createDigitalAsset(name="it_gone", hda_file_name=str(hda), description="it_gone")
+        hou.hipFile.save(str(hip))
+        hou.hda.uninstallFile(str(hda))
+    hda.unlink()
+
+    loaded = tools.load_scene(str(hip), **at)
+
+    assert loaded["status"] == "success", loaded
+    assert loaded["warning"].startswith("Warnings were generated during load.\n"), loaded
+    assert '"/obj/it_g/it_s" using incomplete asset definition' in loaded["warning"]
+    with using(**at) as link:
+        assert link.hou.hipFile.path() == str(hip)
+    assert tools.get_node_info("/obj/it_g/it_s", **at)["status"] == "success"
