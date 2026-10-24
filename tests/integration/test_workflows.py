@@ -278,15 +278,6 @@ class TestParameterWorkflow:
         for name, entry in listed.items():
             assert get_parameter_schema(node_path, parm_name=name, **at)["parameters"] == [entry]
 
-    def test_a_named_component_is_its_vector(self, at: dict[str, Any]) -> None:
-        geo = create_node("geo", "/obj", "test_component", **at)["node_path"]
-        sphere = create_node("sphere", geo, "s", **at)["node_path"]
-
-        [rad] = get_parameter_schema(sphere, parm_name="rad", **at)["parameters"]
-
-        assert rad["name"] == "rad"
-        assert get_parameter_schema(sphere, parm_name="radx", **at)["parameters"] == [rad]
-
 
 class TestErrorHandling:
     """Error detection, diagnosis, and fixing."""

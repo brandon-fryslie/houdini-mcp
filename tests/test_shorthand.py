@@ -113,7 +113,7 @@ class TestRoundTrip:
                 {
                     "path": "/obj/a",
                     "inputs": [{"path": "/obj/x", "index": 0}],
-                    "errors": [{"severity": "error"}],
+                    "errors": ["Undefined node type"],
                     "nodes": [{"path": "/obj/a/b", "inputs": [], "nodes": []}],
                 }
             ]

@@ -124,8 +124,10 @@ def get_node_info(
         warnings (and last_cook_time after a forced cook: {unread} for a cook
         that failed or that the cook count does not show, as none runs in
         Houdini's Manual update mode or on a hard-locked node, and a legacy
-        COP2's leaves the count unchanged). cook_count is how many
-        times Houdini has cooked the node, and needs_to_cook is Houdini's
+        COP2's leaves the count unchanged). Any part of cook_info Houdini would
+        not give is {unread}. errors and warnings are each the list of messages
+        Houdini lists on the node, as find_error_nodes gives them. cook_count is
+        how many times Houdini has cooked the node, and needs_to_cook is Houdini's
         needsToCook(): for a SOP, True after a change and after a cook that failed.
         On Houdini 22 some nodes answer the same after every cook: VOPs, most DOPs
         and networks such as /obj always need to cook, and ROPs never do.
@@ -239,10 +241,10 @@ def _cook_info(node: Any, *, force: bool) -> dict[str, Any]:
     # cook, a ROP never does), and every pair of them is one Houdini gives.
     cook_info["cook_count"] = read(f"cook count of {path}", node.cookCount)
     cook_info["needs_to_cook"] = read(f"needs to cook of {path}", node.needsToCook)
-    cook_info["errors"] = read(f"errors of {path}", lambda: _messages("error", path, node.errors()))
-    cook_info["warnings"] = read(
-        f"warnings of {path}", lambda: _messages("warning", path, node.warnings())
-    )
+    # [LAW:one-source-of-truth] the messages as Houdini lists them, as find_error_nodes
+    # and get_geo_summary give them: the key is their severity, the result's path their node
+    cook_info["errors"] = read(f"errors of {path}", lambda: list(node.errors()))
+    cook_info["warnings"] = read(f"warnings of {path}", lambda: list(node.warnings()))
     logger.debug(
         "cook info path=%s force=%s cook_count=%s needs_to_cook=%s",
         path,
@@ -271,10 +273,6 @@ def _cook(node: Any) -> float:
     if node.cookCount() == before:
         raise UncountedCook(f"the cook count stayed at {before}")
     return time.time()
-
-
-def _messages(severity: str, path: str, messages: Any) -> list[dict[str, str]]:
-    return [{"severity": severity, "message": m, "node_path": path} for m in messages]
 
 
 @tool(UNDOABLE)

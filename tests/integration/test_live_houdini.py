@@ -228,7 +228,7 @@ def test_cook_info_reports_houdini_22s_answers_after_a_forced_cook(at: dict[str,
 
     failed = cook_info(failing, "force_cook")
     assert failed["needs_to_cook"] is True
-    assert "planted" in failed["errors"][0]["message"]
+    assert "planted" in failed["errors"][0]
     assert failed["last_cook_time"]["unread"].startswith("hou.OperationFailed")
 
 

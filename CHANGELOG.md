@@ -213,6 +213,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `get_node_info`'s `cook_info.errors` and
+  `cook_info.warnings` are lists of the messages Houdini lists on the node, the
+  shape `find_error_nodes` and `get_geo_summary` give a node's errors in
+  (houdini-laws-etg.3ft). Each message was `{"severity", "message",
+  "node_path"}`, so a client reading one tool's errors as `e["message"]` raised
+  on the others'. The severity is the key a message is under, and the node is
+  the result's `path`.
+
 - **BREAKING (wire)**: at its `timeout`, `execute_code` cuts its program off
   from Houdini and undoes its step (houdini-laws-etg.lbc): the program's link is
   shut down, which frees Houdini's main thread once the request it is serving
