@@ -116,6 +116,42 @@ def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, 
         assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")
 
 
+def test_a_parent_that_is_not_a_network_is_refused_naming_its_network(
+    at: dict[str, Any],
+) -> None:
+    """Houdini 22 says a SOP box is not a network, so nothing is made inside it."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_leaf", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    refused = tools.create_node("sphere", box, **at)
+
+    assert (refused["kind"], refused["network"]) == ("invalid_input", geo)
+    assert tools.list_children(geo, **at)["returned"] == 1
+
+
+def test_houdinis_refusal_of_a_node_type_is_an_operation_it_refused(at: dict[str, Any]) -> None:
+    """Houdini 22's createNode refuses a type /obj does not offer, in its own words."""
+    before = tools.list_children("/obj", **at)["returned"]
+
+    refused = tools.create_node("nosuchtype", "/obj", **at)
+
+    assert (refused["kind"], refused["node_type"]) == ("operation_failed", "nosuchtype")
+    assert refused["message"].endswith(
+        "hou.OperationFailed: The attempted operation failed.\nInvalid node type name"
+    )
+    assert tools.list_children("/obj", **at)["returned"] == before
+
+
+def test_a_network_spelled_with_a_trailing_slash_is_that_network(at: dict[str, Any]) -> None:
+    """Houdini 22's hou.node resolves "/obj/geo1/" to /obj/geo1, whose children a box takes."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_slash", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    boxed = tools.create_network_box(f"{geo}/", [box], **at)
+
+    assert (boxed["status"], boxed["parent_path"]) == ("success", geo)
+
+
 def test_a_flag_a_nodes_class_does_not_have_reads_null(at: dict[str, Any]) -> None:
     """On Houdini 22 /obj has neither flag, an object only a display flag, a SOP both."""
 

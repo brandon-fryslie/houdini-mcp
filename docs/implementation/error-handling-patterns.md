@@ -392,15 +392,19 @@ MCP client, not by calling the tool function. See
 3. **Raise, don't build error dicts** - one of the exceptions under Key Components,
    with the fields the caller needs; the boundary shapes the response, so every
    tool's failure reads the same and a new tool cannot invent a shape
-4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you
-5. **Clean up connections** - The decorator handles this, but be aware of the pattern
+4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you;
+   a path to a network a tool works inside resolves with `network_at`, which also refuses
+   a node that holds no nodes
+5. **Create nodes with `created_in`** - Houdini's refusal of the node reaches every tool
+   as the same `operation_failed`, in Houdini's words
+6. **Clean up connections** - The decorator handles this, but be aware of the pattern
 
 ## Files Reference
 
 | File | Purpose |
 |------|---------|
 | `houdini_mcp/tools/failure.py` | `ToolFailure`, its arms, what tools raise, and `failure_for` |
-| `houdini_mcp/tools/_common.py` | The `@tool` boundary and `node_at` |
+| `houdini_mcp/tools/_common.py` | The `@tool` boundary, `node_at`, `network_at` and `created_in` |
 | `houdini_mcp/connection.py` | Connection management with retry logic |
 | `tests/conftest.py` | Mock infrastructure for testing |
 | `tests/test_tools.py` | Tests for error handling decorator |

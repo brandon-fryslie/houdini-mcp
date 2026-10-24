@@ -20,7 +20,7 @@ from typing import Any, TypeGuard, TypeVar
 import houdini_mcp_read
 from houdini_mcp_read import UNREAD, Unread, format_reason
 
-from ..connection import transport_failure
+from ..connection import raised_inside_houdini, transport_failure
 
 logger = logging.getLogger("houdini_mcp.tools.reads")
 
@@ -55,9 +55,9 @@ def reason(e: Exception) -> str:
     keeps its message outside them) and keeps the remote traceback, whose lines
     after the last frame are the reason; a message's own lines may be indented.
     """
-    remote_tb = getattr(e, "_remote_tb", None)
-    if remote_tb is None:
+    if not raised_inside_houdini(e):
         return format_reason(e)
+    remote_tb = e._remote_tb  # type: ignore[attr-defined]
     lines = str(remote_tb).rstrip().splitlines()
     frames = [i for i, line in enumerate(lines) if line.startswith('  File "')]
     if not frames:

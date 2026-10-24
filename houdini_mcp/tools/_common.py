@@ -22,6 +22,7 @@ from ..connection import (
     Link,
     houdini,
     is_connected,
+    raised_inside_houdini,
 )
 from .failure import (
     FAILURE,
@@ -38,6 +39,7 @@ from .failure import (
     failure_response,
     tool_error,
 )
+from .reads import reason
 from .transactions import (
     CHECKPOINTED,
     FILE_WRITE,
@@ -90,6 +92,7 @@ __all__ = [
     "batch_status",
     "node_at",
     "network_at",
+    "created_in",
     # Response pagination and bounds (houdini-mcp-2t6)
     "PAGE_LIMIT_MAX",
     "PageLimit",
@@ -113,6 +116,7 @@ __all__ = [
     "Vec3",
     "Count",
     "ResultLimit",
+    "NodeName",
     "SampleCount",
     "Seconds",
     "RGB",
@@ -410,6 +414,30 @@ Seconds = Annotated[int, Field(ge=1, le=86400)]
 """How long a call may wait: zero would give up before it began, and an unbounded wait
 can pass threading.TIMEOUT_MAX and raise after the program has started, so a day is
 the ceiling."""
+NodeName = Annotated[str, Field(min_length=1)]
+"""The name a caller gives a new node. Houdini refuses an empty one, so the wire does;
+a node Houdini is to name is given None, its one spelling."""
+
+
+def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
+    """A new ``node_type`` node in ``network``, named ``name``, or by Houdini when None.
+
+    [LAW:one-source-of-truth] Every node a tool makes for the scene to keep is
+    created here, so Houdini's refusal (a locked asset, a type the network does not
+    offer, a name it will not take) reaches each tool as the same
+    ``operation_failed`` in Houdini's own words, as a parameter set Houdini refused
+    does (parms.write_all).
+    """
+    try:
+        return network.createNode(node_type, name)
+    except Exception as e:
+        # [LAW:no-silent-failure] a lost link or a bug in this process is not a
+        # refusal; it goes on raw, to be classified as what it is
+        if not raised_inside_houdini(e):
+            raise
+        raise OperationFailed(
+            f"Houdini did not create a {node_type!r} node: {reason(e)}", node_type=node_type
+        ) from e
 
 
 class ExecutionTimeoutError(Exception):

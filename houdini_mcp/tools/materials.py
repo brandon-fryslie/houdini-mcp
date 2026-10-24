@@ -11,7 +11,9 @@ from ._common import (
     READ,
     UNDOABLE,
     InvalidInput,
-    OperationFailed,
+    NodeName,
+    created_in,
+    network_at,
     node_at,
     node_category,
     tool,
@@ -25,7 +27,7 @@ logger = logging.getLogger("houdini_mcp.tools.materials")
 @tool(UNDOABLE)
 def create_material(
     material_type: str = "principledshader",
-    name: str | None = None,
+    name: NodeName | None = None,
     parent_path: str = "/mat",
     parameters: dict[str, Any] | None = None,
     host: str = "localhost",
@@ -43,7 +45,8 @@ def create_material(
             - "mtlxstandard_surface": MaterialX Standard Surface
             - "classicshader": Classic Mantra shader
         name: Optional name for the material. Auto-generated if not provided.
-        parent_path: Parent context path (default: "/mat", alternative: "/shop")
+        parent_path: Parent context path (default: "/mat", alternative: "/shop").
+            A node that is not a network is refused, naming the network it sits in.
         parameters: Optional dict of parameter values to set on the material.
             Common principledshader parameters:
             - basecolor: [r, g, b] base color
@@ -68,21 +71,9 @@ def create_material(
     with using(host, port) as link:
         hou = link.hou
 
-        parent = node_at(hou, parent_path, "Parent context")
+        parent = network_at(hou, parent_path, "Parent context")
 
-        # Generate name if not provided
-        if not name:
-            name = f"{material_type}_1"
-
-        # Create the material node
-        try:
-            mat_node = parent.createNode(material_type, name)
-        except Exception as e:
-            raise OperationFailed(
-                f"Failed to create material of type '{material_type}': {str(e)}. "
-                f"Check if this material type is available in your Houdini installation.",
-                material_type=material_type,
-            ) from e
+        mat_node = created_in(parent, material_type, name)
 
         return write_all(mat_node, parameters or {}).fields(
             material_path=mat_node.path(),
@@ -180,7 +171,7 @@ def assign_material(
             mat_sop = existing_mat_sop
         else:
             # Create new Material SOP
-            mat_sop = geo_node.createNode("material", "material1")
+            mat_sop = created_in(geo_node, "material", "material1")
             mat_sop.setFirstInput(display_node)
             mat_sop.setDisplayFlag(True)
             mat_sop.setRenderFlag(True)
