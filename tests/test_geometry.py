@@ -781,7 +781,9 @@ class TestTheProgramHoudiniRuns:
         message = "Node /obj/geo1/box1 has no geometry: geometry() returned None"
         assert result["message"] == message
         assert result["errors"] == ["Invalid source /obj/geo1/box1/attribvop1."]
-        assert f"get_geo_summary failed (operation_failed): {message}" in caplog.messages
+        assert (
+            f"get_geo_summary failed (operation_failed, retry none): {message}" in caplog.messages
+        )
 
     async def test_a_geometry_read_that_raises_carries_the_errors_on_it(self):
         node = self._node(None, geometry=_Raises("cook failed"), errors=lambda: ("boom",))

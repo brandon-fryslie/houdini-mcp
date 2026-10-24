@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A tool that changes the scene no longer answers a failed link with
+  `retry: "call_again"` (houdini-laws-etg.uhu). rpyc's sync timeout leaves the
+  request running in Houdini, and a closed link can follow a request Houdini
+  ran, so following that retry could run `execute_code`'s program, a
+  `create_node` or a `load_scene` twice, or leave a second set of render nodes.
+  `timeout` (with `connection_reset: true`) and `connection_lost` now read the
+  new `retry: "check_scene"` under `execute_code`, every undoable tool,
+  `load_scene`, `new_scene` and the render tools, and the message says to check
+  the scene before calling again; a render's names each temporary node the link
+  left behind. Reads keep `call_again`.
+
 - A `get_geo_summary` of a node whose cook failed says why (houdini-laws-etg.216).
   On Houdini 22 such a node has no geometry, and the reason is only in the errors
   Houdini lists on it. The failure of a SOP with no geometry now carries those

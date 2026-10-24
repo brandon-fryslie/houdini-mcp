@@ -18,8 +18,8 @@ from typing import Any, Literal, cast
 from ..connection import Link, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
-    HOLDS_SCENE,
     READ,
+    RENDER,
     UNDOABLE,
     InvalidInput,
     OperationFailed,
@@ -97,11 +97,13 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
     """
     removed: list[str] = []
     failures: list[tuple[str, Exception]] = []
-    for path, node in reversed(created):
+    remaining = list(reversed(created))
+    for at, (path, node) in enumerate(remaining):
         try:
             node.destroy()
         except Exception as e:
             if transport_failure(e):
+                _tell_stranded(e, remaining[at:])
                 raise
             logger.error("Failed to destroy temporary render node %s: %r", path, e)
             failures.append((path, e))
@@ -109,6 +111,12 @@ def _destroy(created: list[tuple[str, Any]]) -> list[tuple[str, Exception]]:
             removed.append(path)
     logger.debug("Removed temporary render nodes: %s", removed)
     return failures
+
+
+def _tell_stranded(lost: BaseException, nodes: Sequence[tuple[str, Any]]) -> None:
+    """Tell, on the link failure ``lost``, each temporary node it left in the scene."""
+    for path, _ in nodes:
+        add_note(lost, f"temporary render node {path} is still in the scene: the link failed")
 
 
 @contextmanager
@@ -140,6 +148,8 @@ def _temporary_nodes() -> Iterator[Callable[[Any, str, str], Any]]:
         if transport_failure(body) is None:
             for path, failure in _destroy(created):
                 add_note(body, f"also failed to destroy temporary render node {path}: {failure!r}")
+        else:
+            _tell_stranded(body, created)
         raise
     else:
         failures = _destroy(created)
@@ -511,7 +521,7 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
 # =============================================================================
 
 
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_viewport(
     camera_position: Vec3 | None = None,
     camera_rotation: Vec3 = _ISOMETRIC,
@@ -599,7 +609,7 @@ def render_viewport(
         return result
 
 
-@tool(HOLDS_SCENE)
+@tool(RENDER)
 def render_quad_view(
     resolution: Resolution = DEFAULT_RESOLUTION,
     renderer: Renderer = "opengl",

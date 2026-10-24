@@ -386,7 +386,7 @@ class TestDeliver:
         assert parsed.message.endswith(f"past {RESPONSE_BOUND_BYTES} bytes with every string cut")
         assert whole(failure) == result
         assert any(
-            m.startswith("list_children failed (operation_failed): list_children ran")
+            m.startswith("list_children failed (operation_failed, retry none): list_children ran")
             for m in caplog.messages
         )
 

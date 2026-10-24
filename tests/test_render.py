@@ -811,6 +811,16 @@ class TestRenderLeavesSceneUnchanged:
             for context in hou.node("/").children()
         }
 
+    @staticmethod
+    def _added(hou: Any, before: dict[str, list[tuple[int, str]]]) -> list[str]:
+        """The paths of the nodes in the scene now that were not in ``before``."""
+        return [
+            f"{context}/{name}"
+            for context, children in TestRenderLeavesSceneUnchanged._scene(hou).items()
+            for identity, name in children
+            if (identity, name) not in before[context]
+        ]
+
     @pytest.mark.parametrize("tool", TOOLS)
     def test_success_leaves_scene_unchanged(self, rendering_scene: Any, tool: str) -> None:
         import houdini_mcp.tools as tools
@@ -896,11 +906,18 @@ class TestRenderLeavesSceneUnchanged:
             raise link_failure(EOFError("stream has been closed"))
 
         monkeypatch.setattr(MockHouNode, "destroy", destroy)
+        before = self._scene(rendering_scene)
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["kind"] == "connection_lost", result
+        assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
         assert len(destroyed) == 1, destroyed
+        # Every node the failed link left is named, so a client checking the scene
+        # knows what to look for.
+        stranded = self._added(rendering_scene, before)
+        assert stranded and destroyed[0] in stranded
+        for path in stranded:
+            assert f"temporary render node {path} is still in the scene" in result["message"]
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("bad", [{"renderer": "mantra"}, {"karma_engine": "tpu"}])
@@ -1033,12 +1050,17 @@ class TestRenderLeavesSceneUnchanged:
         destroyed: list[str] = []
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
         monkeypatch.setattr(MockHouNode, "destroy", lambda self: destroyed.append(self.path()))
+        before = self._scene(rendering_scene)
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 
-        assert result["kind"] == "connection_lost", result
+        assert (result["kind"], result["retry"]) == ("connection_lost", "check_scene"), result
         assert result["operation"] == tool
         assert destroyed == []
+        stranded = self._added(rendering_scene, before)
+        assert stranded
+        for path in stranded:
+            assert f"temporary render node {path} is still in the scene" in result["message"]
 
     @pytest.mark.parametrize("tool", TOOLS)
     @pytest.mark.parametrize("scene", ["rendering_scene", "render_raises", "rop_refused"])

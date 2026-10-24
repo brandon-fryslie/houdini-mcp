@@ -4,8 +4,10 @@
 body through :func:`recovering` and refuses a scene writer that is not sync, so
 every call that can leave an effect in the scene passes through it. An undoable
 call is one step on Houdini's undo stack, undone if it fails; a call that
-replaces the scene first backs up the scene's unsaved work. No tool body
-recovers its own effect.
+replaces the scene first backs up the scene's unsaved work. Two effects are
+their tool's own to undo, and the policy says so: a program's undo group, which
+outlives the call, and a render's temporary nodes, which it destroys before
+returning.
 """
 
 from __future__ import annotations
@@ -45,6 +47,10 @@ class TransactionPolicy(StrEnum):
     (houdini-laws-etg.lbc)."""
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
     """A file outside the scene: nothing in Houdini to recover."""
+    TEMPORARY_NODES = "temporary_nodes"
+    """The call adds nodes for its own use and destroys them before returning,
+    on its own failure too. A link that fails mid-call reaches none of them, so
+    they stay in the scene."""
 
 
 # File writers (screenshots, save) leave the Houdini scene as it was.
@@ -53,6 +59,8 @@ _SCENE_WRITERS = (
     TransactionPolicy.CHECKPOINT_REQUIRED,
     TransactionPolicy.PROGRAM_UNDO_GROUP,
 )
+# A render leaves nothing it was asked for, yet changes the scene while it runs.
+_SCENE_CHANGERS = (*_SCENE_WRITERS, TransactionPolicy.TEMPORARY_NODES)
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,16 @@ class ToolPolicy:
         return self.recovery in _SCENE_WRITERS
 
     @property
+    def changes_scene(self) -> bool:
+        """Whether a call may change the scene while it runs, so that a call
+        whose link failed partway may have left a change there.
+
+        [LAW:one-source-of-truth] Read off ``recovery``, the policy's statement of
+        what a call leaves behind, never off ``access``, how it holds Houdini.
+        """
+        return self.recovery in _SCENE_CHANGERS
+
+    @property
     def drives_main_thread(self) -> bool:
         """Whether the tool's own body posts its work to Houdini's main thread,
         and so is handed the :class:`MainThread` to post it with.
@@ -89,8 +107,8 @@ class ToolPolicy:
         )
 
     def __post_init__(self) -> None:
-        if self.writes_scene and self.access is Admission.SHARED:
-            raise ValueError(f"A {self.recovery} tool writes the scene, so it cannot share it")
+        if self.changes_scene and self.access is Admission.SHARED:
+            raise ValueError(f"A {self.recovery} tool changes the scene, so it cannot share it")
         if (
             self.recovery is TransactionPolicy.UNDOABLE
             and self.access is not Admission.EXCLUSIVE_ON_MAIN_THREAD
@@ -101,10 +119,11 @@ class ToolPolicy:
 
 
 READ = ToolPolicy(None, Admission.SHARED)
-# Needs the scene to itself for the call and leaves it as found: a read through a
-# program in the one worker slot, or a render that adds a camera and a ROP
-# for the call and removes them before returning.
+# A read through a program in the one worker slot: it needs the scene to itself
+# for the call and changes nothing in it.
 HOLDS_SCENE = ToolPolicy(None, Admission.EXCLUSIVE)
+# A render: it adds a camera and a ROP for the call and removes them before returning.
+RENDER = ToolPolicy(TransactionPolicy.TEMPORARY_NODES, Admission.EXCLUSIVE)
 UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE_ON_MAIN_THREAD)
 CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, Admission.EXCLUSIVE)
 PROGRAM = ToolPolicy(TransactionPolicy.PROGRAM_UNDO_GROUP, Admission.EXCLUSIVE)
@@ -173,8 +192,14 @@ def recovering(
         case TransactionPolicy.CHECKPOINT_REQUIRED:
             recover = _backed_up_first
         # execute_code's program opens its own undo group, which Houdini does not
-        # record off its main thread (houdini-laws-etg.lbc).
-        case TransactionPolicy.PROGRAM_UNDO_GROUP | TransactionPolicy.EXTERNAL_SIDE_EFFECT | None:
+        # record off its main thread (houdini-laws-etg.lbc); a render destroys its
+        # own temporary nodes.
+        case (
+            TransactionPolicy.PROGRAM_UNDO_GROUP
+            | TransactionPolicy.TEMPORARY_NODES
+            | TransactionPolicy.EXTERNAL_SIDE_EFFECT
+            | None
+        ):
             return body()
         case _:
             assert_never(policy.recovery)
