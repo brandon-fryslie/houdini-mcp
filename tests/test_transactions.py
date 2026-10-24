@@ -422,6 +422,9 @@ class TestTheStepsWork:
         assert step.cut_off() is False
         assert houdini().link() is link and link.alive
 
+    def test_work_that_never_began_is_not_cut_off(self, mock_connection):
+        assert UndoStep("probe", BODY_SILENCE).cut_off() is False
+
     def test_what_work_cut_off_returns_is_not_the_calls_and_its_step_is_undone(
         self, mock_connection
     ):
@@ -435,10 +438,10 @@ class TestTheStepsWork:
             assert step.cut_off() is True
             return "done"
 
-        with pytest.raises(OperationFailed, match="returned after it was cut off") as raised:
+        with pytest.raises(OperationFailed, match="returned after it was cut off"):
             step.run(link, work)
 
-        assert "Its changes to the scene were undone." in raised.value.__notes__
+        assert step.told() == ("Its changes to the scene were undone.",)
         assert mock_connection.node("/obj/half") is None
         assert houdini().link() is not link
 

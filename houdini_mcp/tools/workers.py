@@ -189,8 +189,8 @@ class WorkerLedger:
     call is refused naming that worker. The slot passes from a call straight
     to the next one admitted, so nothing can take the scene between them. A
     worker's slot is filled before its thread starts and cleared by the thread
-    itself once its target has ended - the program, its undo group, and any
-    scene reads around it - so :meth:`running` is ``None`` exactly when no
+    itself once its target has ended - the program, its undo step's recovery,
+    and any scene reads around it - so :meth:`running` is ``None`` exactly when no
     worker is using Houdini. Callers ask the ledger, never the thread: the
     thread outlives the slot by a log line.
     """

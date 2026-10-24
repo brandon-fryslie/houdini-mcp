@@ -7,7 +7,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 """
 
 import logging
-import os
 import random
 import socket
 import threading
@@ -231,8 +230,9 @@ class Link:
         request, and Houdini reads the end as it reads a close.
         """
         try:
-            # A dup is shut down and closed here; the fd being polled is left open.
-            with socket.socket(fileno=os.dup(self.conn.fileno())) as sock:
+            # A dup is shut down and closed here; the socket being polled is left open.
+            # socket.dup duplicates a Windows socket handle too, which os.dup cannot.
+            with socket.socket(fileno=socket.dup(self.conn.fileno())) as sock:
                 sock.shutdown(socket.SHUT_RDWR)
         except Exception as e:
             logger.warning(f"Error cutting off {self.name}: {e}")

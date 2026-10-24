@@ -877,6 +877,7 @@ class TestAProgramThatFailedOnTheLink:
 
         assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
         assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert result["message"].count("Its changes to the scene were undone.") == 1
         assert mock_connection.node("/obj/half") is None
         assert houdini().link() is not link and houdini().link().alive
 

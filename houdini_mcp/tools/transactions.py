@@ -326,6 +326,7 @@ Houdini gives its call up: a body that stops talking that long has lost its link
 class _Work(StrEnum):
     """Where an undo step's work stands."""
 
+    PENDING = "pending"
     RUNNING = "running"
     ENDED = "ended"
     CUT = "cut"
@@ -362,12 +363,12 @@ class UndoStep:
         self.label = f"houdini-mcp {operation} {uuid.uuid4().hex[:8]}"
         self._lock = threading.Lock()
         self._link: Link | None = None
-        self._work = _Work.RUNNING
+        self._work = _Work.PENDING
         self._recovered: Recovered | None = None
 
     def run(self, link: Link, work: Callable[[], Result]) -> Result:
-        """What ``work`` returned, its edits this step; recovered if it raised, the
-        failure carrying what recovery told.
+        """What ``work`` returned, its edits this step; recovered if it raised, what
+        recovery told left for the caller to tell once (:meth:`told`).
 
         The step's group is opened and closed on Houdini's main thread, the one
         thread whose undo groups Houdini records, by the plugin, whatever becomes
@@ -381,6 +382,8 @@ class UndoStep:
         self._link = link
 
         def ending() -> Result:
+            with self._lock:
+                self._work = _Work.RUNNING
             try:
                 return work()
             finally:
@@ -408,27 +411,24 @@ class UndoStep:
             if isinstance(outcome, _Raised)
             else OperationFailed(f"{self.operation} returned after it was cut off from Houdini")
         )
-        recovered = self.recover()
-        if recovered.lost is not None:
+        lost = self.recover().lost
+        if lost is not None:
             # A link that failed is the call's failure, telling the one it was undoing.
-            add_note(recovered.lost, f"{self.operation} had failed: {failure}")
-            for note in recovered.told:
-                add_note(recovered.lost, note)
-            raise recovered.lost from failure
-        for note in recovered.told:
-            add_note(failure, note)
+            add_note(lost, f"{self.operation} had failed: {failure}")
+            raise lost from failure
         raise failure
 
     def cut_off(self) -> bool:
-        """Cut the step's work off from Houdini unless it has ended, saying whether
-        it was cut (:meth:`HoudiniConnection.cut_off`).
+        """Cut the step's work off from Houdini while it runs, saying whether it was
+        cut (:meth:`HoudiniConnection.cut_off`): work that never began, or has
+        ended, has nothing to cut.
 
         [LAW:no-ambient-temporal-coupling] One verdict, under the step's lock: work
         that ended is never cut, and what work that was cut returns is never the
         call's. The link is cut under that lock too, so never under an undo.
         """
         with self._lock:
-            if self._work is _Work.ENDED:
+            if self._work is not _Work.RUNNING:
                 return False
             self._work = _Work.CUT
             assert self._link is not None, "a step is cut off once it has run"
@@ -486,8 +486,15 @@ class UndoStep:
 def _undone_on_failure(
     operation: str, link: Link, body: Callable[[], dict[str, Any]]
 ) -> dict[str, Any]:
-    """The body as one Houdini undo step, undone if the body fails."""
-    return UndoStep(operation, BODY_SILENCE).run(link, body)
+    """The body as one Houdini undo step, undone if the body fails, the failure
+    ending with what became of its changes."""
+    step = UndoStep(operation, BODY_SILENCE)
+    try:
+        return step.run(link, body)
+    except BaseException as failure:
+        for note in step.told():
+            add_note(failure, note)
+        raise
 
 
 def _undo_step(undos: Any, label: str) -> tuple[str, ...]:
