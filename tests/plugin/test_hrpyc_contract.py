@@ -13,13 +13,16 @@ import logging
 import socket
 import sys
 import threading
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import houdini_mcp_plugin.listener as listener_module
 import pytest
 import rpyc
 import rpyc.core
 import rpyc.core.stream
+import rpyc.lib
 import rpyc.utils.server
 from houdini_mcp_plugin.listener import (
     HrpycConnection,
@@ -207,30 +210,24 @@ class TestListenerAgainstRealRpyc:
             await_clients_served(server)
         assert [r.getMessage() for r in caplog.records if r.exc_info] == []
         assert unhandled == []
-        assert f"hrpyc client {peer} disconnected from port {port} by the client" in caplog.messages
+        assert (
+            f"hrpyc client {peer} disconnected from port {port} by the client (EOFError: stream has been closed)"
+            in caplog.messages
+        )
 
     def test_stop_disconnects_a_client_about_to_poll_with_no_traceback(
         self, fake_hou, monkeypatch, caplog
     ):
         """stop() closes each client's socket under the thread serving it. A
-        thread blocked in poll() reads that as EOF; one about to enter poll()
-        reads a closed descriptor and fails. Left to itself that second ordering
-        is a narrow race, so the test parks the serving thread at poll()'s entry
-        and stops the listener while it waits there: the losing interleaving,
-        on every run, through rpyc's own code."""
+        thread about to enter poll() then reads a closed descriptor and fails.
+        Left to itself that ordering is a narrow race, so the test parks the
+        serving thread at poll()'s entry and stops the listener while it waits
+        there: the losing interleaving, on every run, through rpyc's own code."""
         real_poll = rpyc.core.stream.SocketStream.poll
-        test_thread = threading.current_thread()
-        armed, parked, released = threading.Event(), threading.Event(), threading.Event()
-        serving: list[threading.Thread] = []
+        released = threading.Event()
         raised: list[BaseException] = []
 
-        def poll(stream: Any, timeout: Any) -> bool:
-            # The client polls on this thread; any other caller is the server's.
-            server_side = threading.current_thread() is not test_thread
-            if not (armed.is_set() and server_side and not parked.is_set()):
-                return real_poll(stream, timeout)
-            serving.append(threading.current_thread())
-            parked.set()
+        def resume(stream: Any, timeout: Any) -> bool:
             assert released.wait(timeout=5), "serving thread was never released"
             try:
                 return real_poll(stream, timeout)
@@ -238,39 +235,99 @@ class TestListenerAgainstRealRpyc:
                 raised.append(exc)
                 raise
 
-        monkeypatch.setattr(rpyc.core.stream.SocketStream, "poll", poll)
-        # The classic service imports a module by name, so this one is served by
-        # the thread serving the client: arm() is set there, mid-request, and
-        # that thread's next poll() is the one after it answers.
-        monkeypatch.setitem(sys.modules, "_park_probe", SimpleNamespace(arm=armed.set))
-        unhandled: list[BaseException | None] = []
-        monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
-        caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
-
-        listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
-        with contextlib.ExitStack() as teardown:
-            # Registered first, so it runs last: a released serving thread
-            # whose listener a failure left open is still closed under it.
-            teardown.callback(listener.stop)
-            teardown.callback(released.set)
-            port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
-            conn, peer = connect_classic(port)
-            teardown.enter_context(contextlib.closing(conn))
-            conn.modules._park_probe.arm()
-            assert parked.wait(timeout=5)
-            assert listener.stop()["status"] == "success"
+        with parked_serving_thread(fake_hou, monkeypatch, caplog, resume) as parked:
+            parked.teardown.callback(released.set)
+            assert parked.listener.stop()["status"] == "success"
             released.set()
-            (thread,) = serving
-            thread.join(timeout=5)
-            assert not thread.is_alive(), "serving thread did not end after stop()"
+            parked.thread.join(timeout=5)
+            assert not parked.thread.is_alive(), "serving thread did not end after stop()"
             with pytest.raises(EOFError):
-                conn.modules.math.sqrt(1.0)
-        assert [r.getMessage() for r in caplog.records if r.exc_info] == []
-        assert unhandled == []
+                parked.conn.modules.math.sqrt(1.0)
         # The parked poll() failed on the descriptor closed under it: the
         # losing interleaving ran, and was recorded as the listener's close.
         (error,) = raised
         assert isinstance(error, OSError)
         assert (
-            f"hrpyc client {peer} disconnected from port {port} by the listener" in caplog.messages
+            f"hrpyc client {parked.peer} disconnected from port {parked.port} by the listener"
+            f" ({type(error).__name__}: {error})" in caplog.messages
         )
+
+    def test_stop_ends_a_serving_thread_whose_poll_the_close_never_wakes(
+        self, fake_hou, monkeypatch, caplog
+    ):
+        """On macOS the close stop() runs under a blocked poll() can swallow the
+        wakeup the shutdown before it sent, leaving the poll asleep on a dead
+        descriptor. The test parks the serving thread in a poll that nothing
+        wakes and that returns only when the time it was given runs out, then
+        stops the listener: the thread still ends, within one serving round."""
+
+        def resume(stream: Any, timeout: Any) -> bool:
+            threading.Event().wait(rpyc.lib.Timeout(timeout).timeleft())
+            return False
+
+        with parked_serving_thread(fake_hou, monkeypatch, caplog, resume) as parked:
+            assert parked.listener.stop()["status"] == "success"
+            parked.thread.join(timeout=listener_module._SERVE_ROUND_SECONDS + 1)
+            assert not parked.thread.is_alive(), "serving thread did not end within a round"
+            with pytest.raises(EOFError):
+                parked.conn.modules.math.sqrt(1.0)
+        assert (
+            f"hrpyc client {parked.peer} disconnected from port {parked.port} by the listener"
+            " (between rounds)" in caplog.messages
+        )
+
+
+@contextlib.contextmanager
+def parked_serving_thread(
+    fake_hou: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    resume: Callable[[Any, Any], bool],
+) -> Iterator[SimpleNamespace]:
+    """A real listener with one classic client, whose serving thread is parked
+    at the entry of its next poll(): that poll is ``resume(stream, timeout)``.
+
+    Yields the listener, the client's connection and address, the bound port,
+    the parked thread and the teardown stack. On exit, on every path, the
+    client is closed and the listener stopped; on the passing path the run
+    logged no traceback and raised nothing to threading.excepthook.
+    """
+    real_poll = rpyc.core.stream.SocketStream.poll
+    test_thread = threading.current_thread()
+    armed, parked = threading.Event(), threading.Event()
+    serving: list[threading.Thread] = []
+
+    def poll(stream: Any, timeout: Any) -> bool:
+        # The client polls on this thread; any other caller is the server's.
+        server_side = threading.current_thread() is not test_thread
+        if not (armed.is_set() and server_side and not parked.is_set()):
+            return real_poll(stream, timeout)
+        serving.append(threading.current_thread())
+        parked.set()
+        return resume(stream, timeout)
+
+    monkeypatch.setattr(rpyc.core.stream.SocketStream, "poll", poll)
+    # The classic service imports a module by name, so this one is served by
+    # the thread serving the client: arm() is set there, mid-request, and that
+    # thread's next poll() is the one after it answers.
+    monkeypatch.setitem(sys.modules, "_park_probe", SimpleNamespace(arm=armed.set))
+    unhandled: list[BaseException | None] = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: unhandled.append(args.exc_value))
+    caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+
+    listener = RemoteListener(hrpyc=real_hrpyc(), hou=fake_hou)
+    with contextlib.ExitStack() as teardown:
+        # Registered first, so it runs last: a parked thread whose listener a
+        # failure left open is still closed under it.
+        teardown.callback(listener.stop)
+        port = listener.start(ListenerConfig(host="127.0.0.1", port=0))["bound_port"]
+        conn, peer = connect_classic(port)
+        teardown.enter_context(contextlib.closing(conn))
+        conn.modules._park_probe.arm()
+        assert parked.wait(timeout=5)
+        (thread,) = serving
+        yield SimpleNamespace(
+            listener=listener, conn=conn, peer=peer, port=port, thread=thread, teardown=teardown
+        )
+    assert [r.getMessage() for r in caplog.records if r.exc_info] == []
+    assert unhandled == []

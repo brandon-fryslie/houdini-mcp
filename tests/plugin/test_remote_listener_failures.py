@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import houdini_mcp_handshake as handshake
@@ -691,47 +692,112 @@ class TestReconnect:
 # ---------------------------------------------------------------------------
 
 
+def _closed_fd() -> OSError:
+    """What poll() raises on a descriptor closed under it."""
+    return OSError(errno.EBADF, "Bad file descriptor")
+
+
+# What one serve() round runs into, acting on the server and the connection it serves.
+def _client_closes(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    raise EOFError("connection closed by peer")
+
+
+def _client_resets(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    # rpyc's SocketStream.read raises a socket error as an EOFError carrying it.
+    raise EOFError(OSError(errno.ECONNRESET, "Connection reset by peer"))
+
+
+def _round_closes_the_connection(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    conn.close()
+    return True
+
+
+def _socket_error_on_a_closed_connection(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    conn.close()
+    raise _closed_fd()
+
+
+def _listener_closes_unheard(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    # stop() lands mid-round and its close never wakes the poll: the round ends
+    # on its own bound with nothing served.
+    server.active = False
+    return False
+
+
+def _listener_closes_under_poll(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    server.active = False
+    raise _closed_fd()
+
+
+def _fails_under_a_serving_listener(server: SimpleNamespace, conn: SimpleNamespace) -> bool:
+    raise _closed_fd()
+
+
 class TestClientDisconnect:
     """Who ended a connection is the listener's ``active`` once serving stops:
     the end is recorded with it, unless serving stopped on a socket error under
-    a listener still serving, which is raised instead."""
+    a listener still serving on a connection still open, which is raised
+    instead. Either way the connection is closed."""
 
     PEER = ("127.0.0.1", 50123)
-    # What poll() raises on a descriptor closed under it.
-    CLOSED_FD = OSError(errno.EBADF, "Bad file descriptor")
 
     @pytest.mark.parametrize(
-        ("error", "active", "record"),
+        ("round_", "record"),
         [
-            (None, True, "by the client"),
-            (None, False, "by the listener"),
-            (CLOSED_FD, False, "by the listener"),
+            (_client_closes, "by the client (EOFError: connection closed by peer)"),
+            (
+                _client_resets,
+                f"by the client (EOFError: [Errno {errno.ECONNRESET}] Connection reset by peer)",
+            ),
+            (_round_closes_the_connection, "by the client (between rounds)"),
+            (
+                _socket_error_on_a_closed_connection,
+                "by the client (OSError: [Errno 9] Bad file descriptor)",
+            ),
+            (_listener_closes_unheard, "by the listener (between rounds)"),
+            (
+                _listener_closes_under_poll,
+                "by the listener (OSError: [Errno 9] Bad file descriptor)",
+            ),
         ],
-        ids=["client-closed", "listener-closed", "listener-closed-under-poll"],
+        ids=[
+            "client-closed",
+            "client-reset",
+            "connection-closed-in-a-round",
+            "socket-error-on-a-closed-connection",
+            "listener-closed-unheard",
+            "listener-closed-under-poll",
+        ],
     )
-    def test_a_clean_end_is_recorded_with_who_ended_it(self, caplog, error, active, record):
+    def test_a_clean_end_is_recorded_with_who_ended_it(self, caplog, round_, record):
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
-        listener_module._serve_connection(
-            SimpleNamespace(active=active, port=18811), self.connection(error)
-        )
+        server = SimpleNamespace(active=True, port=18811)
+        conn = self.connection(server, round_)
+        listener_module._serve_connection(server, conn)
         assert caplog.messages == [
             f"hrpyc client {self.PEER} disconnected from port 18811 {record}"
         ]
+        assert conn.closed is True
 
     def test_a_socket_error_under_a_serving_listener_is_raised_not_recorded(self, caplog):
         caplog.set_level(logging.INFO, logger="houdini_mcp_plugin.listener")
+        server = SimpleNamespace(active=True, port=18811)
+        conn = self.connection(server, _fails_under_a_serving_listener)
         with pytest.raises(OSError) as caught:
-            listener_module._serve_connection(
-                SimpleNamespace(active=True, port=18811), self.connection(self.CLOSED_FD)
-            )
-        assert caught.value is self.CLOSED_FD
+            listener_module._serve_connection(server, conn)
+        assert caught.value.errno == errno.EBADF
         assert caplog.messages == []
+        assert conn.closed is True
 
-    def connection(self, error: OSError | None) -> SimpleNamespace:
-        def serve_all() -> None:
-            if error is not None:
-                raise error
-
-        return SimpleNamespace(
-            serve_all=serve_all, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
+    def connection(
+        self,
+        server: SimpleNamespace,
+        round_: Callable[[SimpleNamespace, SimpleNamespace], bool],
+    ) -> SimpleNamespace:
+        """A connection whose every serve() round is *round_* acting on *server* and it."""
+        conn = SimpleNamespace(
+            closed=False, _config={"endpoints": (("127.0.0.1", 18811), self.PEER)}
         )
+        conn.serve = lambda _timeout: round_(server, conn)
+        conn.close = lambda: setattr(conn, "closed", True)
+        return conn
