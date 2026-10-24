@@ -12,6 +12,7 @@ from ._common import (
     UNDOABLE,
     InvalidInput,
     OperationFailed,
+    network_at,
     node_at,
     node_category,
     tool,
@@ -43,7 +44,8 @@ def create_material(
             - "mtlxstandard_surface": MaterialX Standard Surface
             - "classicshader": Classic Mantra shader
         name: Optional name for the material. Auto-generated if not provided.
-        parent_path: Parent context path (default: "/mat", alternative: "/shop")
+        parent_path: Parent context path (default: "/mat", alternative: "/shop").
+            A node that is not a network is refused, naming the network it sits in.
         parameters: Optional dict of parameter values to set on the material.
             Common principledshader parameters:
             - basecolor: [r, g, b] base color
@@ -68,7 +70,7 @@ def create_material(
     with using(host, port) as link:
         hou = link.hou
 
-        parent = node_at(hou, parent_path, "Parent context")
+        parent = network_at(hou, parent_path, "Parent context")
 
         # Generate name if not provided
         if not name:

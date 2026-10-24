@@ -125,6 +125,43 @@ class TestCreateNode:
             assert result["node_type"] == node_type
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "what", "call"),
+    [
+        ("create_node", "Parent node", lambda t, leaf: t.create_node("sphere", leaf)),
+        ("create_material", "Parent context", lambda t, leaf: t.create_material(parent_path=leaf)),
+        (
+            "create_network_box",
+            "Parent node",
+            lambda t, leaf: t.create_network_box(leaf, [f"{leaf}/sphere1"]),
+        ),
+        ("layout_children", "Node", lambda t, leaf: t.layout_children(leaf)),
+    ],
+)
+def test_a_tool_given_a_parent_that_is_not_a_network_refuses_it_and_leaves_the_scene(
+    mock_connection, caplog, tool_name, what, call
+):
+    """A box holds no nodes, so a tool told to work inside one is refused before
+    it touches the scene, naming the network the box sits in, as
+    render_node_network refuses it."""
+    from houdini_mcp import tools
+
+    mock_connection.node("/obj").createNode("geo", "geo1").createNode("box", "box1")
+    before = mock_connection.node("/").state()
+
+    with caplog.at_level(logging.INFO):
+        result = call(tools, "/obj/geo1/box1")
+
+    message = f"{what} /obj/geo1/box1 is not a network, so it holds no nodes; it sits in /obj/geo1"
+    assert (result["kind"], result["message"], result["network"]) == (
+        "invalid_input",
+        message,
+        "/obj/geo1",
+    )
+    assert mock_connection.node("/").state() == before
+    assert f"{tool_name} failed (invalid_input, retry fix_input): {message}" in caplog.messages
+
+
 class TestExecuteCode:
     """Tests for the execute_code function."""
 

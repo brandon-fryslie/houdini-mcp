@@ -11,6 +11,7 @@ from ._common import (
     RGB,
     UNDOABLE,
     InvalidInput,
+    network_at,
     node_at,
     tool,
     using,
@@ -39,7 +40,8 @@ def layout_children(
     child nodes in a clean, organized layout.
 
     Args:
-        node_path: Path to the parent node (e.g., "/obj/geo1")
+        node_path: Path to the network (e.g., "/obj/geo1").
+            A node that is not a network is refused, naming the network it sits in.
         horizontal_spacing: Horizontal spacing between nodes (default: 2.0)
         vertical_spacing: Vertical spacing between nodes (default: 1.0)
 
@@ -53,7 +55,7 @@ def layout_children(
     with using(host, port) as link:
         hou = link.hou
 
-        node = node_at(hou, node_path)
+        node = network_at(hou, node_path)
 
         children = node.children()
         child_count = len(children)
@@ -171,7 +173,8 @@ def create_network_box(
     Network boxes help organize and visually group related nodes.
 
     Args:
-        parent_path: Path to the parent network (e.g., "/obj/geo1")
+        parent_path: Path to the parent network (e.g., "/obj/geo1").
+            A node that is not a network is refused, naming the network it sits in.
         node_paths: List of node paths to include in the box
         label: Optional label text for the network box
         color: Optional RGB color [r, g, b] for the box (0.0-1.0 each)
@@ -191,7 +194,7 @@ def create_network_box(
         hou = link.hou
 
         applied_color = None if color is None else _clamped(color)
-        parent = node_at(hou, parent_path, "Parent node")
+        parent = network_at(hou, parent_path, "Parent node")
 
         # Validate all nodes exist and are children of parent
         nodes = []

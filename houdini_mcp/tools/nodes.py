@@ -25,6 +25,7 @@ from ._common import (
     PageRequest,
     ResultLimit,
     join_warnings,
+    network_at,
     node_at,
     node_flag,
     page_from,
@@ -62,7 +63,8 @@ def create_node(
 
     Args:
         node_type: The type of node to create (e.g., "geo", "null", "cam")
-        parent_path: The parent node path (default: "/obj")
+        parent_path: The network to create the node in (default: "/obj").
+            A node that is not a network is refused, naming the network it sits in.
         name: Optional name for the new node
 
     Examples:
@@ -73,7 +75,7 @@ def create_node(
     with using(host, port) as link:
         hou = link.hou
 
-        parent = node_at(hou, parent_path, "Parent node")
+        parent = network_at(hou, parent_path, "Parent node")
 
         node = parent.createNode(node_type, name) if name else parent.createNode(node_type)
 

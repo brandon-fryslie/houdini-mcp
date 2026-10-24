@@ -116,6 +116,19 @@ def test_the_qt_the_capture_tools_read_from_houdini_encodes_a_png(at: dict[str, 
         assert png_bytes(image, QtCore, "SceneViewer").startswith(b"\x89PNG")
 
 
+def test_a_parent_that_is_not_a_network_is_refused_naming_its_network(
+    at: dict[str, Any],
+) -> None:
+    """Houdini 22 says a SOP box is not a network, so nothing is made inside it."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_leaf", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+
+    refused = tools.create_node("sphere", box, **at)
+
+    assert (refused["kind"], refused["network"]) == ("invalid_input", geo)
+    assert tools.list_children(geo, **at)["returned"] == 1
+
+
 def test_a_flag_a_nodes_class_does_not_have_reads_null(at: dict[str, Any]) -> None:
     """On Houdini 22 /obj has neither flag, an object only a display flag, a SOP both."""
 
