@@ -737,9 +737,11 @@ class MockHouNode:
 
     def _count_cook(self) -> None:
         # [LAW:one-source-of-truth] what a cook leaves, failed or not: the attempt
-        # counts, and a node with errors still needs to cook
+        # counts, and a node with errors still needs to cook and, as Houdini 22's,
+        # has no geometry
         self._cook_count += 1
         self._needs_to_cook = bool(self._errors)
+        self._geometry = None if self._errors else self._geometry
 
     def _cooks(self) -> bool:
         return self.root()._update_mode is not MockUpdateMode.Manual

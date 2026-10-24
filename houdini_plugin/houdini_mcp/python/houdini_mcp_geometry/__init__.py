@@ -46,8 +46,9 @@ class NoGeometry(TypedDict):
 
 @final
 class NotCurrent(TypedDict):
-    """A SOP whose geometry Houdini has not cooked since it changed: what it last
-    cooked, or nothing, which no summary may pass off as its geometry."""
+    """A SOP Houdini still needs to cook after geometry(), as in its Manual update
+    mode: what it last cooked, or nothing, which no summary may pass off as its
+    geometry."""
 
     not_current: str
 
@@ -129,7 +130,7 @@ def _answer(
     # [LAW:no-silent-failure] a summary is of the node's geometry as it is now
     if node.needsToCook():
         return NotCurrent(
-            not_current="Houdini has not cooked it since it changed; its update mode is "
+            not_current="Houdini needs to cook it; its update mode is "
             + hou.updateModeSetting().name()
         )
 

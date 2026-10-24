@@ -202,8 +202,8 @@ class TestTheFakeScene:
             result = await _summary(sphere)
 
         message = (
-            f"Node {sphere}'s geometry is not current: Houdini has not cooked it since"
-            " it changed; its update mode is Manual"
+            f"Node {sphere}'s geometry is not current: Houdini needs to cook it;"
+            " its update mode is Manual"
         )
         assert (result["kind"], result["retry"], result["path"]) == (
             "operation_failed",

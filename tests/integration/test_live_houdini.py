@@ -308,8 +308,8 @@ async def test_a_geometry_summary_in_manual_update_mode_is_of_current_geometry_o
     for refused, path in ((changed, box), (uncooked, sphere)):
         assert (refused["kind"], refused["path"]) == ("operation_failed", path), refused
         assert refused["message"] == (
-            f"Node {path}'s geometry is not current: Houdini has not cooked it since"
-            " it changed; its update mode is Manual"
+            f"Node {path}'s geometry is not current: Houdini needs to cook it;"
+            " its update mode is Manual"
         )
     # back in the mode it was in, the change cooks
     assert (await summary(box))["bounding_box"]["size"] == [5.0, 1.0, 1.0]
@@ -322,11 +322,30 @@ def test_a_forced_cook_in_manual_update_mode_reports_no_cook_time(at: dict[str, 
     box = tools.create_node("box", geo, "box1", **at)["node_path"]
 
     with _manual_update_mode(at):
+        before = tools.get_node_info(box, cook_info="inspect", **at)["cook_info"]["cook_count"]
         cook_info = tools.get_node_info(box, cook_info="force_cook", **at)["cook_info"]
 
-    assert cook_info["cook_count"] == 0 and cook_info["needs_to_cook"] is True, cook_info
+    assert cook_info["cook_count"] == before, (before, cook_info)
     assert cook_info["last_cook_time"] == {
-        "unread": "houdini_mcp.tools.nodes.CookedNothing: Houdini's update mode is Manual"
+        "unread": "houdini_mcp.tools.nodes.CookedNothing: Houdini ran no cook:"
+        f" the cook count stayed at {before}"
+    }
+
+
+def test_a_forced_cook_of_a_hard_locked_node_reports_no_cook_time(at: dict[str, Any]) -> None:
+    """Houdini 22 runs no forced cook of a hard-locked node, in any update mode."""
+    geo = tools.create_node("geo", "/obj", "mcp_it_locked_cook", **at)["node_path"]
+    box = tools.create_node("box", geo, "box1", **at)["node_path"]
+    with using(**at) as link:
+        link.hou.node(box).setHardLocked(True)
+
+    before = tools.get_node_info(box, cook_info="inspect", **at)["cook_info"]["cook_count"]
+    cook_info = tools.get_node_info(box, cook_info="force_cook", **at)["cook_info"]
+
+    assert cook_info["cook_count"] == before, (before, cook_info)
+    assert cook_info["last_cook_time"] == {
+        "unread": "houdini_mcp.tools.nodes.CookedNothing: Houdini ran no cook:"
+        f" the cook count stayed at {before}"
     }
 
 
