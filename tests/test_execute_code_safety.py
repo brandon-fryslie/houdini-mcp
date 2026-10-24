@@ -11,6 +11,7 @@ Covers, per acceptance criteria:
 """
 
 import keyword
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -621,10 +622,13 @@ class TestAuditFields:
 
 
 class TestTimeoutRollback:
-    def test_timeout_never_undoes_while_worker_group_is_open(
-        self, mock_connection, stalled_program
+    def test_a_timeout_cuts_the_program_off_and_undoes_its_step(
+        self, mock_connection, stalled_program, caplog
     ):
-        """Undoing an open group can revert the previous human action."""
+        """At its timeout the program's link is closed, so Houdini's main thread gives
+        its call up and closes its step, which is undone; the artist's step before
+        it stays."""
+        from houdini_mcp.connection import houdini
         from houdini_mcp.tools import execute_code
 
         undos = mock_connection.undos
@@ -632,24 +636,48 @@ class TestTimeoutRollback:
         with undos.group("artist's edit"):
             mock_connection.node("/obj").createNode("null", "artist_null")
         undos.leave_main_thread()
-        result = execute_code(
-            stalled_program, timeout=1, host="localhost", port=18811, bypass_config_enabled=False
-        )
+        link = houdini().link()
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                f"hou.node('/obj').createNode('geo', 'half')\n{stalled_program}",
+                timeout=1,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
 
+        (cut,) = [r.getMessage() for r in caplog.records if "cut off worker" in r.getMessage()]
+        assert result["audit"]["code_sha256"] in cut
+        assert cut.endswith("('Its changes to the scene were undone.',)")
         assert result["status"] == "error"
         assert result.get("timeout") == 1
-        assert undos.undoLabels() == ("artist's edit",)
-        assert mock_connection.node("/obj/artist_null") is not None
         assert result["audit"]["timed_out"] is True
-        assert result["audit"]["rollback_attempted"] is False
-        assert result["rollback"] == {
-            "attempted": False,
-            "succeeded": False,
-            "error": None,
-            "thread_still_running": True,
-            "scene_consistency": "unknown",
-        }
-        assert "previous human action" in result["warning"].lower()
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert undos.undoLabels() == ("artist's edit",)
+        assert mock_connection.node("/obj/half") is None
+        assert mock_connection.node("/obj/artist_null") is not None
+        assert link.conn.closed and houdini().link() is not link
+        assert "rollback" not in result
+        assert "rollback_attempted" not in result["audit"]
+
+    def test_a_timeout_in_a_houdini_with_undo_off_says_the_changes_stay(
+        self, mock_connection, stalled_program
+    ):
+        from houdini_mcp.tools import execute_code
+
+        mock_connection.undos.enabled = False
+        result = execute_code(
+            f"hou.node('/obj').createNode('geo', 'half')\n{stalled_program}",
+            timeout=1,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+
+        assert result["audit"]["timed_out"] is True
+        assert result["message"].endswith(
+            "Its changes were not undone: Houdini's undo is off, so the scene may hold part of them."
+        )
 
     def test_undo_context_error_does_not_execute_code_twice(self, mock_connection, monkeypatch):
         from contextlib import contextmanager
@@ -694,33 +722,8 @@ class TestTimeoutRollback:
             "print('wrapped')", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "success"
-        assert opened == ["houdini-mcp execute_code"]
-
-    def test_fail_closed_when_no_undo_primitive(
-        self, monkeypatch, mock_connection, stalled_program
-    ):
-        """If Houdini exposes no usable undo primitive, timeout must fail closed."""
-        from houdini_mcp.tools import execute_code
-
-        # Remove undo capability to simulate an environment without rollback.
-        monkeypatch.delattr(mock_connection, "undos", raising=False)
-
-        result = execute_code(
-            stalled_program,
-            timeout=1,
-            allow_dangerous=True,
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-        )
-        assert result["status"] == "error"
-        assert result["audit"]["timed_out"] is True
-        assert result["audit"]["rollback_attempted"] is False
-        # Must clearly surface that mutations may be untracked.
-        assert (
-            "untracked" in result.get("warning", "").lower()
-            or result.get("rollback", {}).get("attempted") is False
-        )
+        (label,) = opened
+        assert label.startswith("houdini-mcp execute_code ")
 
 
 # ---------------------------------------------------------------------------

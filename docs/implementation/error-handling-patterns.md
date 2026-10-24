@@ -69,7 +69,7 @@ discriminated on `kind`. Each kind fixes its own `retry`, except the two link ar
 | A `LinkLost`: a `TransportFailure` raised inside a `using` scope (see below), not a timeout | `connection_lost` | `call_again`, or `check_scene` (below) | `exception`; that call's link was dropped first |
 | A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again`, or `check_scene` (below) | `connection_reset: true`, `exception` |
 | `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
-| `ProgramStillRunning` (the program this call launched outlived its bound and holds the scene) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `rollback`, `audit`, ...) |
+| `ProgramStillRunning` (the program this call launched outlived its bound: cut off from Houdini and undone, its thread still running) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `audit`, ...) |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
@@ -251,8 +251,9 @@ All tools return consistent response dictionaries:
 ### `worker_still_running`
 
 `execute_code` runs the caller's program in a thread the server cannot kill.
-When it times out, the program keeps running with its undo group open, and
-`WorkerLedger` (`houdini_mcp/tools/workers.py`) records it. Until that thread
+When it times out, the program is cut off from Houdini and its undo step
+undone, but the thread runs on, and `WorkerLedger`
+(`houdini_mcp/tools/workers.py`) records it. Until that thread
 ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (the policy
 its `@tool` declares, from `tools/transactions.py`: the scene writers and
 the render tools, which add a camera and a ROP for the call) is refused at

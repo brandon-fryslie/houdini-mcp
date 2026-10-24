@@ -834,51 +834,107 @@ class MockHouNode:
 # The plugin's main_thread as a Houdini serves it: a real rpyc server, so the tool
 # boundary's call into it and its call back into this process are real round
 # trips. A call it runs is on the main thread of the fake hou whose undos it was
-# made for, where that hou records undo groups.
+# made for, where that hou records undo groups. Houdini has one main thread, so
+# calls take it in turn (FAKE_MAIN_THREAD): a call posted while another runs
+# begins once it ends. Each link reaches it on a connection of its own, which
+# closes with the link, and a call is out only while its link is open: the main
+# thread serves the call's connection until the call returns or it closes.
 _MAIN_THREAD = """
-def main_thread_of(undos):
+import rpyc
+
+from tests.conftest import FAKE_MAIN_THREAD, local_undos
+
+
+def _heard(fn):
+    reply = rpyc.async_(fn)()
+    conn = object.__getattribute__(fn, "____conn__")
+    while not reply.ready:
+        conn.serve(0.05)
+    return reply.value
+
+
+def main_thread_of(key):
+    # Houdini's own undo stack, not one reached over the link the call came on.
+    undos = local_undos(key)
+
     class main_thread:
         PICKUP_TIMEOUT = 30.0
 
         @staticmethod
-        def call(fn):
-            undos.enter_main_thread()
-            try:
-                fn()
-            finally:
-                undos.leave_main_thread()
+        def call(fn, silence):
+            with FAKE_MAIN_THREAD:
+                undos.enter_main_thread()
+                try:
+                    _heard(fn)
+                finally:
+                    undos.leave_main_thread()
 
         @staticmethod
-        def call_as_step(fn, label):
-            undos.enter_main_thread()
-            try:
-                with undos.group(label):
-                    fn()
-            finally:
-                undos.leave_main_thread()
+        def call_as_step(fn, label, silence):
+            with FAKE_MAIN_THREAD:
+                undos.enter_main_thread()
+                try:
+                    with undos.group(label):
+                        _heard(fn)
+                finally:
+                    undos.leave_main_thread()
     return main_thread
 """
 
-# [LAW:no-shared-mutable-globals] The session's one main_thread server: opened by
-# the first call that needs it, under the lock, and closed when the session ends.
+# Re-entrant: a call's own requests run inside it, on its connection's thread.
+FAKE_MAIN_THREAD = threading.RLock()
+
+# The fake hou's undo stacks by key, so the served main thread holds each as the
+# object itself, as Houdini holds its own, whatever becomes of the link.
+_undos_by_key: dict[int, "MockUndos"] = {}
+
+
+def local_undos(key: int) -> "MockUndos":
+    return _undos_by_key[key]
+
+
+# [LAW:no-shared-mutable-globals] The session's one main_thread server, opened by
+# the first link that needs it, under the lock, and closed when the session ends,
+# after every connection still open to it.
 _main_thread_lock = threading.Lock()
-_main_thread_served = contextlib.ExitStack()
-_main_thread_conn: list[Any] = []
+_main_thread_server: list[rpyc.utils.server.ThreadedServer] = []
+_main_thread_links: list[Any] = []
 
 
-def served_main_thread(undos: "MockUndos") -> Any:
-    """``houdini_mcp_plugin.main_thread``, served, running calls on ``undos``'s main thread."""
+def main_thread_connection(sync_timeout: float) -> Any:
+    """A new connection to the session's main_thread server, its namespace holding
+    ``_MAIN_THREAD``'s names, each request on it bounded by ``sync_timeout``."""
     with _main_thread_lock:
-        if not _main_thread_conn:
-            _main_thread_conn.append(
-                _main_thread_served.enter_context(served_connection(_MAIN_THREAD))
+        if not _main_thread_server:
+            server = rpyc.utils.server.ThreadedServer(
+                rpyc.core.SlaveService,
+                hostname="127.0.0.1",
+                port=0,
+                logger=logging.getLogger("served_main_thread"),
             )
-        conn = _main_thread_conn[0]
-    return conn.namespace["main_thread_of"](undos)
+            server._start_in_thread()
+            _main_thread_server.append(server)
+        conn = rpyc.classic.connect("127.0.0.1", _main_thread_server[0].port)
+        conn._config["sync_request_timeout"] = sync_timeout
+        _main_thread_links.append(conn)
+    conn.execute(_MAIN_THREAD)
+    return conn
+
+
+def served_main_thread(undos: "MockUndos", conn: Any) -> Any:
+    """``houdini_mcp_plugin.main_thread``, served on ``conn``, running calls on
+    ``undos``'s main thread."""
+    _undos_by_key[id(undos)] = undos
+    return conn.namespace["main_thread_of"](id(undos))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    _main_thread_served.close()
+    with _main_thread_lock:
+        for conn in _main_thread_links:
+            conn.close()
+        for server in _main_thread_server:
+            await_clients_served(server)
+            server.close()
 
 
 def _admit(
@@ -955,14 +1011,15 @@ class MockModuleNamespace:
     module namespace, it answers both ``modules.hou`` and ``modules["hutil.PySide"]``.
     """
 
-    def __init__(self, hou_module: "MockHouModule"):
+    def __init__(self, hou_module: "MockHouModule", link: "MockRpycConnection"):
         self._hou = hou_module
+        self._link = link
 
     def __getitem__(self, name: str) -> Any:
         if name == "hou":
             return self._hou
         if name == "houdini_mcp_plugin.main_thread":
-            return served_main_thread(self._hou.undos)
+            return served_main_thread(self._hou.undos, self._link.main_thread())
         return importlib.import_module(name)
 
     def __getattr__(self, name: str) -> Any:
@@ -976,15 +1033,30 @@ class MockModuleNamespace:
 
 class MockRpycConnection:
     """Mock rpyc connection object: ``modules``, ``closed``, ``close``, and the
-    ``_config`` rpyc reads its sync timeout from."""
+    ``_config`` rpyc reads its sync timeout from.
+
+    Its calls to Houdini's main thread go on a real connection of its own, opened
+    on first use and closed with it, so closing it ends a call it has out there.
+    """
 
     def __init__(self, hou_module: "MockHouModule"):
-        self.modules = MockModuleNamespace(hou_module)
+        self.modules = MockModuleNamespace(hou_module, self)
         self._config: dict[str, Any] = {"sync_request_timeout": 30.0}
         self.closed = False
+        self._lock = threading.Lock()
+        self._main_thread: Any = None
+
+    def main_thread(self) -> Any:
+        with self._lock:
+            if self._main_thread is None:
+                self._main_thread = main_thread_connection(self._config["sync_request_timeout"])
+            return self._main_thread
 
     def close(self) -> None:
-        self.closed = True
+        with self._lock:
+            self.closed = True
+            if self._main_thread is not None:
+                self._main_thread.close()
 
 
 class MockHouModule:
@@ -1342,22 +1414,29 @@ def mock_rpyc_with_reset(
 
 
 @pytest.fixture
-def connected_to(reset_connection_state: None) -> Callable[[Any], Any]:
+def connected_to(reset_connection_state: None) -> Generator[Callable[[Any], Any], None, None]:
     """Connect to any ``hou`` double through the connection module's own API.
 
     The handshake seam hands out a connection to the double and ``connect`` installs
     it, replacing whatever link stood: the ``hou`` returned is the one installed, in
-    a test that connects twice as in one that connects once.
+    a test that connects twice as in one that connects once. The double outlives
+    its link, as Houdini does: once a link is dropped, the next connect reaches the
+    same double on a new one.
     """
     from houdini_mcp.connection import houdini
 
-    def _connect(hou: Any) -> Any:
-        with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-            mock_rpyc_module.connect.return_value = MockRpycConnection(hou)
-            houdini().connect("localhost", 18811)
-        return hou
+    reached: list[Any] = []
+    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
+        mock_rpyc_module.connect.side_effect = lambda *_args, **_kwargs: MockRpycConnection(
+            reached[-1]
+        )
 
-    return _connect
+        def _connect(hou: Any) -> Any:
+            reached.append(hou)
+            houdini().connect("localhost", 18811)
+            return hou
+
+        yield _connect
 
 
 @pytest.fixture

@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`from wave import open`) is now judged as that module's member, as
   `wave.open` already was, not as the builtin.
 
+- `execute_code`'s program is one step on Houdini's undo stack, labelled
+  `houdini-mcp execute_code <id>`, and a program that raises leaves the scene
+  as it found it, its message ending `Its changes to the scene were undone.`
+  (houdini-laws-etg.lbc). The program reached Houdini off its main thread, where
+  Houdini records no undo group, so a failed program left its edits and each
+  edit was a step of its own. A scene-writing tool whose link to Houdini fails
+  mid-call is undone too, on a new link. Needs this release's plugin.
+
 - `get_geo_summary` reads the geometry inside Houdini, in the same few requests
   whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on
   Houdini 22 for 3 points and for 5000 points with ten attributes and ten
@@ -201,6 +209,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: at its `timeout`, `execute_code` cuts its program off
+  from Houdini and undoes its step (houdini-laws-etg.lbc): the program's link is
+  closed, which frees Houdini's main thread once the request it is serving
+  returns. The program kept running with Houdini's main thread, so a timed-out
+  program went on editing the scene. The timeout's message ends with what
+  became of the program's changes; the `rollback` block and
+  `audit.rollback_attempted` / `audit.rollback_succeeded`, which only ever said
+  nothing was attempted, are gone. A read that arrives while a program runs
+  waits for it, and reports that in `scene_wait`.
+
+- **BREAKING (plugin)**: `houdini_mcp_plugin.main_thread.call` and
+  `call_as_step` take how long the client may send Houdini nothing before the
+  main thread gives its call up, and the main thread closes the connection of
+  a client it gives up on (houdini-laws-etg.lbc). `CLIENT_SILENCE_TIMEOUT` is
+  gone: a tool body passes 60 seconds, an `execute_code` program its own
+  `timeout`, so a program that computes without touching `hou` for longer than
+  60 seconds is no longer cut off before its timeout.
 
 - **BREAKING (wire)**: each of `get_geo_summary`'s `sample_points` is
   `{"point": <number>, "values": {<attribute>: <value>}}` (houdini-laws-etg.4mz).
