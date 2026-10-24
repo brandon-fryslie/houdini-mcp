@@ -564,9 +564,13 @@ class MockHouNode:
             parm_tuple.__iter__.side_effect = lambda: iter(components)
             parm_tuple.eval = MagicMock(side_effect=lambda: tuple(self._parms()[name].values))
             parm_tuple.set = MagicMock(side_effect=lambda v: self._set_tuple(name, v))
+            # As in Houdini, a tuple and its components share one template: a
+            # scalar's is its parm's, a vector's its tuple's.
             if len(components) == 1:
-                # a scalar is a one-component tuple of the same name, sharing one template
                 parm_tuple.parmTemplate = lambda: components[0].parmTemplate()
+            else:
+                for component in components:
+                    component.parmTemplate = lambda: parm_tuple.parmTemplate()
             cache[name] = parm_tuple
         return cache[name]
 

@@ -79,12 +79,10 @@ def give_menu(parm: Any, tokens: list[str], labels: list[str]) -> None:
 
 
 def give_templates(node: MockHouNode, templates: list[MockParmTemplate]) -> None:
-    """Give each of the fake node's parameters its template, by name: as in
-    Houdini, a tuple's components share its template."""
+    """Give each of the fake node's parameters its template, by name."""
     for template in templates:
-        parm_tuple = node.parmTuple(template.name())
-        for target in (parm_tuple, *parm_tuple):
-            target.parmTemplate = MagicMock(return_value=template)
+        target = node.parm(template.name()) or node.parmTuple(template.name())
+        target.parmTemplate = MagicMock(return_value=template)
 
 
 def create_mock_hou_with_parm_types():
