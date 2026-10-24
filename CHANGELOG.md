@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no bypass and threw away unsaved work. They now need `allow_dangerous`
   and `HOUDINI_MCP_ALLOW_BYPASS`, and `read-only` refuses them whatever the
   flags. Their defaults, `importFBX` merging into the scene and `merge`
-  renaming a clashing node, still run.
+  renaming a clashing node, still run. An `open` imported from another module
+  (`from wave import open`) is now judged as that module's member, as
+  `wave.open` already was, not as the builtin.
 
 - `get_geo_summary` reads the geometry inside Houdini, in the same few requests
   whatever its points, attributes and groups (houdini-laws-etg.4mz): 5 on

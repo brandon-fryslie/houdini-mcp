@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 __all__ = [
     "parse_code",
@@ -69,7 +69,8 @@ class _Names:
 
     ``aliases`` maps an identifier to the dotted path it stands for:
     ``import os.path as p`` and ``from os import path as p`` both bind ``p`` to
-    ``("os", "path")``, the pre-injected ``hou`` stands for itself, and the
+    ``("os", "path")``, a name the program starts with (``hou``, and for the
+    dangerous gate the builtin ``open``) stands for itself, and the
     one-step ``q = p.x`` binds ``q`` to ``("os", "path", "x")``, so a rename
     never changes a verdict [LAW:one-source-of-truth]. ``bound``
     holds every other identifier the program binds itself - assignments, defs,
@@ -91,8 +92,9 @@ class _Names:
         return identifier in self.bound and identifier not in self.aliases
 
 
-def _names(tree: ast.Module) -> _Names:
-    aliases: dict[str, tuple[str, ...]] = {"hou": ("hou",)}
+def _names(tree: ast.Module, given: frozenset[str]) -> _Names:
+    """Read the program's names; ``given`` are the gate-judged names it starts with."""
+    aliases: dict[str, tuple[str, ...]] = {name: (name,) for name in given}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -251,6 +253,12 @@ MODULE_RAILS: dict[str, frozenset[str]] = {
 }
 
 
+class _DangerousCallee(Protocol):
+    def judge(self, dotted: str, call: ast.Call | None) -> str | None:
+        """Why a reference to the callee is refused, given the call it is the callee of."""
+        ...
+
+
 @dataclass(frozen=True)
 class _Refused:
     """A callee refused wherever the program names it, called or not."""
@@ -314,9 +322,7 @@ class _RefusedByArgument(Generic[Value]):
 # under read-only whatever the flags, refused under normal unless the caller
 # passes allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
 # [LAW:one-source-of-truth] One row per callee, so a path cannot carry two verdicts.
-DANGEROUS_CALLEES: dict[
-    tuple[str, ...], _Refused | _RefusedByArgument[bool] | _RefusedByArgument[str]
-] = {
+DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
     ("hou", "exit"): _Refused("hou.exit() - will close Houdini"),
     ("hou", "hipFile", "clear"): _Refused("hou.hipFile.clear() - scene wipe"),
     ("hou", "hipFile", "load"): _Refused("hou.hipFile.load() - discards the open scene"),
@@ -376,7 +382,9 @@ def _rail_refusal(path: tuple[str, ...]) -> str | None:
 
 def _detect_dangerous_code(tree: ast.Module) -> list[str]:
     """Operations the ``normal`` policy refuses without an explicit, configured bypass."""
-    names = _names(tree)
+    # The builtins a row names start bound to themselves, as hou does, so
+    # ``open = open`` and ``def f(open=open)`` resolve to the builtin.
+    names = _names(tree, frozenset({"hou"} | {path[0] for path in DANGEROUS_CALLEES}))
     detected: list[str] = []
     # Each reference is judged once, with the call it is the callee of, if any.
     calls = {id(node.func): node for node in ast.walk(tree) if isinstance(node, ast.Call)}
@@ -1209,7 +1217,7 @@ def _detect_non_inspection_code(tree: ast.Module) -> list[str]:
     reported, so a mutator this module has never heard of is refused the same
     way as one it has.
     """
-    names = _names(tree)
+    names = _names(tree, frozenset({"hou"}))
     detected: list[str] = []
 
     # An aliased name (``hou``, an import, ``hf = hou.hipFile``) that the

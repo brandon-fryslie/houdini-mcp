@@ -112,6 +112,22 @@ class TestDetectDangerousCode:
         assert len(result) >= 1
         assert any("write" in r.lower() or "file" in r.lower() for r in result)
 
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "open = open\nopen('/x', 'w')",
+            "def f(open=open):\n    open('/x', 'w')",
+            "for open in [open]:\n    open('/x', 'w')",
+            "def open(*a): pass\nopen('/x', 'w')",
+            "o = open\no('/x', 'w')",
+        ],
+    )
+    def test_open_rebound_is_judged_as_the_builtin(self, code):
+        """A program's binding of open cannot be told from the builtin, so its writing call is refused."""
+        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+
+        assert "open() with mode 'w' - file writing" in _detect_dangerous_code(parse_code(code))
+
     def test_safe_code_no_detection(self):
         """Test that safe code returns empty list."""
         from houdini_mcp.tools import _detect_dangerous_code, parse_code
