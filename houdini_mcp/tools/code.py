@@ -779,9 +779,6 @@ def execute_code(
                         scene = _NeverRan(failed_on(houdini(), link, error))
                         return
                 faults = run_program()
-                # The program and its undo step have ended: the caller's clock stops
-                # here, not after the judgment below, which the caller joins on.
-                program_ends.set()
                 # Written before the link is judged, so a judgment that raises cannot
                 # leave the program's failure reading as a success.
                 ended = _Ended(faults, None)
@@ -831,6 +828,11 @@ def execute_code(
                 except BaseException as error:
                     raised.append(_Fault("program", error, traceback.format_exc()))
                     raise
+                # The caller's clock stops as the program ends, not once its step has
+                # closed and been recovered, which the caller joins on: a program that
+                # ended in time is never cut off from that step's undo.
+                finally:
+                    program_ends.set()
 
             try:
                 step.run(link, program)
@@ -857,10 +859,10 @@ def execute_code(
         while (left := deadline - time.monotonic()) > 0 and not program_ends.wait(left):
             woke_early += time.monotonic() < deadline
 
-        # [LAW:one-source-of-truth] The program's own end, set once its undo step
-        # has ended, says whether it is still running - not the ledger slot, which
-        # the worker holds on through the scene read after it - so a program that
-        # ended as the wait expired is reported as complete.
+        # [LAW:one-source-of-truth] The program's own end says whether it is still
+        # running - not the ledger slot, which the worker holds on through its step's
+        # recovery and the scene read after it - so a program that ended as the wait
+        # expired is reported as complete.
         if not program_ends.is_set():
             # Cut the program off from Houdini: once its link has ended, Houdini's
             # main thread gives its call up after the request it is serving returns,

@@ -505,15 +505,22 @@ def failing_after(undos):
         assert "The link failed before the reply to a call Houdini ran" in caplog.text
 
     def test_a_failed_call_whose_link_fails_undoing_it_is_the_links_failure(
-        self, mock_connection, monkeypatch
+        self, mock_connection, monkeypatch, caplog
     ):
-        with conftest.served_namespace(self._PLUGINS) as plugins:
+        with (
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+            conftest.served_namespace(self._PLUGINS) as plugins,
+        ):
             self._served(monkeypatch, plugins, "losing_the_link")
             result = _creates_then_fails()
 
         assert result["kind"] == "connection_lost", result
         assert "_creates_then_fails had failed: the second edit was refused" in result["message"]
         assert result["message"].endswith("so the scene may hold part of them.")
+        # Each failed link - the step's, then the undo's - is dropped once, where it
+        # failed; the loss is not judged again against a link already replaced.
+        drops = [r.getMessage() for r in caplog.records if "Dropped failed link" in r.getMessage()]
+        assert [drop.endswith("(was installed)") for drop in drops] == [True, True], drops
 
     def test_houdini_failing_after_the_call_ran_fails_the_call(self, mock_connection, monkeypatch):
         with conftest.served_namespace(self._PLUGINS) as plugins:

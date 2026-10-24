@@ -1,6 +1,7 @@
 """Tests for the execute_code function and related helpers."""
 
 import contextlib
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import patch
@@ -886,6 +887,33 @@ class TestAProgramThatFailedOnTheLink:
         assert result["message"] == "ValueError: mine\nIts changes to the scene were undone."
         assert mock_connection.node("/obj/half") is None
         assert "ValueError: mine" in result["traceback"]
+
+    def test_a_program_that_raised_in_time_is_not_timed_out_by_its_undo(
+        self, mock_connection, monkeypatch
+    ):
+        """The timeout bounds the program, not the undo after it: a program that raised
+        at once is reported as raised and undone, though its undo outlasts the timeout."""
+        from houdini_mcp.tools import execute_code
+
+        undo = MockUndos.performUndo
+
+        def slow_undo(self: MockUndos) -> None:
+            time.sleep(1.5)
+            undo(self)
+
+        monkeypatch.setattr(MockUndos, "performUndo", slow_undo)
+        result = execute_code(
+            "hou.node('/obj').createNode('geo', 'half')\nraise ValueError('mine')",
+            timeout=1,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+
+        assert result["kind"] == "operation_failed", result
+        assert result["message"] == "ValueError: mine\nIts changes to the scene were undone."
+        assert result["audit"]["timed_out"] is False
+        assert mock_connection.node("/obj/half") is None
 
     def test_a_program_is_one_undo_step_labelled_as_the_call(self, mock_connection):
         result = _run("hou.node('/obj').createNode('geo', 'made')")

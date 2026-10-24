@@ -26,7 +26,7 @@ from typing import Any, Generic, NoReturn, TypeVar, assert_never
 import rpyc
 
 from ..connection import HoudiniConnectionError, Link, houdini, transport_failure
-from .failure import OperationFailed, add_note, link_lost
+from .failure import LinkLost, OperationFailed, add_note, link_lost
 from .plugin import plugin_module
 from .workers import Admission
 
@@ -330,7 +330,7 @@ class Recovered:
     own, or the one opened to undo it - already dropped."""
 
     told: tuple[str, ...]
-    lost: Exception | None
+    lost: LinkLost | HoudiniConnectionError | None
 
 
 class UndoStep:
@@ -434,13 +434,11 @@ class UndoStep:
                 "%s failed; its undo group %r: %s", self.operation, self.label, undo_failed
             )
             # [LAW:single-enforcer] The link the undo failed on is dropped where it
-            # was used, as every call's is; a Houdini that could not be reached
-            # again stops the undo as surely.
-            if link_lost(houdini(), link, error) is not None or isinstance(
-                error, HoudiniConnectionError
-            ):
-                return Recovered((undo_failed,), error)
-            return Recovered((undo_failed,), None)
+            # was used, as every call's is, and its loss passes through every scope
+            # outside this one; a Houdini that could not be reached again stops the
+            # undo as surely.
+            unreachable = error if isinstance(error, HoudiniConnectionError) else None
+            return Recovered((undo_failed,), link_lost(houdini(), link, error) or unreachable)
         logger.info(
             "%s failed; its undo group %r: %s", self.operation, self.label, told or "no step"
         )
