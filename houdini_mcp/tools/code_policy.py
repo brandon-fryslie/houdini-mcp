@@ -13,7 +13,7 @@ Two kinds of rail live here, and they fail in opposite directions on purpose:
   unrecognized, not because it was enumerated.
 * ``normal`` is a **denylist** against accidents. It refuses the operations
   that destroy work (process exit, scene wipe, file deletion, shell and
-  network access, dynamic execution) and admits everything else. It is a
+  network access, dynamic execution, HScript) and admits everything else. It is a
   guard rail, not a sandbox; a caller who needs a guarantee asks for
   ``read-only``.
 
@@ -316,8 +316,8 @@ class _RefusedByArgument(Generic[Value]):
         return None
 
 
-# Calls that close Houdini, discard or overwrite the open scene, or open a file
-# for writing, by the dotted path they resolve to. The detector finds them
+# Calls that close Houdini, discard or overwrite the open scene, open a file
+# for writing, or run HScript, by the dotted path they resolve to. The detector finds them
 # under every policy; ExecutionGrant decides what a finding means: refused
 # under read-only whatever the flags, refused under normal unless the caller
 # passes allow_dangerous and the server sets HOUDINI_MCP_ALLOW_BYPASS.
@@ -353,6 +353,47 @@ DANGEROUS_CALLEES: dict[tuple[str, ...], _DangerousCallee] = {
         dangerous=lambda mode: bool(frozenset("wax+") & set(mode)),
         danger="file writing",
     ),
+    # HScript is a second language the gate does not read, the same case as
+    # eval. A command string cannot be ruled out by reading it: on Houdini 22,
+    # mnew wipes the scene, unix runs a shell, python runs Python, `;` chains
+    # commands, and `alias opls mnew` makes even opls a wipe.
+    ("hou", "hscript"): _Refused(
+        "hou.hscript() - HScript, which can wipe the scene (mnew), "
+        "run a shell (unix) or run Python (python)"
+    ),
+    # An expression's system() runs a shell, and run() runs any HScript command.
+    **{
+        ("hou", evaluator): _Refused(
+            f"hou.{evaluator}() - an HScript expression, whose system() runs a shell "
+            "and run() any HScript command"
+        )
+        for evaluator in (
+            "hscriptExpression",
+            "hscriptFloatExpression",
+            "hscriptStringExpression",
+            "hscriptVectorExpression",
+            "hscriptMatrixExpression",
+        )
+    },
+    # expand(str, ...): a backtick is the one place an expanded string holds an
+    # expression; a variable's value is not expanded again, so "$HIP/x" is plain.
+    **{
+        path: _RefusedByArgument(
+            keyword="str",
+            position=0,
+            literal=str,
+            dangerous=lambda text: "`" in text,
+            danger="running a shell through a backtick expression's system()",
+        )
+        for path in (
+            ("hou", "text", "expandString"),
+            ("hou", "text", "expandStringAtFrame"),
+            # Houdini 22's deprecated spellings of the two above.
+            ("hou", "expandString"),
+            ("hou", "expandStringAtFrame"),
+            ("hou", "hscriptExpandString"),
+        )
+    },
 }
 
 # Dynamic-execution builtins: a name the program evaluates or imports at runtime

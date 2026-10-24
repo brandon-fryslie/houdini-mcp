@@ -599,6 +599,25 @@ def _obj_children(at: dict[str, Any]) -> int:
     return returned
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "hou.hscript('opls /obj; mnew')",
+        "hou.hscriptExpression('run(\"mnew\")')",
+        "hou.text.expandString('`run(\"mnew\")`')",
+    ],
+)
+def test_a_program_running_hscript_is_refused_and_the_scene_stands(
+    at: dict[str, Any], code: str
+) -> None:
+    assert _program("hou.node('/obj').createNode('geo', 'it_kept')", at)["status"] == "success"
+
+    refused = _program(code, at)
+
+    assert refused["audit"]["blocked_reason"] == "dangerous_pattern", refused
+    assert _obj_children(at) == 1
+
+
 def test_a_program_is_one_undo_step_labelled_as_the_call(at: dict[str, Any]) -> None:
     ran = _program("hou.node('/obj').createNode('geo', 'it_program')", at)
     assert ran["status"] == "success", ran

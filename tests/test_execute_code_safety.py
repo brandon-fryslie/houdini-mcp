@@ -10,9 +10,10 @@ Covers, per acceptance criteria:
 6. Red-path harness proving blocked code never reaches the interpreter.
 """
 
+import functools
 import keyword
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from hypothesis import given, settings, strategies as st
@@ -457,6 +458,139 @@ class TestSceneDiscardIsDangerous:
         assert result["audit"]["granted"]["dangerous"] is False
         assert pattern in result["audit"]["dangerous_patterns"]
         getattr(mock_connection.hipFile, member).assert_not_called()
+
+
+HSCRIPT = (
+    "hou.hscript() - HScript, which can wipe the scene (mnew), "
+    "run a shell (unix) or run Python (python)"
+)
+BACKTICK = "running a shell through a backtick expression's system()"
+
+# Each runs HScript the gate cannot rule out as wiping the scene or running a
+# shell on Houdini 22 (houdini-laws-etg.dl2): the path below hou it calls, and
+# the pattern its refusal names.
+HSCRIPT_RUNS = [
+    ("hou.hscript('mnew')", ("hscript",), HSCRIPT),
+    ("hou.hscript('mread /other.hip')", ("hscript",), HSCRIPT),
+    ("hou.hscript('unix echo ran')", ("hscript",), HSCRIPT),
+    # alias makes any command name a wipe, so no command is read as safe.
+    ("hou.hscript('opls /obj')", ("hscript",), HSCRIPT),
+    *(
+        (
+            f"hou.{evaluator}('system(\"echo ran\")')",
+            (evaluator,),
+            f"hou.{evaluator}() - an HScript expression, whose system() runs a shell "
+            "and run() any HScript command",
+        )
+        for evaluator in (
+            "hscriptExpression",
+            "hscriptFloatExpression",
+            "hscriptStringExpression",
+            "hscriptVectorExpression",
+            "hscriptMatrixExpression",
+        )
+    ),
+    (
+        "hou.text.expandString('$HIP/`system(\"echo ran\")`')",
+        ("text", "expandString"),
+        f"hou.text.expandString() with str '$HIP/`system(\"echo ran\")`' - {BACKTICK}",
+    ),
+    (
+        "hou.text.expandStringAtFrame(str='`system(\"echo ran\")`', frame=1)",
+        ("text", "expandStringAtFrame"),
+        f"hou.text.expandStringAtFrame() with str '`system(\"echo ran\")`' - {BACKTICK}",
+    ),
+    (
+        "path = input_path\nhou.text.expandString(path)",
+        ("text", "expandString"),
+        f"hou.text.expandString() with non-literal str - {BACKTICK} cannot be ruled out",
+    ),
+    *(
+        (
+            f"hou.{spelling}('`system(\"echo ran\")`')",
+            (spelling,),
+            f"hou.{spelling}() with str '`system(\"echo ran\")`' - {BACKTICK}",
+        )
+        for spelling in ("expandString", "expandStringAtFrame", "hscriptExpandString")
+    ),
+]
+
+
+@pytest.fixture
+def stub_below_hou(mock_connection, monkeypatch):
+    """Installs a MagicMock at the first hop below the fake hou and returns the
+    callee a path names on it, so a test can see whether the program called it."""
+
+    def stub(path: tuple[str, ...]) -> MagicMock:
+        monkeypatch.setattr(mock_connection, path[0], MagicMock(), raising=False)
+        return functools.reduce(getattr, path, mock_connection)
+
+    return stub
+
+
+class TestHScriptIsDangerous:
+    """Every program that runs HScript gets hou.hipFile.clear's treatment."""
+
+    @pytest.mark.parametrize(("code", "path", "pattern"), HSCRIPT_RUNS)
+    def test_normal_without_bypass_refuses(self, stub_below_hou, code, path, pattern):
+        from houdini_mcp.tools import execute_code
+
+        callee = stub_below_hou(path)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "dangerous_pattern"
+        assert result["dangerous_patterns"] == [pattern]
+        callee.assert_not_called()
+
+    @pytest.mark.parametrize(("code", "path", "pattern"), HSCRIPT_RUNS)
+    def test_normal_with_full_bypass_runs(self, stub_below_hou, code, path, pattern):
+        from houdini_mcp.tools import execute_code
+
+        callee = stub_below_hou(path)
+        result = execute_code(
+            f"input_path = '$HIP'\n{code}",
+            allow_dangerous=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=True,
+        )
+        assert result["status"] == "success", result
+        callee.assert_called_once()
+
+    @pytest.mark.parametrize(("code", "path", "pattern"), HSCRIPT_RUNS)
+    def test_read_only_refuses_whatever_the_flags(self, stub_below_hou, code, path, pattern):
+        from houdini_mcp.tools import execute_code
+
+        callee = stub_below_hou(path)
+        result = execute_code(
+            code,
+            policy="read-only",
+            allow_dangerous=True,
+            allow_heavy_geometry=True,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=True,
+        )
+        assert result["status"] == "error"
+        assert result["audit"]["granted"]["dangerous"] is False
+        assert pattern in result["audit"]["dangerous_patterns"]
+        callee.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("code", "path"),
+        [
+            ("hou.text.expandString('$HIP/render')", ("text", "expandString")),
+            ("hou.text.expandStringAtFrame('$HIP/$F4.exr', 1)", ("text", "expandStringAtFrame")),
+        ],
+    )
+    def test_expanding_a_string_with_no_backtick_runs(self, stub_below_hou, code, path):
+        from houdini_mcp.tools import execute_code
+
+        callee = stub_below_hou(path)
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
+        assert result["status"] == "success", result
+        assert result["audit"]["dangerous_patterns"] == []
+        callee.assert_called_once()
 
 
 class TestHeavyGeometryCapability:
