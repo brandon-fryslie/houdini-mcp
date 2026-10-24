@@ -48,6 +48,8 @@ from typing import (
 
 from houdini_mcp_handshake import Authenticator, peer_name, token_authenticator, token_from
 
+from .main_thread import SERVE_ROUND_SECONDS
+
 logger = logging.getLogger("houdini_mcp_plugin.listener")
 # rpyc logs each accepted and finished connection at INFO through the logger the
 # server is built with; routing that under this module's logger puts it under
@@ -438,12 +440,6 @@ def _serve(server: HrpycServer) -> None:
         logger.info("hrpyc accept loop ended on port %s", server.port)
 
 
-# How long one round of serving a client waits for a request before the thread
-# looks at whether the listener still serves: the longest a client's serving
-# thread outlives a stop() whose close did not wake it. rpyc's own serve() default.
-_SERVE_ROUND_SECONDS = 1.0
-
-
 def _how(end: BaseException) -> str:
     """How a client's thread saw its connection end, as the record prints it."""
     return f"{type(end).__name__}: {end}"
@@ -523,7 +519,7 @@ def _serve_connection(server: HrpycServer, conn: HrpycConnection) -> None:
         # ``active``, cleared before close() touches a socket, read every round;
         # a wakeup the close lost delays it by one round, it cannot prevent it.
         while server.active and not conn.closed:
-            conn.serve(_SERVE_ROUND_SECONDS)
+            conn.serve(SERVE_ROUND_SECONDS)
     except (EOFError, OSError) as exc:
         how = _how(exc)
         error = exc if isinstance(exc, OSError) and not conn.closed else None

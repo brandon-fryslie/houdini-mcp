@@ -20,13 +20,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import houdini_mcp_handshake as handshake
-import houdini_mcp_plugin.listener as listener_module
 import pytest
 import rpyc
 import rpyc.core
 import rpyc.core.stream
 import rpyc.lib
 import rpyc.utils.server
+from houdini_mcp_plugin import main_thread
 from houdini_mcp_plugin.listener import (
     HrpycConnection,
     HrpycModule,
@@ -270,7 +270,7 @@ class TestListenerAgainstRealRpyc:
 
         with parked_serving_thread(fake_hou, monkeypatch, caplog, resume) as parked:
             assert parked.listener.stop()["status"] == "success"
-            parked.thread.join(timeout=listener_module._SERVE_ROUND_SECONDS + 1)
+            parked.thread.join(timeout=main_thread.SERVE_ROUND_SECONDS + 1)
             assert not parked.thread.is_alive(), "serving thread did not end within a round"
             with pytest.raises(EOFError):
                 parked.conn.modules.math.sqrt(1.0)
