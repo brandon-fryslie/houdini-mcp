@@ -371,7 +371,7 @@ MCP client, not by calling the tool function. See
    a node that holds no nodes
 5. **Write to the scene inside `refused_by_houdini`** - Houdini's refusal of the write
    reaches the caller as `operation_failed` in Houdini's words, a lost link as
-   `connection_lost` naming what was asked, and a bug here as a bug; create nodes
+   `connection_lost` naming what was asked, and a fault in this process as a bug; create nodes
    with `created_in`, which writes through it
 6. **Clean up connections** - The decorator handles this, but be aware of the pattern
 
