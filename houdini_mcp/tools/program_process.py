@@ -22,7 +22,7 @@ import os
 import selectors
 import signal
 import struct
-import subprocess
+import subprocess  # nosec B404 - a program runs in a process of its own
 import sys
 import termios
 import time
@@ -125,7 +125,7 @@ def run_program(request: Request, timeout: float, stdout: Capture, stderr: Captu
         unspawned.callback(os.close, lifeline_out)
         unspawned.callback(os.close, lifeline_in)
         spawned = time.monotonic()
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # nosec B603 - this interpreter with fixed flags and fds
             [
                 sys.executable,
                 *("-P", "-u", "-X", "utf8", "-m", "houdini_mcp.program"),

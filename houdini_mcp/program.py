@@ -88,7 +88,7 @@ class Request:
         fields = json.loads(raw)
         return cls(
             reach=Reach(*fields["reach"]),
-            code=marshal.loads(base64.b64decode(fields["code"])),
+            code=marshal.loads(base64.b64decode(fields["code"])),  # nosec B302 - the call wrote it
             label=fields["label"],
             silence=fields["silence"],
             sync_timeout=fields["sync_timeout"],
