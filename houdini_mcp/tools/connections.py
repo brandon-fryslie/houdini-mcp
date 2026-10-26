@@ -9,7 +9,8 @@ outputs feeds it. ``inputs()`` alone cannot say that, and nothing here guesses i
 from dataclasses import dataclass
 from typing import Any
 
-from ._common import node_category, refused_by_houdini
+from ..connection import raised_inside_houdini
+from ._common import houdini_refusal, node_category
 
 
 @dataclass(frozen=True)
@@ -54,9 +55,18 @@ def input_connections(node: Any) -> list[InputConnection]:
     error boundary. There is no fallback output index: a guessed index rewires the
     user's network wrong while reporting success.
     """
-    node_path = node.path()
-    with refused_by_houdini(f"read the input connections of {node_path}", node_path=node_path):
+    try:
         records = node.inputConnections()
+    except Exception as e:
+        # the node's path is asked for only once Houdini refused: a walk reads
+        # connections node by node, and a round trip per node is the walk's cost.
+        # A lost link or a bug here goes on raw, to the call's using scope.
+        if not raised_inside_houdini(e):
+            raise
+        node_path = node.path()
+        raise houdini_refusal(
+            f"read the input connections of {node_path}", e, node_path=node_path
+        ) from e
     return sorted(
         (
             InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())

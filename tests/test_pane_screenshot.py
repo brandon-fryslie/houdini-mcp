@@ -90,7 +90,7 @@ def test_a_houdini_whose_pyside_lacks_a_qt_module_has_its_qt_refused_naming_huti
     with pytest.raises(OperationFailed) as refused:
         _qt_core(houdini().link())
     assert str(refused.value) == (
-        "Houdini did not give its Qt, hutil.PySide.QtCore: "
+        "Houdini did not import its Qt, hutil.PySide: "
         "AttributeError: module 'hutil.PySide' has no attribute 'QtCore'"
     )
 

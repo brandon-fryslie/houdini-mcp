@@ -84,10 +84,11 @@ def save_scene(
         with refused_by_houdini(f"save the scene to {file_path or 'its file'}"):
             if file_path:
                 hou.hipFile.save(file_path)
-                saved_path = file_path
             else:
                 hou.hipFile.save()
-                saved_path = hou.hipFile.path()
+        # a save is not undone, so the path read after it is no part of the save's refusal
+        with refused_by_houdini("name the file it saved the scene to"):
+            saved_path = file_path or hou.hipFile.path()
 
         return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 
@@ -129,9 +130,9 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     been saved cannot be backed up, so one holding any node is refused: save it
     with save_scene(file_path) first.
     """
-    with using(host, port) as link:
-        # [LAW:single-enforcer] As in houdini_mcp_scene.load: the backup, not the prompt, keeps
-        # the unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+    # [LAW:single-enforcer] As in houdini_mcp_scene.load: the backup, not the prompt, keeps
+    # the unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+    with using(host, port) as link, refused_by_houdini("clear the scene"):
         link.hou.hipFile.clear(suppress_save_prompt=True)
 
     return {"status": "success", "message": "New scene created"}

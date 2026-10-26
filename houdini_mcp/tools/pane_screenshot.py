@@ -51,7 +51,7 @@ def _qt_core(link: Link) -> Any:
     # and hutil.PySide is where Houdini states it; a binding named here is a copy
     # that goes stale the release SideFX moves to another one. Its submodules are
     # attributes of the package, which serves the ones it loads lazily the same way.
-    with refused_by_houdini("give its Qt, hutil.PySide.QtCore"):
+    with refused_by_houdini("import its Qt, hutil.PySide"):
         QtCore = conn.modules["hutil.PySide"].QtCore
     logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
     return QtCore

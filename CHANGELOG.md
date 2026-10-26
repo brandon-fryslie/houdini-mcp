@@ -63,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
   `assign_material`'s Material SOP wiring, `delete_node`, `set_node_color`,
-  `set_node_position`, `layout_children`, `create_network_box` and
-  `save_scene`, refused by Houdini (as inside a locked asset), answer
+  `set_node_position`, `layout_children`, `create_network_box`,
+  `save_scene` and `new_scene`, refused by Houdini (as inside a locked asset), answer
   `operation_failed` in Houdini's words, naming what was asked, where they
   answered with an unclassified error and a traceback
   (houdini-laws-etg.ulw). So does a node's input connections or
