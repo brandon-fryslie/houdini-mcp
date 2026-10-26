@@ -95,6 +95,7 @@ exclude = [
     "houdini_mcp_geometry*",
     "houdini_mcp_node_types*",
     "houdini_mcp_scene*",
+    "houdini_mcp_wiring*",
 ]
 
 [tool.setuptools.package-data]

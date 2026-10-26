@@ -543,6 +543,20 @@ class TestServedSchemas:
             assert await accepts(client, served, name, {**base, limit: 0}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: -1}), (name, limit)
 
+    async def test_an_index_is_never_negative(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """Houdini numbers inputs and outputs from 0 and refuses a negative one."""
+        wire = {"src_path": "/obj/geo1/box1", "dst_path": "/obj/geo1/null1"}
+        calls = {
+            ("connect_nodes", "dst_input_index"): wire,
+            ("connect_nodes", "src_output_index"): wire,
+            ("disconnect_node_input", "input_index"): {"node_path": "/obj/geo1/null1"},
+        }
+        for (name, index), base in calls.items():
+            assert await accepts(client, served, name, {**base, index: 0}), (name, index)
+            assert not await accepts(client, served, name, {**base, index: -1}), (name, index)
+
     async def test_a_listing_limit_lists_at_least_one(
         self, client: Client[Any], served: dict[str, Tool]
     ) -> None:

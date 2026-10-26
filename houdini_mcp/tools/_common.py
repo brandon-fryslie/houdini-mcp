@@ -113,6 +113,7 @@ __all__ = [
     "Vec3",
     "Count",
     "ResultLimit",
+    "Index",
     "NodeName",
     "SampleCount",
     "Seconds",
@@ -431,6 +432,9 @@ RGB = tuple[float, float, float]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
+Index = Annotated[int, Field(ge=0)]
+"""A position among a node's inputs or outputs, numbered from 0; Houdini refuses a
+negative one, so the wire does, and how far one may reach is the node's, so Houdini's."""
 SampleCount = Annotated[Count, Field(le=1000)]
 """How many points a geometry read samples. Each carries every point attribute, and
 the read holds Houdini's serving thread for all of them: a thousand is past what a

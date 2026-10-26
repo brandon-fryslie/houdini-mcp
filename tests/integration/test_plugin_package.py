@@ -26,6 +26,7 @@ open(sys.argv[1], "w").write(json.dumps({
             "houdini_mcp_scene",
             "houdini_mcp_schema",
             "houdini_mcp_search",
+            "houdini_mcp_wiring",
         )
     },
     "shelves": {name: shelf.filePath() for name, shelf in hou.shelves.shelves().items()},
