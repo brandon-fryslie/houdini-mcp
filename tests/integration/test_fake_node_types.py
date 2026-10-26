@@ -1,5 +1,6 @@
 """The fake hou's node types are the ones this Houdini gives (houdini-laws-etg.0qg),
-and a name reaches what Houdini gives it (houdini-fake-hou-efn.2vo)."""
+a name reaches what Houdini gives it (houdini-fake-hou-efn.2vo), and the fake knows
+every type Houdini registers (houdini-fake-hou-efn.ak6)."""
 
 from collections.abc import Callable
 from typing import Any
@@ -8,35 +9,37 @@ from houdini_mcp_read import reason
 
 from houdini_mcp.settings import Target
 from houdini_mcp.tools._common import using
-from tests.conftest import (
-    NODE_TYPES,
-    MockHouModule,
-    _full_name,
-    _name_components,
-    _named,
-    _resolved,
-)
-from tests.fake_node_types import load_table, read_node_types
+from tests.conftest import CATEGORIES, MockHouModule, _named, _resolved
+from tests.fake_node_types import full_name, load_table, name_components, read_node_types
 
 
 def test_every_row_of_the_fake_table_is_what_houdini_reads(houdini: Target) -> None:
-    """Each type the fake holds is one this Houdini makes, with the facts the table
-    gives it, and createNode answers in each kind of network as the table says. On a
+    """The table's categories are this Houdini's, each registering the types Houdini
+    registers; each type the fake holds is one Houdini makes, with the facts the table
+    gives it; and createNode answers in each kind of network as the table says. On a
     mismatch, refresh the table: ``hython tests/refresh_fake_node_types.py``."""
     table = load_table()
     with using(houdini.host, houdini.port) as link:
         read = read_node_types(link.hou, table)
 
-    def differing(category: str) -> dict[str, Any]:
+    def differing(table_entry: dict[str, Any], houdini_entry: dict[str, Any]) -> dict[str, Any]:
         return {
-            name: {"table": table[category][name], "houdini": facts}
-            for name, facts in read[category].items()
-            if facts != table[category][name]
+            key: {"table": table_entry.get(key), "houdini": facts}
+            for key, facts in houdini_entry.items()
+            if facts != table_entry.get(key)
         }
 
-    assert {category: differing(category) for category in table} == dict.fromkeys(table, {})
+    assert read.keys() == table.keys()
+    assert {
+        category: {
+            **differing({**entry, "types": None}, {**read[category], "types": None}),
+            **differing(entry["types"], read[category]["types"]),
+        }
+        for category, entry in table.items()
+    } == dict.fromkeys(table, {})
 
 
+# forms no type is registered under, which Houdini splits all the same
 NAMES = (
     "mountain",
     "mountain::2.0",
@@ -47,15 +50,37 @@ NAMES = (
     "a::b::c::f",
     "Sop/grid",
     "",
+    "::",
+    "a:::b::c",
+    "a::::b::c",
+    "a::1.0::b::c",
+    "a::1.0::",
+    "x/y::1.0",
+    "a::b/c",
+    "Sop/x::2.0::ns::y::1.0",
 )
 
 
 def test_the_fake_splits_a_type_name_as_houdini_does(houdini: Target) -> None:
-    """The fake's hou.hda.componentsFromFullNodeTypeName gives this Houdini's parts."""
+    """The fake's hou.hda.componentsFromFullNodeTypeName gives this Houdini's parts for
+    every name it registers, which the table's registry indexes by base name, and for
+    the edge forms."""
+    names = sorted(
+        {
+            *NAMES,
+            *(own for c in CATEGORIES.values() for o in c.namespace_orders.values() for own in o),
+            *(alias for c in CATEGORIES.values() for alias in c.aliases),
+        }
+    )
     with using(houdini.host, houdini.port) as link:
-        read = {name: tuple(link.hou.hda.componentsFromFullNodeTypeName(name)) for name in NAMES}
+        split = link.hou.hda.componentsFromFullNodeTypeName
+        read = {name: tuple(split(name)) for name in names}
 
-    assert {name: _name_components(name) for name in NAMES} == read
+    assert {
+        name: {"fake": name_components(name), "houdini": parts}
+        for name, parts in read.items()
+        if name_components(name) != parts
+    } == {}
 
 
 def _networks(hou: Any) -> dict[str, tuple[Any, str]]:
@@ -90,13 +115,14 @@ def _forms(category: str, resolve: Callable[[str, str], object]) -> list[str]:
     or to none. A name that reaches a type the table lacks (the unversioned
     geometryvopglobal) the fake answers by naming its refresh, not as Houdini does."""
     forms: dict[str, None] = {}
-    for row in NODE_TYPES[category].values():
-        if row.registered:
-            scope, namespace, base, _ = _name_components(row.type)
-            versionless = _full_name(scope, namespace, base, "")
-            for form in (row.type, versionless, f"{versionless}::", base, f"{base}::"):
+    registry = CATEGORIES[category]
+    for own in registry.types:
+        if registry.registered(own):
+            scope, namespace, base, _ = name_components(own)
+            versionless = full_name(scope, namespace, base, "")
+            for form in (own, versionless, f"{versionless}::", base, f"{base}::"):
                 forms.setdefault(form)
-            forms.update(dict.fromkeys(row.aliases))
+            forms.update(dict.fromkeys(registry.aliases_of(own)))
     return [form for form in forms if _reaches_the_table(resolve, category, form)]
 
 
@@ -124,11 +150,15 @@ def _created(network: Any, name: str) -> tuple[str, str]:
     return ("made", made)
 
 
+# a name whose base Houdini registers no type under, in any category
+UNREGISTERED = "houdini_mcp_unregistered"
+
+
 def _create_node_answers(hou: Any) -> dict[str, dict[str, tuple[str, str]]]:
     """createNode's answer in each node for every form of the types of the category
-    it is asked."""
+    it is asked, and for a name no type is registered under."""
     return {
-        label: {name: _created(network, name) for name in _forms(category, _named)}
+        label: {name: _created(network, name) for name in (*_forms(category, _named), UNREGISTERED)}
         for label, (network, category) in _networks(hou).items()
     }
 
@@ -154,7 +184,7 @@ def test_create_node_gives_what_houdini_gives_a_name_in_each_network(houdini: Ta
 def _rebuilt_and_resolved(category: str, name: str) -> object:
     """The type preferredNodeType resolves ``name`` to: rebuilt from its parts, which
     reads a trailing "::" as no version, and taking no alias."""
-    return _resolved(category, _full_name(*_name_components(name)))
+    return _resolved(category, full_name(*name_components(name)))
 
 
 def test_preferred_node_type_gives_what_houdini_gives_a_name(houdini: Target) -> None:
@@ -163,9 +193,9 @@ def test_preferred_node_type_gives_what_houdini_gives_a_name(houdini: Target) ->
     categories = ("Object", "Driver", "Vop", "Lop", "Sop", "Dop", "Director", "Manager")
     qualified = {
         category: {
-            form: _full_name(scope, namespace, f"{category}/{base}", version)
+            form: full_name(scope, namespace, f"{category}/{base}", version)
             for form in _forms(category, _rebuilt_and_resolved)
-            for scope, namespace, base, version in [_name_components(form)]
+            for scope, namespace, base, version in [name_components(form)]
         }
         for category in categories
     }

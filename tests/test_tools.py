@@ -11,12 +11,13 @@ import httpx
 import pytest
 
 from tests.conftest import (
-    NODE_TYPES,
+    CATEGORIES,
     SUMMARIZER,
     HouPermissionError,
     LoadWarning,
     MockHouNode,
     MockNodeLacking,
+    installed,
     link_failure,
     raised_inside_houdini,
 )
@@ -1289,7 +1290,7 @@ class TestListNodeTypes:
 
         assert result["kind"] == "invalid_input"
         assert "'NonExistentCategory' is not a node type category" in result["message"]
-        assert result["categories_available"] == sorted(NODE_TYPES)
+        assert result["categories_available"] == sorted(CATEGORIES)
         assert "node_types" not in result
 
     def test_a_filtered_listing_names_the_category_as_houdini_does(self, mock_connection):
@@ -1309,14 +1310,9 @@ class TestListNodeTypes:
         from houdini_mcp.tools import list_node_types
 
         assert list_node_types("Sop", name_filter="mcp_listed")["returned"] == 0
-        box = NODE_TYPES["Sop"]["box"]
-        monkeypatch.setitem(
-            NODE_TYPES["Sop"],
-            "mcp_listed",
-            dataclasses.replace(
-                box, type="mcp_listed", description="MCP listed", namespace_order=("mcp_listed",)
-            ),
-        )
+        sop = CATEGORIES["Sop"]
+        listed = dataclasses.replace(sop.types["box"], type="mcp_listed", description="MCP listed")
+        monkeypatch.setitem(CATEGORIES, "Sop", installed(sop, listed))
 
         result = list_node_types("Sop", name_filter="mcp_listed")
 

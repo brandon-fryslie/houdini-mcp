@@ -53,8 +53,25 @@ def test_types_narrow_the_count(hou, geo):
             "apex::controlextract",
             (("Sop", "apex::controlextract"), ("Sop", "apex::controlextract::2.0")),
         ),
-        ("null", (("Object", "null"), ("Sop", "null"))),
-        ("filecache", (("Sop", "filecache"), ("Sop", "filecache::2.0"))),
+        (
+            "null",
+            tuple(
+                (category, "null")
+                for category in (
+                    "Chop",
+                    "Cop",
+                    "Cop2",
+                    "Dop",
+                    "Driver",
+                    "Lop",
+                    "Object",
+                    "Sop",
+                    "Top",
+                    "Vop",
+                )
+            ),
+        ),
+        ("filecache", (("Lop", "filecache"), ("Sop", "filecache"), ("Sop", "filecache::2.0"))),
         ("v_mountain", (("Sop", "mountain"), ("Sop", "mountain::2.0"))),
         ("GRID", ()),
         ("mountain::1.0", ()),

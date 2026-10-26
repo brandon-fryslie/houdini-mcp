@@ -1,10 +1,10 @@
 """The fake hou's node types: the table Houdini wrote, and the reader that writes it.
 
 [LAW:one-source-of-truth] ``fake_node_types.json`` is the one record of the node
-types the fake has and of what createNode does with each in a network that makes
-nodes. Its keys are the fake's choice: for each category, the types it holds, under
-their own names, and for each type the parameter tuples a fresh node carries. Every
-fact under them is Houdini's answer, read by ``read_node_types``: the refresh script
+types Houdini registers in each of its categories, of the types of them the fake has,
+and of what createNode does with each in a network that makes nodes. Which types it
+has, and which parameter tuples a fresh node of each carries, are the fake's choice;
+every other fact is Houdini's answer, read by ``read_node_types``: the refresh script
 writes the file from it under hython, and a live test checks the file against it, so
 the table stays what Houdini 22.0.466 says. That a locked asset and a node that is not
 a network refuse every child, whatever the name, is the fake's own rule (``_holding`` in
@@ -24,8 +24,39 @@ from houdini_mcp_read import reason
 
 TABLE_PATH = Path(__file__).with_name("fake_node_types.json")
 
-# category -> a type's own name -> its facts, as the file holds them
-Table = dict[str, dict[str, dict[str, Any]]]
+# category -> its namespace orders, its aliases, and its types (a type's own name ->
+# its facts), as the file holds them
+Table = dict[str, dict[str, Any]]
+
+# what a version is made of; an empty one is a version too (``mountain::``)
+VERSION_CHARACTERS = frozenset("0123456789.")
+
+
+def name_components(name: str) -> tuple[str, str, str, str]:
+    """hou.hda.componentsFromFullNodeTypeName: ``[scope::][namespace::]name[::version]``,
+    as Houdini 22 splits it, on every name it registers and the edge forms probed.
+
+    The name splits at each ``::`` from the right, so ``a:::b`` is ``a:`` and ``b``. A
+    trailing part made of digits and dots, or empty after a trailing ``::``, is the
+    version (``mountain::`` is mountain). The scope is a full type name that holds the
+    type: everything up to the last part before the base that names a category
+    (``Sop/rbdmaterialfracture``) or is a version (the scope's own, as in
+    ``Sop/rbdmaterialfracture::2.0::rbdconcretefracture::2.0``). The namespace is what
+    lies between (``a::b::c`` has namespace ``a::b``).
+    """
+    parts = [part[::-1] for part in reversed(name[::-1].split("::"))]
+    version = parts.pop() if len(parts) > 1 and set(parts[-1]) <= VERSION_CHARACTERS else ""
+    base = parts.pop()
+    scoped = max(
+        (i + 1 for i, part in enumerate(parts) if "/" in part or set(part) <= VERSION_CHARACTERS),
+        default=0,
+    )
+    return "::".join(parts[:scoped]), "::".join(parts[scoped:]), base, version
+
+
+def full_name(scope: str, namespace: str, name: str, version: str) -> str:
+    """hou.hda.fullNodeTypeNameFromComponents: the components joined, the empty ones left out."""
+    return "::".join(part for part in (scope, namespace, name, version) if part)
 
 
 @dataclass(frozen=True)
@@ -104,11 +135,7 @@ class CreateNode:
 class NodeType:
     """One node type as Houdini gives it.
 
-    ``type`` is its own name, the table's key. ``namespace_order`` is every type its
-    name without scope, namespace or version could mean, as ``namespaceOrder`` gives
-    them, the preferred first (``mountain::2.0`` and the older ``mountain``); none
-    for the root and its contexts, which Houdini registers no type for. ``aliases``
-    is the other names createNode takes for it. ``holds`` is the category of the
+    ``type`` is its own name, the table's key. ``holds`` is the category of the
     nodes it holds, None for a node that is not a network. A ``locked`` asset holds a
     category and refuses every child at once. ``indirect_inputs`` is how many indirect
     inputs, named "1" on, a node of it has; None for a node Houdini says is not a
@@ -119,18 +146,11 @@ class NodeType:
 
     type: str
     description: str
-    namespace_order: tuple[str, ...]
-    aliases: tuple[str, ...]
     holds: str | None
     locked: bool
     indirect_inputs: int | None
     parms: dict[str, ParmTuple]
     create_node: CreateNode | None
-
-    @property
-    def registered(self) -> bool:
-        """Whether Houdini's registry has it, and so whether any name reaches it."""
-        return _registered(self.type, self.namespace_order)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "NodeType":
         # [LAW:one-source-of-truth] a type is the table's one record of it, so a copy
@@ -139,16 +159,55 @@ class NodeType:
         return self
 
 
+@dataclass(frozen=True)
+class Category:
+    """A node type category as Houdini registers it, and the types of it the fake has.
+
+    ``namespace_orders`` is, for each base name (a name without scope, namespace or
+    version), every type it could mean, as ``namespaceOrder`` gives them, the
+    preferred first (``mountain::2.0`` and the older ``mountain``): Houdini's
+    registry, which lists every type it registers, and no other. ``aliases`` is the
+    other names createNode takes, each for its type's own name. ``types`` is the types
+    the fake has, by own name: registered ones, and for Director and Manager the root
+    and its contexts, which Houdini registers no type for.
+    """
+
+    name: str
+    namespace_orders: dict[str, tuple[str, ...]]
+    aliases: dict[str, str]
+    types: dict[str, NodeType]
+
+    def namespace_order(self, own: str) -> tuple[str, ...]:
+        """The namespace order the type named ``own`` is in; none for a type Houdini
+        does not register."""
+        order = self.namespace_orders.get(name_components(own)[2], ())
+        return order if own in order else ()
+
+    def registered(self, own: str) -> bool:
+        return bool(self.namespace_order(own))
+
+    def aliases_of(self, own: str) -> tuple[str, ...]:
+        return tuple(alias for alias, aliased in self.aliases.items() if aliased == own)
+
+    def held(self, own: str) -> NodeType:
+        """The type named ``own``, which Houdini registers: the table's record of it.
+
+        [LAW:no-silent-failure] a type Houdini has and the table lacks is the table's
+        gap, which the refresh fills, never an answer Houdini gives.
+        """
+        row = self.types.get(own)
+        if row is None:
+            raise LookupError(
+                f"Houdini registers {self.name}/{own}, which the table lacks: "
+                f"hython tests/refresh_fake_node_types.py {self.name}/{own}"
+            )
+        return row
+
+
 def _has_answers(category: str, holds: str | None, locked: bool) -> bool:
     """Whether the table holds createNode's answers in a node of a ``category`` type
     that ``holds`` a category and is ``locked`` or not: an unlocked context root."""
     return holds not in (None, category) and not locked
-
-
-def _registered(own: str, namespace_order: Any) -> bool:
-    # [LAW:one-source-of-truth] the namespace order is Houdini's answer: a type it
-    # lists is registered, and the root and its contexts are in none
-    return own in namespace_order
 
 
 def load_table() -> Table:
@@ -157,12 +216,32 @@ def load_table() -> Table:
     return table
 
 
-def node_types(table: Table) -> dict[str, dict[str, NodeType]]:
-    """The table as records: category -> a type's own name -> the type."""
-    return {
-        category: {own: _node_type(category, own, facts) for own, facts in types.items()}
-        for category, types in table.items()
-    }
+def categories(table: Table) -> dict[str, Category]:
+    """The table as records: category -> the category."""
+    return {name: _category(name, entry) for name, entry in table.items()}
+
+
+def _category(name: str, entry: dict[str, Any]) -> Category:
+    # [LAW:parse-dont-validate] the registry indexed by base name, by the splitter
+    # every lookup splits a name with, so the index and the lookups agree
+    namespace_orders: dict[str, tuple[str, ...]] = {}
+    for order in entry["namespace_orders"]:
+        bases = {name_components(own)[2] for own in order}
+        if len(bases) != 1 or bases & namespace_orders.keys():
+            raise ValueError(
+                f"{name}'s namespace order {order} is not the one order of one base name"
+            )
+        namespace_orders[bases.pop()] = tuple(order)
+    category = Category(
+        name=name,
+        namespace_orders=namespace_orders,
+        aliases=entry["aliases"],
+        types={own: _node_type(name, own, facts) for own, facts in entry["types"].items()},
+    )
+    unregistered = sorted(own for own in entry["aliases"].values() if not category.registered(own))
+    if unregistered:
+        raise ValueError(f"{name}'s aliases name types it does not register: {unregistered}")
+    return category
 
 
 def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
@@ -177,8 +256,6 @@ def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
     return NodeType(
         type=own,
         description=facts["description"],
-        namespace_order=tuple(facts["namespace_order"]),
-        aliases=tuple(facts["aliases"]),
         holds=facts["holds"],
         locked=facts["locked"],
         indirect_inputs=facts["indirect_inputs"],
@@ -228,7 +305,8 @@ def _answer(own: str, answer: Any) -> Answer:
 
 
 def read_node_types(hou: Any, table: Table) -> Table:
-    """``table`` with every fact re-read from ``hou``, whose scene must be fresh.
+    """``table`` with every fact re-read from ``hou``, whose scene must be fresh: each
+    category Houdini has, with its registry and the types of it ``table`` has.
 
     A type's facts are read off the first node of it the reader meets that Houdini
     made cleanly: the root and its contexts, which come with the scene, then each node
@@ -256,7 +334,19 @@ class _Reader:
 
     def __init__(self, hou: Any, table: Table) -> None:
         self._components = hou.hda.componentsFromFullNodeTypeName
-        self._table = table
+        houdini = hou.nodeTypeCategories()
+        unknown = sorted(table.keys() - houdini.keys())
+        if unknown:
+            raise LookupError(f"the table holds {unknown}, which Houdini has no category for")
+        self._registries = {name: _registry(houdini[name]) for name in sorted(houdini)}
+        self._registered = {
+            name: {own for order in registry["namespace_orders"] for own in order}
+            for name, registry in self._registries.items()
+        }
+        # the types of each category the fake has; none of one the table holds no entry for
+        self._types: dict[str, dict[str, Any]] = {
+            name: table[name]["types"] if name in table else {} for name in self._registries
+        }
         self._facts: dict[tuple[str, str], dict[str, Any]] = {}
         self._create_node: dict[tuple[str, str], dict[str, Any]] = {}
         self.roots: list[Any] = []
@@ -268,7 +358,7 @@ class _Reader:
         if key in self._facts:
             return False
         category, own = key
-        facts = self._facts[key] = _facts(node, self._table[category][own])
+        facts = self._facts[key] = _facts(node, self._types[category][own])
         is_root = _has_answers(category, facts["holds"], facts["locked"])
         if keep and is_root:
             self.roots.append(node)
@@ -277,12 +367,6 @@ class _Reader:
     def explore(self, network: Any) -> None:
         """createNode's answers in the context root ``network`` itself."""
         held = network.childTypeCategory().name()
-        if held not in self._table:
-            raise LookupError(
-                f"{network.path()} holds {held}, which the table has no entry for: add "
-                f'"{held}": {{}} to {TABLE_PATH.name}, or any of its types the fake needs '
-                f"with hython tests/refresh_fake_node_types.py {held}/<type>"
-            )
         self._create_node[_type_key(network)] = {
             "network": self._ask_all(network, held, keep=True),
             "subnetworks": {},
@@ -293,7 +377,7 @@ class _Reader:
         root ``network`` makes that holds its category."""
         held = network.childTypeCategory().name()
         subnetworks = self._create_node[_type_key(network)]["subnetworks"]
-        for own in self._table[held]:
+        for own in self._types[held]:
             facts = self._facts.get((held, own))
             if facts is None or facts["holds"] != held or facts["locked"]:
                 continue
@@ -314,10 +398,8 @@ class _Reader:
         for child in network.children():
             built.setdefault(child.type().name(), []).append(child)
         answers = {}
-        for own in self._table[category]:
-            facts = self._facts.get((category, own))
-            if facts is not None and not _registered(own, facts["namespace_order"]):
-                continue
+        # no name reaches a type Houdini does not register: the root and its contexts
+        for own in [own for own in self._types[category] if own in self._registered[category]]:
             for held in built.get(own, []):
                 held.destroy()
             with_none, first = self._ask(network, own)
@@ -357,18 +439,35 @@ class _Reader:
         return "made", node
 
     def read(self) -> Table:
-        read: Table = {}
-        for category, types in self._table.items():
-            read[category] = {}
-            for own in types:
-                facts = self._facts.get((category, own))
-                if facts is None:
-                    raise LookupError(f"a fresh scene gives no clean node of {category}/{own}")
-                create_node = self._create_node.get((category, own))
-                read[category][own] = (
-                    facts if create_node is None else {**facts, "create_node": create_node}
-                )
-        return read
+        return {
+            name: {**registry, "types": {own: self._read(name, own) for own in self._types[name]}}
+            for name, registry in self._registries.items()
+        }
+
+    def _read(self, category: str, own: str) -> dict[str, Any]:
+        facts = self._facts.get((category, own))
+        if facts is None:
+            raise LookupError(f"a fresh scene gives no clean node of {category}/{own}")
+        create_node = self._create_node.get((category, own))
+        return facts if create_node is None else {**facts, "create_node": create_node}
+
+
+def _registry(category: Any) -> dict[str, Any]:
+    """``category``'s namespace orders and aliases, as Houdini registers them: one
+    order for each base name, read off the first type of it, and each alias's type."""
+    orders: list[list[str]] = []
+    listed: set[str] = set()
+    aliases: dict[str, str] = {}
+    for own, node_type in sorted(category.nodeTypes().items()):
+        if own not in listed:
+            order = list(node_type.namespaceOrder())
+            orders.append(order)
+            listed.update(order)
+        for alias in node_type.aliases():
+            if aliases.setdefault(alias, own) != own:
+                # the file maps an alias to one type, as createNode takes it for one
+                raise ValueError(f"{alias!r} is an alias of {aliases[alias]} and of {own}")
+    return {"namespace_orders": sorted(orders), "aliases": dict(sorted(aliases.items()))}
 
 
 def _type_key(node: Any) -> tuple[str, str]:
@@ -391,8 +490,6 @@ def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
     held = node.childTypeCategory()
     return {
         "description": node.type().description(),
-        "namespace_order": list(node.type().namespaceOrder()),
-        "aliases": list(node.type().aliases()),
         "holds": None if held is None else held.name(),
         "locked": node.isLockedHDA(),
         "indirect_inputs": _indirect_inputs(node),

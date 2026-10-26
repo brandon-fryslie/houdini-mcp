@@ -1335,16 +1335,18 @@ class TestRenderFraming:
         """A studio's own defaults for a camera's rotate and transform orders do not move
         it: the render sets the orders camera_position and camera_rotation are stated in."""
         import houdini_mcp.tools as tools
-        from tests.conftest import NODE_TYPES
+        from tests.conftest import CATEGORIES
 
         # the cam a studio's defaults give: rotate zxy, transform trs, as menu indices
-        cam = NODE_TYPES["Object"]["cam"]
+        cam = CATEGORIES["Object"].types["cam"]
         orders = {
             name: dataclasses.replace(cam.parms[name], values=(index,))
             for name, index in (("rOrd", 4), ("xOrd", 5))
         }
         monkeypatch.setitem(
-            NODE_TYPES["Object"], "cam", dataclasses.replace(cam, parms={**cam.parms, **orders})
+            CATEGORIES["Object"].types,
+            "cam",
+            dataclasses.replace(cam, parms={**cam.parms, **orders}),
         )
 
         result = getattr(tools, tool)(host="localhost", port=18811)

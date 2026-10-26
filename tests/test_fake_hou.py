@@ -3,13 +3,19 @@
 import pytest
 
 from tests.conftest import (
+    CATEGORIES,
     HOUDINI_TURNED_MATRIX,
-    NODE_TYPES,
     MockHouModule,
     MockHouNode,
     _built_as,
 )
-from tests.fake_node_types import ParmTuple, load_table, node_types, read_node_types
+from tests.fake_node_types import (
+    ParmTuple,
+    categories,
+    load_table,
+    name_components,
+    read_node_types,
+)
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -243,9 +249,9 @@ def test_a_node_is_of_the_category_its_network_holds(mock_hou: MockHouModule) ->
 
 
 def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
-    held = {row.holds for offered in NODE_TYPES.values() for row in offered.values()}
+    held = {row.holds for category in CATEGORIES.values() for row in category.types.values()}
 
-    assert held - {None} <= NODE_TYPES.keys()
+    assert held - {None} <= CATEGORIES.keys()
 
 
 @pytest.mark.parametrize(
@@ -336,40 +342,66 @@ def test_a_node_outside_any_scene_has_no_category() -> None:
 
 
 def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> None:
-    """The reader that writes the table from Houdini reads the same table off the fake."""
+    """The reader that writes the table from Houdini reads the same types off the fake.
+    Its registry is the file's own, which the fake lists only the held types of."""
     table = load_table()
 
-    assert read_node_types(mock_hou, table) == table
+    read = read_node_types(mock_hou, table)
+
+    assert {c: e["types"] for c, e in read.items()} == {c: e["types"] for c, e in table.items()}
 
 
-def test_the_reader_refuses_a_network_holding_a_category_the_table_lacks(
-    mock_hou: MockHouModule,
-) -> None:
+def test_the_reader_refuses_a_category_houdini_does_not_have(mock_hou: MockHouModule) -> None:
     table = load_table()
-    del table["Vop"]
+    table["Nope"] = {"namespace_orders": [], "aliases": {}, "types": {}}
 
-    with pytest.raises(LookupError, match="holds Vop, which the table has no entry for"):
+    with pytest.raises(LookupError, match=r"the table holds \['Nope'\], which Houdini has no"):
         read_node_types(mock_hou, table)
 
 
 def test_the_table_holds_create_node_answers_for_an_unlocked_context_root_alone() -> None:
     table = load_table()
-    del table["Manager"]["mat"]["create_node"]
-    table["Sop"]["box"]["create_node"] = {"network": {}, "subnetworks": {}}
+    del table["Manager"]["types"]["mat"]["create_node"]
+    table["Sop"]["types"]["box"]["create_node"] = {"network": {}, "subnetworks": {}}
 
     with pytest.raises(ValueError, match="Manager/mat lacks createNode answers"):
-        node_types({"Manager": table["Manager"]})
+        categories({"Manager": table["Manager"]})
     with pytest.raises(ValueError, match="Sop/box has createNode answers"):
-        node_types({"Sop": table["Sop"]})
+        categories({"Sop": table["Sop"]})
 
 
 def test_the_table_names_the_type_whose_create_node_answer_the_fake_does_not_model() -> None:
     table = load_table()
-    answers = table["Manager"]["mat"]["create_node"]["network"]
+    answers = table["Manager"]["types"]["mat"]["create_node"]["network"]
     answers["geometryvopglobal::2.0"]["with_none"] = "refused"
 
     with pytest.raises(ValueError, match="no createNode answer for geometryvopglobal::2.0"):
-        node_types({"Manager": table["Manager"]})
+        categories({"Manager": table["Manager"]})
+
+
+@pytest.mark.parametrize(
+    "orders",
+    [
+        [["mountain::2.0", "grid"]],
+        [["mountain::2.0"], ["mountain"]],
+    ],
+)
+def test_the_table_holds_one_namespace_order_for_each_base_name(orders: list[list[str]]) -> None:
+    table = load_table()
+    table["Sop"]["namespace_orders"] = orders
+    table["Sop"]["types"] = {}
+    table["Sop"]["aliases"] = {}
+
+    with pytest.raises(ValueError, match="is not the one order of one base name"):
+        categories({"Sop": table["Sop"]})
+
+
+def test_the_table_holds_no_alias_of_a_type_houdini_does_not_register() -> None:
+    table = load_table()
+    table["Sop"]["aliases"]["v_nothing"] = "nothing"
+
+    with pytest.raises(ValueError, match=r"aliases name types it does not register: \['nothing'\]"):
+        categories({"Sop": table["Sop"]})
 
 
 def test_a_node_is_the_same_state_whichever_name_made_its_type(
@@ -435,18 +467,6 @@ def test_a_name_no_type_has_is_refused(mock_hou: MockHouModule, name: str) -> No
 
     with pytest.raises(Exception, match=INVALID_TYPE):
         geo.createNode(name)
-
-
-def test_a_name_houdini_resolves_to_a_type_the_table_lacks_names_the_refresh(
-    mock_hou: MockHouModule,
-) -> None:
-    """The unversioned apex::controlextract is Houdini's, and the fake's gap."""
-    geo = mock_hou.node("/obj").createNode("geo")
-
-    with pytest.raises(
-        LookupError, match="hython tests/refresh_fake_node_types.py Sop/apex::controlextract$"
-    ):
-        geo.createNode("controlextract::")
 
 
 def test_preferred_node_type_takes_no_alias_and_reads_a_trailing_colon_pair_as_no_version(
@@ -554,7 +574,7 @@ def test_a_node_built_as_its_type_is_not_judged_as_create_node_judges_a_name(
     attribvop's geometryvopglobal1 holds subinput1), so a node built as its type is
     judged only by its network's category."""
     attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
-    subinput = NODE_TYPES["Vop"]["subinput"]
+    subinput = CATEGORIES["Vop"].types["subinput"]
 
     mock_hou.add_node(_built_as(subinput, path=f"{attribvop.path()}/subinput1", name="subinput1"))
 
@@ -607,7 +627,7 @@ def test_a_menu_parm_set_by_a_token_holds_its_index(mock_hou: MockHouModule) -> 
 
 def test_a_menu_parm_given_to_a_node_holds_an_index(mock_hou: MockHouModule) -> None:
     """A given token is held as its index; a given ParmTuple keeps its type's menu."""
-    rOrd = NODE_TYPES["Object"]["cam"].parms["rOrd"]
+    rOrd = CATEGORIES["Object"].types["cam"].parms["rOrd"]
     params = {"rOrd": "zxy", "xOrd": ParmTuple(("xOrd",), (0,))}
     mock_hou.add_node(MockHouNode(path="/obj/cam1", name="cam1", node_type="cam", params=params))
     cam = mock_hou.node("/obj/cam1")
@@ -710,3 +730,79 @@ def test_a_node_placed_again_keeps_the_values_it_had(mock_hou: MockHouModule) ->
     mock_hou.add_node(geo)
 
     assert geo.parm("tx").eval() == 4.0
+
+
+# Houdini 22's componentsFromFullNodeTypeName, probed: the fake splits at each "::"
+# from the right, and a scope runs to its category or its own version
+@pytest.mark.parametrize(
+    ("name", "components"),
+    [
+        ("mountain::", ("", "", "mountain", "")),
+        (
+            "apex::Sop/controlextract::2.0",
+            ("", "apex", "Sop/controlextract", "2.0"),
+        ),
+        (
+            "Sop/rbdmaterialfracture::2.0::rbdconcretefracture::2.0",
+            ("Sop/rbdmaterialfracture::2.0", "", "rbdconcretefracture", "2.0"),
+        ),
+        (
+            "sidefx::recipe::sop/pyroburstsource:::useattribs",
+            ("sidefx::recipe::sop/pyroburstsource:", "", "useattribs", ""),
+        ),
+        ("a::::b::c", ("a::", "b", "c", "")),
+        ("a::1.0::", ("", "a", "1.0", "")),
+        ("x/y::1.0", ("", "", "x/y", "1.0")),
+    ],
+)
+def test_a_type_name_splits_as_houdini_splits_it(
+    name: str, components: tuple[str, str, str, str]
+) -> None:
+    assert name_components(name) == components
+
+
+def test_a_type_houdini_registers_and_the_table_lacks_names_its_refresh(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini 22 makes a Vop suboutput in /mat; the fake names the refresh that adds
+    it, through every way a name reaches a type, where it would otherwise refuse it."""
+    refresh = r"Houdini registers Vop/suboutput, which the table lacks: hython tests/refresh_fake_node_types.py Vop/suboutput"
+
+    with pytest.raises(LookupError, match=refresh):
+        mock_hou.node("/mat").createNode("suboutput")
+    with pytest.raises(LookupError, match=refresh):
+        mock_hou.preferredNodeType("Vop/suboutput")
+    with pytest.raises(LookupError, match=refresh):
+        mock_hou.nodeTypeCategories()["Vop"].nodeType("suboutput")
+
+
+def test_an_alias_of_a_type_the_table_lacks_names_its_refresh(mock_hou: MockHouModule) -> None:
+    sop = CATEGORIES["Sop"]
+    alias, own = next((a, own) for a, own in sop.aliases.items() if own not in sop.types)
+
+    with pytest.raises(LookupError, match=f"hython tests/refresh_fake_node_types.py Sop/{own}"):
+        mock_hou.node("/obj").createNode("geo").createNode(alias)
+
+
+def test_a_name_houdini_registers_no_type_under_is_refused(mock_hou: MockHouModule) -> None:
+    with pytest.raises(Exception, match=INVALID_TYPE):
+        mock_hou.node("/mat").createNode("houdini_mcp_unregistered")
+    assert mock_hou.preferredNodeType("Vop/houdini_mcp_unregistered") is None
+    assert mock_hou.nodeTypeCategories()["Vop"].nodeType("houdini_mcp_unregistered") is None
+
+
+def test_a_types_namespace_order_and_aliases_are_houdinis_registry(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini 22: mountain::2.0 is preferred to the older mountain, whose alias is
+    v_mountain."""
+    sop = mock_hou.nodeTypeCategories()["Sop"]
+    mountain = mock_hou.node("/obj").createNode("geo").createNode("mountain::")
+
+    assert [sop.nodeType(own).namespaceOrder() for own in ("mountain", "mountain::2.0")] == [
+        ("mountain::2.0", "mountain")
+    ] * 2
+    assert (mountain.type().aliases(), sop.nodeType("mountain::2.0").aliases()) == (
+        ("v_mountain",),
+        (),
+    )
