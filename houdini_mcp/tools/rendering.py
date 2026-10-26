@@ -581,7 +581,8 @@ def render_viewport(
     Creates a temporary camera, positions it to frame the scene geometry,
     renders the scene, and returns the rendered image encoded as base64.
     The camera and render node are removed again before returning, whatever
-    the outcome: the scene is as it was before the call.
+    the outcome: the scene, and Houdini's undo history, are as they were before
+    the call.
 
     Args:
         camera_position: [x, y, z] world position of the camera (default: where
@@ -665,7 +666,7 @@ def render_quad_view(
 
     Creates a camera and renders standardized views for spatial understanding.
     The camera and render node are removed again before returning, whatever the
-    outcome: the scene is as it was before the call.
+    outcome: the scene, and Houdini's undo history, are as they were before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
     calling render_viewport 4 times as it reuses the camera and calculates
     the bounding box only once.

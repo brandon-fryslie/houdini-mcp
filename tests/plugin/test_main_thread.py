@@ -337,6 +337,31 @@ class TestHeadless:
         assert "no activity" in str(raised)
         assert ran == []
 
+    def test_a_call_without_undo_holds_its_disabler_on_the_main_thread(self, houdini, monkeypatch):
+        """Houdini closes the disabler itself, there, even when the call fails."""
+        seen: list[tuple[str, str]] = []
+
+        @contextmanager
+        def disabler() -> Iterator[None]:
+            seen.append(("open", threading.current_thread().name))
+            try:
+                yield
+            finally:
+                seen.append(("close", threading.current_thread().name))
+
+        monkeypatch.setattr(
+            sys.modules["hou"], "undos", SimpleNamespace(disabler=disabler), raising=False
+        )
+        with houdini() as conn:
+
+            def fn() -> None:
+                raise ValueError("the client's own failure")
+
+            entry = conn.modules["houdini_mcp_plugin.main_thread"].call_without_undo
+            (raised,) = serving_main_thread(lambda: rpyc.async_(entry)(fn, 60.0).value)
+        assert "the client's own failure" in str(raised)
+        assert seen == [("open", "MainThread"), ("close", "MainThread")]
+
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []
 

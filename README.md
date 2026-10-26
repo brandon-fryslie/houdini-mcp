@@ -94,8 +94,8 @@ interface, and serves only the tools that need nothing inside Houdini: not the o
 that edit the scene as one undo step (`create_node`, `delete_node`, `set_parameter`,
 the Wiring & Layout tools, `create_material`, `assign_material`, `set_render_settings`,
 `create_render_node`), the pane captures (`capture_pane_screenshot`,
-`capture_multiple_panes`, `render_node_network`), `find_nodes` or
-`get_parameter_schema`.
+`capture_multiple_panes`, `render_node_network`), the renders (`render_viewport`,
+`render_quad_view`), `find_nodes` or `get_parameter_schema`.
 
 ### Docker (Houdini on another machine)
 

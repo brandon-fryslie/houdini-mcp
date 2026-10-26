@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module called `read-only` a guarantee, and the tool contract said it blocks
   every mutation; it admits only recognized inspection.
 
+- `render_viewport` and `render_quad_view` leave Houdini's undo history as they
+  found it (houdini-laws-etg.bci). In graphical Houdini each node they created
+  and destroyed for the render was a step of its own on the artist's undo
+  stack, so the next Ctrl+Z stepped through the render and could bring its
+  camera and ROP back. They now run on Houdini's main thread with undo
+  disabled, the one place Houdini honours a disabler.
+
 - `execute_code` refuses the calls that run HScript as it refuses `eval`
   (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
   expansion (`hou.text.expandString()` and kin) of a string holding a backtick
@@ -405,6 +412,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused as `invalid_input` (houdini-laws-etg.dyr). Before, they were clamped into range and the call
   reported success: a `limit` of 0 or less listed one item per page, one over
   500 listed 500, and a negative `cursor` started at 0.
+
+- **BREAKING (deployment)**: `render_viewport` and `render_quad_view` need the
+  houdini_mcp plugin installed in the Houdini they reach, as the pane captures
+  and editing tools do (houdini-laws-etg.bci); without it they fail saying to
+  install the plugin. A headless `hython` must run `main_thread.serve()`.
+
+- **BREAKING (wire)**: a call that arrives while `render_viewport` or
+  `render_quad_view` runs waits for it, reads included, and reports the wait in
+  `scene_wait` (houdini-laws-etg.bci): the render holds Houdini's main thread.
 
 - **BREAKING (deployment)**: `capture_pane_screenshot`, `capture_multiple_panes`
   and `render_node_network` need the houdini_mcp plugin installed in the
