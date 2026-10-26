@@ -28,7 +28,8 @@ def main() -> None:
         help="install the plugin into Houdini and register this server with each MCP client",
     )
     if parser.parse_args().command == "install":
-        raise SystemExit(install.main(install.Machine(os.environ, Path.home(), sys.platform)))
+        machine = install.Machine(os.environ, Path.home(), sys.platform, install.documents_folder())
+        raise SystemExit(install.main(machine))
     serve()
 
 

@@ -49,7 +49,7 @@ def test_houdini_mcp_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -
         if name not in _OTHER_SOURCES and not name.startswith("HOUDINI_")
     }
     environ |= {"HOUDINI_USER_PREF_DIR": str(pref)}
-    machine = Machine(environ, tmp_path / "home", sys.platform)
+    machine = Machine(environ, tmp_path / "home", sys.platform, tmp_path / "home" / "Documents")
     assert isinstance(install_plugin(machine, this_server()), Installed)
     plugin = plugin_tree() / "houdini_mcp"
     report = tmp_path / "loaded.json"

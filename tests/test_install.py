@@ -60,8 +60,16 @@ def _calls(bin_dir: Path) -> list[list[str]]:
     return [json.loads(line) for line in (bin_dir / "calls").read_text().splitlines()]
 
 
-def _machine(tmp_path: Path, platform: str = "darwin", **environ: str) -> Machine:
-    return Machine({"PATH": str(tmp_path / "bin"), **environ}, tmp_path / "home", platform)
+def _machine(
+    tmp_path: Path, platform: str = "darwin", documents: Path | Failed | None = None, **environ: str
+) -> Machine:
+    home = tmp_path / "home"
+    return Machine(
+        {"PATH": str(tmp_path / "bin"), **environ},
+        home,
+        platform,
+        home / "Documents" if documents is None else documents,
+    )
 
 
 def _claude_json(tmp_path: Path, config: dict[str, object]) -> Machine:
@@ -587,6 +595,36 @@ def test_houdinis_preferences_on_windows_are_not_moved_by_a_shells_home(tmp_path
     """Git Bash sets HOME in its own shell; Houdini started from the Start menu has none."""
     machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
     assert houdini_pref_dir(machine) == machine.home / "Documents" / "houdini22.0"
+
+
+def test_houdinis_preferences_on_windows_follow_a_redirected_documents_folder(
+    tmp_path: Path,
+) -> None:
+    """OneDrive or a policy moves Documents off the home folder; Houdini follows it."""
+    redirected = tmp_path / "OneDrive" / "Documents"
+    machine = _machine(tmp_path, "win32", documents=redirected)
+
+    assert install_plugin(machine, SERVER) == Installed(
+        str(redirected / "houdini22.0" / "packages" / "houdini_mcp.json")
+    )
+    assert not (machine.home / "Documents").exists()
+
+
+def test_a_documents_folder_windows_did_not_name_fails_the_plugin_step_alone(
+    tmp_path: Path,
+) -> None:
+    unnamed = Failed("Windows did not say where Documents is (HRESULT 0x80070002)")
+    (tmp_path / "ad" / "Claude").mkdir(parents=True)
+    results = dict(
+        install(
+            _machine(tmp_path, "win32", documents=unnamed, APPDATA=str(tmp_path / "ad")), SERVER
+        )
+    )
+
+    assert results["Houdini plugin"] == unnamed
+    assert results["Claude Desktop"] == Installed(
+        str(tmp_path / "ad" / "Claude" / "claude_desktop_config.json")
+    )
 
 
 def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:

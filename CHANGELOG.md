@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On Windows, `houdini-mcp install` puts the plugin pointer in the Documents folder
+  Windows reports, so Houdini finds it when Documents is redirected to OneDrive or by
+  policy (houdini-install-aby.gh4). If Windows does not say where Documents is, the
+  plugin step fails saying so and the client steps still run. Not yet tested on Windows.
+
 - On macOS, a call waiting for Houdini's main thread holds off App Nap
   (houdini-install-aby.80r): a graphical Houdini whose window was covered
   refused `create_node` and every other edit after 30 s while reads answered.

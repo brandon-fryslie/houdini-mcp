@@ -28,11 +28,13 @@ _CLI_SECONDS = 60
 
 @dataclass(frozen=True)
 class Machine:
-    """The machine being installed on: its environment, the user's home and its platform."""
+    """The machine being installed on: its environment, the user's home, its platform,
+    and the user's Documents folder as the OS reports it (see :func:`documents_folder`)."""
 
     environ: Mapping[str, str]
     home: Path
     platform: str  # as sys.platform spells it
+    documents: "Path | Failed"
 
 
 @dataclass(frozen=True)
@@ -97,20 +99,53 @@ class Failed:
 Outcome = Installed | NotFound | Kept | Failed
 
 
-def houdini_pref_dir(machine: Machine) -> Path:
+def houdini_pref_dir(machine: Machine) -> "Path | Failed":
     """Houdini's user preferences directory, as Houdini finds it.
 
     Houdini takes HOUDINI_USER_PREF_DIR only when it holds ``__HVER__`` (one without
     is "missing __HVER__, ignored", Houdini 22.0.466), and its own default otherwise.
+    On Windows that default is in the Documents folder wherever Windows keeps it,
+    redirected to OneDrive or by policy included (houdini-install-aby.gh4).
     """
     named = machine.environ.get("HOUDINI_USER_PREF_DIR", "")
     if "__HVER__" in named:
         return Path(named.replace("__HVER__", HOUDINI_VERSION))
-    defaults = {
-        "darwin": machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION,
-        "win32": machine.home / "Documents" / f"houdini{HOUDINI_VERSION}",
-    }
-    return defaults.get(machine.platform, machine.home / f"houdini{HOUDINI_VERSION}")
+    match machine.platform, machine.documents:
+        case "darwin", _:
+            return machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION
+        case "win32", Path() as documents:
+            return documents / f"houdini{HOUDINI_VERSION}"
+        case "win32", Failed() as failed:
+            return failed
+    return machine.home / f"houdini{HOUDINI_VERSION}"
+
+
+def documents_folder() -> "Path | Failed":
+    """This user's Documents folder, as the OS reports it.
+
+    [LAW:effects-at-boundaries] Called once, where the real :class:`Machine` is built.
+    On Windows it is the known folder (SHGetKnownFolderPath, FOLDERID_Documents), which
+    follows a redirection; the installer's HOME or USERPROFILE would not, and a Git
+    Bash HOME is not what a Houdini started from the Start menu sees.
+    """
+    if sys.platform != "win32":
+        return Path.home() / "Documents"
+    import ctypes
+    import uuid
+
+    folder_id = (ctypes.c_byte * 16).from_buffer_copy(
+        uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7").bytes_le
+    )
+    path = ctypes.c_wchar_p()
+    result = ctypes.windll.shell32.SHGetKnownFolderPath(folder_id, 0, None, ctypes.byref(path))
+    try:
+        if result != 0 or not path.value:
+            return Failed(
+                f"Windows did not say where Documents is (HRESULT {result & 0xFFFFFFFF:#010x})"
+            )
+        return Path(path.value)
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(path)
 
 
 def plugin_tree() -> Path:
@@ -126,7 +161,10 @@ def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
     Houdini loads with it. The pointer takes the name of the package file an earlier
     copy was installed under, so that copy no longer loads.
     """
-    packages = houdini_pref_dir(machine) / "packages"
+    pref_dir = houdini_pref_dir(machine)
+    if isinstance(pref_dir, Failed):
+        return pref_dir
+    packages = pref_dir / "packages"
     pointer = packages / "houdini_mcp.json"
     try:
         packages.mkdir(parents=True, exist_ok=True)
