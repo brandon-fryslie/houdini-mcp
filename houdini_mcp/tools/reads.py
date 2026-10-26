@@ -12,15 +12,14 @@ is that place as the server reaches Houdini, over the link; a plugin module's
 reads come back as the refusals it kept, which ``log_refused`` logs here.
 """
 
-import itertools
 import logging
 from collections.abc import Callable
 from typing import Any, TypeGuard, TypeVar
 
 import houdini_mcp_read
-from houdini_mcp_read import UNREAD, RefusedRead, Unread, format_reason
+from houdini_mcp_read import UNREAD, RefusedRead, Unread, format_reason, reason
 
-from ..connection import raised_inside_houdini, transport_failure
+from ..connection import transport_failure
 
 logger = logging.getLogger("houdini_mcp.tools.reads")
 
@@ -45,25 +44,6 @@ def is_unread(value: Any) -> TypeGuard[Unread]:
 
 def unread(e: Exception) -> Unread:
     return Unread(unread=reason(e))
-
-
-def reason(e: BaseException) -> str:
-    """The reason Houdini gave for ``e``.
-
-    rpyc rebuilds a remote exception without its arguments (a ``hou`` error
-    keeps its message outside them) and keeps the remote traceback, whose lines
-    after the last frame are the reason; a message's own lines may be indented.
-    """
-    if not raised_inside_houdini(e):
-        return format_reason(e)
-    remote_tb = e._remote_tb  # type: ignore[attr-defined]
-    lines = str(remote_tb).rstrip().splitlines()
-    frames = [i for i, line in enumerate(lines) if line.startswith('  File "')]
-    if not frames:
-        # a server that withholds its traceback leaves only the class name
-        return f"{type(e).__name__}: {remote_tb}"
-    reason = itertools.dropwhile(lambda line: line.startswith("    "), lines[frames[-1] + 1 :])
-    return "\n".join(reason)
 
 
 def read(what: str, fetch: Callable[[], T]) -> T | Unread:

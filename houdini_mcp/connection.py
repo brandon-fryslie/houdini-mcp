@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
+from houdini_mcp_read import raised_inside_houdini
 
 logger = logging.getLogger("houdini_mcp.connection")
 
@@ -50,12 +51,6 @@ class TransportFailure:
     """
 
     exc: TransportException
-
-
-def raised_inside_houdini(exc: BaseException) -> bool:
-    """rpyc re-raises an exception from Houdini's side as a local instance of the same
-    class, tagged with ``_remote_tb``; whatever its type, it crossed an intact link."""
-    return hasattr(exc, "_remote_tb")
 
 
 def _raised_by_rpyc(exc: BaseException) -> bool:
