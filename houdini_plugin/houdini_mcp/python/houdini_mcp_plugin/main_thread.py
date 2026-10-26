@@ -230,6 +230,8 @@ def call(fn: Callable[[], Any], silence: float) -> str | None:
 
     Raises:
         Exception: whatever calling ``fn`` raised.
+        OSError: macOS gave no activity to hold off App Nap, so ``fn`` was
+            never posted.
     """
     return _posted(lambda: _call_while_heard(fn, silence))
 

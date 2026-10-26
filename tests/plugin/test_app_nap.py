@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from types import SimpleNamespace
 
 import pytest
 from houdini_mcp_plugin import app_nap
@@ -33,6 +34,34 @@ def test_a_block_that_raises_still_ends_its_activity(caplog):
     ):
         raise ValueError("the block's own")
     assert "Ended the App Nap activity: the reason" in caplog.text
+
+
+@macos
+def test_no_activity_from_macos_is_an_error_and_no_block_runs(monkeypatch):
+    process_info = app_nap._ProcessInfo()
+    monkeypatch.setattr(process_info, "_send_begin", lambda *_: None)
+    ran: list[bool] = []
+    with (
+        pytest.raises(OSError, match="NSProcessInfo began no activity for 'the reason'"),
+        process_info.held("the reason"),
+    ):
+        ran.append(True)
+    assert ran == []
+
+
+@macos
+def test_no_string_from_corefoundation_is_an_error_and_no_block_runs(monkeypatch):
+    process_info = app_nap._ProcessInfo()
+    monkeypatch.setattr(
+        process_info, "_cf", SimpleNamespace(CFStringCreateWithCString=lambda *_: None)
+    )
+    ran: list[bool] = []
+    with (
+        pytest.raises(OSError, match="CoreFoundation made no string of 'the reason'"),
+        process_info.held("the reason"),
+    ):
+        ran.append(True)
+    assert ran == []
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="macOS has App Nap")
