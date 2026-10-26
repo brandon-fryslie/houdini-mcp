@@ -53,8 +53,9 @@ class _Call:
     while it is pending, so a call given up on can never run late.
     """
 
-    def __init__(self, work: Callable[[], object]) -> None:
+    def __init__(self, work: Callable[[], object], nap: str) -> None:
         self._work = work
+        self._nap = nap
         self._lock = threading.Lock()
         self._state = _State.PENDING
         self._posted_at = time.monotonic()
@@ -72,8 +73,9 @@ class _Call:
             self._state = _State.RUNNING
         self._settled.set()
         logger.info(
-            "Houdini's main thread began a call %.3fs after it was posted",
+            "Houdini's main thread began a call %.3fs after it was posted (%s)",
             time.monotonic() - self._posted_at,
+            self._nap,
         )
         try:
             self._work()
@@ -89,7 +91,7 @@ class _Call:
                 return
             self._state = _State.REFUSED
             self._refusal = why
-        logger.warning("Refused a call, which never ran: %s", why)
+        logger.warning("Refused a call, which never ran (%s): %s", self._nap, why)
         self._settled.set()
         self._ended.set()
 
@@ -229,7 +231,7 @@ def call(fn: Callable[[], Any], silence: float) -> str | None:
     Raises:
         Exception: whatever calling ``fn`` raised.
     """
-    return _posted(_Call(lambda: _call_while_heard(fn, silence)))
+    return _posted(lambda: _call_while_heard(fn, silence))
 
 
 def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | None:
@@ -248,16 +250,17 @@ def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | Non
         with hou.undos.group(label):
             _call_while_heard(fn, silence)
 
-    return _posted(_Call(as_step))
+    return _posted(as_step)
 
 
-def _posted(pending: _Call) -> str | None:
-    """``pending``, handed to the main thread and waited for."""
+def _posted(work: Callable[[], object]) -> str | None:
+    """``work``, handed to the main thread as a call and waited for."""
     import hou
 
     # [LAW:no-ambient-temporal-coupling] held from the hand-over to the wait's end,
     # on this thread: the call's wait is the whole of the need (houdini-install-aby.80r).
-    with app_nap.prevented("houdini-mcp: a client's call waits for Houdini's main thread"):
+    with app_nap.prevented("houdini-mcp: a client's call waits for Houdini's main thread") as nap:
+        pending = _Call(work, nap)
         # [LAW:dataflow-not-control-flow] The one difference between a graphical and a
         # headless Houdini is who hands the main thread its calls.
         if hou.isUIAvailable():
