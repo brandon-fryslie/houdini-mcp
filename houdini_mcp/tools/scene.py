@@ -21,6 +21,7 @@ from ._common import (
     OperationFailed,
     node_at,
     on_the_scene,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -80,12 +81,13 @@ def save_scene(
     with using(host, port) as link:
         hou = link.hou
 
-        if file_path:
-            hou.hipFile.save(file_path)
-            saved_path = file_path
-        else:
-            hou.hipFile.save()
-            saved_path = hou.hipFile.path()
+        with refused_by_houdini(f"save the scene to {file_path or 'its file'}"):
+            if file_path:
+                hou.hipFile.save(file_path)
+                saved_path = file_path
+            else:
+                hou.hipFile.save()
+                saved_path = hou.hipFile.path()
 
         return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 

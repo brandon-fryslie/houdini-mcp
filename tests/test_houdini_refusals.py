@@ -20,7 +20,7 @@ LOCKED = (
 REFUSAL = f"hou.PermissionError: {LOCKED}"
 
 
-def _refuse(*_args: Any) -> None:
+def _refuse(*_args: Any, **_kwargs: Any) -> None:
     raise raised_inside_houdini(HouPermissionError(LOCKED))
 
 
@@ -92,8 +92,30 @@ def test_assign_material_whose_material_sop_houdini_will_not_wire_is_its_refusal
 
     result = assign_material("/obj/geo1", "/mat/m1", group="top")
 
-    _assert_refused(result, "wire /obj/geo1/box1 into /obj/geo1/material1 and display it")
+    _assert_refused(result, "wire /obj/geo1/box1 into /obj/geo1/material1")
     assert result["material_sop_path"] == "/obj/geo1/material1"
+
+
+def test_assign_material_whose_material_sop_houdini_will_not_display_names_that_step(
+    mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from houdini_mcp.tools import assign_material
+
+    geo = mock_connection.node("/obj").createNode("geo", "geo1")
+    geo.createNode("box", "box1").setDisplayFlag(True)
+    mock_connection.node("/mat").createNode("principledshader", "m1")
+
+    def refuse_on_material(node: MockHouNode, on: bool) -> None:
+        if node.type().name() == "material":
+            _refuse()
+        MockHouNode.__getattr__(node, "setDisplayFlag")(on)
+
+    # a class attribute is found before the fake's flag __getattr__
+    monkeypatch.setattr(MockHouNode, "setDisplayFlag", refuse_on_material, raising=False)
+
+    result = assign_material("/obj/geo1", "/mat/m1", group="top")
+
+    _assert_refused(result, "display /obj/geo1/material1")
 
 
 def test_list_visible_panes_houdini_will_not_list_is_its_refusal(
@@ -106,3 +128,89 @@ def test_list_visible_panes_houdini_will_not_list_is_its_refusal(
     result = list_visible_panes()
 
     _assert_refused(result, "list its desktops' panes")
+
+
+def test_set_node_flags_houdini_will_not_read_back_is_its_refusal(
+    mock_connection: MockHouModule,
+) -> None:
+    from houdini_mcp.tools import set_node_flags
+
+    merge = _wired(mock_connection)
+    merge.isDisplayFlagSet = _refuse  # type: ignore[method-assign]
+
+    result = set_node_flags("/obj/geo1/merge1", display=True)
+
+    _assert_refused(result, "set display=True on /obj/geo1/merge1")
+
+
+@pytest.mark.parametrize(
+    ("method", "call", "request_phrase"),
+    [
+        ("destroy", lambda t: t.delete_node("/obj/geo1/merge1"), "delete /obj/geo1/merge1"),
+        (
+            "setColor",
+            lambda t: t.set_node_color("/obj/geo1/merge1", [1, 0, 0]),
+            "color /obj/geo1/merge1",
+        ),
+        (
+            "setPosition",
+            lambda t: t.set_node_position("/obj/geo1/merge1", 1.0, 2.0),
+            "move /obj/geo1/merge1",
+        ),
+        (
+            "inputConnections",
+            lambda t: t.get_node_info("/obj/geo1/merge1"),
+            "read the input connections of /obj/geo1/merge1",
+        ),
+    ],
+)
+def test_a_node_write_houdini_refuses_is_its_refusal(
+    mock_connection: MockHouModule, method: str, call: Any, request_phrase: str
+) -> None:
+    from houdini_mcp import tools
+
+    merge = _wired(mock_connection)
+    setattr(merge, method, _refuse)
+
+    result = call(tools)
+
+    _assert_refused(result, request_phrase)
+    assert result["node_path"] == "/obj/geo1/merge1"
+
+
+@pytest.mark.parametrize(
+    ("method", "call", "request_phrase"),
+    [
+        (
+            "layoutChildren",
+            lambda t: t.layout_children("/obj/geo1"),
+            "lay out the children of /obj/geo1",
+        ),
+        (
+            "createNetworkBox",
+            lambda t: t.create_network_box("/obj/geo1", ["/obj/geo1/merge1"]),
+            "box 1 nodes in /obj/geo1",
+        ),
+    ],
+)
+def test_a_network_write_houdini_refuses_is_its_refusal(
+    mock_connection: MockHouModule, method: str, call: Any, request_phrase: str
+) -> None:
+    from houdini_mcp import tools
+
+    _wired(mock_connection)
+    setattr(mock_connection.node("/obj/geo1"), method, _refuse)
+
+    result = call(tools)
+
+    _assert_refused(result, request_phrase)
+
+
+def test_save_scene_houdini_refuses_is_its_refusal(mock_connection: MockHouModule) -> None:
+    from houdini_mcp.tools import save_scene
+
+    mock_connection.hipFile.save = _refuse  # type: ignore[method-assign]
+
+    result = save_scene("/tmp/scene.hip")
+
+    _assert_refused(result, "save the scene to /tmp/scene.hip")

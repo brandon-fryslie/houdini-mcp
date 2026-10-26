@@ -14,10 +14,11 @@ from ._common import (
     ResultLimit,
     node_at,
     on_the_scene,
+    refused_by_houdini,
     tool,
     using,
 )
-from .failure import OperationFailed, Undone, batch_status
+from .failure import Undone, batch_status
 from .summarization import ERRORS_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
@@ -91,12 +92,9 @@ def _scan_error_nodes(
         hou = link.hou
 
         root = node_at(hou, root_path, "Root node")
-        try:
+        # [LAW:no-silent-failure] no node list, no scan
+        with refused_by_houdini(f"list the nodes under {root_path}", root_path=root_path):
             descendants = root.allSubChildren()
-        except Exception as e:
-            # [LAW:no-silent-failure] no node list, no scan. Chained so a lost link
-            # is classified as the loss it is, not as this tool's failure.
-            raise OperationFailed(f"Could not list the nodes under {root_path}: {e}") from e
 
         error_nodes: list[dict[str, Any]] = []
         warning_nodes: list[dict[str, Any]] = []

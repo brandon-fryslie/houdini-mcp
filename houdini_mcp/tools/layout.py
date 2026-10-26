@@ -13,6 +13,7 @@ from ._common import (
     InvalidInput,
     network_at,
     node_at,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -70,11 +71,11 @@ def layout_children(
                 "message": "No children to layout",
             }
 
-        # Call layoutChildren with spacing parameters
-        node.layoutChildren(
-            horizontal_spacing=horizontal_spacing,
-            vertical_spacing=vertical_spacing,
-        )
+        with refused_by_houdini(f"lay out the children of {network}", node_path=network):
+            node.layoutChildren(
+                horizontal_spacing=horizontal_spacing,
+                vertical_spacing=vertical_spacing,
+            )
 
         return {
             "status": "success",
@@ -111,7 +112,8 @@ def set_node_color(
 
         node = node_at(hou, node_path)
         clamped_color = _clamped(color)
-        node.setColor(hou.Color(clamped_color))
+        with refused_by_houdini(f"color {node_path}", node_path=node_path):
+            node.setColor(hou.Color(clamped_color))
         logger.info("node color set path=%s color=%s", node_path, clamped_color)
 
         return {
@@ -149,9 +151,8 @@ def set_node_position(
 
         node = node_at(hou, node_path)
 
-        # Create position vector and set it
-        position = hou.Vector2(x, y)
-        node.setPosition(position)
+        with refused_by_houdini(f"move {node_path}", node_path=node_path):
+            node.setPosition(hou.Vector2(x, y))
 
         return {
             "status": "success",
@@ -212,23 +213,16 @@ def create_network_box(
         if not nodes:
             raise InvalidInput("No nodes specified for network box", node_paths=node_paths)
 
-        # Create network box
-        netbox = parent.createNetworkBox()
-
-        # Set label
-        if label:
-            netbox.setComment(label)
-
-        if applied_color is not None:
-            netbox.setColor(hou.Color(applied_color))
-
-        # Add nodes to the box
-        for node in nodes:
-            netbox.addNode(node)
-
-        # Fit box to contents
-        netbox.fitAroundContents()
-        box_name = netbox.name()
+        with refused_by_houdini(f"box {len(nodes)} nodes in {network}", parent_path=network):
+            netbox = parent.createNetworkBox()
+            if label:
+                netbox.setComment(label)
+            if applied_color is not None:
+                netbox.setColor(hou.Color(applied_color))
+            for node in nodes:
+                netbox.addNode(node)
+            netbox.fitAroundContents()
+            box_name = netbox.name()
         logger.info(
             "network box created parent=%s name=%s nodes=%d color=%s",
             network,

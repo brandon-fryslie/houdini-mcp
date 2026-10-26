@@ -36,6 +36,7 @@ from ._common import (
     page_from,
     paginate,
     paging_fields,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -295,7 +296,8 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
         node = node_at(hou, node_path)
 
         node_name = node.name()
-        node.destroy()
+        with refused_by_houdini(f"delete {node_path}", node_path=node_path):
+            node.destroy()
 
         return {
             "status": "success",

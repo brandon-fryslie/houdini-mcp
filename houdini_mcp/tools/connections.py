@@ -9,7 +9,7 @@ outputs feeds it. ``inputs()`` alone cannot say that, and nothing here guesses i
 from dataclasses import dataclass
 from typing import Any
 
-from ._common import node_category
+from ._common import node_category, refused_by_houdini
 
 
 @dataclass(frozen=True)
@@ -42,10 +42,6 @@ class InputConnection:
         }
 
 
-class InputConnectionsUnreadable(RuntimeError):
-    """Houdini could not report a node's input connections; the message names the node."""
-
-
 def input_connections(node: Any) -> list[InputConnection]:
     """The node's connected inputs, in input order, from Houdini's connection records.
 
@@ -58,12 +54,9 @@ def input_connections(node: Any) -> list[InputConnection]:
     error boundary. There is no fallback output index: a guessed index rewires the
     user's network wrong while reporting success.
     """
-    try:
+    node_path = node.path()
+    with refused_by_houdini(f"read the input connections of {node_path}", node_path=node_path):
         records = node.inputConnections()
-    except Exception as e:
-        raise InputConnectionsUnreadable(
-            f"Could not read input connections of {node.path()}: {e}"
-        ) from e
     return sorted(
         (
             InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())

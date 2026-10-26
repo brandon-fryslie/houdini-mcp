@@ -251,14 +251,14 @@ def set_node_flags(
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
             read, write = methods[flag]
+            # Each flag is read back after its write, not taken as asked for: a SOP
+            # network keeps its display and render flags on one node, so turning
+            # either off writes nothing. [LAW:no-silent-failure]
             with refused_by_houdini(
                 f"set {flag}={value} on {node_path}", node_path=node_path, flag=flag
             ):
                 write(value)
-            # Each flag is read back after its write, not taken as asked for: a SOP
-            # network keeps its display and render flags on one node, so turning
-            # either off writes nothing. [LAW:no-silent-failure]
-            held = bool(read())
+                held = bool(read())
             if held != value:
                 raise OperationFailed(
                     f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",
