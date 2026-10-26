@@ -6,7 +6,8 @@ group of its own: ``-P`` keeps the working directory off its path, and leaves
 it importing this package as the server does. On stdin it reads one
 :class:`Request`; it opens its own link to the Houdini the server reaches, runs
 the program as one undo step on Houdini's main thread, and writes what happened
-as :class:`Fact` lines on ``facts``, a pipe the program's stdout cannot forge.
+as :class:`Fact` lines on ``facts``, a pipe the program's stdout cannot forge;
+a program that writes to it on purpose, which takes the dangerous bypass, can.
 The program's stdout and stderr are this process's own fds 1 and 2, so whatever
 it does to ``sys.stdout`` reaches nothing but itself, and the call kills the
 process, and with it the program, at its timeout. ``lifeline`` is a pipe whose
@@ -168,23 +169,31 @@ def encode_fact(fact: Fact) -> bytes:
 
 
 def decode_fact(line: bytes) -> Fact:
-    """[LAW:parse-dont-validate] One line back into its fact, or a ``ValueError``:
-    the program can write this pipe too, so any line may be malformed."""
+    """[LAW:parse-dont-validate] One line back into its fact, every field its
+    type, or a ``ValueError``: the program can write this pipe too, so any line
+    may be malformed."""
     try:
         fields = json.loads(line)
-        match fields["fact"]:
-            case "began":
-                return Began()
-            case "program_ended":
-                return ProgramEnded()
-            case "ended":
-                faults = tuple(Fault(*fault) for fault in fields["faults"])
-                return Ended(faults, fields["reply_lost"])
-            case "did_not_run":
-                return DidNotRun(fields["why"])
-    except (ValueError, KeyError, TypeError) as error:
+    except ValueError as error:
         raise ValueError(f"not a program's fact: {line!r}") from error
+    match fields:
+        case {"fact": "began"}:
+            return Began()
+        case {"fact": "program_ended"}:
+            return ProgramEnded()
+        case {"fact": "ended", "faults": list(faults), "reply_lost": None | str() as reply_lost}:
+            if all(_is_fault(fault) for fault in faults):
+                return Ended(tuple(Fault(*fault) for fault in faults), reply_lost)
+        case {"fact": "did_not_run", "why": str(why)}:
+            return DidNotRun(why)
     raise ValueError(f"not a program's fact: {line!r}")
+
+
+def _is_fault(fields: object) -> bool:
+    match fields:
+        case ["program" | "undo step", str(), str()]:
+            return True
+    return False
 
 
 class _Facts:
@@ -320,7 +329,7 @@ def main(argv: list[str]) -> NoReturn:
     threading.Thread(target=_outlive_no_call, args=(int(argv[2]),), daemon=True).start()
     # The process's own records would otherwise reach the program's stderr; what
     # it knows the call needs, it writes as facts.
-    for name in ("houdini_mcp", "houdini_mcp_handshake"):
+    for name in ("houdini_mcp", "houdini_mcp_handshake", "rpyc"):
         logging.getLogger(name).addHandler(logging.NullHandler())
         logging.getLogger(name).propagate = False
     request = Request.decode(sys.stdin.buffer.read())

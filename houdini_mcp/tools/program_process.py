@@ -63,9 +63,10 @@ class Died:
 
 @dataclass(frozen=True)
 class Garbled:
-    """The process wrote a line on its facts that is no fact, so nothing it says
-    after can be trusted: the program writes that pipe as easily as it does.
-    ``line`` is that line's first :data:`GARBLED_SHOWN` bytes."""
+    """The process wrote a line on its facts that is no fact, or a fact its run's
+    phase does not admit, so nothing it says after can be trusted: a program
+    granted the dangerous bypass can write that pipe. ``line`` is that line's
+    first :data:`GARBLED_SHOWN` bytes."""
 
     line: bytes
 
@@ -200,6 +201,8 @@ class _Feed:
         process closed its end - its facts' end then tells the wait it died."""
         try:
             self._pending = self._pending[os.write(self.fd, self._pending) :]
+        except BlockingIOError:
+            return False
         except BrokenPipeError:
             logger.warning("execute_code's program process ended before its whole request")
             return True
@@ -277,12 +280,20 @@ def _wait(facts: int, feed: _Feed, streams: dict[int, _Decoded], clock: _Clock) 
                         fact = decode_fact(line)
                     except ValueError:
                         return Garbled(line[:GARBLED_SHOWN])
-                    match fact:
-                        case Began():
+                    # [LAW:types-are-the-program] Each fact moves the run on from the
+                    # one phase that admits it: the program begins once and ends once,
+                    # and an outcome comes outside its run (a step Houdini failed
+                    # before the program began ends with no Began).
+                    match clock.phase, fact:
+                        case "starting", Began():
                             clock.began()
-                        case ProgramEnded():
+                        case "running", ProgramEnded():
                             clock.program_ended()
-                        case Ended() | DidNotRun() as outcome:
+                        case "starting", DidNotRun() as outcome:
                             return outcome
+                        case "starting" | "closing", Ended() as outcome:
+                            return outcome
+                        case _:
+                            return Garbled(line[:GARBLED_SHOWN])
             if time.monotonic() >= clock.deadline:
                 return Killed(clock.phase)

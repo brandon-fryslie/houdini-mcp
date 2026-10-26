@@ -31,8 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own, with its own link to Houdini and its own stdout and stderr, and kills
   that process at the program's `timeout` (houdini-execute-code-kwc.28w). A
   timed-out program used to run on as a thread nothing could stop, and every
-  scene-writing call was refused until it ended; now nothing of it runs once
-  the call returns, and the next call runs at once. On the wire:
+  scene-writing call was refused until it ended; now its process is gone once
+  the call returns, and no call is refused for it. A request it had in
+  flight in Houdini (a long cook) still finishes there, and the calls after
+  it wait their turn on Houdini's main thread. On the wire:
   - The timeout is the `timeout` arm with `cut_off: "program"` and
     `retry: "check_scene"`, carrying the output up to the kill. The
     `worker_still_running` kind, the `wait_for_worker` retry and the `worker`

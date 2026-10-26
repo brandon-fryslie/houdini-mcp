@@ -22,6 +22,7 @@ import pytest
 
 from houdini_mcp.tools import code, execute_code, program_process
 from tests.conftest import MockHouModule
+from tests.test_execute_code import _server_sync_timeout
 
 
 def _run(program: str, **options: Any) -> dict[str, Any]:
@@ -64,7 +65,7 @@ class TestAProgramThatNeverRan:
 
     def test_a_main_thread_that_neither_takes_nor_refuses_it(self, mock_connection, monkeypatch):
         """Its process's own pickup expiry ends the start, before the call's backstop."""
-        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.3)
+        _server_sync_timeout(monkeypatch, 0.3)
         mock_connection.main_thread_behaviour.takes_calls = False
         mock_connection.main_thread_behaviour.pickup_timeout = 0.3
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
@@ -118,7 +119,7 @@ class TestTheCallsClocks:
         assert "had not reported by its start deadline" in result["message"]
 
     def test_a_process_that_stopped_while_its_step_closed(self, mock_connection, monkeypatch):
-        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.5)
+        _server_sync_timeout(monkeypatch, 0.5)
         monkeypatch.setattr(program_process, "REPORT_GRACE", 0.5)
         mock_connection.main_thread_behaviour.reply_hold = 3.0
         result = execute_code(
@@ -270,7 +271,17 @@ class TestWhatTheProcessSaysIsParsed:
     """The program can write its process's facts pipe, so a line there that is no
     fact ends the run, undone and recorded, as one more way its process ended."""
 
-    @pytest.mark.parametrize("line", [b"nonsense", b'{"fact": "ended"}', b'["began"]'])
+    @pytest.mark.parametrize(
+        "line",
+        [
+            b"nonsense",
+            b'{"fact": "ended"}',
+            b'["began"]',
+            b'{"fact": "ended", "faults": [[1, 2, 3]], "reply_lost": null}',
+            b'{"fact": "ended", "faults": ["abc"], "reply_lost": null}',
+            b'{"fact": "did_not_run", "why": 7}',
+        ],
+    )
     def test_a_line_that_is_no_fact_is_not_one(self, line: bytes) -> None:
         from houdini_mcp.program import decode_fact
 
@@ -296,6 +307,48 @@ class TestWhatTheProcessSaysIsParsed:
         assert result["message"].endswith("\nIts changes to the scene were undone.")
         assert mock_connection.node("/obj/forged") is None
         assert "ending={'garbled': '{\"fact\": \"ended\"}'}" in caplog.text
+
+    @pytest.mark.parametrize(
+        "fact",
+        [
+            '{"fact": "began"}',
+            '{"fact": "ended", "faults": [], "reply_lost": null}',
+            '{"fact": "did_not_run", "why": "forged"}',
+        ],
+    )
+    def test_a_fact_out_of_its_phase_is_garbled(self, mock_connection, fact: str):
+        """A program cannot begin again to restart its clock, nor end its run early
+        as a success, by writing what its process would."""
+        result = _granted(
+            "import os, sys, time\n"
+            "hou.node('/obj').createNode('geo', 'forged')\n"
+            f"os.write(int(sys.argv[1]), {(fact + chr(10)).encode()!r})\n"
+            "time.sleep(30)\n",
+            timeout=10,
+        )
+
+        assert result["kind"] == "operation_failed", result
+        assert result["message"].startswith("The program's process wrote a line that is not a fact")
+        assert mock_connection.node("/obj/forged") is None
+
+    def test_what_the_process_logs_is_not_the_programs_stderr(self, mock_connection):
+        result = _run("import logging\nlogging.getLogger('rpyc').warning('from rpyc')\n")
+
+        assert (result["status"], result.get("stderr", "")) == ("success", ""), result
+
+
+class TestAWaitThatRaises:
+    def test_its_step_is_undone(self, mock_connection, monkeypatch):
+        def fails(self: Any) -> None:
+            raise RuntimeError("the wait failed")
+
+        monkeypatch.setattr(program_process._Clock, "program_ended", fails)
+        result = _run("hou.node('/obj').createNode('geo', 'escaped')\n")
+
+        assert result["kind"] == "operation_failed", result
+        assert "RuntimeError" in result.get("exception", result["message"])
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert mock_connection.node("/obj/escaped") is None
 
 
 class TestTheCallsClocksHoldUnderLoad:

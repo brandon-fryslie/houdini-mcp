@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import Any, Literal, TypedDict, assert_never
 
-from ..connection import DEFAULT_SYNC_TIMEOUT, Link, houdini
+from ..connection import Link, houdini
 from ..main_thread import BODY_SILENCE, MainThread
 from ..program import DidNotRun, Ended, Request
 from ._common import (
@@ -562,7 +562,7 @@ def execute_code(
             traceback="".join(traceback.format_exception_only(exc)),
         )
     # [LAW:one-source-of-truth] What runs is the code object the gate compiled;
-    # the worker never compiles the source again.
+    # the program's process never compiles the source again.
     code_object = detected.program
 
     # --- Empty code ----------------------------------------------------------
@@ -669,10 +669,16 @@ def execute_code(
             # whose process is gone, starts before the timeout's clock, so it
             # waits a body's silence longer rather than racing the kill.
             silence=timeout + BODY_SILENCE,
-            sync_timeout=DEFAULT_SYNC_TIMEOUT,
+            # [LAW:one-source-of-truth] The program's requests are bounded as the
+            # server's are: by the server link's own setting.
+            sync_timeout=link.sync_timeout,
             start_timeout=PROGRAM_START_TIMEOUT,
         )
-        run = run_program(request, timeout, stdout_capture, stderr_capture)
+        try:
+            run = run_program(request, timeout, stdout_capture, stderr_capture)
+        # A wait that raised may have left a step its process began: the one undo.
+        except BaseException as escaped:  # noqa: BLE001
+            raised_after_undo(operation, escaped, undo_latest(main_thread, link, operation, label))
         output = _reported_output(operation, stdout_capture, stderr_capture)
         # [LAW:single-enforcer] A run that may have left its step - it raised, died
         # or was killed - has it undone by the one undo; one that completed, or

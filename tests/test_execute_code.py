@@ -11,6 +11,13 @@ import pytest
 from tests.conftest import MockUndos, raised_inside_houdini
 
 
+def _server_sync_timeout(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """Bound each request on the server's link, and so the program's, by ``seconds``."""
+    from houdini_mcp.connection import houdini
+
+    monkeypatch.setitem(houdini().link().conn._config, "sync_request_timeout", seconds)
+
+
 class TestDetectDangerousCode:
     """Tests for the _detect_dangerous_code helper."""
 
@@ -688,9 +695,8 @@ class TestAProgramWhoseOwnLinkFailed:
         self, mock_connection, monkeypatch
     ):
         from houdini_mcp.connection import houdini
-        from houdini_mcp.tools import code
 
-        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.5)
+        _server_sync_timeout(monkeypatch, 0.5)
         monkeypatch.setattr(mock_connection, "slow", lambda: time.sleep(2), raising=False)
         link = houdini().link()
         result = _run("print('before')\nhou.node('/obj').createNode('geo', 'half')\nhou.slow()")
@@ -965,9 +971,7 @@ class TestTheRunsRecord:
     def test_a_run_whose_reply_was_lost(self, mock_connection, monkeypatch, caplog):
         import logging
 
-        from houdini_mcp.tools import code
-
-        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.5)
+        _server_sync_timeout(monkeypatch, 0.5)
         mock_connection.main_thread_behaviour.reply_hold = 1.5
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             result = _run("print('done')")
