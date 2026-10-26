@@ -77,6 +77,43 @@ jobs:
       - name: Run mypy on the plugin as Python 3.10
         run: uv run mypy --python-version 3.10 houdini_plugin/houdini_mcp/python
 
+      # The installer's Windows branch is unreachable to a check run as Linux.
+      - name: Run mypy on the installer as Windows
+        run: uv run mypy --platform win32 houdini_mcp/install.py
+
+  # Where the installer puts the plugin on Windows is Windows' answer, asked of Windows:
+  # Documents redirected and not yet made, as OneDrive leaves it, then a user's HOME.
+  # Each run has HOME set as Git Bash sets it, which a Houdini from the Start menu never sees.
+  windows-houdini-home:
+    name: Houdini's home on Windows
+    runs-on: windows-latest
+    env:
+      HOME: C:\GitBashHome
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install locked environment
+        run: uv sync --locked
+
+      - name: Redirect Documents
+        run: |
+          Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' Personal "$env:RUNNER_TEMP\OneDrive\Documents"
+          $documents = [Environment]::GetFolderPath('MyDocuments', 'DoNotVerify')
+          if ($documents -ne "$env:RUNNER_TEMP\OneDrive\Documents") { throw "Documents is $documents" }
+
+      - name: Houdini's home is the redirected Documents
+        run: uv run pytest tests/test_install.py -v -k houdinis_home_is_the_one_windows_gives
+
+      - name: Set a HOME for the user
+        run: '[Environment]::SetEnvironmentVariable("HOME", "$env:RUNNER_TEMP\UserHome", "User")'
+
+      - name: Houdini's home is the user's HOME
+        run: uv run pytest tests/test_install.py -v -k houdinis_home_is_the_one_windows_gives
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

@@ -31,10 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- On Windows, `houdini-mcp install` puts the plugin pointer in the Documents folder
-  Windows reports, so Houdini finds it when Documents is redirected to OneDrive or by
-  policy (houdini-install-aby.gh4). If Windows does not say where Documents is, the
-  plugin step fails saying so and the client steps still run. Not yet tested on Windows.
+- On Windows, `houdini-mcp install` puts the plugin pointer where a Houdini started
+  from the Start menu looks (houdini-install-aby.gh4): under the HOME your user or
+  system environment sets, else in the Documents folder Windows reports, redirected
+  to OneDrive or by policy included. A HOME set only in the installing shell, as Git
+  Bash sets one, is not used. If Windows does not say where Documents is, the plugin
+  step fails saying so and the client steps still run. CI checks the lookup on
+  Windows; the plugin has not yet been loaded by Houdini on Windows.
 
 - On macOS, a call waiting for Houdini's main thread holds off App Nap
   (houdini-install-aby.80r): a graphical Houdini whose window was covered

@@ -29,12 +29,12 @@ _CLI_SECONDS = 60
 @dataclass(frozen=True)
 class Machine:
     """The machine being installed on: its environment, the user's home, its platform,
-    and the user's Documents folder as the OS reports it (see :func:`documents_folder`)."""
+    and the HOME a Houdini started from the desktop has (see :func:`houdini_home`)."""
 
     environ: Mapping[str, str]
     home: Path
     platform: str  # as sys.platform spells it
-    documents: "Path | Failed"
+    houdini_home: "Path | Failed"
 
 
 @dataclass(frozen=True)
@@ -103,41 +103,65 @@ def houdini_pref_dir(machine: Machine) -> "Path | Failed":
     """Houdini's user preferences directory, as Houdini finds it.
 
     Houdini takes HOUDINI_USER_PREF_DIR only when it holds ``__HVER__`` (one without
-    is "missing __HVER__, ignored", Houdini 22.0.466), and its own default otherwise.
-    On Windows that default is in the Documents folder wherever Windows keeps it,
-    redirected to OneDrive or by policy included (houdini-install-aby.gh4).
+    is "missing __HVER__, ignored", Houdini 22.0.466), and its own default otherwise:
+    ``$HOME/houdini__HVER__`` on Windows and Linux, under ``Library/Preferences`` on
+    macOS (SideFX, ref/env).
     """
     named = machine.environ.get("HOUDINI_USER_PREF_DIR", "")
     if "__HVER__" in named:
         return Path(named.replace("__HVER__", HOUDINI_VERSION))
-    match machine.platform, machine.documents:
-        case "darwin", _:
-            return machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION
-        case "win32", Path() as documents:
-            return documents / f"houdini{HOUDINI_VERSION}"
-        case "win32", Failed() as failed:
+    match machine.houdini_home:
+        case Failed() as failed:
             return failed
-    return machine.home / f"houdini{HOUDINI_VERSION}"
+        case Path() as home if machine.platform == "darwin":
+            return home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION
+        case Path() as home:
+            return home / f"houdini{HOUDINI_VERSION}"
 
 
-def documents_folder() -> "Path | Failed":
-    """This user's Documents folder, as the OS reports it.
+# SHGetKnownFolderPath's KF_FLAG_DONT_VERIFY: the folder's path as configured, whether
+# or not it exists yet (a OneDrive not yet synced, a share off the network).
+_KF_FLAG_DONT_VERIFY = 0x4000
+
+
+def houdini_home() -> "Path | Failed":
+    """The HOME a Houdini started from the desktop has, where it keeps its preferences.
 
     [LAW:effects-at-boundaries] Called once, where the real :class:`Machine` is built.
-    On Windows it is the known folder (SHGetKnownFolderPath, FOLDERID_Documents), which
-    follows a redirection; the installer's HOME or USERPROFILE would not, and a Git
-    Bash HOME is not what a Houdini started from the Start menu sees.
+    Off Windows it is the user's home. On Windows it is a HOME the user's or the
+    system's environment sets, else the Documents known folder (SHGetKnownFolderPath,
+    FOLDERID_Documents), which follows a redirection to OneDrive or by policy
+    (houdini-install-aby.gh4). The installer's own environment is not read: a Git Bash
+    HOME is that shell's alone, and a Houdini started from the Start menu never sees it.
     """
     if sys.platform != "win32":
-        return Path.home() / "Documents"
+        return Path.home()
     import ctypes
     import uuid
+    import winreg
 
+    # The environment a process started from the desktop inherits: the user's, which
+    # wins, then the system's.
+    for hive, key in (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    ):
+        try:
+            with winreg.OpenKey(hive, key) as environment:
+                home, kind = winreg.QueryValueEx(environment, "HOME")
+        except FileNotFoundError:
+            continue
+        return Path(winreg.ExpandEnvironmentStrings(home) if kind == winreg.REG_EXPAND_SZ else home)
     folder_id = (ctypes.c_byte * 16).from_buffer_copy(
         uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7").bytes_le
     )
     path = ctypes.c_wchar_p()
-    result = ctypes.windll.shell32.SHGetKnownFolderPath(folder_id, 0, None, ctypes.byref(path))
+    result = ctypes.windll.shell32.SHGetKnownFolderPath(
+        folder_id, _KF_FLAG_DONT_VERIFY, None, ctypes.byref(path)
+    )
     try:
         if result != 0 or not path.value:
             return Failed(

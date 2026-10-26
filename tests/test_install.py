@@ -17,6 +17,7 @@ from houdini_mcp.install import (
     ServerEntry,
     claude_code,
     codex,
+    houdini_home,
     houdini_pref_dir,
     install,
     install_plugin,
@@ -61,14 +62,17 @@ def _calls(bin_dir: Path) -> list[list[str]]:
 
 
 def _machine(
-    tmp_path: Path, platform: str = "darwin", documents: Path | Failed | None = None, **environ: str
+    tmp_path: Path,
+    platform: str = "darwin",
+    houdini_home: Path | Failed | None = None,
+    **environ: str,
 ) -> Machine:
     home = tmp_path / "home"
     return Machine(
         {"PATH": str(tmp_path / "bin"), **environ},
         home,
         platform,
-        home / "Documents" if documents is None else documents,
+        home if houdini_home is None else houdini_home,
     )
 
 
@@ -121,15 +125,15 @@ def test_a_second_install_points_at_the_plugin_again_in_place_of_an_earlier_one(
     ("platform", "under_home"),
     [
         ("darwin", "Library/Preferences/houdini/22.0"),
-        ("win32", "Documents/houdini22.0"),
+        ("win32", "houdini22.0"),
         ("linux", "houdini22.0"),
     ],
 )
 def test_houdinis_preferences_are_where_houdini_keeps_them(
     tmp_path: Path, platform: str, under_home: str
 ) -> None:
-    machine = _machine(tmp_path, platform)
-    assert houdini_pref_dir(machine) == machine.home / under_home
+    machine = _machine(tmp_path, platform, houdini_home=tmp_path / "houdinis_home")
+    assert houdini_pref_dir(machine) == tmp_path / "houdinis_home" / under_home
 
 
 def test_a_preferences_directory_that_cannot_be_made_fails_the_plugin_step(tmp_path: Path) -> None:
@@ -591,10 +595,26 @@ def test_a_json_config_keeps_its_permissions_and_its_text(tmp_path: Path) -> Non
     assert sorted(path.name for path in config.parent.iterdir()) == ["mcp.json"]
 
 
-def test_houdinis_preferences_on_windows_are_not_moved_by_a_shells_home(tmp_path: Path) -> None:
-    """Git Bash sets HOME in its own shell; Houdini started from the Start menu has none."""
-    machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
-    assert houdini_pref_dir(machine) == machine.home / "Documents" / "houdini22.0"
+@pytest.mark.skipif(sys.platform != "win32", reason="asks Windows itself")
+def test_houdinis_home_is_the_one_windows_gives_a_houdini_started_from_the_desktop() -> None:
+    """The user's HOME, else the system's, else Documents wherever Windows keeps it, as
+    .NET reads them; never the installer's own HOME, which CI sets as Git Bash would."""
+    windows = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "$h = [Environment]::GetEnvironmentVariable('HOME', 'User');"
+            "if (-not $h) { $h = [Environment]::GetEnvironmentVariable('HOME', 'Machine') };"
+            "if (-not $h) { $h = [Environment]::GetFolderPath('MyDocuments', 'DoNotVerify') };"
+            "$h",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    assert houdini_home() == Path(windows)
 
 
 def test_houdinis_preferences_on_windows_follow_a_redirected_documents_folder(
@@ -602,7 +622,7 @@ def test_houdinis_preferences_on_windows_follow_a_redirected_documents_folder(
 ) -> None:
     """OneDrive or a policy moves Documents off the home folder; Houdini follows it."""
     redirected = tmp_path / "OneDrive" / "Documents"
-    machine = _machine(tmp_path, "win32", documents=redirected)
+    machine = _machine(tmp_path, "win32", houdini_home=redirected)
 
     assert install_plugin(machine, SERVER) == Installed(
         str(redirected / "houdini22.0" / "packages" / "houdini_mcp.json")
@@ -617,7 +637,8 @@ def test_a_documents_folder_windows_did_not_name_fails_the_plugin_step_alone(
     (tmp_path / "ad" / "Claude").mkdir(parents=True)
     results = dict(
         install(
-            _machine(tmp_path, "win32", documents=unnamed, APPDATA=str(tmp_path / "ad")), SERVER
+            _machine(tmp_path, "win32", houdini_home=unnamed, APPDATA=str(tmp_path / "ad")),
+            SERVER,
         )
     )
 
