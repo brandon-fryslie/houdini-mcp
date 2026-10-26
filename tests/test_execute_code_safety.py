@@ -130,7 +130,7 @@ class TestPolicyProfiles:
         assert result["status"] == "error"
         assert result["policy"] == "read-only"
         assert "read-only" in result["message"].lower()
-        assert "mutation_patterns" in result
+        assert "non_inspection_patterns" in result
 
     def test_read_only_allows_pure_inspection(self, mock_connection):
         from houdini_mcp.tools import execute_code
@@ -166,7 +166,7 @@ class TestPolicyProfiles:
             code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "error"
-        assert result["audit"]["blocked_reason"] == "read_only_mutation"
+        assert result["audit"]["blocked_reason"] == "read_only_non_inspection"
         assert result["audit"]["woke_early"] is None
 
     def test_normal_allows_houdini_parm_eval_read(self, mock_connection):
@@ -248,9 +248,9 @@ class TestPolicyProfiles:
             bypass_config_enabled=True,
         )
         assert result["status"] == "error"
-        assert result["audit"]["blocked_reason"] == "read_only_mutation"
+        assert result["audit"]["blocked_reason"] == "read_only_non_inspection"
         assert result["audit"]["granted"] == {
-            "mutation": False,
+            "non_inspection": False,
             "dangerous": False,
             "heavy_geometry": False,
         }
@@ -630,7 +630,7 @@ class TestHeavyGeometryCapability:
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "heavy_geometry"
         assert result["audit"]["granted"] == {
-            "mutation": True,
+            "non_inspection": True,
             "dangerous": True,
             "heavy_geometry": False,
         }
@@ -657,7 +657,11 @@ class TestAuditFields:
         assert "code_sha256" in audit
         assert "code_length" in audit
         # The permission decision is one value, and the audit reports it.
-        assert audit["granted"] == {"mutation": True, "dangerous": False, "heavy_geometry": False}
+        assert audit["granted"] == {
+            "non_inspection": True,
+            "dangerous": False,
+            "heavy_geometry": False,
+        }
 
     def test_audit_records_executed_bypass(self, mock_connection):
         from houdini_mcp.tools import execute_code
@@ -714,7 +718,7 @@ class TestAuditFields:
             r.message for r in caplog.records if r.message.startswith("execute_code policy=")
         ]
         assert record.startswith("execute_code policy=normal granted=")
-        assert "'mutation': True, 'dangerous': False, 'heavy_geometry': False" in record
+        assert "'non_inspection': True, 'dangerous': False, 'heavy_geometry': False" in record
         assert "config=False requested dangerous=True heavy=False" in record
 
     def test_approved_bypass_is_logged_without_source(self, mock_connection, caplog):
@@ -1082,8 +1086,8 @@ class TestReadOnlyIsAnAllowlist:
             code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "error"
-        assert result["audit"]["blocked_reason"] == "read_only_mutation"
-        assert result["mutation_patterns"]
+        assert result["audit"]["blocked_reason"] == "read_only_non_inspection"
+        assert result["non_inspection_patterns"]
 
     @pytest.mark.parametrize(
         "code",
@@ -1127,7 +1131,7 @@ class TestReadOnlyIsAnAllowlist:
             code, policy="read-only", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "error"
-        assert result["audit"]["blocked_reason"] == "read_only_mutation"
+        assert result["audit"]["blocked_reason"] == "read_only_non_inspection"
 
     @pytest.mark.parametrize(
         "code",
@@ -1167,7 +1171,7 @@ class TestReadOnlyIsAnAllowlist:
             port=18811,
             bypass_config_enabled=False,
         )
-        assert any("changeNodeType" in p for p in result["mutation_patterns"])
+        assert any("changeNodeType" in p for p in result["non_inspection_patterns"])
 
 
 class TestNormalPolicyModuleRails:

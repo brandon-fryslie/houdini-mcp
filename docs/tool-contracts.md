@@ -325,7 +325,7 @@ When other tools don't cover your use case, `execute_code` is the escape hatch. 
 2. Use `print()` for output - it arrives in the result's `stdout` field
 3. Heavy geometry operations are blocked by default; `allow_heavy_geometry=True` unlocks them only under policy "normal" with `HOUDINI_MCP_ALLOW_BYPASS` set server-side (prefer `get_geo_summary`)
 4. Dangerous operations are blocked by default; `allow_dangerous=True` unlocks only them, under the same two conditions
-5. `policy="read-only"` blocks every mutation and grants nothing to either flag; the resolved decision is reported in `audit.granted`
+5. `policy="read-only"` admits only recognized inspection and grants nothing to either flag; the resolved decision is reported in `audit.granted`. Both policies are guard rails against accidents, not a sandbox
 6. A refusal for either flag lists `unmet_requirements` - each of `policy`, `request` (the flag) or `config` (`HOUDINI_MCP_ALLOW_BYPASS`) still missing - and the `hint` asks for exactly those; `audit.unmet` reports the same per capability on every run
 
 ```python

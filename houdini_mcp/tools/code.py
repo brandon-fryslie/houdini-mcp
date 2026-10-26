@@ -17,8 +17,8 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
                        nothing.
     - ``normal``     : default; recognized dangerous operations and
                        heavy-geometry calls are blocked unless the caller opts
-                       in *and* the server is configured to permit bypass. A
-                       guard rail against accidents, not a sandbox.
+                       in *and* the server is configured to permit bypass.
+  Both are guard rails against accidents, not a sandbox (``code_policy``).
 * Every gate reads the parsed program, the same AST ``exec`` compiles, so text
   in comments and strings is not code and a program that does not parse is
   refused before any rail.
@@ -143,7 +143,7 @@ class ExecutionGrant:
     heavy_geometry_unmet: tuple[Requirement, ...]
 
     @property
-    def mutation(self) -> bool:
+    def non_inspection(self) -> bool:
         return self.policy == "normal"
 
     @property
@@ -195,7 +195,7 @@ class ExecutionGrant:
 
     def as_audit(self) -> dict[str, bool]:
         return {
-            "mutation": self.mutation,
+            "non_inspection": self.non_inspection,
             "dangerous": self.dangerous,
             "heavy_geometry": self.heavy_geometry,
         }
@@ -211,7 +211,7 @@ class DetectedPatterns:
     """
 
     code_sha256: str
-    mutation: list[str]
+    non_inspection: list[str]
     dangerous: list[str]
     heavy_geometry: list[str]
     import_hou: bool
@@ -227,7 +227,7 @@ class DetectedPatterns:
         except SyntaxError as exc:
             return cls(
                 code_sha256=code_sha256,
-                mutation=[],
+                non_inspection=[],
                 dangerous=[],
                 heavy_geometry=[],
                 import_hou=False,
@@ -235,7 +235,7 @@ class DetectedPatterns:
             )
         return cls(
             code_sha256=code_sha256,
-            mutation=_detect_non_inspection_code(tree),
+            non_inspection=_detect_non_inspection_code(tree),
             dangerous=_detect_dangerous_code(tree),
             heavy_geometry=_detect_heavy_geometry_code(tree),
             import_hou=_detect_import_hou(tree),
@@ -438,7 +438,7 @@ def _build_audit(
         "unmet": grant.unmet_audit(),
         "dangerous_patterns": detected.dangerous,
         "heavy_geometry_patterns": detected.heavy_geometry,
-        "mutation_patterns": detected.mutation,
+        "non_inspection_patterns": detected.non_inspection,
         "timed_out": timed_out,
         # How often the wait for the program woke before its monotonic deadline;
         # None when the call was refused before anything was waited on.
@@ -462,11 +462,11 @@ def _blocked(
     """The one shape of a pre-execution refusal: the program is the caller's to fix."""
     # Patterns only, never the source: this line is the durable server-side trail.
     logger.warning(
-        "execute_code blocked: %s policy=%s unmet=%s mutation=%s dangerous=%s heavy=%s",
+        "execute_code blocked: %s policy=%s unmet=%s non_inspection=%s dangerous=%s heavy=%s",
         reason,
         grant.policy,
         grant.unmet_audit(),
-        detected.mutation,
+        detected.non_inspection,
         detected.dangerous,
         detected.heavy_geometry,
     )
@@ -508,8 +508,8 @@ def execute_code(
     - Policy profiles: "read-only" (inspection only: the code may name only
       recognized inspection APIs, pure stdlib and dicts for its own records;
       anything else, including hou APIs added after this release, is refused,
-      and bypass flags grant nothing) and "normal" (default; a guard rail
-      against accidents, not a sandbox).
+      and bypass flags grant nothing) and "normal" (default). Both are guard
+      rails against accidents, not a sandbox.
     - Dangerous operation detection: hou.exit(), discarding the open scene
       (hou.hipFile.clear(), hou.hipFile.load(), hou.hipFile.importFBX() with
       merge_into_scene=False, hou.hipFile.merge() with
@@ -650,15 +650,15 @@ def execute_code(
             ).replace("from hou import ", "# from hou import "),
         )
 
-    if detected.mutation and not grant.mutation:
+    if detected.non_inspection and not grant.non_inspection:
         raise _blocked(
             code=code,
             grant=grant,
             detected=detected,
-            reason="read_only_mutation",
+            reason="read_only_non_inspection",
             message=(
                 "Blocked under read-only policy: the code names something outside "
-                "the inspection allowlist. Use policy='normal' (default) for changes."
+                "the inspection allowlist."
             ),
             hint=(
                 "read-only admits only recognized inspection (navigation, parameter "
@@ -666,7 +666,7 @@ def execute_code(
                 "records in dicts, not attributes. Re-run with policy='normal' to "
                 "allow anything else."
             ),
-            mutation_patterns=detected.mutation,
+            non_inspection_patterns=detected.non_inspection,
         )
 
     for gate in _BYPASS_GATES:
