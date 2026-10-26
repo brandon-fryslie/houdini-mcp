@@ -26,6 +26,7 @@ from ._common import (
     using,
 )
 from .parms import evaluated
+from .reads import read
 from .snapshot import scene_snapshot
 from .summarization import SCENE_BRIEF, summarized
 
@@ -86,9 +87,9 @@ def save_scene(
                 hou.hipFile.save(file_path)
             else:
                 hou.hipFile.save()
-        # a save is not undone, so the path read after it is no part of the save's refusal
-        with refused_by_houdini("name the file it saved the scene to"):
-            saved_path = file_path or hou.hipFile.path()
+        # a save is not undone, so a path Houdini will not give after it is that
+        # field's absence, not the save's failure
+        saved_path = file_path or read("saved scene path", hou.hipFile.path)
 
         return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 

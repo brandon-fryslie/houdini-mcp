@@ -225,7 +225,8 @@ def test_save_scene_whose_path_houdini_will_not_read_says_the_save_landed(
 
     result = save_scene()
 
-    _assert_refused(result, "name the file it saved the scene to")
+    assert result["status"] == "success", result
+    assert result["file_path"] == {"unread": REFUSAL}
 
 
 def test_new_scene_houdini_will_not_clear_is_its_refusal(mock_connection: MockHouModule) -> None:

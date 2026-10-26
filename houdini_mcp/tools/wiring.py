@@ -93,7 +93,7 @@ def connect_nodes(
         # setInput replaces whatever wire is at the input; once Houdini holds the new
         # one, say which. A refused write leaves that wire in place. Its source is read
         # now, so nothing asked of Houdini after a write it took can fail the call.
-        replaced = wire_at(input_connections(dst_node), dst_input_index)
+        replaced = wire_at(input_connections(dst_node, dst_path), dst_input_index)
         replaced_source = None if replaced is None else replaced.source.path()
 
         with refused_by_houdini(
@@ -106,7 +106,7 @@ def connect_nodes(
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
-        wire = wire_at(input_connections(dst_node), dst_input_index)
+        wire = wire_at(input_connections(dst_node, dst_path), dst_input_index)
         if wire is None:
             raise OperationFailed(
                 f"Houdini reports no wire at {dst_path}[{dst_input_index}] after connecting {src_path}",
@@ -154,7 +154,7 @@ def disconnect_node_input(
         # The wires and the input span both come from Houdini's connection records:
         # inputs() looks through a subnet's indirect input to None, which would cut
         # that wire and call it absent. [LAW:one-source-of-truth]
-        connections = input_connections(node)
+        connections = input_connections(node, node_path)
         span = input_span(connections)
         if input_index not in span:
             raise InvalidInput(
@@ -317,7 +317,7 @@ def reorder_inputs(
         # [LAW:one-source-of-truth] the wire records are the only read: the input span
         # comes from them too, not from inputs(), which looks through a subnet's indirect
         # input to the parent network and so does not count the same wires.
-        connections = input_connections(node)
+        connections = input_connections(node, node_path)
         span = list(input_span(connections))
 
         # new_order is a permutation of the span: every wire gets exactly one new

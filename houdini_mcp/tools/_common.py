@@ -458,8 +458,9 @@ def houdini_refusal(request: str, e: BaseException, **context: Any) -> Operation
 def refused_by_houdini(request: str, **context: Any) -> Iterator[None]:
     """A call Houdini refuses, inside the block, becomes its :func:`houdini_refusal`.
 
-    Every scene write a tool makes runs inside one, and so do the reads a tool cannot
-    answer without. A link that fails inside the block is classified as the link's
+    Every write a tool makes to the user's scene runs inside one, and so may a read
+    the tool cannot answer without. The render's own temporary rig does not: a
+    value this server set on a node it made is this server's to get right. A link that fails inside the block is classified as the link's
     failure, keeping ``context`` and noting what was asked, never whether it landed:
     a write cut off mid-call may have.
     """

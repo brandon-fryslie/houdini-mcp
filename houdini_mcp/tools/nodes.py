@@ -174,13 +174,14 @@ def get_node_info(
 
 def _compact_record(node: Any) -> dict[str, Any]:
     """Path, type and the non-zero child/input/output counts."""
+    path = node.path()
     info: dict[str, Any] = {
         "status": "success",
-        "path": node.path(),
+        "path": path,
         "type": node.type().name(),
     }
     children_count = len(node.children())
-    inputs_count = len(input_connections(node))
+    inputs_count = len(input_connections(node, path))
     outputs_count = len(node.outputs())
     if children_count:
         info["children_count"] = children_count
@@ -195,8 +196,8 @@ def _standard_record(node: Any) -> dict[str, Any]:
     """Identity, flags, children, inputs, outputs and per-input connection details."""
     # [LAW:one-source-of-truth] "inputs" and "input_connections" describe the same
     # wires, so both come from one read of the connection records.
-    connections = input_connections(node)
     path = node.path()
+    connections = input_connections(node, path)
     node_type = node.type()
     type_name = node_type.name()
     info: dict[str, Any] = {
@@ -473,7 +474,7 @@ def list_children(
                 "path": child_path,
                 "name": child.name(),
                 "type": child.type().name(),
-                "inputs": [conn.as_record() for conn in input_connections(child)],
+                "inputs": [conn.as_record() for conn in input_connections(child, child_path)],
                 "outputs": [out.path() for out in child.outputs()],
             }
 

@@ -53,7 +53,7 @@ def _qt_core(link: Link) -> Any:
     # attributes of the package, which serves the ones it loads lazily the same way.
     with refused_by_houdini("import its Qt, hutil.PySide"):
         QtCore = conn.modules["hutil.PySide"].QtCore
-    logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
+        logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
     return QtCore
 
 
