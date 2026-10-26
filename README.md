@@ -78,8 +78,8 @@ The shelf's **Start Remote** starts it on a port you choose when none is running
 finds the port taken and says so in a dialog.
 
 A headless `hython` runs no UI, so it starts the listener itself, then takes the
-editing tools' calls on its main thread until `main_thread.stop()` is called from
-another thread:
+editing tools' and renders' calls on its main thread until `main_thread.stop()` is
+called from another thread:
 
 ```python
 from houdini_mcp_plugin import main_thread, start_hrpyc_server
@@ -94,8 +94,8 @@ interface, and serves only the tools that need nothing inside Houdini: not the o
 that edit the scene as one undo step (`create_node`, `delete_node`, `set_parameter`,
 the Wiring & Layout tools, `create_material`, `assign_material`, `set_render_settings`,
 `create_render_node`), the pane captures (`capture_pane_screenshot`,
-`capture_multiple_panes`, `render_node_network`), `find_nodes` or
-`get_parameter_schema`.
+`capture_multiple_panes`, `render_node_network`), the renders (`render_viewport`,
+`render_quad_view`), `find_nodes` or `get_parameter_schema`.
 
 ### Docker (Houdini on another machine)
 

@@ -25,7 +25,15 @@ from . import app_nap
 
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
-__all__ = ["PICKUP_TIMEOUT", "SERVE_ROUND_SECONDS", "call", "call_as_step", "serve", "stop"]
+__all__ = [
+    "PICKUP_TIMEOUT",
+    "SERVE_ROUND_SECONDS",
+    "call",
+    "call_as_step",
+    "call_without_undo",
+    "serve",
+    "stop",
+]
 
 PICKUP_TIMEOUT = 30.0
 """Seconds Houdini's main thread may take to begin a call: the call is refused,
@@ -251,6 +259,25 @@ def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | Non
             _call_while_heard(fn, silence)
 
     return _posted(as_step)
+
+
+def call_without_undo(fn: Callable[[], Any], silence: float) -> str | None:
+    """As :func:`call`, ``fn``'s edits recorded on no undo step.
+
+    The disabler is Houdini's own, opened and closed on the main thread around
+    the call to ``fn``, as :func:`call_as_step` holds its group: one opened off
+    the main thread disables nothing, and one the client held as a netref would
+    be closed, if at all, on the thread that drops its connection, leaving
+    Houdini's undo off (houdini-laws-etg.bci).
+    """
+
+    def without_undo() -> None:
+        import hou
+
+        with hou.undos.disabler():
+            _call_while_heard(fn, silence)
+
+    return _posted(without_undo)
 
 
 def _posted(work: Callable[[], object]) -> str | None:

@@ -3,11 +3,12 @@
 [LAW:single-enforcer] The tool boundary (``_common.tool``) runs every sync tool's
 body through :func:`recovering` and refuses a scene writer that is not sync, so
 every call that can leave an effect in the scene passes through it. An undoable
-call is one step on Houdini's undo stack, undone if it fails; a call that
-replaces the scene first backs up the scene's unsaved work. Two effects are
-their tool's own to undo, and the policy says so: a program's undo step, which
-it undoes when the program fails or is cut off at its timeout, and a render's
-temporary nodes, which it destroys before returning.
+call is one step on Houdini's undo stack, undone if it fails; a render runs
+on Houdini's main thread with undo disabled, so its temporary nodes reach no
+undo step; a call that replaces the scene first backs up the scene's unsaved
+work. Two effects are their tool's own to undo, and the policy says so: a
+program's undo step, which it undoes when the program fails or is cut off at
+its timeout, and a render's temporary nodes, which it destroys before returning.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from types import ModuleType
 from typing import Any, Generic, NoReturn, TypeVar, assert_never
 
@@ -50,18 +52,18 @@ class TransactionPolicy(StrEnum):
     """A file outside the scene: nothing in Houdini to recover."""
     TEMPORARY_NODES = "temporary_nodes"
     """The call adds nodes for its own use and destroys them before returning,
-    on its own failure too. A link that fails mid-call reaches none of them, so
+    on its own failure too, on Houdini's main thread with undo disabled, so no
+    undo step records them. A link that fails mid-call reaches none of them, so
     they stay in the scene."""
 
 
-# File writers (screenshots, save) leave the Houdini scene as it was.
-_SCENE_WRITERS = (
-    TransactionPolicy.UNDOABLE,
-    TransactionPolicy.CHECKPOINT_REQUIRED,
-    TransactionPolicy.PROGRAM_UNDO_GROUP,
-)
-# A render leaves nothing it was asked for, yet changes the scene while it runs.
-_SCENE_CHANGERS = (*_SCENE_WRITERS, TransactionPolicy.TEMPORARY_NODES)
+# Every policy but a file writer's (screenshots, save), which leaves the Houdini
+# scene as it was. A render leaves nothing it was asked for, yet changes the
+# scene while it runs.
+_SCENE_CHANGERS = frozenset(TransactionPolicy) - {TransactionPolicy.EXTERNAL_SIDE_EFFECT}
+# Whose recovery runs the whole body on Houdini's main thread: Houdini records an
+# undo group, and honours a disabler, only there.
+_WHOLE_ON_MAIN_THREAD = (TransactionPolicy.UNDOABLE, TransactionPolicy.TEMPORARY_NODES)
 
 
 @dataclass(frozen=True)
@@ -80,10 +82,6 @@ class ToolPolicy:
     access: Admission
 
     @property
-    def writes_scene(self) -> bool:
-        return self.recovery in _SCENE_WRITERS
-
-    @property
     def changes_scene(self) -> bool:
         """Whether a call may change the scene while it runs, so that a call
         whose link failed partway may have left a change there.
@@ -98,30 +96,31 @@ class ToolPolicy:
         """Whether the tool's own body posts its work to Houdini's main thread,
         and so is handed the :class:`MainThread` to post it with.
 
-        [LAW:one-source-of-truth] Derived, never declared: an undoable body is
-        already on the main thread, put there whole by its recovery
-        (:class:`UndoStep`), where a second call would wait on itself.
+        [LAW:one-source-of-truth] Derived, never declared: an undoable or a
+        render's body is already on the main thread, put there whole by its
+        recovery (:func:`recovering`), where a second call would wait on itself.
         """
         return (
             self.access is Admission.EXCLUSIVE_ON_MAIN_THREAD
-            and self.recovery is not TransactionPolicy.UNDOABLE
+            and self.recovery not in _WHOLE_ON_MAIN_THREAD
         )
 
     def __post_init__(self) -> None:
         if self.changes_scene and self.access is Admission.SHARED:
             raise ValueError(f"A {self.recovery} tool changes the scene, so it cannot share it")
         if (
-            self.recovery is TransactionPolicy.UNDOABLE
+            self.recovery in _WHOLE_ON_MAIN_THREAD
             and self.access is not Admission.EXCLUSIVE_ON_MAIN_THREAD
         ):
             raise ValueError(
-                "An undoable tool runs on Houdini's main thread, so it is admitted there"
+                f"A {self.recovery} tool runs on Houdini's main thread, so it is admitted there"
             )
 
 
 READ = ToolPolicy(None, Admission.SHARED)
-# A render: it adds a camera and a ROP for the call and removes them before returning.
-RENDER = ToolPolicy(TransactionPolicy.TEMPORARY_NODES, Admission.EXCLUSIVE)
+# A render: it adds a camera and a ROP for the call and removes them before
+# returning, on Houdini's main thread with undo disabled.
+RENDER = ToolPolicy(TransactionPolicy.TEMPORARY_NODES, Admission.EXCLUSIVE_ON_MAIN_THREAD)
 UNDOABLE = ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE_ON_MAIN_THREAD)
 CHECKPOINTED = ToolPolicy(TransactionPolicy.CHECKPOINT_REQUIRED, Admission.EXCLUSIVE)
 # A program: it runs on Houdini's main thread as its own undo step, which the
@@ -191,14 +190,10 @@ def recovering(
             recover = _undone_on_failure
         case TransactionPolicy.CHECKPOINT_REQUIRED:
             recover = _backed_up_first
-        # execute_code runs its program's undo step itself, and a render destroys
-        # its own temporary nodes.
-        case (
-            TransactionPolicy.PROGRAM_UNDO_GROUP
-            | TransactionPolicy.TEMPORARY_NODES
-            | TransactionPolicy.EXTERNAL_SIDE_EFFECT
-            | None
-        ):
+        case TransactionPolicy.TEMPORARY_NODES:
+            recover = _without_undo
+        # execute_code runs its program's undo step itself.
+        case TransactionPolicy.PROGRAM_UNDO_GROUP | TransactionPolicy.EXTERNAL_SIDE_EFFECT | None:
             return body()
         case _:
             assert_never(policy.recovery)
@@ -228,11 +223,40 @@ class _Raised:
         raise self.failure
 
 
+@dataclass(frozen=True)
+class _Recorded:
+    """The call's edits recorded as Houdini records them there."""
+
+
+@dataclass(frozen=True)
+class _AsStep:
+    """The call's edits one undo step, labelled ``label``."""
+
+    label: str
+
+
+@dataclass(frozen=True)
+class _WithoutUndo:
+    """The call's edits recorded on no undo step."""
+
+
+_Undo = _Recorded | _AsStep | _WithoutUndo
+"""How a main-thread call's edits reach Houdini's undo stack.
+
+[LAW:types-are-the-program] A closed set, mapped to the plugin's entry and its
+arguments in one place (:func:`_on_main_thread`), so no caller names an entry
+or passes it arguments it does not take."""
+
+_RECORDED = _Recorded()
+_WITHOUT_UNDO = _WithoutUndo()
+
+
 def _on_main_thread(
-    link: Link, entry: str, work: Callable[[], Result], *args: Any
+    link: Link, work: Callable[[], Result], undo: _Undo, silence: float
 ) -> _Returned[Result] | _Raised:
-    """How ``work`` ended, run here while Houdini's main thread, calling it through
-    the plugin's ``main_thread.<entry>``, serves every request it makes.
+    """How ``work`` ended, run here while Houdini's main thread serves every
+    request it makes, its edits reaching the undo stack as ``undo`` says, and
+    Houdini giving the call up once it has heard nothing for ``silence`` seconds.
 
     The plugin's entry has the main thread call back into this process; while
     that call is out, the main thread serves the link, so each ``hou`` request
@@ -264,9 +288,17 @@ def _on_main_thread(
             reply.set_expiry(link.sync_timeout)
 
     # Read before the call goes out: a request made after it waits behind it.
-    entered = rpyc.async_(getattr(main_thread, entry))
+    match undo:
+        case _Recorded():
+            entered = partial(rpyc.async_(main_thread.call), run)
+        case _AsStep(label):
+            entered = partial(rpyc.async_(main_thread.call_as_step), run, label)
+        case _WithoutUndo():
+            entered = partial(rpyc.async_(main_thread.call_without_undo), run)
+        case _:
+            assert_never(undo)
     expiry = main_thread.PICKUP_TIMEOUT + link.sync_timeout
-    reply = entered(run, *args)
+    reply = entered(silence)
     reply.set_expiry(expiry)
     try:
         # ``value``, not ``wait()``: an async result raises what Houdini raised only when read.
@@ -301,7 +333,7 @@ class MainThread:
         Raises:
             MainThreadRefused: the main thread refused the call, which never ran.
         """
-        return _on_main_thread(link, "call", work, BODY_SILENCE).result()
+        return _on_main_thread(link, work, _RECORDED, BODY_SILENCE).result()
 
     def step(self, operation: str, silence: float) -> UndoStep:
         """One undo step for ``operation``'s edits, given up by Houdini once the
@@ -392,7 +424,7 @@ class UndoStep:
                         self._work = _Work.ENDED
 
         try:
-            outcome = _on_main_thread(link, "call_as_step", ending, self.label, self.silence)
+            outcome = _on_main_thread(link, ending, _AsStep(self.label), self.silence)
         # Only the plugin's refusal is a call that never ran, with nothing to undo:
         # the work raising the same type is the work's failure.
         except MainThreadRefused:
@@ -462,7 +494,7 @@ class UndoStep:
             link = houdini().ensure(link.host, link.port)
             undos = link.hou.undos
             told = _on_main_thread(
-                link, "call", lambda: _undo_step(undos, self.label), BODY_SILENCE
+                link, lambda: _undo_step(undos, self.label), _RECORDED, BODY_SILENCE
             ).result()
         except Exception as error:
             undo_failed = (
@@ -495,6 +527,19 @@ def _undone_on_failure(
         for note in step.told():
             add_note(failure, note)
         raise
+
+
+def _without_undo(operation: str, link: Link, body: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """The body on Houdini's main thread with undo disabled, so the nodes it makes
+    and destroys for its own use reach no undo step: off the main thread Houdini
+    records each such edit as a step of its own, and a disabler opened there
+    disables nothing (houdini-laws-etg.bci).
+
+    Raises:
+        MainThreadRefused: the main thread refused the call, which never ran.
+    """
+    logger.info("%s runs on Houdini's main thread with undo disabled", operation)
+    return _on_main_thread(link, body, _WITHOUT_UNDO, BODY_SILENCE).result()
 
 
 def _undo_step(undos: Any, label: str) -> tuple[str, ...]:

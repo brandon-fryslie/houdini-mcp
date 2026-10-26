@@ -444,8 +444,20 @@ def _own_components(node_type: NodeType, name: str, values: tuple[Any, ...]) -> 
     return (name,) * len(values)
 
 
+class _NoUndoStack:
+    """The undo stack of a tree built by hand, outside any Houdini: it records nothing."""
+
+    @contextlib.contextmanager
+    def edit(self, label: str) -> Generator[None, None, None]:
+        yield
+
+
 class MockHouNode:
     """Mock Houdini node object."""
+
+    # The undo stack this node's edits reach, read off the root: a MockHouModule's
+    # scene has Houdini's, a hand-built tree none.
+    _undos: "MockUndos | _NoUndoStack" = _NoUndoStack()
 
     def __init__(
         self,
@@ -796,7 +808,9 @@ class MockHouNode:
         new_path = join_path(self._path, new_name)
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type)
-        if isinstance(answer := self.attach(new_node), Mismatched):
+        with self.root()._undos.edit("hou.Node.createNode"):
+            answer = self.attach(new_node)
+        if isinstance(answer, Mismatched):
             # the node is made, its contents not matching its definition here
             raise raised_inside_houdini(MatchDefinitionError(answer.message))
         return new_node
@@ -809,6 +823,11 @@ class MockHouNode:
         """
         if self._parent is None:
             raise RuntimeError(f"{self.path()!r} is not in a scene")
+        with self.root()._undos.edit("Delete Node"):
+            self._leave()
+
+    def _leave(self) -> None:
+        assert self._parent is not None
         subtree = [self, *self.allSubChildren()]
         for node in subtree:
             node._disconnect()
@@ -1049,6 +1068,8 @@ def _heard(fn):
 
 def main_thread_of(key):
     # Houdini's own undo stack, not one reached over the link the call came on.
+    # Each entry records on it how long the client asked Houdini to wait on it
+    # while it says nothing.
     undos = local_undos(key)
 
     class main_thread:
@@ -1056,6 +1077,7 @@ def main_thread_of(key):
 
         @staticmethod
         def call(fn, silence):
+            undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
                 try:
@@ -1064,8 +1086,18 @@ def main_thread_of(key):
                     undos.leave_main_thread()
 
         @staticmethod
+        def call_without_undo(fn, silence):
+            undos.silence = silence
+            with FAKE_MAIN_THREAD:
+                undos.enter_main_thread()
+                try:
+                    with undos.disabler():
+                        _heard(fn)
+                finally:
+                    undos.leave_main_thread()
+
+        @staticmethod
         def call_as_step(fn, label, silence):
-            # How long the client asked Houdini to wait on it while it says nothing.
             undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
@@ -1363,6 +1395,9 @@ class MockHouModule:
         self.updateMode = MockUpdateMode
 
         self.undos = MockUndos(self)
+        self._root._undos = self.undos
+        # A headless hython unless a test makes it graphical.
+        self.ui_available = False
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
@@ -1370,6 +1405,9 @@ class MockHouModule:
 
     def applicationVersionString(self) -> str:
         return self._version
+
+    def isUIAvailable(self) -> bool:
+        return self.ui_available
 
     def setUpdateMode(self, mode: "MockEnumValue") -> None:
         self._root._update_mode = mode
@@ -1934,6 +1972,12 @@ class MockUndos:
     False and no group is a step, as for a Houdini with undo turned off (set
     ``enabled`` False). A call is on the main thread while the plugin's
     ``main_thread.call`` double runs it.
+
+    A node created or destroyed outside any group is a step of its own, labelled
+    as Houdini labels it, wherever Houdini records it: on the main thread, and
+    in a graphical Houdini off it too, though there ``areEnabled()`` is False.
+    A ``disabler()`` opened on the main thread records nothing inside it; one
+    opened off it disables nothing (houdini-laws-etg.bci, measured on 22.0.466).
     """
 
     def __init__(self, hou: "MockHouModule") -> None:
@@ -1941,7 +1985,12 @@ class MockUndos:
         self._steps: list[tuple[str, MockHouNode]] = []
         self._depth = 0
         self._main_thread_calls = 0
+        self._disablers = 0
         self.enabled = True
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "MockUndos":
+        # An undo step copies the scene, never Houdini's stack its root reaches.
+        return self
 
     @property
     def on_main_thread(self) -> bool:
@@ -1958,14 +2007,46 @@ class MockUndos:
 
     @contextlib.contextmanager
     def group(self, label: str) -> Generator[None, None, None]:
-        found = copy.deepcopy(self._hou._root) if self._depth == 0 else None
-        self._depth += 1
+        # Houdini ignores a group opened off its main thread: the edits in it are
+        # recorded, or not, as edits outside any group.
+        held = int(self.on_main_thread)
+        found = copy.deepcopy(self._hou._root) if held and self._depth == 0 else None
+        self._depth += held
         try:
             yield
         finally:
-            self._depth -= 1
+            self._depth -= held
             if found is not None and self.areEnabled() and found.state() != self._hou._root.state():
                 self._steps.append((label, found))
+
+    @contextlib.contextmanager
+    def edit(self, label: str) -> Generator[None, None, None]:
+        """One node edit: its own step when Houdini records it outside any group."""
+        found = (
+            copy.deepcopy(self._hou._root) if self._depth == 0 and self._records_edits() else None
+        )
+        try:
+            yield
+        finally:
+            # A step records what changed, as group's does, whether or not the edit raised.
+            if found is not None and found.state() != self._hou._root.state():
+                self._steps.append((label, found))
+
+    def _records_edits(self) -> bool:
+        return (
+            self.enabled
+            and self._disablers == 0
+            and (self.on_main_thread or self._hou.isUIAvailable())
+        )
+
+    @contextlib.contextmanager
+    def disabler(self) -> Generator[None, None, None]:
+        held = int(self.on_main_thread)
+        self._disablers += held
+        try:
+            yield
+        finally:
+            self._disablers -= held
 
     def undoLabels(self) -> tuple[str, ...]:
         return tuple(label for label, _ in reversed(self._steps))
@@ -1975,7 +2056,7 @@ class MockUndos:
         self._hou._root = found
 
     def areEnabled(self) -> bool:
-        return self.enabled and self._main_thread_calls > 0
+        return self.enabled and self._main_thread_calls > 0 and self._disablers == 0
 
 
 class MockColor:

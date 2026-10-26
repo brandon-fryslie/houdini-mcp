@@ -146,12 +146,15 @@ held it) and how long it waited:
 
 A read runs beside any of them but a scene-writing tool that Houdini's undo
 can reverse (`set_parameter`, `create_node`, `connect_nodes`, `create_material`
-and the rest), an `execute_code` program, and a pane capture
+and the rest), an `execute_code` program, a render (`render_viewport`,
+`render_quad_view`) and a pane capture
 (`capture_pane_screenshot`, `capture_multiple_panes`, `render_node_network`):
 those run on Houdini's main thread and have Houdini to themselves, so a read that arrives during one waits
-for it, and carries `scene_wait` the same way. A capture is the pane as its own
-window draws it, so a window in front of Houdini is never in the picture, and
-like the undoable tools it needs the plugin installed in that Houdini.
+for it, and carries `scene_wait` the same way. A render runs there with undo
+disabled, so its camera and ROP never reach the undo stack and the artist's next
+undo is their own. A capture is the pane as its own
+window draws it, so a window in front of Houdini is never in the picture. Like
+the undoable tools, renders and captures need the plugin installed in that Houdini.
 
 A call that finds the scene free has no `scene_wait`. A call still waiting
 when a timed-out program takes over the scene is refused with

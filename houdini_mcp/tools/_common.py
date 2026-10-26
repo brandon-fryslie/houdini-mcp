@@ -257,13 +257,14 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
         except InvalidInput as e:
             raise TypeError(f"{operation_name} default is not its parameter's type: {e}") from None
 
-        # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
-        # body, off the event loop, in the Houdini its host and port name.
-        if policy.writes_scene and (
+        # [LAW:types-are-the-program] A scene changer's recovery wraps its whole
+        # body, off the event loop, in the Houdini its host and port name: a render
+        # that skipped it would leave its temporary nodes on the undo stack.
+        if policy.changes_scene and (
             inspect.iscoroutinefunction(func) or not {"host", "port"} <= signature.parameters.keys()
         ):
             raise TypeError(
-                f"{operation_name} writes the scene, so it is sync and takes host and port"
+                f"{operation_name} changes the scene, so it is sync and takes host and port"
             )
 
         # A served tool that finishes its result asynchronously (summarizing it,

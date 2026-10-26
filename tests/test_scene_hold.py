@@ -21,13 +21,16 @@ from houdini_mcp.server import held, served
 from houdini_mcp.tools.transactions import (
     PROGRAM,
     READ,
-    RENDER,
     UNDOABLE,
     ToolPolicy,
     declare_policy,
 )
 from houdini_mcp.tools.workers import WORKERS, Admission, WorkerLedger, WorkerStillRunning
 from tests.conftest import DEFAULT_SETTINGS, SUMMARIZER
+
+# A call the ledger admits to the scene alone, off Houdini's main thread, with no
+# recovery to reach Houdini: how a scene load is admitted, without its link.
+_HOLDS_SCENE = ToolPolicy(None, Admission.EXCLUSIVE)
 
 
 class _Gated:
@@ -115,14 +118,14 @@ class TestCallsHoldTheScene:
             assert (await summary)["status"] == "success"
 
     async def test_a_reader_runs_beside_a_call_holding_the_scene_without_waiting(self):
-        render = _Gated("render_viewport", RENDER, [])
-        call = asyncio.create_task(held(render.tool)())
-        await _until(render.entered)
+        holder = _Gated("holds_scene", _HOLDS_SCENE, [])
+        call = asyncio.create_task(held(holder.tool)())
+        await _until(holder.entered)
         try:
             read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
-            render.gate.set()
+            holder.gate.set()
             await call
 
     async def test_a_reader_waits_for_an_undoable_call_and_says_so(self, heard):
@@ -175,12 +178,12 @@ class TestCallsHoldTheScene:
     async def test_queued_calls_cost_no_thread_so_reads_still_run(self):
         """A waiting call holds no thread from the pool that runs tool bodies."""
         anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-        render = _Gated("render_viewport", RENDER, [])
-        holder = asyncio.create_task(held(render.tool)())
-        await _until(render.entered)
+        first = _Gated("holds_scene", _HOLDS_SCENE, [])
+        holder = asyncio.create_task(held(first.tool)())
+        await _until(first.entered)
         queued = [
             asyncio.create_task(
-                held(_named("render_quad_view", RENDER, lambda: {"status": "success"}))()
+                held(_named("also_holds_scene", _HOLDS_SCENE, lambda: {"status": "success"}))()
             )
             for _ in range(5)
         ]
@@ -188,7 +191,7 @@ class TestCallsHoldTheScene:
             read = _named("get_scene_info", READ, lambda: {"status": "success"})
             assert await asyncio.wait_for(held(read)(), 5) == {"status": "success"}
         finally:
-            render.gate.set()
+            first.gate.set()
             await holder
             await asyncio.gather(*queued)
 
@@ -425,25 +428,25 @@ class TestReadsBesideTheMainThread:
         assert order == ["set_parameter", "second_read"]
         assert (await reading).waited_for == ("set_parameter",)
 
-    async def test_a_read_passes_an_undoable_call_waiting_on_a_render(self, heard):
-        """The undoable call waits for the render either way; the read need not."""
+    async def test_a_read_passes_an_undoable_call_waiting_on_a_scene_load(self, heard):
+        """The undoable call waits for the load either way; the read need not."""
         ledger = WorkerLedger()
         order: list[str] = []
-        write_queued = heard("set_parameter waits for the scene behind render_viewport")
+        write_queued = heard("set_parameter waits for the scene behind load_scene")
 
         async def write():
             async with ledger.hold("set_parameter", Admission.EXCLUSIVE_ON_MAIN_THREAD) as wait:
                 order.append("set_parameter")
                 return wait
 
-        async with ledger.hold("render_viewport", Admission.EXCLUSIVE):
+        async with ledger.hold("load_scene", Admission.EXCLUSIVE):
             writing = asyncio.create_task(write())
             await _until(write_queued)
             async with asyncio.timeout(5), ledger.hold("get_node_info", Admission.SHARED) as wait:
                 assert wait.waited_for == ()
                 order.append("get_node_info")
 
-        assert (await writing).waited_for == ("render_viewport", "get_node_info")
+        assert (await writing).waited_for == ("load_scene", "get_node_info")
         assert order == ["get_node_info", "set_parameter"]
 
     async def test_a_read_freed_when_the_undoable_call_ahead_gives_up(self, heard):

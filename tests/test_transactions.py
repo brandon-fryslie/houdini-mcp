@@ -22,7 +22,7 @@ from houdini_mcp.tools import (
     render_viewport,
     set_parameter,
 )
-from houdini_mcp.tools._common import UNDOABLE, InvalidInput, tool, using
+from houdini_mcp.tools._common import RENDER, UNDOABLE, InvalidInput, tool, using
 from houdini_mcp.tools.failure import OperationFailed
 from houdini_mcp.tools.transactions import (
     BODY_SILENCE,
@@ -46,7 +46,7 @@ def test_a_render_changes_the_scene_while_it_runs(render_tool):
     test_execute_code_worker's."""
     policy = policy_of(render_tool)
     assert policy.recovery is TransactionPolicy.TEMPORARY_NODES
-    assert policy.changes_scene and not policy.writes_scene
+    assert policy.changes_scene
 
 
 @pytest.mark.parametrize(
@@ -63,23 +63,28 @@ def test_a_scene_changer_cannot_share_the_scene(recovery):
         ToolPolicy(recovery, Admission.SHARED)
 
 
-def test_an_undoable_tool_off_the_main_thread_is_refused():
-    """Houdini records an undo group only on its main thread."""
+@pytest.mark.parametrize(
+    "recovery", [TransactionPolicy.UNDOABLE, TransactionPolicy.TEMPORARY_NODES]
+)
+def test_a_body_its_recovery_runs_on_the_main_thread_is_admitted_there(recovery):
+    """Houdini records an undo group, and honours a disabler, only on its main thread."""
     with pytest.raises(ValueError, match="runs on Houdini's main thread"):
-        ToolPolicy(TransactionPolicy.UNDOABLE, Admission.EXCLUSIVE)
+        ToolPolicy(recovery, Admission.EXCLUSIVE)
 
 
 @pytest.mark.parametrize("recovery", [None, *TransactionPolicy])
 @pytest.mark.parametrize("access", list(Admission))
 def test_only_a_body_not_already_on_the_main_thread_drives_it(recovery, access):
-    """An undoable body is put on the main thread whole by its recovery; any other
-    call admitted there posts its own work, and is the one handed the main thread."""
+    """An undoable or a render's body is put on the main thread whole by its
+    recovery; any other call admitted there posts its own work, and is the one
+    handed the main thread."""
     try:
         policy = ToolPolicy(recovery, access)
     except ValueError:
         pytest.skip("not a policy any tool may have")
     assert policy.drives_main_thread is (
-        access is Admission.EXCLUSIVE_ON_MAIN_THREAD and recovery is not TransactionPolicy.UNDOABLE
+        access is Admission.EXCLUSIVE_ON_MAIN_THREAD
+        and recovery not in (TransactionPolicy.UNDOABLE, TransactionPolicy.TEMPORARY_NODES)
     )
 
 
@@ -143,9 +148,12 @@ def _no_target() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("body", [_async_body, _no_target], ids=["async", "no_host_port"])
-def test_a_scene_writer_the_boundary_cannot_recover_is_refused_where_declared(body):
-    with pytest.raises(TypeError, match=f"{body.__name__} writes the scene"):
-        tool(UNDOABLE)(body)
+@pytest.mark.parametrize("policy", [UNDOABLE, RENDER], ids=["undoable", "render"])
+def test_a_scene_changer_the_boundary_cannot_recover_is_refused_where_declared(body, policy):
+    """Only a sync tool's body passes through recovering(), in the Houdini its host
+    and port name: a render outside it would put its rig on the undo stack."""
+    with pytest.raises(TypeError, match=f"{body.__name__} changes the scene"):
+        tool(policy)(body)
 
 
 REPLACERS = {

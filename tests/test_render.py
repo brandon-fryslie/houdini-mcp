@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from houdini_mcp.tools.transactions import BODY_SILENCE
 from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
 
 
@@ -890,6 +891,40 @@ class TestRenderLeavesSceneUnchanged:
         # for it is houdini-laws-etg.tmx's.
         assert "OpenGL ROP: no display" in str(result), result
         assert self._scene(render_raises) == before
+
+    @staticmethod
+    def _artist_step(hou: Any) -> tuple[str, ...]:
+        """A graphical Houdini whose artist's last change is on top of the undo stack."""
+        hou.ui_available = True
+        hou.undos.enter_main_thread()
+        try:
+            with hou.undos.group("artist step"):
+                hou.node("/obj").createNode("null", "artist_null")
+        finally:
+            hou.undos.leave_main_thread()
+        return hou.undos.undoLabels()
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("outcome", ["rendering_scene", "render_raises"])
+    def test_the_undo_history_is_as_it_was(
+        self,
+        request: pytest.FixtureRequest,
+        caplog: pytest.LogCaptureFixture,
+        tool: str,
+        outcome: str,
+    ) -> None:
+        """The artist's next Ctrl+Z undoes their own change, not the render's rig."""
+        import houdini_mcp.tools as tools
+
+        hou = request.getfixturevalue(outcome)
+        before = self._artist_step(hou)
+
+        with caplog.at_level(logging.INFO, "houdini_mcp.tools.transactions"):
+            getattr(tools, tool)(host="localhost", port=18811)
+
+        assert hou.undos.undoLabels() == before == ("artist step",)
+        assert hou.undos.silence == BODY_SILENCE
+        assert f"{tool} runs on Houdini's main thread with undo disabled" in caplog.text
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_link_that_fails_under_a_destroy_is_sent_nothing_more(
