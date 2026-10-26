@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..connection import Link, houdini
+from ..main_thread import MainThread, MainThreadRefused
 from ._common import (
     FILE_WRITE_ON_MAIN_THREAD,
     ON_MAIN_THREAD,
@@ -35,7 +36,6 @@ from ._common import (
 )
 from .failure import LinkLost
 from .reads import Unread, is_unread, read, reason
-from .transactions import MainThread, MainThreadRefused
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -238,14 +238,14 @@ def _capture_pane_to_bytes(
     # Navigated and framed only once the input and the pane are known good, so a
     # capture refused for either leaves the user's view as it was; one that fails
     # navigating, framing or grabbing leaves the view as far as it got.
-    shown = main_thread.call(link, framed)
+    shown = main_thread.call(link, framed).result()
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is
     # back in its event loop; it offers no signal that it has (no viewer or
     # viewport event says so, and no draw call makes a grab in the same call
     # current). So the grab is the next main-thread call, which Houdini begins
     # only when its event loop is idle again, after that drawing.
-    image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
+    image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name)).result()
     # Encoded here, off the main thread, so Houdini's UI is held only for the grab.
     raw_bytes = png_bytes(image, QtCore, pane_type_name)
     logger.info("Grabbed %s from its window: %d PNG bytes", pane_type_name, len(raw_bytes))

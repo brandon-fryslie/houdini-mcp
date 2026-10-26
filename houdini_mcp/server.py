@@ -17,8 +17,6 @@ from .connection import describe_target
 from .results import Results
 from .settings import Http, ServerSettings, Serving, Stdio
 from .tools._common import on_the_scene, run_in_executor
-from .tools.failure import failure_response
-from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
 
@@ -41,10 +39,7 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        try:
-            return await on_the_scene(tool, tool, *args, **kwargs)
-        except WorkerStillRunning as refused:
-            return failure_response(refused, tool.__name__)
+        return await on_the_scene(tool, tool, *args, **kwargs)
 
     return call
 

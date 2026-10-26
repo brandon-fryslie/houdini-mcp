@@ -12,7 +12,6 @@ import pytest
 from houdini_mcp.connection import (
     HoudiniConnectionError,
     HoudiniTargetMismatch,
-    Link,
     TransportFailure,
     get_connection_info,
     houdini,
@@ -26,7 +25,6 @@ from tests.conftest import (
     MockRpycConnection,
     link_failure,
     raised_inside_houdini,
-    served_connection,
 )
 
 
@@ -57,13 +55,13 @@ class TestConnect:
         assert installed_conn() is second.conn
 
     def test_a_failed_connect_leaves_the_installed_link_standing(
-        self, mock_rpyc_with_reset, mock_hou
+        self, reset_connection_state, mock_hou
     ):
         """The old link is closed only once the new one is proven, so a reconnect that
         fails costs nothing a concurrent caller was using."""
-        first = houdini().connect("localhost", 18811)
-
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            first = houdini().connect("localhost", 18811)
             mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             with pytest.raises(HoudiniConnectionError):
                 houdini().connect("localhost", 18811, max_retries=1, retry_delay=0.01)
@@ -207,7 +205,6 @@ class TestConnect:
 
     def test_connect_exponential_backoff(self, reset_connection_state, mock_hou):
         """Test that retry delay doubles each attempt (exponential backoff)."""
-        import time
 
         mock_conn = MockRpycConnection(mock_hou)
         call_times = []
@@ -230,7 +227,6 @@ class TestConnect:
 
     def test_connect_with_jitter(self, reset_connection_state, mock_hou):
         """Test that jitter adds randomness to retry delays."""
-        import time
 
         mock_conn = MockRpycConnection(mock_hou)
         delays = []
@@ -359,45 +355,6 @@ class TestClose:
         assert installed_conn() is None
 
 
-class TestCutOff:
-    """A link ended under a request waiting on it, as execute_code's timeout ends its
-    program's."""
-
-    def test_a_request_waiting_on_a_link_cut_off_fails_at_once(self, reset_connection_state):
-        """Closed under it, the waiting request slept until its 30s sync timeout on
-        macOS. The pause lets the request reach its wait; sent after the cut-off, it
-        fails at once too."""
-        with served_connection("import time") as conn:
-            link = Link("127.0.0.1", 0, conn, hou=None)
-            failed: list[BaseException] = []
-
-            def waits() -> None:
-                try:
-                    conn.modules.time.sleep(4)
-                except BaseException as e:  # noqa: BLE001
-                    failed.append(e)
-
-            waiting = threading.Thread(target=waits)
-            waiting.start()
-            time.sleep(0.5)
-
-            houdini().cut_off(link)
-            waiting.join(3)
-
-            assert not waiting.is_alive()
-            assert [type(e) for e in failed] == [EOFError]
-            # rpyc closed it, from the thread that was waiting
-            assert conn.closed
-
-    def test_a_cut_off_link_is_uninstalled(self, mock_connection):
-        """It reads as open until its user closes it, so the next call opens another."""
-        link = houdini().link()
-
-        houdini().cut_off(link)
-
-        assert houdini().link() is None
-
-
 class TestEnsure:
     """Tests for the owner's ensure: the link a call's scope holds."""
 
@@ -434,18 +391,17 @@ class TestEnsure:
         assert is_connected() is True
         assert houdini().ensure("localhost", 18811).hou is mock_connection
 
-    def test_ensure_reconnects_after_the_link_closed(self, mock_rpyc_with_reset):
+    def test_ensure_reconnects_after_the_link_closed(self, reset_connection_state, mock_hou):
         """A link found closed is replaced, once, and the new hou is handed out."""
-        houdini().ensure("localhost", 18811)
-        first = installed_conn()
-        first.close()
-
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
-            mock_rpyc.connect.return_value = MockRpycConnection(mock_rpyc_with_reset)
+            mock_rpyc.connect.side_effect = lambda *_a, **_k: MockRpycConnection(mock_hou)
+            houdini().ensure("localhost", 18811)
+            first = installed_conn()
+            first.close()
             hou = houdini().ensure("localhost", 18811).hou
 
-        assert hou is mock_rpyc_with_reset
-        assert mock_rpyc.connect.call_count == 1
+        assert hou is mock_hou
+        assert mock_rpyc.connect.call_count == 2
         assert installed_conn() is not first
         assert is_connected() is True
 
@@ -775,7 +731,10 @@ def _owner() -> Any:
     def open_fresh(host: str, port: int, sync_timeout: float) -> MockRpycConnection:
         return MockRpycConnection(MockHouModule())
 
-    return HoudiniConnection(HoudiniTarget(open_fresh, "start a fresh double"))
+    def reach_none(host: str, port: int) -> Any:
+        raise LookupError("a fresh double serves no program's process")
+
+    return HoudiniConnection(HoudiniTarget(open_fresh, "start a fresh double", reach_none))
 
 
 class TestATeardownDropsTheLinkThatFailed:
@@ -892,7 +851,7 @@ class TestATeardownDropsTheLinkThatFailed:
             raise OperationFailed("TimeoutError: result expired", stdout="before\n") from judged
 
         failure = failure_for(lost.value, "execute_code")
-        assert (failure.kind, failure.connection_reset) == ("timeout", True)
+        assert (failure.kind, failure.cut_off) == ("timeout", "link")
         assert failure.stdout == "before\n"
         assert failure.message.count("TimeoutError: result expired") == 1
 

@@ -9,10 +9,11 @@ from typing import Any
 import pytest
 
 from houdini_mcp import tools
+from houdini_mcp.connection import Link, houdini
+from houdini_mcp.main_thread import MainThread, Posted, Raised
 from houdini_mcp.tools._common import using
 from houdini_mcp.tools.pane_screenshot import _qt_core, png_bytes
-from houdini_mcp.tools.transactions import _RECORDED, BODY_SILENCE, UndoStep, _on_main_thread
-from houdini_mcp.tools.workers import WORKERS
+from houdini_mcp.tools.transactions import Recovered, step_label, undo_latest
 
 
 def test_check_connection_round_trip(at: dict[str, Any]) -> None:
@@ -520,7 +521,7 @@ async def test_a_geometry_summary_costs_the_link_the_same_requests_whatever_the_
 
 def _on_houdinis_main_thread(link: Any, work: Callable[[], Any]) -> Any:
     """What ``work`` returns, run with its requests served on Houdini's main thread."""
-    return _on_main_thread(link, work, _RECORDED, BODY_SILENCE).result()
+    return MainThread(houdini().drop).call(link, work).result()
 
 
 def _undo_labels(at: dict[str, Any]) -> tuple[str, ...]:
@@ -705,22 +706,38 @@ def test_a_program_that_raises_leaves_the_scene_as_it_found_it(at: dict[str, Any
     ],
     ids=["calling_hou", "never_calling_hou"],
 )
-def test_a_timed_out_program_is_cut_off_and_undone(at: dict[str, Any], loop: str) -> None:
+def test_a_timed_out_program_is_killed_and_undone(at: dict[str, Any], loop: str) -> None:
     """Houdini's main thread is free once the timeout has passed: the next call runs
     at once, and the program's edits are gone."""
     timed_out = _program(
         f"import time\nhou.node('/obj').createNode('geo', 'it_cut')\n{loop}", at, timeout=1
     )
 
-    assert timed_out["kind"] == "worker_still_running", timed_out
+    assert (timed_out["kind"], timed_out["cut_off"]) == ("timeout", "program"), timed_out
     assert timed_out["message"].endswith("\nIts changes to the scene were undone.")
     started = time.monotonic()
     assert _obj_children(at) == 0
     assert time.monotonic() - started < 2
-    worker = WORKERS.running()
-    if worker is not None:
-        worker.thread.join(10)
-    assert WORKERS.running() is None
+
+
+def test_after_a_timed_out_loop_the_next_program_and_create_node_run(at: dict[str, Any]) -> None:
+    timed_out = _program("while True: pass", at, timeout=1)
+    assert (timed_out["kind"], timed_out["cut_off"]) == ("timeout", "program"), timed_out
+
+    ran = _program("hou.node('/obj').createNode('geo', 'it_after')", at)
+    assert ran["status"] == "success", ran
+    created = tools.create_node("geo", "/obj", "it_made", **at)
+    assert created["status"] == "success", created
+    assert _obj_children(at) == 2
+
+
+def _as_step(link: Link, work: Callable[[], Any], silence: float) -> tuple[Posted[Any], Recovered]:
+    """``work`` as one undo step, given up by Houdini after ``silence`` seconds of
+    nothing from this process, and the step then undone as a failed call's is."""
+    main_thread = MainThread(houdini().drop)
+    label = step_label("it_step")
+    posted = main_thread.as_step(link, work, label, silence)
+    return posted, undo_latest(main_thread, link, "it_step", label)
 
 
 def test_a_step_whose_request_outlives_the_link_is_undone(at: dict[str, Any]) -> None:
@@ -733,13 +750,12 @@ def test_a_step_whose_request_outlives_the_link_is_undone(at: dict[str, Any]) ->
             hou.node("/obj").createNode("geo", "it_slow")
             slow(2)
 
-        step = UndoStep("it_slow", silence=60.0)
         try:
-            with pytest.raises(TimeoutError):
-                step.run(link, work)
+            posted, recovered = _as_step(link, work, silence=60.0)
         finally:
             config["sync_request_timeout"] = expires
-    assert step.told() == ("Its changes to the scene were undone.",)
+    assert isinstance(posted, Raised) and isinstance(posted.failure, TimeoutError), posted
+    assert recovered.told == ("Its changes to the scene were undone.",)
     assert _obj_children(at) == 0
 
 
@@ -754,16 +770,18 @@ def _quiet_work(hou: Any) -> Callable[[], None]:
     return work
 
 
-def test_a_step_silent_past_its_bound_is_cut_off_and_undone(at: dict[str, Any]) -> None:
-    step = UndoStep("it_quiet", silence=1.0)
-    with using(**at) as link, pytest.raises(EOFError):
-        step.run(link, _quiet_work(link.hou))
-    assert step.told() == ("Its changes to the scene were undone.",)
+def test_a_step_silent_past_its_bound_is_given_up_and_undone(at: dict[str, Any]) -> None:
+    with using(**at) as link:
+        posted, recovered = _as_step(link, _quiet_work(link.hou), silence=1.0)
+    assert isinstance(posted, Raised) and isinstance(posted.failure, EOFError), posted
+    assert recovered.told == ("Its changes to the scene were undone.",)
     assert _obj_children(at) == 0
 
 
 def test_a_step_silent_within_its_bound_stands(at: dict[str, Any]) -> None:
     """The bound is the caller's: 60s for a tool body, a program's timeout and 60s more."""
     with using(**at) as link:
-        UndoStep("it_quiet", silence=4.0).run(link, _quiet_work(link.hou))
+        MainThread(houdini().drop).as_step(
+            link, _quiet_work(link.hou), step_label("it_quiet"), 4.0
+        ).result()
     assert _obj_children(at) == 1

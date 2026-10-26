@@ -11,6 +11,7 @@ This module provides tools for managing Houdini scenes:
 import logging
 from typing import Any
 
+from ..plugin import plugin_module
 from ..settings import Summarizer
 from ._common import (
     CHECKPOINTED,
@@ -24,7 +25,6 @@ from ._common import (
     using,
 )
 from .parms import evaluated
-from .plugin import plugin_module
 from .snapshot import scene_snapshot
 from .summarization import SCENE_BRIEF, summarized
 

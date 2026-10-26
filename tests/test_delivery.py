@@ -293,8 +293,9 @@ class TestDeliver:
     def test_a_failure_with_every_string_long_fits_the_bound(
         self, results: Results, caplog: pytest.LogCaptureFixture
     ) -> None:
+        # A closed field holds one of its few values, so only the open ones run long.
         failure = {
-            **dict.fromkeys(delivery.ENVELOPE_FIELDS, COSTLY),
+            **dict.fromkeys(delivery.ENVELOPE_FIELDS - CLOSED_FIELDS, COSTLY),
             "status": "error",
             "kind": "connection_mismatch",
             "retry": "none",
@@ -308,7 +309,7 @@ class TestDeliver:
         assert parsed.kind == "connection_mismatch"
         assert COSTLY.startswith(parsed.message.removesuffix(delivery.TRIMMED))
         assert whole(pointer) == failure
-        cut = sorted(delivery.ENVELOPE_FIELDS - {"status", "kind", "retry"})
+        cut = sorted(delivery.ENVELOPE_FIELDS - CLOSED_FIELDS)
         size = len(Reading.of(pointer).encoded)
         assert any(f"; pointer {size} bytes, cut {cut}; " in m for m in caplog.messages)
 

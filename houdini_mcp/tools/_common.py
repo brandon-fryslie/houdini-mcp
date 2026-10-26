@@ -28,7 +28,7 @@ from .failure import (
     FAILURE,
     InvalidInput,
     OperationFailed,
-    ProgramStillRunning,
+    ProgramTimedOut,
     TimedOut,
     ToolError,
     ToolFailure,
@@ -83,7 +83,7 @@ __all__ = [
     "InvalidInput",
     "OperationFailed",
     "TimedOut",
-    "ProgramStillRunning",
+    "ProgramTimedOut",
     "Undone",
     "batch_status",
     "node_at",
@@ -467,25 +467,23 @@ class ExecutionTimeoutError(Exception):
 
 import anyio
 
-from .workers import WORKERS
+from .scene_hold import SCENE_HOLD
 
 
 async def on_the_scene(
     tool: Callable[..., Any], work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
 ) -> dict[str, Any]:
-    """Run ``tool``'s blocking Houdini work off the event loop, once the ledger
-    admits it as its policy says.
+    """Run ``tool``'s blocking Houdini work off the event loop, once the scene
+    hold admits it as its policy says.
 
-    [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
+    [LAW:single-enforcer] The one place a call meets the scene hold: a sync
     tool's whole body comes through here (``server.held``), an async tool's
     Houdini read does, and whatever it finishes afterwards (a summary) runs
     with Houdini released. A call waits on the event loop while one it must
     not run beside holds Houdini, so a waiting call costs no thread and one
-    its client cancels never runs; one that needs the scene to itself is
-    refused with :class:`WorkerStillRunning` while a program still runs
-    against Houdini. The result tells the wait in ``scene_wait``.
+    its client cancels never runs. The result tells the wait in ``scene_wait``.
     """
-    async with WORKERS.hold(tool.__name__, policy_of(tool).access) as wait:
+    async with SCENE_HOLD.hold(tool.__name__, policy_of(tool).access) as wait:
         result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
     return {**result, **wait.response_fields()}
 

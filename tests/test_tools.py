@@ -3666,7 +3666,7 @@ class TestConnectionErrorHandling:
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
-        assert result["connection_reset"] is True
+        assert result["cut_off"] == "link"
         assert result["retry"] == "call_again"
         assert result["exception"] == "TimeoutError"
         assert "timed out" in result["message"]
@@ -3738,7 +3738,7 @@ class TestConnectionErrorHandling:
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
-        assert result["connection_reset"] is True
+        assert result["cut_off"] == "link"
         assert "timed out" in result["message"]
         # A read changes nothing, so calling it again is the remedy.
         assert result["retry"] == "call_again"

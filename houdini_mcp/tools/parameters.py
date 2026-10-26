@@ -8,6 +8,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..plugin import plugin_module
 from ._common import (
     READ,
     UNDOABLE,
@@ -18,7 +19,6 @@ from ._common import (
     using,
 )
 from .parms import write_all
-from .plugin import plugin_module
 from .reads import log_refused
 
 if TYPE_CHECKING:
