@@ -84,74 +84,41 @@ class _ThreadRoutedStream:
     def __init__(self, thread: int, capture: TextIOBase, past: TextIO) -> None:
         self._thread: int | None = thread
         self._capture = capture
-        self.past = past
+        self._past = past
 
     def __getattr__(self, attr: str) -> object:
         # Every stream operation - write, flush, encoding, fileno - resolves
         # against the capture for the program's thread, the prior stream for any other.
-        return getattr(self._capture if threading.get_ident() == self._thread else self.past, attr)
-
-    @property
-    def ended(self) -> bool:
-        return self._thread is None
+        return getattr(self._capture if threading.get_ident() == self._thread else self._past, attr)
 
     def end(self) -> None:
         self._thread = None
 
 
-def _beneath(stream: object, router: _ThreadRoutedStream) -> bool:
-    """Whether ``router`` is ``stream`` or lies past it, under a later capture's routers."""
-    while isinstance(stream, _ThreadRoutedStream):
-        if stream is router:
-            return True
-        stream = stream.past
-    return False
-
-
-def _live(stream: TextIO) -> TextIO:
-    """The stream writes reach past every router that has ended."""
-    while isinstance(stream, _ThreadRoutedStream) and stream.ended:
-        stream = stream.past
-    return stream
-
-
-# [LAW:no-shared-mutable-globals] The one owner of assigning sys.stdout and
-# sys.stderr here: a program's run and the gate reading the next call's program
-# capture on two threads, and each reads the streams it routes past and sets them.
-_SWAP = threading.Lock()
-
-
 @contextmanager
 def captured(stdout: TextIOBase, stderr: TextIOBase) -> Iterator[None]:
-    """Send the calling thread's stdout and stderr writes to these captures.
-
-    Captures nest and overlap, and end in any order: one that ends beneath a later
-    capture's routers leaves them installed, and the later capture restores past it.
-    """
+    """Send the calling thread's stdout and stderr writes to these captures."""
     thread = threading.get_ident()
-    with _SWAP:
-        routers = (
-            _ThreadRoutedStream(thread, stdout, sys.stdout),
-            _ThreadRoutedStream(thread, stderr, sys.stderr),
-        )
-        sys.stdout, sys.stderr = routers
+    entered = (sys.stdout, sys.stderr)
+    routers = (
+        _ThreadRoutedStream(thread, stdout, entered[0]),
+        _ThreadRoutedStream(thread, stderr, entered[1]),
+    )
+    sys.stdout, sys.stderr = routers
     try:
         yield
     finally:
-        replaced: list[tuple[str, object]] = []
-        # Restored before logging: a warning on a host with no log handler is
+        for router in routers:
+            router.end()
+        left = (sys.stdout, sys.stderr)
+        # Restore before logging: a warning on a host with no log handler is
         # written to sys.stderr, which until now still routed into the capture.
-        with _SWAP:
-            for name, router in zip(("stdout", "stderr"), routers, strict=True):
-                router.end()
-                left = getattr(sys, name)
-                if left is not router and _beneath(left, router):
-                    # A later capture's routers are installed over this one's, and
-                    # restore past it when that capture ends.
-                    continue
-                if left is not router:
-                    replaced.append((name, left))
-                setattr(sys, name, _live(router.past))
+        sys.stdout, sys.stderr = entered
+        replaced = [
+            (name, stream)
+            for name, router, stream in zip(("stdout", "stderr"), routers, left, strict=True)
+            if stream is not router
+        ]
         for name, stream in replaced:
             # [LAW:no-silent-failure] The program (nothing else here swaps the
             # streams) left its own stream installed; restoring keeps a closed

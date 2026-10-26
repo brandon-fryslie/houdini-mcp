@@ -1381,31 +1381,21 @@ class TestSyntaxGate:
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
 
-    def test_the_compilers_warnings_lead_the_programs_stderr_once(
-        self, mock_connection, monkeypatch
-    ):
-        """exec compiling the source wrote its SyntaxWarnings to the program's stderr. The
-        gate compiles the program now and the worker runs what it compiled, so they are
-        there still, and once."""
-        import sys
+    def test_the_program_is_compiled_once(self, mock_connection):
+        """The worker runs the code object the gate compiled and never compiles the
+        source again, so the compiler's SyntaxWarning is given once."""
         import warnings
 
         from houdini_mcp.tools import execute_code
 
-        def _to_stderr(message, category, filename, lineno, file=None, line=None):
-            sys.stderr.write(warnings.formatwarning(message, category, filename, lineno, line))
-
-        # pytest records warnings; this shows them as Python does outside it, on sys.stderr.
-        monkeypatch.setattr(warnings, "showwarning", _to_stderr)
-        with warnings.catch_warnings():
+        with warnings.catch_warnings(record=True) as given:
             warnings.simplefilter("always", SyntaxWarning)
             result = execute_code(
                 "x = 1\nprint(x is 1)", host="localhost", port=18811, bypass_config_enabled=False
             )
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
-        assert result["stderr"].startswith("<string>:2: SyntaxWarning: ")
-        assert result["stderr"].count("SyntaxWarning") == 1
+        assert [w.category for w in given] == [SyntaxWarning]
 
     def test_code_that_parses_but_does_not_compile_is_audited_in_full(self, mock_connection):
         """The gates read the tree the parser gave, so the audit names what the program

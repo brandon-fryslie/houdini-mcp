@@ -281,9 +281,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the program's traceback. The refusal reads "Code does not compile: ...",
   where it read "Code does not parse: ...", and its traceback names the file
   `<string>`, where a parse refusal's named `<unknown>`. The worker runs the
-  code object the gate compiled, and the program's `stderr` starts with the
-  SyntaxWarnings the parser and the compiler gave, as it did when the worker
-  compiled the source.
+  code object the gate compiled, so the parser's and the compiler's
+  SyntaxWarnings (`invalid escape sequence`, `"is" with 'int' literal`) go to
+  the server's stderr, once, and a program's `stderr` no longer starts with
+  them.
 
 - **BREAKING (wire)**: `list_node_types` refuses a `category` Houdini does not
   have as `invalid_input`, whose `categories_available` lists those it has,
