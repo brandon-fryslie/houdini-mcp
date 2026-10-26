@@ -372,6 +372,16 @@ def test_the_table_names_the_type_whose_create_node_answer_the_fake_does_not_mod
         node_types({"Manager": table["Manager"]})
 
 
+def test_a_node_is_the_same_state_whichever_name_made_its_type(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini keeps a node's type, not the name createNode was given for it."""
+    obj = mock_hou.node("/obj")
+    states = {obj.createNode("geo").createNode(name).state() for name in ("mountain", "v_mountain")}
+
+    assert len(states) == 1
+
+
 def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
     mock_hou: MockHouModule,
 ) -> None:

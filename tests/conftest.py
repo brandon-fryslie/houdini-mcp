@@ -516,7 +516,7 @@ class MockHouNode:
         """This node and its subtree as one comparable value: what an undo step restores."""
         return (
             self._name,
-            self._node_type,
+            self._row().type,
             repr(sorted(self._parms().items())),
             tuple(
                 (index, source.path(), self._input_output_indexes.get(index, 0))
