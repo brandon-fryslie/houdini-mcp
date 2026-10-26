@@ -75,10 +75,33 @@ def test_qt_is_the_one_the_connected_houdini_names(
 def test_a_houdini_whose_pyside_lacks_a_qt_module_has_its_qt_refused_naming_hutil_pyside(
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
-    """hutil.PySide skips a submodule its binding cannot import; the capture is refused naming hutil.PySide."""
+    """hutil.PySide skips a submodule its binding cannot import; the capture is refused
+    in Houdini's words, naming hutil.PySide.QtCore."""
+
+    class WithoutQtCore:
+        # rpyc delivers a remote module's missing attribute as Houdini's raise
+        def __getattr__(self, name: str) -> object:
+            raise raised_inside_houdini(
+                AttributeError(f"module 'hutil.PySide' has no attribute {name!r}")
+            )
+
+    monkeypatch.setitem(sys.modules, "hutil.PySide", WithoutQtCore())
+
+    with pytest.raises(OperationFailed) as refused:
+        _qt_core(houdini().link())
+    assert str(refused.value) == (
+        "Houdini did not give its Qt, hutil.PySide.QtCore: "
+        "AttributeError: module 'hutil.PySide' has no attribute 'QtCore'"
+    )
+
+
+def test_a_qt_lookup_that_fails_in_this_process_is_no_refusal_by_houdini(
+    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+) -> None:
+    """Only what Houdini raised is its refusal; an error raised here is the bug it is."""
     monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=object()))
 
-    with pytest.raises(OperationFailed, match=r"Houdini's Qt \(hutil\.PySide\).*QtCore"):
+    with pytest.raises(AttributeError):
         _qt_core(houdini().link())
 
 

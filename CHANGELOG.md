@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `disconnect_node_input`, `reorder_inputs`, `set_node_flags` and
+  `assign_material`'s Material SOP wiring, refused by Houdini (as inside a
+  locked asset), answer `operation_failed` in Houdini's words, naming what was
+  asked, where they answered with an unclassified error and a traceback
+  (houdini-laws-etg.ulw). A parameter Houdini will not set, a render Houdini
+  fails, and a pane list or Qt lookup Houdini refuses carry Houdini's reason
+  without rpyc's remote traceback; an error in the server there is reported as
+  the server's fault, not as Houdini's refusal.
+
 - `connect_nodes` from a source outside the destination's network
   (houdini-laws-etg.z7i), which Houdini refuses, answers `operation_failed`
   in Houdini's words, naming both paths, where it answered with an

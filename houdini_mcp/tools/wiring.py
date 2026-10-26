@@ -165,7 +165,10 @@ def disconnect_node_input(
 
         existing = wire_at(connections, input_index)
 
-        node.setInput(input_index, None)
+        with refused_by_houdini(
+            f"disconnect {node_path}[{input_index}]", node_path=node_path, input_index=input_index
+        ):
+            node.setInput(input_index, None)
 
         # ``disconnected`` is the wire that was cut, as every tool reports a wire, or
         # None when the input was already unwired.
@@ -248,7 +251,10 @@ def set_node_flags(
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
             read, write = methods[flag]
-            write(value)
+            with refused_by_houdini(
+                f"set {flag}={value} on {node_path}", node_path=node_path, flag=flag
+            ):
+                write(value)
             # Each flag is read back after its write, not taken as asked for: a SOP
             # network keeps its display and render flags on one node, so turning
             # either off writes nothing. [LAW:no-silent-failure]
@@ -331,14 +337,19 @@ def reorder_inputs(
         # wire, plus the input it came from.
         rewired = sorted(connections, key=lambda conn: new_position[conn.input_index])
         reconnection_info: list[dict[str, Any]] = []
-        for conn in rewired:
-            moved = InputConnection(new_position[conn.input_index], conn.source, conn.output_index)
-            node.setInput(moved.input_index, moved.source, moved.output_index)
-            reconnection_info.append(
-                {**moved.as_record(), "previous_input_index": conn.input_index}
-            )
-        for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
-            node.setInput(idx, None)
+        with refused_by_houdini(
+            f"reorder the inputs of {node_path}", node_path=node_path, new_order=new_order
+        ):
+            for conn in rewired:
+                moved = InputConnection(
+                    new_position[conn.input_index], conn.source, conn.output_index
+                )
+                node.setInput(moved.input_index, moved.source, moved.output_index)
+                reconnection_info.append(
+                    {**moved.as_record(), "previous_input_index": conn.input_index}
+                )
+            for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
+                node.setInput(idx, None)
 
         logger.info(f"Reordered inputs on {node_path}: {new_order}, {len(connections)} wires")
 

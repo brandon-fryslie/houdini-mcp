@@ -11,10 +11,17 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from houdini_mcp_read import Parm, ParmNotFound, evaluated_json, resolve
+from houdini_mcp_read import (
+    Parm,
+    ParmNotFound,
+    evaluated_json,
+    raised_inside_houdini,
+    reason,
+    resolve,
+)
 
 from .failure import Undone, items_failed
-from .reads import Unread, read, reraise_transport_failure
+from .reads import Unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.parms")
 
@@ -103,8 +110,9 @@ def write_all(node: Any, values: Mapping[str, Any]) -> Writes:
     [LAW:no-silent-failure] A parameter that is missing, refuses the value, or
     raises inside Houdini lands in ``failed`` with its reason and its ``kind``:
     a name the node lacks or a value of the wrong shape is ``invalid_input``, a
-    set Houdini itself refused is ``operation_failed``. The others are still
-    written. Connection loss is not a parameter failure and propagates.
+    set Houdini itself refused is ``operation_failed``, in Houdini's words. The
+    others are still written. Connection loss and a bug here are no parameter's
+    failure and propagate.
     """
     updated: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -115,8 +123,11 @@ def write_all(node: Any, values: Mapping[str, Any]) -> Writes:
             failed.append({"name": name, "kind": "invalid_input", "reason": str(e)})
             continue
         except Exception as e:
-            reraise_transport_failure(e)
-            failed.append({"name": name, "kind": "operation_failed", "reason": str(e)})
+            # [LAW:single-enforcer] a lost link is the connection module's failure and
+            # an error raised here is this process's bug; neither is a parameter's
+            if not raised_inside_houdini(e):
+                raise
+            failed.append({"name": name, "kind": "operation_failed", "reason": reason(e)})
             continue
         updated.append({"name": name, "value": value})
     logger.info(

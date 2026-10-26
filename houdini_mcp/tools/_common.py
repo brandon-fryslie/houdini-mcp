@@ -444,24 +444,30 @@ NodeName = Annotated[str, Field(min_length=1)]
 a node Houdini is to name is given None, its one spelling."""
 
 
+def houdini_refusal(request: str, e: BaseException, **context: Any) -> OperationFailed:
+    """``operation_failed`` reading ``Houdini did not <request>: <Houdini's own words>``,
+    carrying ``context``, for ``e`` that Houdini raised. ``request`` is what the tool
+    asked of Houdini, as a verb phrase ("frame SceneViewer").
+
+    [LAW:single-enforcer] The one shape of a call Houdini refused.
+    """
+    return OperationFailed(f"Houdini did not {request}: {reason(e)}", **context)
+
+
 @contextmanager
 def refused_by_houdini(request: str, **context: Any) -> Iterator[None]:
-    """A scene write Houdini refuses, inside the block, becomes ``operation_failed``
-    reading ``Houdini did not <request>: <Houdini's own words>``, carrying ``context``.
-    ``request`` is what the tool asked of Houdini, as a verb phrase ("frame
-    SceneViewer").
+    """A call Houdini refuses, inside the block, becomes its :func:`houdini_refusal`.
 
-    [LAW:single-enforcer] The one shape of a write Houdini refused, for node
-    creation, connect_nodes, and the pane capture's navigation and framing. A link
-    that fails inside the block is classified as the link's failure, keeping
-    ``context`` and noting what was asked, never whether it landed: a write cut off
-    mid-call may have.
+    Every scene write a tool makes runs inside one, and so do the reads a tool cannot
+    answer without. A link that fails inside the block is classified as the link's
+    failure, keeping ``context`` and noting what was asked, never whether it landed:
+    a write cut off mid-call may have.
     """
     try:
         yield
     except Exception as e:
         if raised_inside_houdini(e):
-            raise OperationFailed(f"Houdini did not {request}: {reason(e)}", **context) from e
+            raise houdini_refusal(request, e, **context) from e
         if transport_failure(e) is not None:
             raise OperationFailed(
                 f"The link failed while asking Houdini to {request}: {reason(e)}", **context
