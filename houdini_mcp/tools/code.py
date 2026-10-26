@@ -19,9 +19,9 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
                        heavy-geometry calls are blocked unless the caller opts
                        in *and* the server is configured to permit bypass.
   Both are guard rails against accidents, not a sandbox (``code_policy``).
-* Every gate reads the parsed program, the same AST ``exec`` compiles, so text
-  in comments and strings is not code and a program that does not parse is
-  refused before any rail.
+* Every gate reads the parsed program, the tree the program ``exec`` runs was
+  compiled from, so text in comments and strings is not code and a program that
+  does not compile is refused before any rail.
 * Each bypass flag unlocks exactly its own capability: ``allow_dangerous``
   the dangerous patterns, ``allow_heavy_geometry`` the heavy-geometry
   patterns. Both require server configuration (``HOUDINI_MCP_ALLOW_BYPASS``).
@@ -46,6 +46,7 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import CodeType
 from typing import Any, Literal, TypedDict
 
 from ..connection import houdini, raised_inside_houdini
@@ -65,7 +66,8 @@ from .code_policy import (
     _detect_heavy_geometry_code,
     _detect_import_hou,
     _detect_non_inspection_code,
-    parse_code,
+    compile_program,
+    parse_program,
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
@@ -205,9 +207,11 @@ class ExecutionGrant:
 class DetectedPatterns:
     """Everything the static scan found in the code, whatever the grant says about it.
 
-    The program is parsed once, here; every gate reads the same AST ``exec``
-    compiles. A program that does not parse carries its ``syntax_error`` and
-    nothing else, because nothing else could be read [LAW:parse-dont-validate].
+    The program is parsed and compiled once, here; every gate reads the tree its
+    code object was compiled from, and that code object is what ``exec`` runs. A
+    program that does not compile carries its ``SyntaxError`` as ``program``, and
+    one that does not parse carries nothing else, because nothing else could be
+    read [LAW:parse-dont-validate].
     """
 
     code_sha256: str
@@ -215,7 +219,7 @@ class DetectedPatterns:
     dangerous: list[str]
     heavy_geometry: list[str]
     import_hou: bool
-    syntax_error: SyntaxError | None
+    program: CodeType | SyntaxError
 
     @classmethod
     def scan(cls, code: str) -> "DetectedPatterns":
@@ -223,7 +227,7 @@ class DetectedPatterns:
         # the audit, the worker ledger and every refusal name it from this field.
         code_sha256 = hashlib.sha256(code.encode("utf-8", "replace")).hexdigest()
         try:
-            tree = parse_code(code)
+            tree = parse_program(code)
         except SyntaxError as exc:
             return cls(
                 code_sha256=code_sha256,
@@ -231,15 +235,20 @@ class DetectedPatterns:
                 dangerous=[],
                 heavy_geometry=[],
                 import_hou=False,
-                syntax_error=exc,
+                program=exc,
             )
+        program: CodeType | SyntaxError
+        try:
+            program = compile_program(tree)
+        except SyntaxError as exc:
+            program = exc
         return cls(
             code_sha256=code_sha256,
             non_inspection=_detect_non_inspection_code(tree),
             dangerous=_detect_dangerous_code(tree),
             heavy_geometry=_detect_heavy_geometry_code(tree),
             import_hou=_detect_import_hou(tree),
-            syntax_error=None,
+            program=program,
         )
 
 
@@ -359,13 +368,15 @@ class _Ended:
     lost: LinkLost | None
 
 
-def _run_code_thread(code: str, hou: Any, stdout_capture: Capture, stderr_capture: Capture) -> None:
-    """Execute user code, capturing stdout/stderr."""
+def _run_code_thread(
+    program: CodeType, hou: Any, stdout_capture: Capture, stderr_capture: Capture
+) -> None:
+    """Execute the gate's compiled program, capturing stdout/stderr."""
     exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
     # [LAW:effects-at-boundaries] Only this thread's writes are captured;
     # other threads keep writing to the streams they always did.
     with captured(stdout_capture, stderr_capture):
-        exec(code, exec_globals)
+        exec(program, exec_globals)
 
 
 @dataclass(frozen=True)
@@ -520,7 +531,7 @@ def execute_code(
       evaluators, and string expansion holding a backtick), network egress (socket, urllib,
       requests, httpx, http, ftplib, smtplib, ...) and the debugger. Judged on
       the parsed program, so text in comments and strings is not code.
-    - Code that does not parse is refused before any rail runs.
+    - Code that does not compile is refused before any rail runs.
     - Heavy geometry guard: Blocks direct node.geometry()/geo.points()/geo.prims() access by default
     - Config+request bypass: allow_dangerous unlocks dangerous patterns and
       allow_heavy_geometry unlocks heavy geometry, each only when the server
@@ -606,19 +617,22 @@ def execute_code(
     detected = DetectedPatterns.scan(code)
 
     # --- Syntax gate: a program the gates cannot read is a program that does not run
-    if detected.syntax_error is not None:
-        # [LAW:no-silent-failure] the same grammar exec would reject; say so here, before any rail.
-        exc = detected.syntax_error
+    if isinstance(detected.program, SyntaxError):
+        # [LAW:no-silent-failure] the compile exec would have done; say so here, before any rail.
+        exc = detected.program
         location = f" (line {exc.lineno})" if exc.lineno is not None else ""
         raise _blocked(
             code=code,
             grant=grant,
             detected=detected,
             reason="syntax_error",
-            message=f"Code does not parse: {exc.msg}{location}",
-            hint="Fix the syntax error; the gates judge the parsed program and refuse one they cannot read.",
+            message=f"Code does not compile: {exc.msg}{location}",
+            hint="Fix the error the compiler reports; a program that does not compile cannot run.",
             traceback="".join(traceback.format_exception_only(exc)),
         )
+    # [LAW:one-source-of-truth] What runs is the code object the gate compiled;
+    # the worker never compiles the source again.
+    code_object = detected.program
 
     # --- Empty code ----------------------------------------------------------
     if not code or not code.strip():
@@ -825,7 +839,7 @@ def execute_code(
                 started = time.monotonic()
                 program_starts.set()
                 try:
-                    _run_code_thread(code, hou, stdout_capture, stderr_capture)
+                    _run_code_thread(code_object, hou, stdout_capture, stderr_capture)
                 # Whatever the program raises - SystemExit and KeyboardInterrupt too -
                 # is how it ended, not the worker's own failure: the caller reports it.
                 except BaseException as error:

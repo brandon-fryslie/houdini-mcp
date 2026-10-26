@@ -16,37 +16,37 @@ class TestDetectDangerousCode:
 
     def test_detect_hou_exit(self):
         """Test detection of hou.exit() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = "hou.exit()"
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) == 1
         assert "hou.exit()" in result[0]
 
     def test_detect_os_remove(self):
         """Test detection of os.remove() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = "os.remove('/path/to/file')"
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 1
         assert any("file deletion" in r.lower() or "os.remove" in r for r in result)
 
     def test_detect_subprocess(self):
         """Test detection of subprocess calls."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = "subprocess.run(['ls', '-la'])"
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 1
         assert any("subprocess" in r.lower() or "shell" in r.lower() for r in result)
 
     def test_detect_hipfile_clear(self):
         """Test detection of hou.hipFile.clear() calls."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = "hou.hipFile.clear()"
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 1
         assert any("clear" in r.lower() or "wipe" in r.lower() for r in result)
 
@@ -68,9 +68,9 @@ class TestDetectDangerousCode:
     )
     def test_import_fbx_is_judged_by_merge_into_scene(self, code, refused):
         """importFBX replaces the open scene only with merge_into_scene=False; one the gate cannot read is refused."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        detected = _detect_dangerous_code(parse_code(code))
+        detected = _detect_dangerous_code(parse_program(code))
         assert any("hou.hipFile.importFBX" in d for d in detected) is refused
 
     @pytest.mark.parametrize(
@@ -87,17 +87,17 @@ class TestDetectDangerousCode:
     )
     def test_merge_is_judged_by_overwrite_on_conflict(self, code, refused):
         """merge replaces the open scene's clashing nodes only with overwrite_on_conflict=True."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        detected = _detect_dangerous_code(parse_code(code))
+        detected = _detect_dangerous_code(parse_program(code))
         assert any("hou.hipFile.merge" in d for d in detected) is refused
 
     def test_literal_of_another_type_is_named_as_one(self):
         """A literal the gate cannot judge is named as the literal it is, not as a non-literal."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         detected = _detect_dangerous_code(
-            parse_code("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)")
+            parse_program("hou.hipFile.importFBX('/x.fbx', merge_into_scene=0)")
         )
         assert detected == [
             "hou.hipFile.importFBX() with merge_into_scene 0, not a bool"
@@ -106,10 +106,10 @@ class TestDetectDangerousCode:
 
     def test_detect_open_write_mode(self):
         """Test detection of open() with write mode."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = "open('/path/to/file', 'w')"
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 1
         assert any("write" in r.lower() or "file" in r.lower() for r in result)
 
@@ -125,13 +125,13 @@ class TestDetectDangerousCode:
     )
     def test_open_rebound_is_judged_as_the_builtin(self, code):
         """A program's binding of open cannot be told from the builtin, so its writing call is refused."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert "open() with mode 'w' - file writing" in _detect_dangerous_code(parse_code(code))
+        assert "open() with mode 'w' - file writing" in _detect_dangerous_code(parse_program(code))
 
     def test_safe_code_no_detection(self):
         """Test that safe code returns empty list."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = """
 node = hou.node('/obj')
@@ -139,19 +139,19 @@ geo = node.createNode('geo', 'my_geo')
 sphere = geo.createNode('sphere')
 print(sphere.path())
 """
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert result == []
 
     def test_multiple_dangerous_patterns(self):
         """Test detection of multiple dangerous patterns."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = """
 hou.exit()
 os.remove('/tmp/file')
 subprocess.call(['rm', '-rf', '/'])
 """
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 3
 
 
@@ -159,16 +159,16 @@ class TestDetectHeavyGeometryCode:
     """Tests for the _detect_heavy_geometry_code helper."""
 
     def test_detect_node_geometry(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_program
 
         result = _detect_heavy_geometry_code(
-            parse_code("geo = hou.node('/obj/geo1/out').geometry()")
+            parse_program("geo = hou.node('/obj/geo1/out').geometry()")
         )
         assert len(result) == 1
         assert "node.geometry" in result[0]
 
     def test_detect_geometry_iteration(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_program
 
         code = """
 geo = node.geometry()
@@ -177,13 +177,15 @@ for prim in geo.prims():
 for point in geo.points():
     pass
 """
-        result = _detect_heavy_geometry_code(parse_code(code))
+        result = _detect_heavy_geometry_code(parse_program(code))
         assert len(result) >= 3
 
     def test_safe_parameter_code_no_detection(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_program
 
-        result = _detect_heavy_geometry_code(parse_code("hou.node('/obj/geo1').parm('tx').set(1)"))
+        result = _detect_heavy_geometry_code(
+            parse_program("hou.node('/obj/geo1').parm('tx').set(1)")
+        )
         assert result == []
 
 

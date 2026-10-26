@@ -340,7 +340,7 @@ def render_viewport(
 
 `execute_code` (`houdini_mcp/tools/code.py`) refuses a program before it
 connects: it raises `_blocked(...)`, which builds the `InvalidInput`, for a program
-that does not parse, an `import hou`, code outside the inspection allowlist under `read-only`, or a rail the
+that does not compile, an `import hou`, code outside the inspection allowlist under `read-only`, or a rail the
 caller did not unlock.
 Once the program runs, it raises `OperationFailed` when the program raised,
 `ProgramStillRunning` when the program outlived its timeout, and, as it came, the
