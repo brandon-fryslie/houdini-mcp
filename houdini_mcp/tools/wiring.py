@@ -105,8 +105,9 @@ def connect_nodes(
             src_path=src_path,
             dst_path=dst_path,
             dst_input_index=dst_input_index,
+            src_output_index=src_output_index,
         ):
-            refused = plugin_module(link, "houdini_mcp_wiring").set_input(
+            refused: str | None = plugin_module(link, "houdini_mcp_wiring").set_input(
                 hou, dst_node, dst_input_index, src.item, src_output_index
             )
         if refused is not None:
@@ -300,7 +301,7 @@ def set_node_flags(
 
 @tool(UNDOABLE)
 def reorder_inputs(
-    node_path: str, new_order: list[int], host: str = "localhost", port: int = 18811
+    node_path: str, new_order: list[Index], host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
     """
     Reorder inputs on a node (useful for merge nodes).

@@ -393,7 +393,7 @@ class TestErrorHandling:
         assert (refused["kind"], refused["retry"]) == ("invalid_input", "fix_input"), refused
         assert refused["message"] == (
             f"Houdini refused input {dst_input_index} of {xform} or output "
-            f"{src_output_index} of {box}: Invalid input."
+            f"{src_output_index} of {box}: hou.InvalidInput: Invalid input."
         )
         assert get_node_info(xform, **at)["input_connections"] == []
 

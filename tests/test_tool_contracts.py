@@ -556,6 +556,9 @@ class TestServedSchemas:
         for (name, index), base in calls.items():
             assert await accepts(client, served, name, {**base, index: 0}), (name, index)
             assert not await accepts(client, served, name, {**base, index: -1}), (name, index)
+        merge = {"node_path": "/obj/geo1/merge1"}
+        assert await accepts(client, served, "reorder_inputs", {**merge, "new_order": [1, 0]})
+        assert not await accepts(client, served, "reorder_inputs", {**merge, "new_order": [-1, 0]})
 
     async def test_a_listing_limit_lists_at_least_one(
         self, client: Client[Any], served: dict[str, Tool]
