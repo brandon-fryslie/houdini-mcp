@@ -137,7 +137,7 @@ class ExecutionGrant:
     capability off this value instead of recombining the inputs.
     """
 
-    policy: str
+    policy: Policy
     bypass_config_enabled: bool
     dangerous_requested: bool
     heavy_geometry_requested: bool
@@ -162,15 +162,12 @@ class ExecutionGrant:
     def resolve(
         cls,
         *,
-        policy: str,
+        policy: Policy,
         allow_dangerous: bool,
         allow_heavy_geometry: bool,
         bypass_config_enabled: bool,
     ) -> "ExecutionGrant":
-        """The public decision: a bypass needs policy "normal", the request flag AND the config.
-
-        Any other policy - read-only, or a value that does not exist - grants nothing.
-        """
+        """The public decision: a bypass needs policy "normal", the request flag AND the config."""
         bypassable = policy == "normal"
 
         # In precedence order: a refusal's reason is its first unmet requirement.
@@ -328,21 +325,6 @@ def _bypass_refusal(
             )
         case "request":
             return (gate.pattern_reason, gate.found)
-
-
-@dataclass(frozen=True)
-class _Diff:
-    """What a program changed under ``_DIFF_ROOT``, capped."""
-
-    changes: CappedDiff
-
-
-@dataclass(frozen=True)
-class _DiffFailed:
-    """Why a program that ran has no diff: the link's loss, already dropped, when
-    that is what failed."""
-
-    error: Exception
 
 
 class _ReportedOutput(TypedDict):
@@ -751,9 +733,9 @@ def execute_code(
                     )
                 case Killed(phase):
                     failure = ProgramTimedOut(
-                        # [LAW:one-source-of-truth] The start deadline named is the
-                        # one the process and the call's backstop were set from.
-                        _killed(phase, timeout, request.start_timeout),
+                        # [LAW:one-source-of-truth] The deadline named is the one
+                        # the process and the call's backstop were set from.
+                        _killed(phase, timeout, request),
                         policy=grant.policy,
                         **output,
                         timeout=timeout,
@@ -775,7 +757,7 @@ class ProgramDidNotRun(OperationFailed):
     start deadline passed. Nothing was undone, because nothing ran."""
 
 
-def _killed(phase: Phase, timeout: int, start_timeout: float) -> str:
+def _killed(phase: Phase, timeout: int, request: Request) -> str:
     """How the timeout response reads for the phase whose clock the call killed the process on."""
     match phase:
         case "running":
@@ -783,12 +765,13 @@ def _killed(phase: Phase, timeout: int, start_timeout: float) -> str:
         case "starting":
             return (
                 "Execution timeout: the program's process had not reported by its start "
-                f"deadline ({start_timeout}s) and a grace, so it was killed"
+                f"deadline ({request.start_timeout}s) and a grace, so it was killed"
             )
         case "closing":
             return (
                 "Execution timeout: the program ended, but its process had not reported "
-                "how its undo step closed within the sync timeout and a grace, so it was killed"
+                f"how its undo step closed within the sync timeout ({request.sync_timeout}s) "
+                "and a grace, so it was killed"
             )
         case _:
             assert_never(phase)

@@ -143,6 +143,7 @@ class TestTheCallsClocks:
 
         assert (result["kind"], result["cut_off"]) == ("timeout", "program"), result
         assert "had not reported how its undo step closed" in result["message"]
+        assert "within the sync timeout (0.5s)" in result["message"]
         assert result["message"].endswith("\nIts changes to the scene were undone.")
         assert mock_connection.node("/obj/half") is None
 

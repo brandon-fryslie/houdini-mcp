@@ -1364,19 +1364,21 @@ class TestSyntaxGate:
         self, mock_connection, caplog, code, compiler_says
     ):
         """The parser accepts these; the compiler does not. The gate's verdict is the
-        compiler's, so they are refused here rather than failing in the worker."""
+        compiler's, so they are refused here, before any process is started."""
         from houdini_mcp.tools import code as code_mod
 
-        def _tripwire(*_a, **_k):
-            raise AssertionError("exec must not run for code that does not compile")
+        # Recorded, not raised: the tool boundary would turn a raise into a failure
+        # response, and the test would fail on its fields, not on the process.
+        started: list[object] = []
 
         with (
-            patch.object(code_mod, "exec", _tripwire, create=True),
+            patch.object(code_mod, "run_program", lambda *a, **_k: started.append(a)),
             caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
         ):
             result = code_mod.execute_code(
                 code, host="localhost", port=18811, bypass_config_enabled=False
             )
+        assert started == [], "no process may start for code that does not compile"
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
         assert result["message"] == f"Code does not compile: {compiler_says} (line 1)"
@@ -1397,13 +1399,16 @@ class TestSyntaxGate:
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
 
-    def test_the_program_is_compiled_once(self, mock_connection):
-        """The worker runs the code object the gate compiled and never compiles the
-        source again, so the compiler's SyntaxWarning is given once."""
+    def test_the_program_is_compiled_once(self, mock_connection, monkeypatch):
+        """The program's process runs the code object the gate compiled and never
+        compiles the source again, so the compiler's SyntaxWarning is given once."""
         import warnings
 
         from houdini_mcp.tools import execute_code
 
+        # The program's process inherits the environment; a filter there would
+        # hide the warning a second compile writes to its stderr.
+        monkeypatch.delenv("PYTHONWARNINGS", raising=False)
         with warnings.catch_warnings(record=True) as given:
             warnings.simplefilter("always", SyntaxWarning)
             result = execute_code(
@@ -1412,6 +1417,8 @@ class TestSyntaxGate:
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
         assert [w.category for w in given] == [SyntaxWarning]
+        # The program's process writes a compile's warnings to its own stderr.
+        assert "SyntaxWarning" not in result["stderr"]
 
     def test_code_that_parses_but_does_not_compile_is_audited_in_full(self, mock_connection):
         """The gates read the tree the parser gave, so the audit names what the program

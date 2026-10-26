@@ -839,8 +839,8 @@ class TestATeardownDropsTheLinkThatFailed:
         assert told.message.count("backed up at /tmp/backup.hip") == 1
 
     def test_a_tool_failure_raised_from_a_judged_loss_adds_its_payload(self):
-        """execute_code's worker judges its program's failure on the link; the call
-        then raises its own failure, with what the program left, from that loss."""
+        """A body that judged a failure the link's raises its own failure, with its
+        payload, from that loss: the loss is the arm, and it carries the payload."""
         from houdini_mcp.tools._common import held_link
         from houdini_mcp.tools.failure import OperationFailed, failure_for, link_lost
 

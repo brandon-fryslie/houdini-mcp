@@ -36,7 +36,7 @@ import threading
 import traceback
 from dataclasses import dataclass
 from types import CodeType, FrameType
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, assert_never
 
 from houdini_mcp_read import raised_inside_houdini, reason
 
@@ -166,6 +166,8 @@ def encode_fact(fact: Fact) -> bytes:
             }
         case DidNotRun(why):
             fields = {"fact": "did_not_run", "why": why}
+        case _:
+            assert_never(fact)
     return json.dumps(fields).encode("utf-8") + b"\n"
 
 
