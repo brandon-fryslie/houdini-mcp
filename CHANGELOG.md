@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_node_types` lists the types Houdini offers when it is called
+  (houdini-laws-etg.tva). It answered from a cache that only `load_scene` and
+  `new_scene` dropped, so an asset installed or removed any other way, by
+  `execute_code`, a file merged with embedded assets, or an artist in the UI,
+  was missing from the listing, or still in it, until the next scene load. The
+  listing is now read inside Houdini on every call, filtered and cut to the page
+  there, so one request carries only the page. Types are listed in category,
+  then name, order, so a cursor names the same place on every call. Needs this
+  release's plugin.
+
 - `execute_code`'s documentation states one scope for both policies
   (houdini-laws-etg.aep): `read-only` and `normal` are guard rails against
   accidents in the code an agent ordinarily writes, not a sandbox. The gate
@@ -260,6 +270,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: the node type cache is gone, and with it the
+  `manage_cache` tool and `list_node_types`' `_cache_info` field
+  (houdini-laws-etg.tva). `list_node_types` refuses, `invalid_input` naming
+  the categories Houdini has, a `category` Houdini does not have, where a
+  misspelt category answered success with no types.
 
 - **BREAKING (wire)**: `execute_code`'s read-only refusal is named for what it
   refuses, code outside the inspection allowlist (houdini-laws-etg.aep):

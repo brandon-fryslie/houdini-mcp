@@ -9,11 +9,8 @@ This module provides tools for managing Houdini scenes:
 """
 
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 
-from ..connection import Link
 from ..settings import Summarizer
 from ._common import (
     CHECKPOINTED,
@@ -26,7 +23,6 @@ from ._common import (
     tool,
     using,
 )
-from .cache import invalidate_all_caches
 from .parms import evaluated
 from .plugin import plugin_module
 from .snapshot import scene_snapshot
@@ -112,7 +108,7 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
     Args:
         file_path: Path to the .hip file to load
     """
-    with _replacing_scene(host, port) as link:
+    with using(host, port) as link:
         warning: str | None = plugin_module(link, "houdini_mcp_scene").load(link.hou, file_path)
     logger.info("Loaded %s; Houdini's load warnings: %s", file_path, warning)
 
@@ -131,27 +127,12 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     been saved cannot be backed up, so one holding any node is refused: save it
     with save_scene(file_path) first.
     """
-    with _replacing_scene(host, port) as link:
+    with using(host, port) as link:
         # [LAW:single-enforcer] As in houdini_mcp_scene.load: the backup, not the prompt, keeps
         # the unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
         link.hou.hipFile.clear(suppress_save_prompt=True)
 
     return {"status": "success", "message": "New scene created"}
-
-
-@contextmanager
-def _replacing_scene(host: str, port: int) -> Iterator[Link]:
-    """The link for a call that replaces Houdini's scene, dropping the caches
-    that described the last one however the call leaves.
-
-    [LAW:dataflow-not-control-flow] A load or clear that raised may have replaced
-    the scene before it did, so every attempt drops them.
-    """
-    try:
-        with using(host, port) as link:
-            yield link
-    finally:
-        invalidate_all_caches()
 
 
 @tool(READ)

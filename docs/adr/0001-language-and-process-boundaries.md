@@ -210,8 +210,7 @@ not import from or know about higher layers.
 ### Allowed dependency direction
 
 - `server.py` (L3) → `tools/*` (L2) → `connection.py` (L1) → Houdini/`hou` (L0).
-- `tools/*` may use `tools/_common.py` and `tools/cache.py` but **must not**
-  import `server.py`.
+- `tools/*` may use `tools/_common.py` but **must not** import `server.py`.
 - `connection.py` **must not** import `tools/*` or `server.py`.
 - No layer reimplements a layer below it. In particular, **only L0 defines
   `hou`/node/geometry semantics**; L1–L3 pass through, shape, and size responses.

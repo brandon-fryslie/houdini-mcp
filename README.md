@@ -32,7 +32,6 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 - **Connection management** - Auto-reconnect with exponential backoff + jitter
 - **Error handling** - Consistent error responses with recovery hints
 - **Response optimization** - Result text in a dense shorthand of its JSON, text over 16KB delivered whole as a file, AI summarization
-- **In-memory caching** - Node type cache with TTL for performance
 
 ## Prerequisites
 
@@ -355,11 +354,10 @@ the pointer; `summarize=False` sends nothing to the summarizer. The summarizer r
 first 8KB of the file's text and is told that is part of the result, and
 `summarized_bytes` says how many bytes from the file's start the summary covers.
 
-### Infrastructure (`_common.py`, `cache.py`)
+### Infrastructure (`_common.py`)
 - **Error handling**: `@tool(policy)` decorator, the tool named by its function; every failure is one arm of `ToolFailure` (`tools/failure.py`), discriminated on `kind`, each arm stating its `retry`
 - **Connection retry**: Exponential backoff with jitter
 - **Response size**: one bound for every tool, in `houdini_mcp/delivery.py`; a larger result is written whole to a file
-- **Caching**: Node type cache with TTL
 
 ## Usage Examples
 
@@ -431,7 +429,6 @@ houdini_mcp/
 ├── connection.py          # One owner of the RPyC link, with retry/backoff
 └── tools/                 # The tools: each function's signature and docstring is its MCP contract
     ├── _common.py         # Shared utilities, error handling
-    ├── cache.py           # Node type caching with TTL, manage_cache
     ├── code.py            # Python execution
     ├── errors.py          # Error node detection
     ├── geometry.py        # Geometry introspection

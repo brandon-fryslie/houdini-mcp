@@ -15,7 +15,6 @@ from tests.conftest import (
     LoadWarning,
     MockHouNode,
     MockNodeLacking,
-    OperationFailed,
     link_failure,
     raised_inside_houdini,
 )
@@ -1081,35 +1080,12 @@ class TestSceneOperations:
             "Loaded /path/to/scene.hip; Houdini's load warnings: None"
         ]
 
-    @pytest.mark.parametrize(
-        ("replace", "houdini_call"),
-        [
-            (lambda tools: tools.load_scene("/scenes/truncated.hip"), "load"),
-            (lambda tools: tools.new_scene(), "clear"),
-        ],
-        ids=["load_scene", "new_scene"],
-    )
-    def test_a_scene_replacement_that_failed_still_drops_the_caches(
-        self, mock_connection, replace, houdini_call
-    ):
-        """Houdini may have replaced the scene before the call raised."""
-        from houdini_mcp import tools
-
-        getattr(mock_connection.hipFile, houdini_call).side_effect = OperationFailed(
-            "The attempted operation failed."
-        )
-        assert tools.list_node_types()["_cache_info"]["hit"] is False
-        assert tools.list_node_types()["_cache_info"]["hit"] is True
-
-        assert replace(tools)["status"] == "error"
-        assert tools.list_node_types()["_cache_info"]["hit"] is False
-
     def test_a_load_houdini_warned_about_is_a_load_carrying_its_warning(
         self, mock_connection, caplog
     ):
         """hipFile.load raises LoadWarning once the file has loaded: the scene is the
-        file's, so the caches that described the last one are dropped."""
-        from houdini_mcp.tools import list_node_types, load_scene
+        file's."""
+        from houdini_mcp.tools import load_scene
 
         warned = (
             "Warnings were generated during load.\n"
@@ -1117,8 +1093,6 @@ class TestSceneOperations:
             'Warning:     "/obj/g/s" using incomplete asset definition (full definition not found).'
         )
         mock_connection.hipFile.load.side_effect = LoadWarning(warned)
-        assert list_node_types()["_cache_info"]["hit"] is False
-        assert list_node_types()["_cache_info"]["hit"] is True
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.scene"):
             result = load_scene("/scenes/next.hip")
@@ -1129,7 +1103,6 @@ class TestSceneOperations:
             "file_path": "/scenes/next.hip",
             "warning": warned,
         }
-        assert list_node_types()["_cache_info"]["hit"] is False
         assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.scene"] == [
             f"Loaded /scenes/next.hip; Houdini's load warnings: {warned}"
         ]
@@ -1306,14 +1279,60 @@ class TestListNodeTypes:
         for node_type in result["node_types"]:
             assert node_type["category"] == "Object"
 
-    def test_list_node_types_nonexistent_category(self, mock_connection):
-        """Test listing with non-existent category returns empty."""
+    def test_a_category_houdini_does_not_have_is_invalid_input(self, mock_connection):
+        """A misspelt category is refused, not answered as one with no types."""
         from houdini_mcp.tools import list_node_types
 
         result = list_node_types("NonExistentCategory", host="localhost", port=18811)
 
-        assert result["status"] == "success"
-        assert result["returned"] == 0
+        assert result["kind"] == "invalid_input"
+        assert "'NonExistentCategory' is not a node type category" in result["message"]
+        assert "Sop" in result["message"]
+        assert "node_types" not in result
+
+    def test_a_type_installed_between_calls_is_in_the_next_answer(
+        self, mock_connection, monkeypatch
+    ):
+        """An asset installed outside load_scene and new_scene - by a program, or an
+        artist in the UI - is listed with nothing invalidated."""
+        import dataclasses
+
+        from houdini_mcp.tools import list_node_types
+        from tests.conftest import NODE_TYPES
+
+        assert list_node_types("Sop", name_filter="mcp_listed")["returned"] == 0
+        box = NODE_TYPES["Sop"]["box"]
+        monkeypatch.setitem(
+            NODE_TYPES["Sop"],
+            "mcp_listed",
+            dataclasses.replace(box, type="mcp_listed", description="MCP listed"),
+        )
+
+        result = list_node_types("Sop", name_filter="mcp_listed")
+
+        assert result["node_types"] == [
+            {"category": "Sop", "name": "mcp_listed", "description": "MCP listed"}
+        ]
+
+    def test_a_lost_link_during_the_walk_is_connection_lost(self, mock_connection):
+        mock_connection.nodeTypeCategories = MagicMock(
+            side_effect=link_failure(EOFError("stream has been closed"))
+        )
+
+        from houdini_mcp.tools import list_node_types
+
+        assert list_node_types()["kind"] == "connection_lost"
+
+    def test_a_listing_logs_its_counts(self, mock_connection, caplog):
+        from houdini_mcp.tools import list_node_types
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
+            result = list_node_types("Sop", name_filter="o", limit=1)
+
+        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.nodes"] == [
+            f"node types category=Sop name_filter=o total={result['total']} returned=1 unread=0"
+        ]
+        assert result["total"] > 1
 
     def test_list_node_types_limit_default(self, mock_connection):
         """Test that default limit limits output to 100."""
