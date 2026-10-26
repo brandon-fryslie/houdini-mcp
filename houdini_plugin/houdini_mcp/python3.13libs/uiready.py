@@ -7,6 +7,9 @@ package puts this one there. A hython session starts its listener itself.
 import hou
 from houdini_mcp_plugin import start_hrpyc_server
 
-result = start_hrpyc_server()
+try:
+    result = start_hrpyc_server()
+except ValueError as e:  # a listener variable set to something it cannot mean
+    result = {"status": "error", "message": f"The MCP listener did not start: {e}"}
 if result["status"] == "error":
     hou.ui.displayMessage(result["message"], severity=hou.severityType.Error)

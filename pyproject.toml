@@ -98,8 +98,12 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-# The plugin's files that are not modules
-houdini_plugin = ["houdini_mcp.json", "houdini_mcp/toolbar/*.shelf", "houdini_mcp/python3.13libs/*.py"]
+# The whole plugin tree, whatever kinds of file it holds (tests/test_wheel.py)
+houdini_plugin = ["**/*"]
+
+[tool.setuptools.exclude-package-data]
+# Bytecode an interpreter left in the tree is that interpreter's, not the plugin's
+houdini_plugin = ["**/__pycache__/*", "**/*.pyc"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]

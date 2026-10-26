@@ -6,6 +6,7 @@ installs into a directory of its own.
 """
 
 import json
+import os
 import shlex
 import shutil
 import subprocess  # nosec B404 - registering with a client is running its own CLI
@@ -54,13 +55,20 @@ class ServerEntry:
         return {"command": self.argv[0], "args": list(self.argv[1:]), "env": dict(self.env)}
 
 
+# The keys of an ``mcpServers`` entry that say how a client starts or reaches a server,
+# stdio or http: an install replaces them, and keeps the rest (disabled, autoApprove, ...).
+_HOW_REACHED = frozenset({"command", "args", "env", "type", "url", "headers"})
+
+
 def this_server() -> ServerEntry:
     """This interpreter running this server over stdio.
 
     The interpreter's absolute path runs under a GUI client's bare PATH, and Houdini loads
     the plugin from this interpreter's distribution, so server and plugin are one release.
+    ``-P`` keeps the folder a client starts it in off ``sys.path``: a project's own
+    ``houdini_mcp`` or ``rpyc`` does not load in place of this distribution's.
     """
-    return ServerEntry((sys.executable, "-m", "houdini_mcp"), {"MCP_TRANSPORT": "stdio"})
+    return ServerEntry((sys.executable, "-P", "-m", "houdini_mcp"), {"MCP_TRANSPORT": "stdio"})
 
 
 @dataclass(frozen=True)
@@ -143,12 +151,30 @@ def _cli(machine: Machine, name: str) -> str | None:
 
 
 @dataclass(frozen=True)
+class Entry:
+    """This server's entry in a table of servers, as the client wrote it; empty when absent."""
+
+    fields: dict[str, object]
+    env: dict[str, str]
+
+
+def _entry(servers: object) -> Entry | None:
+    """[LAW:single-enforcer] The one reading of this server's entry in a table of servers;
+    None for a shape no client writes."""
+    entry = servers.get(SERVER_NAME, {}) if isinstance(servers, dict) else None
+    env = entry.get("env", {}) if isinstance(entry, dict) else None
+    if not (isinstance(env, dict) and all(isinstance(value, str) for value in env.values())):
+        return None
+    return Entry(entry, env)
+
+
+@dataclass(frozen=True)
 class Registered:
-    """A client's config, parsed: its table of servers, and what this server's entry sets."""
+    """A client's config, parsed: its table of servers, and this server's entry in it."""
 
     config: dict[str, object]
     servers: dict[str, object]
-    env: dict[str, str]
+    entry: Entry
 
 
 def registered(path: Path, load: Callable[[str], object], table: str) -> Registered | Failed:
@@ -162,18 +188,12 @@ def registered(path: Path, load: Callable[[str], object], table: str) -> Registe
     except (OSError, ValueError) as e:  # JSON's and TOML's decode errors are ValueErrors
         return Failed(f"{path} could not be read, and was left as it is: {e}")
     servers = config.get(table, {}) if isinstance(config, dict) else None
-    entry = servers.get(SERVER_NAME, {}) if isinstance(servers, dict) else None
-    env = entry.get("env", {}) if isinstance(entry, dict) else None
-    if not (
-        isinstance(config, dict)
-        and isinstance(servers, dict)
-        and isinstance(env, dict)
-        and all(isinstance(value, str) for value in env.values())
-    ):
+    entry = _entry(servers)
+    if not (isinstance(config, dict) and isinstance(servers, dict) and entry is not None):
         return Failed(
             f"{path} does not hold {table} as the client writes it, and was left as it is"
         )
-    return Registered(config, servers, env)
+    return Registered(config, servers, entry)
 
 
 def _claude_config(machine: Machine) -> Path:
@@ -195,13 +215,14 @@ def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     earlier = registered(path, json.loads, "mcpServers")
     if isinstance(earlier, Failed):
         return earlier
-    local = _local_envs(earlier.config, path)
-    if isinstance(local, Failed):
-        return local
+    projects = _projects(earlier.config, path)
+    if isinstance(projects, Failed):
+        return projects
+    local, gone = projects
     # A project's local-scope entry runs over the user's (`claude mcp add`'s default scope,
     # which a hand-made registration used), so what it set is carried here too: removing
     # it afterwards, as the report asks, loses nothing.
-    user = {"user scope": earlier.env} if SERVER_NAME in earlier.servers else {}
+    user = {"user scope": earlier.entry.env} if SERVER_NAME in earlier.servers else {}
     carried = _agreed(user | local, server.env)
     if isinstance(carried, Failed):
         return carried
@@ -228,28 +249,40 @@ def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
             f"{SERVER_NAME!r} set, but Claude Code runs theirs there instead: "
             f"{', '.join(local)}. In each, run: claude mcp remove --scope local {SERVER_NAME}"
         )
-    return Installed("its user config")
+    passed = f" (passed over the entries of projects that no longer exist: {', '.join(gone)})"
+    return Installed("its user config" + (passed if gone else ""))
 
 
-def _local_envs(config: dict[str, object], path: Path) -> dict[str, dict[str, str]] | Failed:
-    """The environment each project's own local-scope entry for this server sets, by project."""
+def _projects(
+    config: dict[str, object], path: Path
+) -> tuple[dict[str, dict[str, str]], list[str]] | Failed:
+    """The environment each project's own local-scope entry for this server sets, by project,
+    and the projects holding an entry whose folder is gone.
+
+    Claude Code keeps a project's settings after its folder is deleted (a removed worktree).
+    It cannot run a server there, and ``claude mcp remove --scope local`` cannot be run from
+    there, so such an entry neither runs over the user's nor carries into it.
+    """
     projects = config.get("projects", {})
     if not isinstance(projects, dict):
         return Failed(f"{path} does not hold projects as Claude Code writes it; left as it is")
     found: dict[str, dict[str, str]] = {}
+    gone: list[str] = []
     for project, settings in projects.items():
         servers = settings.get("mcpServers", {}) if isinstance(settings, dict) else None
         if isinstance(servers, dict) and SERVER_NAME not in servers:
             continue
-        entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
-        env = entry.get("env", {}) if isinstance(entry, dict) else None
-        if not (isinstance(env, dict) and all(isinstance(v, str) for v in env.values())):
+        entry = _entry(servers)
+        if entry is None:
             return Failed(
                 f"{path} does not hold {project}'s servers as Claude Code writes them; "
                 "left as it is"
             )
-        found[project] = env
-    return found
+        if Path(project).is_dir():
+            found[project] = entry.env
+        else:
+            gone.append(project)
+    return found, gone
 
 
 def _agreed(
@@ -279,43 +312,63 @@ def codex(machine: Machine, server: ServerEntry) -> Outcome:
     earlier = registered(_codex_config(machine), tomllib.loads, "mcp_servers")
     if isinstance(earlier, Failed):
         return earlier
-    server = server.keeping(earlier.env)
+    server = server.keeping(earlier.entry.env)
     env = [flag for name, value in server.env.items() for flag in ("--env", f"{name}={value}")]
     added = _run([cli, "mcp", "add", SERVER_NAME, *env, "--", *server.argv], machine)
     if isinstance(added, Failed):
         return added
     if added.returncode != 0:
         return Failed(f"codex mcp add: {_said(added)}")
-    return Installed("its config")
+    # `codex mcp add` writes the whole entry anew and takes no flag for the rest of it.
+    dropped = sorted(set(earlier.entry.fields) - _HOW_REACHED)
+    lost = f" (codex mcp add did not keep the earlier entry's {', '.join(dropped)})"
+    return Installed("its config" + (lost if dropped else ""))
 
 
 @dataclass(frozen=True)
 class JsonConfig:
     """A client that reads its servers from ``mcpServers`` in a JSON file in its own directory."""
 
-    app_dir: Callable[[Machine], Path]
+    app_dir: Callable[[Machine], Path | NotFound]
     file: str
 
     def __call__(self, machine: Machine, server: ServerEntry) -> Outcome:
         app = self.app_dir(machine)
+        if isinstance(app, NotFound):
+            return app
         if not app.is_dir():
             return NotFound(str(app))
         path = app / self.file
         earlier = registered(path, json.loads, "mcpServers")
         if isinstance(earlier, Failed):
             return earlier
-        earlier.servers[SERVER_NAME] = server.keeping(earlier.env).as_json()
+        kept = {k: v for k, v in earlier.entry.fields.items() if k not in _HOW_REACHED}
+        earlier.servers[SERVER_NAME] = kept | server.keeping(earlier.entry.env).as_json()
         earlier.config["mcpServers"] = earlier.servers
         try:
-            path.write_text(json.dumps(earlier.config, indent=2) + "\n")
+            _replace(path, json.dumps(earlier.config, indent=2) + "\n")
         except OSError as e:
             return Failed(str(e))
         return Installed(str(path))
 
 
-def _claude_desktop_dir(machine: Machine) -> Path:
+def _replace(path: Path, text: str) -> None:
+    """Put *text* in the file *path* names, whole, or leave that file as it was.
+
+    The client reads its config while this writes it, and an interrupted write would leave
+    half of it; a file renamed over another is the old one or the new one. A link (a config
+    kept in a dotfiles repository) stays a link: the file it names is the one replaced.
+    """
+    target = path.resolve()
+    staged = target.with_name(f".{target.name}.houdini-mcp")
+    staged.write_text(text)
+    os.replace(staged, target)
+
+
+def _claude_desktop_dir(machine: Machine) -> Path | NotFound:
     if machine.platform == "win32":
-        return Path(machine.environ["APPDATA"]) / "Claude"
+        appdata = machine.environ.get("APPDATA")
+        return Path(appdata) / "Claude" if appdata else NotFound("APPDATA, unset")
     if machine.platform == "darwin":
         return machine.home / "Library" / "Application Support" / "Claude"
     return machine.home / ".config" / "Claude"
@@ -355,13 +408,13 @@ def _described(outcome: Outcome) -> str:
 
 def report(results: list[tuple[str, Outcome]], server: ServerEntry) -> tuple[str, int]:
     """What the install did, for a person to read, and the exit status that says it."""
-    env = " ".join(f"{name}={value}" for name, value in server.env.items())
+    env = [f"{name}={value}" for name, value in server.env.items()]
     lines = [
         *(f"{name}: {_described(outcome)}" for name, outcome in results),
         "",
         "Restart Houdini: the plugin starts its listener once the UI is up.",
         "Restart each MCP client above to load the server.",
-        f"Any other MCP client runs it as: {env} {' '.join(server.argv)}",
+        f"Any other MCP client runs it as: {shlex.join([*env, *server.argv])}",
     ]
     failed = any(isinstance(outcome, Failed) for _, outcome in results)
     return "\n".join(lines), int(failed)

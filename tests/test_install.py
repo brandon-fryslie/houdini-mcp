@@ -23,7 +23,7 @@ from houdini_mcp.install import (
     report,
 )
 
-SERVER = ServerEntry(("/venv/bin/python", "-m", "houdini_mcp"), {"MCP_TRANSPORT": "stdio"})
+SERVER = ServerEntry(("/venv/bin/python", "-P", "-m", "houdini_mcp"), {"MCP_TRANSPORT": "stdio"})
 
 # A client's command line: records each call's argv, one JSON list per line, and
 # answers as the real one does for a name it holds (`known`) or does not.
@@ -61,6 +61,23 @@ def _calls(bin_dir: Path) -> list[list[str]]:
 
 def _machine(tmp_path: Path, platform: str = "darwin", **environ: str) -> Machine:
     return Machine({"PATH": str(tmp_path / "bin"), **environ}, tmp_path / "home", platform)
+
+
+def _claude_json(tmp_path: Path, config: dict[str, object]) -> Machine:
+    """A machine whose Claude Code config is *config*, its projects' folders made, a
+    ``/gone/`` project's left unmade."""
+    for project in config.get("projects", {}):  # type: ignore[union-attr]
+        if not project.startswith("/gone/"):
+            (tmp_path / project.lstrip("/")).mkdir(parents=True)
+    projects = {
+        (p if p.startswith("/gone/") else str(tmp_path / p.lstrip("/"))): s
+        for p, s in config.get("projects", {}).items()  # type: ignore[union-attr]
+    }
+    (tmp_path / "claude").mkdir()
+    (tmp_path / "claude" / ".claude.json").write_text(
+        json.dumps({**config, **({"projects": projects} if projects else {})})
+    )
+    return _machine(tmp_path, CLAUDE_CONFIG_DIR=str(tmp_path / "claude"))
 
 
 def test_houdini_is_pointed_at_the_plugin_this_distribution_ships(tmp_path: Path) -> None:
@@ -120,7 +137,7 @@ def test_claude_code_registers_the_server_in_its_user_scope(tmp_path: Path) -> N
 
     assert _calls(tmp_path / "bin")[-1] == [
         "mcp", "add", "--scope", "user", "houdini", "-e", "MCP_TRANSPORT=stdio",
-        "--", "/venv/bin/python", "-m", "houdini_mcp",
+        "--", "/venv/bin/python", "-P", "-m", "houdini_mcp",
     ]  # fmt: skip
     assert claude.with_name("known").exists()
 
@@ -150,7 +167,7 @@ def test_codex_registers_the_server(tmp_path: Path) -> None:
 
     assert _calls(tmp_path / "bin") == [
         ["mcp", "add", "houdini", "--env", "MCP_TRANSPORT=stdio",
-         "--", "/venv/bin/python", "-m", "houdini_mcp"],
+         "--", "/venv/bin/python", "-P", "-m", "houdini_mcp"],
     ]  # fmt: skip
 
 
@@ -176,7 +193,7 @@ def test_a_json_client_keeps_its_other_servers_and_settings(tmp_path: Path) -> N
             "other": {"url": "http://x"},
             "houdini": {
                 "command": "/venv/bin/python",
-                "args": ["-m", "houdini_mcp"],
+                "args": ["-P", "-m", "houdini_mcp"],
                 "env": {"MCP_TRANSPORT": "stdio"},
             },
         },
@@ -223,7 +240,7 @@ def test_the_report_says_what_each_step_did_and_fails_when_one_failed(tmp_path: 
         "B: not found (b on PATH)",
         "C: FAILED: broke",
     ]
-    assert "MCP_TRANSPORT=stdio /venv/bin/python -m houdini_mcp" in text
+    assert "MCP_TRANSPORT=stdio /venv/bin/python -P -m houdini_mcp" in text
     assert status == 1
     assert report([("A", Installed("here")), ("B", NotFound("x"))], SERVER)[1] == 0
 
@@ -257,7 +274,7 @@ def test_the_command_installs_this_interpreters_server(tmp_path: Path) -> None:
     )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "Claude Code: installed in its user config" in done.stdout
-    assert _calls(tmp_path / "bin")[-1][-3:] == [sys.executable, "-m", "houdini_mcp"]
+    assert _calls(tmp_path / "bin")[-1][-4:] == [sys.executable, "-P", "-m", "houdini_mcp"]
     assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
 
 
@@ -307,22 +324,17 @@ def test_a_project_that_registers_its_own_server_in_claude_code_fails_the_step(
     """Claude Code runs a project's local-scope entry over the user's (claude mcp add's
     default scope, which an earlier hand-made registration used)."""
     _cli(tmp_path / "bin", "claude")
-    machine = _machine(tmp_path, CLAUDE_CONFIG_DIR=str(tmp_path / "claude"))
-    (tmp_path / "claude").mkdir()
-    (tmp_path / "claude" / ".claude.json").write_text(
-        json.dumps(
-            {
-                "projects": {
-                    "/work/shot": {
-                        "mcpServers": {
-                            "houdini": {"command": "uv", "env": {"HOUDINI_RPC_TOKEN": "s3"}}
-                        }
-                    },
-                    "/work/other": {"mcpServers": {}},
-                    "/work/bare": {},
-                }
+    machine = _claude_json(
+        tmp_path,
+        {
+            "projects": {
+                "/work/shot": {
+                    "mcpServers": {"houdini": {"command": "uv", "env": {"HOUDINI_RPC_TOKEN": "s3"}}}
+                },
+                "/work/other": {"mcpServers": {}},
+                "/work/bare": {},
             }
-        )
+        },
     )
 
     outcome = claude_code(machine, SERVER)
@@ -364,9 +376,7 @@ def test_an_entry_that_leaves_a_variable_unset_disagrees_with_one_that_sets_it(
     """Unset is the default, the local Houdini: carrying one project's host into the user's
     entry would repoint every other project."""
     _cli(tmp_path / "bin", "claude")
-    machine = _machine(tmp_path, CLAUDE_CONFIG_DIR=str(tmp_path / "claude"))
-    (tmp_path / "claude").mkdir()
-    (tmp_path / "claude" / ".claude.json").write_text(json.dumps(config))
+    machine = _claude_json(tmp_path, config)
 
     outcome = claude_code(machine, SERVER)
 
@@ -376,22 +386,19 @@ def test_an_entry_that_leaves_a_variable_unset_disagrees_with_one_that_sets_it(
 
 def test_earlier_claude_code_entries_that_disagree_register_nothing(tmp_path: Path) -> None:
     _cli(tmp_path / "bin", "claude")
-    machine = _machine(tmp_path, CLAUDE_CONFIG_DIR=str(tmp_path / "claude"))
-    (tmp_path / "claude").mkdir()
     entry = {"command": "uv", "env": {"HOUDINI_HOST": "a", "MCP_TRANSPORT": "stdio"}}
-    (tmp_path / "claude" / ".claude.json").write_text(
-        json.dumps(
-            {
-                "mcpServers": {"houdini": entry},
-                "projects": {
-                    "/work/shot": {
-                        "mcpServers": {
-                            "houdini": {"env": {"HOUDINI_HOST": "b", "MCP_TRANSPORT": "http"}}
-                        }
+    machine = _claude_json(
+        tmp_path,
+        {
+            "mcpServers": {"houdini": entry},
+            "projects": {
+                "/work/shot": {
+                    "mcpServers": {
+                        "houdini": {"env": {"HOUDINI_HOST": "b", "MCP_TRANSPORT": "http"}}
                     }
-                },
-            }
-        )
+                }
+            },
+        },
     )
 
     outcome = claude_code(machine, SERVER)
@@ -426,3 +433,78 @@ def test_a_client_config_it_cannot_read_registers_nothing(tmp_path: Path) -> Non
 
     assert isinstance(codex(machine, SERVER), Failed)
     assert not (tmp_path / "bin" / "calls").exists()
+
+
+def test_a_project_whose_folder_is_gone_neither_fails_the_step_nor_carries(
+    tmp_path: Path,
+) -> None:
+    """Claude Code keeps a deleted worktree's settings; no server runs there, and its
+    entry cannot be removed from there."""
+    _cli(tmp_path / "bin", "claude")
+    gone = {"mcpServers": {"houdini": {"env": {"HOUDINI_HOST": "render"}}}}
+    machine = _claude_json(tmp_path, {"projects": {"/gone/worktree": gone}})
+
+    outcome = claude_code(machine, SERVER)
+
+    assert outcome == Installed(
+        "its user config (passed over the entries of projects that no longer exist: /gone/worktree)"
+    )
+    added = _calls(tmp_path / "bin")[-1]
+    assert added[added.index("houdini") + 1 : added.index("--")] == ["-e", "MCP_TRANSPORT=stdio"]
+
+
+def test_a_json_client_keeps_the_earlier_entrys_own_settings(tmp_path: Path) -> None:
+    machine = _machine(tmp_path)
+    config = machine.home / ".cursor" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    earlier = {"url": "http://localhost:8000/mcp", "disabled": False, "autoApprove": ["get_scene"]}
+    config.write_text(json.dumps({"mcpServers": {"houdini": earlier}}))
+
+    _CURSOR(machine, SERVER)
+
+    assert json.loads(config.read_text())["mcpServers"]["houdini"] == {
+        "disabled": False,
+        "autoApprove": ["get_scene"],
+        "command": "/venv/bin/python",
+        "args": ["-P", "-m", "houdini_mcp"],
+        "env": {"MCP_TRANSPORT": "stdio"},
+    }
+
+
+def test_a_json_config_kept_behind_a_link_stays_a_link(tmp_path: Path) -> None:
+    machine = _machine(tmp_path)
+    (machine.home / ".cursor").mkdir(parents=True)
+    kept = tmp_path / "dotfiles" / "cursor-mcp.json"
+    kept.parent.mkdir()
+    kept.write_text('{"mcpServers": {}}')
+    (machine.home / ".cursor" / "mcp.json").symlink_to(kept)
+
+    _CURSOR(machine, SERVER)
+
+    assert (machine.home / ".cursor" / "mcp.json").is_symlink()
+    assert list(json.loads(kept.read_text())["mcpServers"]) == ["houdini"]
+    assert sorted(path.name for path in kept.parent.iterdir()) == ["cursor-mcp.json"]
+
+
+def test_codex_says_what_of_its_earlier_entry_it_did_not_keep(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "codex")
+    machine = _machine(tmp_path, CODEX_HOME=str(tmp_path / "codex"))
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex" / "config.toml").write_text(
+        '[mcp_servers.houdini]\ncommand = "old"\nstartup_timeout_sec = 30\n'
+    )
+
+    assert codex(machine, SERVER) == Installed(
+        "its config (codex mcp add did not keep the earlier entry's startup_timeout_sec)"
+    )
+
+
+def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:
+    results = dict(install(_machine(tmp_path, "win32"), SERVER))
+    assert results["Claude Desktop"] == NotFound("APPDATA, unset")
+
+
+def test_the_command_another_client_is_shown_quotes_a_path_with_a_space() -> None:
+    server = ServerEntry((r"C:\Users\Jane Doe\python.exe", "-P", "-m", "houdini_mcp"), {})
+    text, _ = report([], server)
+    assert "runs it as: 'C:\\Users\\Jane Doe\\python.exe' -P -m houdini_mcp" in text
