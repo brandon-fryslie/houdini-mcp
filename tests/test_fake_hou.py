@@ -2,8 +2,14 @@
 
 import pytest
 
-from tests.conftest import HOUDINI_TURNED_MATRIX, NODE_TYPES, MockHouModule, MockHouNode
-from tests.fake_node_types import ParmTuple, load_table, read_node_types
+from tests.conftest import (
+    HOUDINI_TURNED_MATRIX,
+    NODE_TYPES,
+    MockHouModule,
+    MockHouNode,
+    _built_as,
+)
+from tests.fake_node_types import ParmTuple, load_table, node_types, read_node_types
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -246,6 +252,7 @@ def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
     ("network", "node_type", "message"),
     [
         ("/", "matnet", INVALID_TYPE),
+        ("/", "obj", INVALID_TYPE),
         ("/obj", "box", INVALID_TYPE),
         ("/obj/geo1/box1", "sphere", NOT_A_NETWORK),
         ("/ch", "null", INVALID_TYPE),
@@ -254,8 +261,9 @@ def test_every_category_a_network_holds_is_one_the_fake_lists() -> None:
 def test_create_node_refuses_a_type_its_network_does_not_hold(
     mock_hou: MockHouModule, network: str, node_type: str, message: str
 ) -> None:
-    """A context at the root, a SOP among objects, anything inside a node that is not
-    a network, and a type the network's category does not list."""
+    """A type no category has at the root, a context, which comes with the scene and
+    no name reaches, a SOP among objects, anything inside a node that is not a
+    network, and a type the network's category does not list."""
     mock_hou.node("/obj").createNode("geo", "geo1").createNode("box", "box1")
     parent = mock_hou.node(network)
     before = parent.children()
@@ -334,6 +342,46 @@ def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> 
     assert read_node_types(mock_hou, table) == table
 
 
+def test_the_reader_refuses_a_network_holding_a_category_the_table_lacks(
+    mock_hou: MockHouModule,
+) -> None:
+    table = load_table()
+    del table["Vop"]
+
+    with pytest.raises(LookupError, match="holds Vop, which the table has no entry for"):
+        read_node_types(mock_hou, table)
+
+
+def test_the_table_holds_create_node_answers_for_an_unlocked_context_root_alone() -> None:
+    table = load_table()
+    del table["Manager"]["mat"]["create_node"]
+    table["Sop"]["box"]["create_node"] = {"network": {}, "subnetworks": {}}
+
+    with pytest.raises(ValueError, match="Manager/mat lacks createNode answers"):
+        node_types({"Manager": table["Manager"]})
+    with pytest.raises(ValueError, match="Sop/box has createNode answers"):
+        node_types({"Sop": table["Sop"]})
+
+
+def test_the_table_names_the_type_whose_create_node_answer_the_fake_does_not_model() -> None:
+    table = load_table()
+    answers = table["Manager"]["mat"]["create_node"]["network"]
+    answers["geometryvopglobal::2.0"]["with_none"] = "refused"
+
+    with pytest.raises(ValueError, match="no createNode answer for geometryvopglobal::2.0"):
+        node_types({"Manager": table["Manager"]})
+
+
+def test_a_node_is_the_same_state_whichever_name_made_its_type(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini keeps a node's type, not the name createNode was given for it."""
+    obj = mock_hou.node("/obj")
+    states = {obj.createNode("geo").createNode(name).state() for name in ("mountain", "v_mountain")}
+
+    assert len(states) == 1
+
+
 def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
     mock_hou: MockHouModule,
 ) -> None:
@@ -345,23 +393,172 @@ def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
     assert [n.name() for n in (by_key, by_type)] == ["mountain1", "mountain2"]
 
 
-def test_every_type_the_catalog_lists_is_one_create_node_gives(mock_hou: MockHouModule) -> None:
-    """Each by the name the table keys it under: a type's own name can give a newer
-    version, as Houdini 22's createNode("mountain") gives mountain::2.0, not mountain."""
-    obj = mock_hou.node("/obj")
-    networks = {
-        "Object": obj,
-        "Sop": obj.createNode("geo"),
-        "Dop": obj.createNode("dopnet"),
-        "Vop": mock_hou.node("/mat"),
-        "Driver": mock_hou.node("/out"),
-        "Lop": mock_hou.node("/stage"),
+@pytest.mark.parametrize(
+    ("name", "own"),
+    [
+        ("mountain", "mountain::2.0"),
+        ("mountain::", "mountain"),
+        ("mountain::2.0", "mountain::2.0"),
+        ("v_mountain", "mountain::2.0"),
+        ("controlextract", "apex::controlextract::2.0"),
+        ("controlextract::2.0", "apex::controlextract::2.0"),
+        ("polybevel", "polybevel::3.0"),
+        ("polybevelnew", "polybevel::3.0"),
+        ("smoothcl", "attribblur"),
+    ],
+)
+def test_a_name_gives_the_type_houdini_22_resolves_it_to(
+    mock_hou: MockHouModule, name: str, own: str
+) -> None:
+    """The first of its base name's namespace order with the scope, namespace and
+    version the name gives, a part left out matching any and a trailing "::" giving no
+    version; an alias stands for its type's own name (v_mountain is the older
+    mountain's, and gives the newer)."""
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    assert geo.createNode(name).type().name() == own
+
+
+def test_a_created_node_is_named_by_its_type(mock_hou: MockHouModule) -> None:
+    """Its own name without namespace or version, as Houdini 22 names it, whatever
+    name reached the type."""
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    names = [geo.createNode(n).name() for n in ("v_mountain", "apex::controlextract", "smoothcl")]
+
+    assert names == ["mountain1", "controlextract1", "attribblur1"]
+
+
+@pytest.mark.parametrize("name", ["grid::9.0", "zz::grid", "Sop/grid", "nosuchtype"])
+def test_a_name_no_type_has_is_refused(mock_hou: MockHouModule, name: str) -> None:
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    with pytest.raises(Exception, match=INVALID_TYPE):
+        geo.createNode(name)
+
+
+def test_a_name_houdini_resolves_to_a_type_the_table_lacks_names_the_refresh(
+    mock_hou: MockHouModule,
+) -> None:
+    """The unversioned apex::controlextract is Houdini's, and the fake's gap."""
+    geo = mock_hou.node("/obj").createNode("geo")
+
+    with pytest.raises(
+        LookupError, match="hython tests/refresh_fake_node_types.py Sop/apex::controlextract$"
+    ):
+        geo.createNode("controlextract::")
+
+
+def test_preferred_node_type_takes_no_alias_and_reads_a_trailing_colon_pair_as_no_version(
+    mock_hou: MockHouModule,
+) -> None:
+    preferred = {
+        name: mock_hou.preferredNodeType(name)
+        for name in ("Sop/mountain::", "Sop/mountain::2.0", "Sop/v_mountain")
     }
 
-    for category, network in networks.items():
-        listed = mock_hou.nodeTypeCategories()[category].nodeTypes()
-        created = [network.createNode(name).type().name() for name in NODE_TYPES[category]]
-        assert created == list(listed)
+    assert {name: t and t.name() for name, t in preferred.items()} == {
+        "Sop/mountain::": "mountain::2.0",
+        "Sop/mountain::2.0": "mountain::2.0",
+        "Sop/v_mountain": None,
+    }
+
+
+def test_the_root_and_the_contexts_are_no_registered_types(mock_hou: MockHouModule) -> None:
+    categories = mock_hou.nodeTypeCategories()
+
+    assert [categories[c].nodeTypes() for c in ("Director", "Manager")] == [{}, {}]
+    assert categories["Manager"].nodeType("obj") is None
+    assert mock_hou.preferredNodeType("Manager/obj") is None
+
+
+def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModule) -> None:
+    """/mat makes subinput, in itself and in its subnets at any depth; an attribvop
+    refuses it, and holds one collect at most."""
+    mat = mock_hou.node("/mat")
+    nested = mat.createNode("subnet").createNode("subnet")
+    attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
+
+    made = [network.createNode("subinput").type().name() for network in (mat, nested)]
+    collect = attribvop.createNode("collect")
+
+    assert made == ["subinput", "subinput"]
+    assert collect.type().name() == "collect"
+    for refused in ("subinput", "collect"):
+        with pytest.raises(Exception, match=INVALID_TYPE):
+            attribvop.createNode(refused)
+    assert attribvop.children() == (collect,)
+
+
+def test_an_undone_scene_is_judged_as_the_scene_it_puts_back(mock_hou: MockHouModule) -> None:
+    """An undo puts back a copy of the scene whose nodes are still the table's types:
+    its attribvop holding a collect refuses a second, and its subnet goes back in."""
+    geo = mock_hou.node("/obj").createNode("geo")
+    subnet = geo.createNode("subnet")
+    attribvop = geo.createNode("attribvop")
+    attribvop.createNode("collect")
+    mock_hou.undos.enter_main_thread()
+    with mock_hou.undos.group("add a geo"):
+        mock_hou.node("/obj").createNode("geo")
+
+    mock_hou.undos.performUndo()
+    restored = mock_hou.node(subnet.path())
+    restored.destroy()
+    mock_hou.add_node(restored)
+
+    with pytest.raises(Exception, match=INVALID_TYPE):
+        mock_hou.node(attribvop.path()).createNode("collect")
+    assert mock_hou.node(subnet.path()) is restored
+
+
+def test_an_asset_whose_contents_do_not_match_where_it_is_made_is_left_unlocked(
+    mock_hou: MockHouModule,
+) -> None:
+    """geometryvopglobal::2.0 is a CVEX asset: /mat makes it and raises, leaving it
+    unlocked and never cooked, with an error for each child VOP that failed; an
+    attribvop makes it."""
+    mat = mock_hou.node("/mat")
+    attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
+
+    with pytest.raises(Exception, match=r"hou\.MatchDefinitionError: Failed to match node type"):
+        mat.createNode("geometryvopglobal")
+    left = mat.node("geometryvopglobal1")
+    made = attribvop.createNode("geometryvopglobal")
+
+    assert left is not None
+    assert (left.type().name(), left.isLockedHDA()) == ("geometryvopglobal::2.0", False)
+    assert left.errors() == [f"Error in child VOP '{vop}'." for vop in ("P", "Time", "N")]
+    assert (left.needsToCook(), left.cookCount()) == (True, 0)
+    assert (made.isLockedHDA(), made.errors()) == (True, [])
+
+
+def test_a_network_kind_the_table_has_no_answers_for_says_so(mock_hou: MockHouModule) -> None:
+    """An unlocked geometryvopglobal::2.0 in /mat is a subnetwork the reader never
+    asks in: only Houdini's mismatch leaves one unlocked."""
+    mat = mock_hou.node("/mat")
+    with pytest.raises(Exception, match="MatchDefinitionError"):
+        mat.createNode("geometryvopglobal")
+    left = mat.node("geometryvopglobal1")
+    assert left is not None
+
+    with pytest.raises(
+        LookupError, match="no createNode answers in a geometryvopglobal::2.0 inside a mat"
+    ):
+        left.createNode("subinput")
+
+
+def test_a_node_built_as_its_type_is_not_judged_as_create_node_judges_a_name(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini builds a subinput inside a node where createNode refuses one (an
+    attribvop's geometryvopglobal1 holds subinput1), so a node built as its type is
+    judged only by its network's category."""
+    attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
+    subinput = NODE_TYPES["Vop"]["subinput"]
+
+    mock_hou.add_node(_built_as(subinput, path=f"{attribvop.path()}/subinput1", name="subinput1"))
+
+    assert [child.type().name() for child in attribvop.children()] == ["subinput"]
 
 
 def test_a_locked_asset_holds_a_category_and_refuses_every_child(
@@ -370,10 +567,13 @@ def test_a_locked_asset_holds_a_category_and_refuses_every_child(
     wrangle = mock_hou.node("/obj").createNode("geo").createNode("attribwrangle")
 
     assert (wrangle.childTypeCategory().name(), wrangle.isNetwork()) == ("Sop", True)
-    with pytest.raises(
-        Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
-    ):
-        wrangle.createNode("null")
+    # curve:: names the unversioned curve, which the table lacks: the lock refuses
+    # before the name is read
+    for name in ("null", "curve::"):
+        with pytest.raises(
+            Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
+        ):
+            wrangle.createNode(name)
     assert wrangle.children() == ()
 
 
@@ -417,7 +617,7 @@ def test_a_menu_parm_given_to_a_node_holds_an_index(mock_hou: MockHouModule) -> 
     assert (cam.parm("rOrd").eval(), cam.parm("xOrd").eval()) == (rOrd.menu.index("zxy"), 5)
 
 
-def test_a_node_is_placed_again_only_where_its_name_gives_its_type(
+def test_a_node_placed_again_keeps_the_type_it_was_placed_as(
     mock_hou: MockHouModule,
 ) -> None:
     """A Sop subnet left by destroy is not placed under an Object network, which
@@ -428,7 +628,10 @@ def test_a_node_is_placed_again_only_where_its_name_gives_its_type(
     geo.destroy()
     mock_hou.node("/obj").createNode("subnet", "g")
 
-    with pytest.raises(ValueError, match="'/obj/g/s' was placed where 'subnet' gave another type"):
+    with pytest.raises(
+        ValueError,
+        match="'/obj/g/s' keeps the subnet it was placed as, which no Object network holds",
+    ):
         mock_hou.add_node(sop_subnet)
 
 

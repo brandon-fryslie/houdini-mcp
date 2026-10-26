@@ -1,111 +1,224 @@
 {
   "Director": {
     "root": {
-      "type": "root",
       "description": "Root",
       "namespace_order": [],
       "aliases": [],
       "holds": "Manager",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     }
   },
   "Manager": {
     "obj": {
-      "type": "obj",
       "description": "Object",
       "namespace_order": [],
       "aliases": [],
       "holds": "Object",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "subnet": {}
+        }
+      }
     },
     "out": {
-      "type": "out",
       "description": "Driver",
       "namespace_order": [],
       "aliases": [],
       "holds": "Driver",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "subnet": {}
+        }
+      }
     },
     "ch": {
-      "type": "ch",
       "description": "ChopNet",
       "namespace_order": [],
       "aliases": [],
       "holds": "ChopNet",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     },
     "shop": {
-      "type": "shop",
       "description": "Shop",
       "namespace_order": [],
       "aliases": [],
       "holds": "Shop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     },
     "img": {
-      "type": "img",
       "description": "CopNet",
       "namespace_order": [],
       "aliases": [],
       "holds": "CopNet",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     },
     "vex": {
-      "type": "vex",
       "description": "VopNet",
       "namespace_order": [],
       "aliases": [],
       "holds": "VopNet",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     },
     "mat": {
-      "type": "mat",
       "description": "Vop",
       "namespace_order": [],
       "aliases": [],
       "holds": "Vop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {
+          "geometryvopglobal::2.0": {
+            "with_none": {
+              "raises": "MatchDefinitionError",
+              "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'Time'.\n             Error in child VOP 'N'.",
+              "errors": [
+                "Error in child VOP 'P'.",
+                "Error in child VOP 'Time'.",
+                "Error in child VOP 'N'."
+              ]
+            },
+            "with_one": {
+              "raises": "MatchDefinitionError",
+              "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'Time'.\n             Error in child VOP 'N'.",
+              "errors": [
+                "Error in child VOP 'P'.",
+                "Error in child VOP 'Time'.",
+                "Error in child VOP 'N'."
+              ]
+            }
+          },
+          "geometryvopoutput": {
+            "with_none": {
+              "raises": "MatchDefinitionError",
+              "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'N'.",
+              "errors": [
+                "Error in child VOP 'P'.",
+                "Error in child VOP 'N'."
+              ]
+            },
+            "with_one": {
+              "raises": "MatchDefinitionError",
+              "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'N'.",
+              "errors": [
+                "Error in child VOP 'P'.",
+                "Error in child VOP 'N'."
+              ]
+            }
+          }
+        },
+        "subnetworks": {
+          "subnet": {
+            "geometryvopglobal::2.0": {
+              "with_none": {
+                "raises": "MatchDefinitionError",
+                "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'Time'.\n             Error in child VOP 'N'.",
+                "errors": [
+                  "Error in child VOP 'P'.",
+                  "Error in child VOP 'Time'.",
+                  "Error in child VOP 'N'."
+                ]
+              },
+              "with_one": {
+                "raises": "MatchDefinitionError",
+                "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'Time'.\n             Error in child VOP 'N'.",
+                "errors": [
+                  "Error in child VOP 'P'.",
+                  "Error in child VOP 'Time'.",
+                  "Error in child VOP 'N'."
+                ]
+              }
+            },
+            "geometryvopoutput": {
+              "with_none": {
+                "raises": "MatchDefinitionError",
+                "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'N'.",
+                "errors": [
+                  "Error in child VOP 'P'.",
+                  "Error in child VOP 'N'."
+                ]
+              },
+              "with_one": {
+                "raises": "MatchDefinitionError",
+                "message": "Failed to match node type definition.\nError:       Error in child VOP 'P'.\n             Error in child VOP 'N'.",
+                "errors": [
+                  "Error in child VOP 'P'.",
+                  "Error in child VOP 'N'."
+                ]
+              }
+            }
+          }
+        }
+      }
     },
     "stage": {
-      "type": "stage",
       "description": "Lop",
       "namespace_order": [],
       "aliases": [],
       "holds": "Lop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     },
     "tasks": {
-      "type": "tasks",
       "description": "TopNet",
       "namespace_order": [],
       "aliases": [],
       "holds": "TopNet",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     }
   },
   "Object": {
     "geo": {
-      "type": "geo",
       "description": "Geometry",
       "namespace_order": [
         "geo"
@@ -150,10 +263,16 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
       }
     },
     "null": {
-      "type": "null",
       "description": "Null",
       "namespace_order": [
         "null"
@@ -189,10 +308,16 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
       }
     },
     "light": {
-      "type": "light",
       "description": "Light Template",
       "namespace_order": [
         "light"
@@ -228,10 +353,16 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
       }
     },
     "instance": {
-      "type": "instance",
       "description": "Instance",
       "namespace_order": [
         "instance"
@@ -240,10 +371,16 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
+      }
     },
     "fetch": {
-      "type": "fetch",
       "description": "Fetch",
       "namespace_order": [
         "fetch"
@@ -279,10 +416,16 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
       }
     },
     "subnet": {
-      "type": "subnet",
       "description": "Subnetwork",
       "namespace_order": [
         "subnet"
@@ -321,7 +464,6 @@
       }
     },
     "dopnet": {
-      "type": "dopnet",
       "description": "DOP Network",
       "namespace_order": [
         "dopnet"
@@ -357,10 +499,15 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "subnet": {}
+        }
       }
     },
     "cam": {
-      "type": "cam",
       "description": "Camera",
       "namespace_order": [
         "cam"
@@ -463,10 +610,16 @@
           ],
           "menu": []
         }
+      },
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
       }
     },
     "ropnet": {
-      "type": "ropnet",
       "description": "ROP Network",
       "namespace_order": [
         "ropnet"
@@ -475,10 +628,15 @@
       "holds": "Driver",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "subnet": {}
+        }
+      }
     },
     "chopnet": {
-      "type": "chopnet",
       "description": "CHOP Network",
       "namespace_order": [
         "chopnet"
@@ -487,12 +645,15 @@
       "holds": "Chop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {}
+      }
     }
   },
   "Sop": {
     "sphere": {
-      "type": "sphere",
       "description": "Sphere",
       "namespace_order": [
         "sphere"
@@ -504,7 +665,6 @@
       "parms": {}
     },
     "box": {
-      "type": "box",
       "description": "Box",
       "namespace_order": [
         "box"
@@ -516,7 +676,6 @@
       "parms": {}
     },
     "grid": {
-      "type": "grid",
       "description": "Grid",
       "namespace_order": [
         "grid"
@@ -528,7 +687,6 @@
       "parms": {}
     },
     "tube": {
-      "type": "tube",
       "description": "Tube",
       "namespace_order": [
         "tube"
@@ -540,7 +698,6 @@
       "parms": {}
     },
     "torus": {
-      "type": "torus",
       "description": "Torus",
       "namespace_order": [
         "torus"
@@ -552,7 +709,6 @@
       "parms": {}
     },
     "circle": {
-      "type": "circle",
       "description": "Circle",
       "namespace_order": [
         "circle"
@@ -564,7 +720,6 @@
       "parms": {}
     },
     "line": {
-      "type": "line",
       "description": "Line",
       "namespace_order": [
         "line"
@@ -575,8 +730,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "curve": {
-      "type": "curve::2.0",
+    "curve::2.0": {
       "description": "Curve",
       "namespace_order": [
         "curve::2.0",
@@ -588,8 +742,7 @@
       "indirect_inputs": 1,
       "parms": {}
     },
-    "mountain": {
-      "type": "mountain::2.0",
+    "mountain::2.0": {
       "description": "Mountain",
       "namespace_order": [
         "mountain::2.0",
@@ -601,8 +754,7 @@
       "indirect_inputs": 1,
       "parms": {}
     },
-    "mountain::": {
-      "type": "mountain",
+    "mountain": {
       "description": "Mountain",
       "namespace_order": [
         "mountain::2.0",
@@ -616,8 +768,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "apex::controlextract": {
-      "type": "apex::controlextract::2.0",
+    "apex::controlextract::2.0": {
       "description": "APEX Control Extract",
       "namespace_order": [
         "apex::controlextract::2.0",
@@ -629,8 +780,7 @@
       "indirect_inputs": 1,
       "parms": {}
     },
-    "attribnoise": {
-      "type": "attribnoise::2.0",
+    "attribnoise::2.0": {
       "description": "Attribute Noise",
       "namespace_order": [
         "attribnoise::2.0",
@@ -643,7 +793,6 @@
       "parms": {}
     },
     "cloudnoise": {
-      "type": "cloudnoise",
       "description": "Cloud Noise",
       "namespace_order": [
         "cloudnoise"
@@ -655,7 +804,6 @@
       "parms": {}
     },
     "heightfield_noise": {
-      "type": "heightfield_noise",
       "description": "HeightField Noise",
       "namespace_order": [
         "heightfield_noise"
@@ -667,7 +815,6 @@
       "parms": {}
     },
     "xform": {
-      "type": "xform",
       "description": "Transform",
       "namespace_order": [
         "xform"
@@ -679,7 +826,6 @@
       "parms": {}
     },
     "blast": {
-      "type": "blast",
       "description": "Blast",
       "namespace_order": [
         "blast"
@@ -691,7 +837,6 @@
       "parms": {}
     },
     "delete": {
-      "type": "delete",
       "description": "Delete",
       "namespace_order": [
         "delete"
@@ -702,8 +847,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "dissolve": {
-      "type": "dissolve::2.0",
+    "dissolve::2.0": {
       "description": "Dissolve",
       "namespace_order": [
         "dissolve::2.0",
@@ -715,8 +859,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "fuse": {
-      "type": "fuse::2.0",
+    "fuse::2.0": {
       "description": "Fuse",
       "namespace_order": [
         "fuse::2.0",
@@ -729,7 +872,6 @@
       "parms": {}
     },
     "clean": {
-      "type": "clean",
       "description": "Clean",
       "namespace_order": [
         "clean"
@@ -741,7 +883,6 @@
       "parms": {}
     },
     "merge": {
-      "type": "merge",
       "description": "Merge",
       "namespace_order": [
         "merge"
@@ -753,7 +894,6 @@
       "parms": {}
     },
     "switch": {
-      "type": "switch",
       "description": "Switch",
       "namespace_order": [
         "switch"
@@ -765,7 +905,6 @@
       "parms": {}
     },
     "copy": {
-      "type": "copy",
       "description": "Copy with Stamp",
       "namespace_order": [
         "copy"
@@ -776,8 +915,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "scatter": {
-      "type": "scatter::2.0",
+    "scatter::2.0": {
       "description": "Scatter",
       "namespace_order": [
         "scatter::2.0",
@@ -789,8 +927,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "copytopoints": {
-      "type": "copytopoints::2.0",
+    "copytopoints::2.0": {
       "description": "Copy to Points",
       "namespace_order": [
         "copytopoints::2.0",
@@ -803,7 +940,6 @@
       "parms": {}
     },
     "foreach": {
-      "type": "foreach",
       "description": "For-Each Subnetwork",
       "namespace_order": [
         "foreach"
@@ -815,7 +951,6 @@
       "parms": {}
     },
     "vex": {
-      "type": "vex",
       "description": "VEX",
       "namespace_order": [
         "vex"
@@ -827,7 +962,6 @@
       "parms": {}
     },
     "attribwrangle": {
-      "type": "attribwrangle",
       "description": "Attribute Wrangle",
       "namespace_order": [
         "attribwrangle"
@@ -839,7 +973,6 @@
       "parms": {}
     },
     "pointwrangle": {
-      "type": "pointwrangle",
       "description": "Point Wrangle",
       "namespace_order": [
         "pointwrangle"
@@ -851,7 +984,6 @@
       "parms": {}
     },
     "volumewrangle": {
-      "type": "volumewrangle",
       "description": "Volume Wrangle",
       "namespace_order": [
         "volumewrangle"
@@ -863,7 +995,6 @@
       "parms": {}
     },
     "vdb": {
-      "type": "vdb",
       "description": "VDB",
       "namespace_order": [
         "vdb"
@@ -875,7 +1006,6 @@
       "parms": {}
     },
     "vdbfromparticles": {
-      "type": "vdbfromparticles",
       "description": "VDB from Particles",
       "namespace_order": [
         "vdbfromparticles"
@@ -887,7 +1017,6 @@
       "parms": {}
     },
     "vdbsmooth": {
-      "type": "vdbsmooth",
       "description": "VDB Smooth",
       "namespace_order": [
         "vdbsmooth"
@@ -899,7 +1028,6 @@
       "parms": {}
     },
     "vdbcombine": {
-      "type": "vdbcombine",
       "description": "VDB Combine",
       "namespace_order": [
         "vdbcombine"
@@ -911,7 +1039,6 @@
       "parms": {}
     },
     "file": {
-      "type": "file",
       "description": "File",
       "namespace_order": [
         "file"
@@ -923,7 +1050,6 @@
       "parms": {}
     },
     "alembic": {
-      "type": "alembic",
       "description": "Alembic",
       "namespace_order": [
         "alembic"
@@ -934,8 +1060,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "filecache": {
-      "type": "filecache::2.0",
+    "filecache::2.0": {
       "description": "File Cache",
       "namespace_order": [
         "filecache::2.0",
@@ -950,7 +1075,6 @@
       "parms": {}
     },
     "cache": {
-      "type": "cache",
       "description": "Cache",
       "namespace_order": [
         "cache"
@@ -962,7 +1086,6 @@
       "parms": {}
     },
     "stash": {
-      "type": "stash",
       "description": "Stash",
       "namespace_order": [
         "stash"
@@ -974,7 +1097,6 @@
       "parms": {}
     },
     "group": {
-      "type": "group",
       "description": "Group",
       "namespace_order": [
         "group"
@@ -986,7 +1108,6 @@
       "parms": {}
     },
     "groupcreate": {
-      "type": "groupcreate",
       "description": "Group Create",
       "namespace_order": [
         "groupcreate"
@@ -998,7 +1119,6 @@
       "parms": {}
     },
     "groupcombine": {
-      "type": "groupcombine",
       "description": "Group Combine",
       "namespace_order": [
         "groupcombine"
@@ -1010,7 +1130,6 @@
       "parms": {}
     },
     "groupexpression": {
-      "type": "groupexpression",
       "description": "Group Expression",
       "namespace_order": [
         "groupexpression"
@@ -1022,7 +1141,6 @@
       "parms": {}
     },
     "subdivide": {
-      "type": "subdivide",
       "description": "Subdivide",
       "namespace_order": [
         "subdivide"
@@ -1033,8 +1151,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "polyextrude": {
-      "type": "polyextrude::2.0",
+    "polyextrude::2.0": {
       "description": "PolyExtrude",
       "namespace_order": [
         "polyextrude::2.0",
@@ -1046,8 +1163,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "polybevel": {
-      "type": "polybevel::3.0",
+    "polybevel::3.0": {
       "description": "PolyBevel",
       "namespace_order": [
         "polybevel::3.0",
@@ -1062,8 +1178,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "polyreduce": {
-      "type": "polyreduce::2.0",
+    "polyreduce::2.0": {
       "description": "PolyReduce",
       "namespace_order": [
         "polyreduce::2.0",
@@ -1076,7 +1191,6 @@
       "parms": {}
     },
     "polyfill": {
-      "type": "polyfill",
       "description": "PolyFill",
       "namespace_order": [
         "polyfill"
@@ -1088,7 +1202,6 @@
       "parms": {}
     },
     "null": {
-      "type": "null",
       "description": "Null",
       "namespace_order": [
         "null"
@@ -1100,7 +1213,6 @@
       "parms": {}
     },
     "output": {
-      "type": "output",
       "description": "Output",
       "namespace_order": [
         "output"
@@ -1112,7 +1224,6 @@
       "parms": {}
     },
     "object_merge": {
-      "type": "object_merge",
       "description": "Object Merge",
       "namespace_order": [
         "object_merge"
@@ -1126,7 +1237,6 @@
       "parms": {}
     },
     "timeshift": {
-      "type": "timeshift",
       "description": "Time Shift",
       "namespace_order": [
         "timeshift"
@@ -1138,7 +1248,6 @@
       "parms": {}
     },
     "trail": {
-      "type": "trail",
       "description": "Trail",
       "namespace_order": [
         "trail"
@@ -1150,7 +1259,6 @@
       "parms": {}
     },
     "material": {
-      "type": "material",
       "description": "Material",
       "namespace_order": [
         "material"
@@ -1180,8 +1288,7 @@
         }
       }
     },
-    "attribcreate": {
-      "type": "attribcreate::2.0",
+    "attribcreate::2.0": {
       "description": "Attribute Create",
       "namespace_order": [
         "attribcreate::2.0",
@@ -1194,7 +1301,6 @@
       "parms": {}
     },
     "split": {
-      "type": "split",
       "description": "Split",
       "namespace_order": [
         "split"
@@ -1206,7 +1312,6 @@
       "parms": {}
     },
     "add": {
-      "type": "add",
       "description": "Add",
       "namespace_order": [
         "add"
@@ -1218,7 +1323,6 @@
       "parms": {}
     },
     "align": {
-      "type": "align",
       "description": "Spline Align",
       "namespace_order": [
         "align"
@@ -1230,7 +1334,6 @@
       "parms": {}
     },
     "attribblur": {
-      "type": "attribblur",
       "description": "Attribute Blur",
       "namespace_order": [
         "attribblur"
@@ -1244,7 +1347,6 @@
       "parms": {}
     },
     "attribcast": {
-      "type": "attribcast",
       "description": "Attribute Cast",
       "namespace_order": [
         "attribcast"
@@ -1256,7 +1358,6 @@
       "parms": {}
     },
     "attribcopy": {
-      "type": "attribcopy",
       "description": "Attribute Copy",
       "namespace_order": [
         "attribcopy"
@@ -1268,7 +1369,6 @@
       "parms": {}
     },
     "attribdelete": {
-      "type": "attribdelete",
       "description": "Attribute Delete",
       "namespace_order": [
         "attribdelete"
@@ -1280,7 +1380,6 @@
       "parms": {}
     },
     "attribexpression": {
-      "type": "attribexpression",
       "description": "Attribute Expression",
       "namespace_order": [
         "attribexpression"
@@ -1292,7 +1391,6 @@
       "parms": {}
     },
     "attribfade": {
-      "type": "attribfade",
       "description": "Attribute Fade",
       "namespace_order": [
         "attribfade"
@@ -1304,7 +1402,6 @@
       "parms": {}
     },
     "attribpromote": {
-      "type": "attribpromote",
       "description": "Attribute Promote",
       "namespace_order": [
         "attribpromote"
@@ -1316,7 +1413,6 @@
       "parms": {}
     },
     "attribrandomize": {
-      "type": "attribrandomize",
       "description": "Attribute Randomize",
       "namespace_order": [
         "attribrandomize"
@@ -1328,7 +1424,6 @@
       "parms": {}
     },
     "attribremap": {
-      "type": "attribremap",
       "description": "Attribute Remap",
       "namespace_order": [
         "attribremap"
@@ -1340,7 +1435,6 @@
       "parms": {}
     },
     "attribtransfer": {
-      "type": "attribtransfer",
       "description": "Attribute Transfer",
       "namespace_order": [
         "attribtransfer"
@@ -1352,7 +1446,6 @@
       "parms": {}
     },
     "attribvop": {
-      "type": "attribvop",
       "description": "Attribute VOP",
       "namespace_order": [
         "attribvop"
@@ -1361,10 +1454,30 @@
       "holds": "Vop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {
+          "subinput": {
+            "with_none": {
+              "raises": "OperationFailed",
+              "message": "The attempted operation failed.\nInvalid node type name"
+            },
+            "with_one": null
+          },
+          "collect": {
+            "with_none": "made",
+            "with_one": {
+              "raises": "OperationFailed",
+              "message": "The attempted operation failed.\nInvalid node type name"
+            }
+          }
+        },
+        "subnetworks": {
+          "subnet": {}
+        }
+      }
     },
     "bend": {
-      "type": "bend",
       "description": "Bend",
       "namespace_order": [
         "bend"
@@ -1376,7 +1489,6 @@
       "parms": {}
     },
     "blastbyattribute": {
-      "type": "blastbyattribute",
       "description": "Blast by Attribute",
       "namespace_order": [
         "blastbyattribute"
@@ -1388,7 +1500,6 @@
       "parms": {}
     },
     "bound": {
-      "type": "bound",
       "description": "Bound",
       "namespace_order": [
         "bound"
@@ -1400,7 +1511,6 @@
       "parms": {}
     },
     "bridge": {
-      "type": "bridge",
       "description": "Spline Bridge",
       "namespace_order": [
         "bridge"
@@ -1412,7 +1522,6 @@
       "parms": {}
     },
     "bulge": {
-      "type": "bulge",
       "description": "Bulge",
       "namespace_order": [
         "bulge"
@@ -1424,7 +1533,6 @@
       "parms": {}
     },
     "cap": {
-      "type": "cap",
       "description": "Spline Cap",
       "namespace_order": [
         "cap"
@@ -1436,7 +1544,6 @@
       "parms": {}
     },
     "carve": {
-      "type": "carve",
       "description": "Carve",
       "namespace_order": [
         "carve"
@@ -1448,7 +1555,6 @@
       "parms": {}
     },
     "chain": {
-      "type": "chain",
       "description": "Chain",
       "namespace_order": [
         "chain"
@@ -1460,7 +1566,6 @@
       "parms": {}
     },
     "circlefromedges": {
-      "type": "circlefromedges",
       "description": "Circle from Edges",
       "namespace_order": [
         "circlefromedges"
@@ -1471,8 +1576,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "clip": {
-      "type": "clip::2.0",
+    "clip::2.0": {
       "description": "Clip",
       "namespace_order": [
         "clip::2.0",
@@ -1485,7 +1589,6 @@
       "parms": {}
     },
     "cluster": {
-      "type": "cluster",
       "description": "Cluster",
       "namespace_order": [
         "cluster"
@@ -1497,7 +1600,6 @@
       "parms": {}
     },
     "color": {
-      "type": "color",
       "description": "Color",
       "namespace_order": [
         "color"
@@ -1509,7 +1611,6 @@
       "parms": {}
     },
     "comb": {
-      "type": "comb",
       "description": "Comb",
       "namespace_order": [
         "comb"
@@ -1521,7 +1622,6 @@
       "parms": {}
     },
     "connectivity": {
-      "type": "connectivity",
       "description": "Connectivity",
       "namespace_order": [
         "connectivity"
@@ -1533,7 +1633,6 @@
       "parms": {}
     },
     "convert": {
-      "type": "convert",
       "description": "Convert",
       "namespace_order": [
         "convert"
@@ -1545,7 +1644,6 @@
       "parms": {}
     },
     "convertline": {
-      "type": "convertline",
       "description": "Convert Line",
       "namespace_order": [
         "convertline"
@@ -1557,7 +1655,6 @@
       "parms": {}
     },
     "convertvdb": {
-      "type": "convertvdb",
       "description": "Convert VDB",
       "namespace_order": [
         "convertvdb"
@@ -1569,7 +1666,6 @@
       "parms": {}
     },
     "cookie": {
-      "type": "cookie",
       "description": "Cookie",
       "namespace_order": [
         "cookie"
@@ -1581,7 +1677,6 @@
       "parms": {}
     },
     "copyxform": {
-      "type": "copyxform",
       "description": "Copy and Transform",
       "namespace_order": [
         "copyxform"
@@ -1593,7 +1688,6 @@
       "parms": {}
     },
     "crease": {
-      "type": "crease",
       "description": "Crease",
       "namespace_order": [
         "crease"
@@ -1605,7 +1699,6 @@
       "parms": {}
     },
     "creep": {
-      "type": "creep",
       "description": "Creep",
       "namespace_order": [
         "creep"
@@ -1617,7 +1710,6 @@
       "parms": {}
     },
     "deform": {
-      "type": "deform",
       "description": "Deform",
       "namespace_order": [
         "deform"
@@ -1628,8 +1720,7 @@
       "indirect_inputs": 0,
       "parms": {}
     },
-    "deltamush": {
-      "type": "deltamush::2.0",
+    "deltamush::2.0": {
       "description": "Delta Mush",
       "namespace_order": [
         "deltamush::2.0",
@@ -1642,7 +1733,6 @@
       "parms": {}
     },
     "subnet": {
-      "type": "subnet",
       "description": "Subnetwork",
       "namespace_order": [
         "subnet"
@@ -1654,7 +1744,6 @@
       "parms": {}
     },
     "dopnet": {
-      "type": "dopnet",
       "description": "DOP Network",
       "namespace_order": [
         "dopnet"
@@ -1663,12 +1752,17 @@
       "holds": "Dop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "subnet": {}
+        }
+      }
     }
   },
   "Dop": {
-    "pyrosolver": {
-      "type": "pyrosolver::2.0",
+    "pyrosolver::2.0": {
       "description": "Pyro Solver",
       "namespace_order": [
         "pyrosolver::2.0",
@@ -1683,7 +1777,6 @@
       "parms": {}
     },
     "subnet": {
-      "type": "subnet",
       "description": "Subnetwork",
       "namespace_order": [
         "subnet"
@@ -1696,8 +1789,7 @@
     }
   },
   "Vop": {
-    "principledshader": {
-      "type": "principledshader::2.0",
+    "principledshader::2.0": {
       "description": "Principled Shader",
       "namespace_order": [
         "principledshader::2.0",
@@ -1742,7 +1834,6 @@
       }
     },
     "subnet": {
-      "type": "subnet",
       "description": "Subnetwork",
       "namespace_order": [
         "subnet"
@@ -1752,11 +1843,55 @@
       "locked": false,
       "indirect_inputs": 0,
       "parms": {}
+    },
+    "subinput": {
+      "description": "Subnet Inputs",
+      "namespace_order": [
+        "subinput"
+      ],
+      "aliases": [],
+      "holds": null,
+      "locked": false,
+      "indirect_inputs": 0,
+      "parms": {}
+    },
+    "geometryvopglobal::2.0": {
+      "description": "Geometry VOP Global Parameters",
+      "namespace_order": [
+        "geometryvopglobal::2.0",
+        "geometryvopglobal"
+      ],
+      "aliases": [],
+      "holds": "Vop",
+      "locked": true,
+      "indirect_inputs": 0,
+      "parms": {}
+    },
+    "geometryvopoutput": {
+      "description": "Geometry VOP Output",
+      "namespace_order": [
+        "geometryvopoutput"
+      ],
+      "aliases": [],
+      "holds": "Vop",
+      "locked": true,
+      "indirect_inputs": 0,
+      "parms": {}
+    },
+    "collect": {
+      "description": "Collect",
+      "namespace_order": [
+        "collect"
+      ],
+      "aliases": [],
+      "holds": null,
+      "locked": false,
+      "indirect_inputs": 0,
+      "parms": {}
     }
   },
   "Driver": {
     "opengl": {
-      "type": "opengl",
       "description": "OpenGL",
       "namespace_order": [
         "opengl"
@@ -1820,7 +1955,6 @@
       }
     },
     "karma": {
-      "type": "karma",
       "description": "Karma",
       "namespace_order": [
         "karma"
@@ -1885,7 +2019,6 @@
       }
     },
     "subnet": {
-      "type": "subnet",
       "description": "Subnetwork",
       "namespace_order": [
         "subnet"
@@ -1897,7 +2030,6 @@
       "parms": {}
     },
     "sopnet": {
-      "type": "sopnet",
       "description": "SOP Network",
       "namespace_order": [
         "sopnet"
@@ -1906,12 +2038,18 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
+      }
     }
   },
   "Lop": {
     "sopnet": {
-      "type": "sopnet",
       "description": "SOP Network",
       "namespace_order": [
         "sopnet"
@@ -1920,7 +2058,14 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
-      "parms": {}
+      "parms": {},
+      "create_node": {
+        "network": {},
+        "subnetworks": {
+          "foreach": {},
+          "subnet": {}
+        }
+      }
     }
   },
   "ChopNet": {},

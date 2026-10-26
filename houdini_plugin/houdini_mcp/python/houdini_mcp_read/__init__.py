@@ -15,6 +15,7 @@ on Houdini's path, and the server distribution ships it from the same source
 
 from __future__ import annotations
 
+import itertools
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,7 +32,9 @@ __all__ = [
     "format_reason",
     "json_safe_hou_value",
     "of_tuple",
+    "raised_inside_houdini",
     "read",
+    "reason",
     "resolve",
 ]
 
@@ -52,6 +55,32 @@ UNREAD = next(iter(Unread.__annotations__))
 def format_reason(e: BaseException) -> str:
     """``<ExcType>: <message>``, as Python spells an exception it reports."""
     return "".join(traceback.format_exception_only(type(e), e)).rstrip()
+
+
+def raised_inside_houdini(exc: BaseException) -> bool:
+    """rpyc re-raises an exception from Houdini's side as a local instance of the same
+    class, tagged with ``_remote_tb``; whatever its type, it crossed an intact link."""
+    return hasattr(exc, "_remote_tb")
+
+
+def reason(e: BaseException) -> str:
+    """The reason Houdini gave for ``e``, ``<ExcType>: <message>``, on either side
+    of the link.
+
+    rpyc rebuilds a remote exception without its arguments (a ``hou`` error
+    keeps its message outside them) and keeps the remote traceback, whose lines
+    after the last frame are the reason; a message's own lines may be indented.
+    """
+    if not raised_inside_houdini(e):
+        return format_reason(e)
+    remote_tb = e._remote_tb  # type: ignore[attr-defined]
+    lines = str(remote_tb).rstrip().splitlines()
+    frames = [i for i, line in enumerate(lines) if line.startswith('  File "')]
+    if not frames:
+        # a server that withholds its traceback leaves only the class name
+        return f"{type(e).__name__}: {remote_tb}"
+    reason = itertools.dropwhile(lambda line: line.startswith("    "), lines[frames[-1] + 1 :])
+    return "\n".join(reason)
 
 
 def read(fetch: Callable[[], T], explain: Callable[[Exception], str]) -> T | Unread:

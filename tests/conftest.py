@@ -28,7 +28,18 @@ from houdini_mcp.connection import TransportException
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
-from tests.fake_node_types import NodeType, ParmTuple, load_table, node_types
+from tests.fake_node_types import (
+    MAKES,
+    Answer,
+    Answers,
+    Made,
+    Mismatched,
+    NodeType,
+    ParmTuple,
+    Refused,
+    load_table,
+    node_types,
+)
 
 # What the houdini-mcp command's tools run under when the environment names nothing.
 DEFAULT_SETTINGS = server_settings({})
@@ -52,33 +63,66 @@ def join_path(parent: str, name: str) -> str:
 
 
 # [LAW:one-source-of-truth] the fake's node types are the table Houdini 22.0.466
-# wrote (tests/fake_node_types.py): category -> the name createNode is given -> its
-# type. A node's category is the one its network holds; the root's children are the
-# contexts of a fresh scene, each one's type name also its node name.
+# wrote (tests/fake_node_types.json): category -> a type's own name -> the type, and
+# createNode's answers in each kind of network. A node's category is the one its
+# network holds; the root and its contexts come with the scene, placed as their types.
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 
-
-# Houdini 22 registers no type for the root and its contexts: their categories list
-# none, and no lookup by name finds one.
-UNREGISTERED = frozenset({"Director", "Manager"})
+# what Houdini 22's createNode raises for a name that reaches no type it makes there
+INVALID_TYPE_NAME = "The attempted operation failed.\nInvalid node type name"
 
 
-def _own(category: str, name: str) -> NodeType | None:
-    """The type in ``category`` whose own name ``name`` is; None when no type has it."""
-    return next((row for row in NODE_TYPES[category].values() if row.type == name), None)
-
-
-def _registered(category: str, row: NodeType | None) -> "MockNodeType | None":
+def _registered(row: NodeType | None) -> "MockNodeType | None":
     """``row`` as Houdini's registry answers it: None for a type it does not register."""
-    return None if row is None or category in UNREGISTERED else MockNodeType(row)
+    return None if row is None or not row.registered else MockNodeType(row)
 
 
-def _offered(category: str, name: str) -> NodeType | None:
-    """The type createNode gives for ``name`` in ``category``: the one the table keys
-    under it, or the one whose own name it is (``mountain`` and ``mountain::2.0`` both
-    give ``mountain::2.0``, as Houdini's createNode takes either); None for a name it
-    refuses there."""
-    return NODE_TYPES[category].get(name) or _own(category, name)
+def _resolved(category: str, name: str) -> NodeType | None:
+    """The type ``name`` names in ``category``, as Houdini 22 resolves it: the first of
+    its base name's namespace order whose scope, namespace and version are the ones the
+    name gives, a part it leaves out matching any and a trailing ``::`` giving the
+    version as empty (``mountain`` gives mountain::2.0, ``mountain::`` the older
+    mountain, ``controlextract`` apex::controlextract::2.0); None when no type is that
+    one. A type the namespace order gives that the table lacks is the table's gap, not
+    Houdini's refusal."""
+    scope, namespace, base, version = _name_components(name)
+    given = (scope or None, namespace or None, version if version or name.endswith("::") else None)
+    order = next(
+        (
+            row.namespace_order
+            for row in NODE_TYPES[category].values()
+            if _name_components(row.type)[2] == base
+        ),
+        (),
+    )
+    own = next((own for own in order if _matches(given, own)), None)
+    if own is None:
+        return None
+    row = NODE_TYPES[category].get(own)
+    if row is None:
+        raise LookupError(
+            f"{name!r} names {category}/{own}, which the table lacks: "
+            f"hython tests/refresh_fake_node_types.py {category}/{own}"
+        )
+    return row
+
+
+def _matches(given: tuple[str | None, str | None, str | None], own: str) -> bool:
+    """Whether the type named ``own`` has the scope, namespace and version ``given``,
+    each None for a part the name leaves out."""
+    scope, namespace, _, version = _name_components(own)
+    return all(
+        part is None or part == theirs
+        for part, theirs in zip(given, (scope, namespace, version), strict=True)
+    )
+
+
+def _named(category: str, name: str) -> NodeType | None:
+    """The type createNode gives for ``name`` in ``category``: an alias stands for its
+    type's own name, which then resolves as any name does (``v_mountain``, an alias of
+    the older mountain, gives mountain::2.0)."""
+    aliased = next((row.type for row in NODE_TYPES[category].values() if name in row.aliases), name)
+    return _resolved(category, aliased)
 
 
 def _name_components(name: str) -> tuple[str, str, str, str]:
@@ -132,6 +176,14 @@ class InvalidSize(Exception):
 
 
 InvalidSize.__module__ = "hou"
+
+
+class MatchDefinitionError(Exception):
+    """hou.MatchDefinitionError, which Houdini 22's createNode raises once it has made
+    an asset whose contents do not match its definition in that network."""
+
+
+MatchDefinitionError.__module__ = "hou"
 
 
 class LoadWarning(Exception):
@@ -200,13 +252,14 @@ class MockNodeTypeCategory:
         return self._name
 
     def nodeTypes(self) -> dict[str, MockNodeType]:
-        """Every type the category offers, under its own name, a name createNode takes back."""
-        offered = NODE_TYPES[self._name].values()
-        return {row.type: MockNodeType(row) for row in offered if self._name not in UNREGISTERED}
+        """Every type the category registers, under its own name."""
+        return {
+            own: MockNodeType(row) for own, row in NODE_TYPES[self._name].items() if row.registered
+        }
 
     def nodeType(self, name: str) -> MockNodeType | None:
-        """The type whose own name ``name`` is; None when no type has it."""
-        return _registered(self._name, _own(self._name, name))
+        """The registered type whose own name ``name`` is; None when no type has it."""
+        return _registered(NODE_TYPES[self._name].get(name))
 
 
 class _SopNodeClass(type):
@@ -279,15 +332,18 @@ class HeldTuple:
 @dataclass(frozen=True)
 class Placed:
     """What a placed node holds because of its type: its parameter tuples, its indirect
-    inputs, and the type that gave them.
+    inputs, its lock, and the type that gave them.
 
     ``indirect`` is None for a node that is not a subnetwork, whose indirectInputs()
     raises instead; the items it lists are made once, as each holds its own wires.
+    ``locked`` is its type's, but for a node createNode made whose contents did not
+    match its definition there, which Houdini leaves unlocked.
     """
 
     row: NodeType
     tuples: dict[str, HeldTuple]
     indirect: tuple[MockSubnetIndirectInput, ...] | None
+    locked: bool
 
 
 @dataclass(frozen=True)
@@ -298,9 +354,12 @@ class Unplaced:
     given: Mapping[str, Any] | None
 
 
-def _place(node: "MockHouNode", node_type: NodeType, given: Mapping[str, Any] | None) -> Placed:
+def _place(
+    node: "MockHouNode", node_type: NodeType, given: Mapping[str, Any] | None, answer: Answer
+) -> Placed:
     """[LAW:single-enforcer] what ``node`` holds once placed as a ``node_type``, given
-    the parameters it was built with: the one place a node's type gives it anything."""
+    the parameters it was built with and createNode's answer: the one place a node's
+    type gives it anything."""
     return Placed(
         node_type,
         _placed_parms(node_type, given),
@@ -309,7 +368,17 @@ def _place(node: "MockHouNode", node_type: NodeType, given: Mapping[str, Any] | 
         else tuple(
             MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
         ),
+        node_type.locked and not isinstance(answer, Mismatched),
     )
+
+
+def _built_as(node_type: NodeType, path: str, name: str) -> "MockHouNode":
+    """A node Houdini builds as its type, with no name resolved: the root and the
+    contexts of a fresh scene, which no name reaches, and a node Houdini builds
+    inside another where createNode may refuse it (an attribvop's subinput1)."""
+    node = MockHouNode(path=path, name=name, node_type=node_type.type)
+    node._placement = _place(node, node_type, None, Made())
+    return node
 
 
 def _placed_parms(node_type: NodeType, given: Mapping[str, Any] | None) -> dict[str, HeldTuple]:
@@ -388,7 +457,8 @@ class MockHouNode:
     ):
         self._path = path
         self._name = name
-        # the name it is created with; its type is the row that name gives in its network
+        # the name it is created with, which its network resolves to the type it is
+        # placed as; a node built as its type is built with its type's own name
         self._node_type = node_type
         # [LAW:one-source-of-truth] the tree is the scene graph: a node is in the
         # scene exactly when it is in its parent's children, and hou.node() walks it.
@@ -446,7 +516,7 @@ class MockHouNode:
         """This node and its subtree as one comparable value: what an undo step restores."""
         return (
             self._name,
-            self._node_type,
+            self._row().type,
             repr(sorted(self._parms().items())),
             tuple(
                 (index, source.path(), self._input_output_indexes.get(index, 0))
@@ -464,7 +534,7 @@ class MockHouNode:
             tuple(child.state() for child in self._children),
         )
 
-    def attach(self, child: "MockHouNode") -> None:
+    def attach(self, child: "MockHouNode") -> Answer:
         """Place a prebuilt subtree in this network, as Houdini could have built it.
 
         [LAW:single-enforcer] the one way into the scene (createNode and add_node
@@ -472,16 +542,28 @@ class MockHouNode:
         judged before any of it is linked, so a refused one leaves the scene and
         every node's links as they were. A path, name or parent that lies is a
         fixture lying, ValueError; a type its network cannot hold is refused as
-        Houdini's createNode refuses it.
+        Houdini's createNode refuses it. Returns createNode's answer for ``child``.
         """
-        placements = _admit(self, self._row(), child, self._children)
+        admitted = _admit(self._chain(), child, [(c.name(), c._row()) for c in self._children])
         for network in [child, *child.allSubChildren()]:
             for node in network._children:
                 node._parent = network
         child._parent = self
         self._children.append(child)
-        for node, placement in placements:
+        for node, placement, answer in admitted:
             node._placement = placement
+            if isinstance(answer, Mismatched):
+                node._made_unmatched(answer.errors)
+        return admitted[0][2]
+
+    def _chain(self) -> "Chain":
+        """This network and each one it is in, as _admit judges a child in it."""
+        chain = []
+        network: MockHouNode | None = self
+        while network is not None:
+            chain.append((network, network._category(), network._placed()))
+            network = network._parent
+        return tuple(chain)
 
     def node(self, path: str) -> "MockHouNode | None":
         """hou.Node.node: walk a path from this node, or from the root when it is
@@ -524,15 +606,13 @@ class MockHouNode:
             held = self._parent._held()
             assert held is not None, "attach places no child in a node that is not a network"
             return held
-        if self._node_type != "root":
+        if self._row() is not NODE_TYPES["Director"]["root"]:
             raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
         return "Director"
 
     def _row(self) -> NodeType:
-        """This node's type: what the name it was created with gives in its category."""
-        row = _offered(self._category(), self._node_type)
-        assert row is not None, "attach places no node whose type its network refuses"
-        return row
+        """This node's type, which its placement stamped."""
+        return self._placed().row
 
     def _held(self) -> str | None:
         """The category of the nodes this network holds; None for a node that is not one."""
@@ -547,11 +627,6 @@ class MockHouNode:
 
     def _parms(self) -> dict[str, HeldTuple]:
         return self._placed().tuples
-
-    def _take_placement(self) -> None:
-        """Take what this node's type gives it: the root's, which no network places."""
-        assert isinstance(self._placement, Unplaced)
-        self._placement = _place(self, self._row(), self._placement.given)
 
     def children(self) -> tuple["MockHouNode", ...]:
         """The network's children, as hou.Node.children gives them: a tuple, which
@@ -580,7 +655,7 @@ class MockHouNode:
         return MockNodeTypeCategory(held) if held is not None else None
 
     def isLockedHDA(self) -> bool:
-        return self._row().locked
+        return self._placed().locked
 
     def isNetwork(self) -> bool:
         """Whether this node holds nodes, read off the same category as childTypeCategory."""
@@ -708,8 +783,11 @@ class MockHouNode:
     def createNode(self, node_type: str, name: str | None = None) -> "MockHouNode":
         # Houdini uniquifies a taken or omitted name: the first free number after
         # the one the name carries ("geo5" taken gives "geo6"; "geo" gives "geo1").
-        # The name a type gives is its own, without its version ("curve::2.0" gives "curve1").
-        base = name or node_type.split("::")[0]
+        # The name a type gives is its own, without namespace or version
+        # ("v_mountain" gives mountain1, "apex::controlextract" controlextract1); a
+        # name that reaches no type is refused before it names a node.
+        row = _named(_holding(self._placed()), node_type)
+        base = name or (node_type if row is None else _name_components(row.type)[2])
         stem = base.rstrip("0123456789")
         carried = base[len(stem) :]
         numbered = (f"{stem}{n}" for n in range(int(carried or 0) + 1, 10_000))
@@ -718,7 +796,9 @@ class MockHouNode:
         new_path = join_path(self._path, new_name)
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type)
-        self.attach(new_node)
+        if isinstance(answer := self.attach(new_node), Mismatched):
+            # the node is made, its contents not matching its definition here
+            raise raised_inside_houdini(MatchDefinitionError(answer.message))
         return new_node
 
     def destroy(self) -> None:
@@ -840,6 +920,14 @@ class MockHouNode:
         """Leave the node as a cook that failed with ``errors`` leaves it."""
         self._errors = list(errors)
         self._count_cook()
+
+    def _made_unmatched(self, errors: tuple[str, ...]) -> None:
+        """Leave the node as Houdini 22's createNode leaves an asset whose contents did
+        not match its definition: never cooked and needing to, with an error per child
+        VOP that failed."""
+        self._cook_count = 0
+        self._needs_to_cook = True
+        self._errors = list(errors)
 
     def _count_cook(self) -> None:
         # [LAW:one-source-of-truth] what a cook leaves, failed or not: the attempt
@@ -1045,56 +1133,110 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             server.close()
 
 
-def _admit(
-    network: MockHouNode,
-    network_type: NodeType,
-    node: MockHouNode,
-    siblings: Sequence[MockHouNode],
-) -> list[tuple[MockHouNode, Placed]]:
-    """Refuse ``node`` and its subtree as a child of ``network`` (of ``network_type``),
-    beside ``siblings``, unless Houdini could have built them there; else each node of
-    the subtree with the parameters it holds once placed.
+# A network as _admit judges a child in it: the node, its category and its placement,
+# innermost first and out to the root. A network of a prebuilt subtree, not yet in the
+# scene, is judged by the placement it is about to take.
+Chain = tuple[tuple[MockHouNode, str, Placed], ...]
 
-    A node placed before keeps the parameters it had, so it is placed only where its
-    name gives the type it was.
+
+def _holding(placed: Placed) -> str:
+    """[LAW:single-enforcer] the category a network placed as ``placed`` holds, which
+    names in it resolve in; Houdini refuses every child, whatever its name, of a node
+    that is not a network and of a locked asset, before it reads the name."""
+    if placed.row.holds is None:
+        raise raised_inside_houdini(
+            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
+        )
+    if placed.locked:
+        raise raised_inside_houdini(
+            HouPermissionError("Cannot create a node inside a locked asset")
+        )
+    return placed.row.holds
+
+
+def _admit(
+    chain: Chain, node: MockHouNode, siblings: Sequence[tuple[str, NodeType]]
+) -> list[tuple[MockHouNode, Placed, Answer]]:
+    """Refuse ``node`` and its subtree as a child of the network ``chain`` begins with,
+    beside ``siblings`` (each one's name and type), unless Houdini could have built
+    them there; else each node of the subtree with its placement and createNode's
+    answer for it.
+
+    A node built by name is judged as createNode judges that name there. A node built
+    as its type (the scene's own, one Houdini builds inside another, or one placed
+    before) keeps it and is judged only by
+    its network's category: Houdini builds such nodes where createNode refuses them,
+    and moves none to a network whose category would make it another type.
     """
+    network, _, placed = chain[0]
+    if node._parent is not None:
+        raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
+    held = _holding(placed)
+    answer: Answer
+    if isinstance(node._placement, Placed):
+        placement, answer = node._placement, Made()
+        if NODE_TYPES[held].get(placement.row.type) is not placement.row:
+            raise ValueError(
+                f"{node.path()!r} keeps the {placement.row.type} it was placed as, "
+                f"which no {held} network holds"
+            )
+    else:
+        judged = _judged(chain, held, node._node_type, siblings)
+        if isinstance(judged, Refused):
+            raise raised_inside_houdini(OperationFailed(judged.message))
+        row, answer = judged
+        placement = _place(node, row, node._placement.given, answer)
+    # a fixture's lies, judged once Houdini has not refused the node: createNode
+    # names a node only after its name reaches a type
     parent_path, name = split_path(node.path())
     if parent_path != network.path() or name != node.name():
         raise ValueError(
             f"{node.path()!r} (name {node.name()!r}) cannot be a child of {network.path()!r}"
         )
-    if node._parent is not None:
-        raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
-    if any(sibling.name() == name for sibling in siblings):
+    if any(sibling == name for sibling, _ in siblings):
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
-    held = network_type.holds
-    node_type = (
-        _offered(held, node._node_type) if held is not None and not network_type.locked else None
-    )
-    if node_type is None:
-        # Houdini's three refusals: a node that is not a network, a locked asset, and
-        # a type its network's category does not offer.
-        refused: BaseException = (
-            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
-            if held is None
-            else HouPermissionError("Cannot create a node inside a locked asset")
-            if network_type.locked
-            else OperationFailed("The attempted operation failed.\nInvalid node type name")
+    admitted = [(node, placement, answer)]
+    inner: Chain = ((node, held, placement), *chain)
+    built: list[tuple[str, NodeType]] = []
+    for child in node._children:
+        child_admitted = _admit(inner, child, built)
+        admitted += child_admitted
+        built.append((child.name(), child_admitted[0][1].row))
+    return admitted
+
+
+def _judged(
+    chain: Chain, category: str, name: str, siblings: Sequence[tuple[str, NodeType]]
+) -> Refused | tuple[NodeType, Made | Mismatched]:
+    """What createNode does with ``name`` in the network ``chain`` begins with, which
+    holds ``category`` and ``siblings``: refuses it, or makes the type it names."""
+    row = _named(category, name)
+    if row is None:
+        return Refused(INVALID_TYPE_NAME)
+    holds_one = any(sibling is row for _, sibling in siblings)
+    answer = _answers_in(chain).get(row.type, MAKES).given(holds_one)
+    return answer if isinstance(answer, Refused) else (row, answer)
+
+
+def _answers_in(chain: Chain) -> dict[str, Answers]:
+    """createNode's answers in the network ``chain`` begins with, as its context root
+    (the nearest network at or above it that holds a category other than its own)
+    gives them: for the root itself, or for a subnetwork of its type at any depth
+    inside it."""
+    _, _, placed = chain[0]
+    depth = next(i for i, (_, category, outer) in enumerate(chain) if outer.row.holds != category)
+    root, _, root_placed = chain[depth]
+    create_node = root_placed.row.create_node
+    if create_node is None:
+        raise LookupError(f"the table has no createNode answers in {root.path()!r}")
+    answers = create_node.network if depth == 0 else create_node.subnetworks.get(placed.row.type)
+    if answers is None:
+        # the reader asks in a fresh subnetwork of each unlocked type the root makes
+        raise LookupError(
+            f"the table has no createNode answers in a {placed.row.type} inside a "
+            f"{root_placed.row.type}"
         )
-        refused.add_note(f"{node._node_type!r} in {network.path()!r} ({network_type.type})")
-        raise raised_inside_houdini(refused)
-    if isinstance(node._placement, Placed) and node._placement.row != node_type:
-        # Houdini moves no node to a network whose category makes it another type
-        raise ValueError(f"{node.path()!r} was placed where {node._node_type!r} gave another type")
-    placement = (
-        node._placement
-        if isinstance(node._placement, Placed)
-        else _place(node, node_type, node._placement.given)
-    )
-    placements = [(node, placement)]
-    for index, child in enumerate(node._children):
-        placements += _admit(node, node_type, child, node._children[:index])
-    return placements
+    return answers
 
 
 class MockNodeLacking(MockHouNode):
@@ -1183,17 +1325,16 @@ class MockHouModule:
 
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
-        self._root = MockHouNode(path="/", name="", node_type="root")
+        self._root = _built_as(NODE_TYPES["Director"]["root"], path="/", name="")
         # the scene's update mode, as hou.setUpdateMode sets it: every placed node
         # reads it off the root
         self._root._update_mode = MockUpdateMode.AutoUpdate
-        self._root._take_placement()
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
 
-        for context in NODE_TYPES["Manager"]:
-            self.add_node(MockHouNode(path=f"/{context}", name=context, node_type=context))
+        for context, row in NODE_TYPES["Manager"].items():
+            self.add_node(_built_as(row, path=f"/{context}", name=context))
 
         # Mock hipFile
         self.hipFile = MagicMock()
@@ -1292,16 +1433,15 @@ class MockHouModule:
         return {category: MockNodeTypeCategory(category) for category in NODE_TYPES}
 
     def preferredNodeType(self, name: str) -> MockNodeType | None:
-        """The type createNode gives for a name in Houdini's category-qualified form,
-        the category before the type's own name (``apex::Sop/controlextract``); None
-        for a name it refuses."""
+        """The registered type a name in Houdini's category-qualified form, the
+        category before the type's own name (``apex::Sop/controlextract``), resolves
+        to as rebuilt from its parts, which reads a trailing "::" as no version; None
+        for a name no type answers. It takes no alias, and no network's answers."""
         scope, namespace, qualified, version = _name_components(name)
         category, _, base = qualified.partition("/")
         if category not in NODE_TYPES:
             return None
-        return _registered(
-            category, _offered(category, _full_name(scope, namespace, base, version))
-        )
+        return _registered(_resolved(category, _full_name(scope, namespace, base, version)))
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""
