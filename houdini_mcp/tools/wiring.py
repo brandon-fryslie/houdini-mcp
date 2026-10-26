@@ -43,8 +43,8 @@ def connect_nodes(
 
     Validates that node types are compatible (e.g., SOP→SOP, OBJ→OBJ) before connecting.
     Automatically disconnects existing connection if the destination input is already wired.
-    The source sits in the destination's own network: a node beside it, or, inside a
-    subnet, one of that subnet's indirect inputs. Houdini refuses any other.
+    The source sits in the destination's own network: a node or dot beside it, or,
+    inside a subnet, one of that subnet's indirect inputs. Houdini refuses any other.
 
     Args:
         src_path: Path to source node (e.g., "/obj/geo1/grid1")
@@ -88,13 +88,9 @@ def connect_nodes(
                 dst_path=dst_path,
             )
 
-        # setInput replaces whatever wire is at the input; say which one.
+        # setInput replaces whatever wire is at the input; once it has, say which one.
+        # A refused write leaves that wire in place.
         replaced = wire_at(input_connections(dst_node), dst_input_index)
-        if replaced is not None:
-            logger.info(
-                f"Disconnecting existing connection from {replaced.source.path()} "
-                f"to {dst_path}[{dst_input_index}]"
-            )
 
         with refused_by_houdini(
             f"Houdini did not connect {src_path} to {dst_path}[{dst_input_index}]",
@@ -103,6 +99,12 @@ def connect_nodes(
             dst_input_index=dst_input_index,
         ):
             dst_node.setInput(dst_input_index, src.item, src_output_index)
+
+        if replaced is not None:
+            logger.info(
+                f"Replaced connection from {replaced.source.path()} "
+                f"to {dst_path}[{dst_input_index}]"
+            )
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]

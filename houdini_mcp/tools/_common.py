@@ -23,6 +23,7 @@ from ..connection import (
     houdini,
     is_connected,
     raised_inside_houdini,
+    transport_failure,
 )
 from .failure import (
     FAILURE,
@@ -438,16 +439,17 @@ def refused_by_houdini(what: str, **context: Any) -> Iterator[None]:
     """A scene write Houdini refuses, inside the block, becomes ``operation_failed``
     reading ``what: <Houdini's own words>``, carrying ``context``.
 
-    [LAW:single-enforcer] Every write a tool asks of Houdini meets its refusal here,
-    so each tool reports one the same way, as a parameter set Houdini refused does
-    (parms.write_all).
+    [LAW:single-enforcer] The one shape of a write Houdini refused: node creation,
+    wiring and the pane capture's navigation and framing meet their refusal here.
+    A link that fails inside the block is labeled the same way and classified as
+    the link's failure, which keeps ``context`` and names the step as a note.
     """
     try:
         yield
     except Exception as e:
-        # [LAW:no-silent-failure] a lost link or a bug in this process is not a
-        # refusal; it goes on raw, to be classified as what it is
-        if not raised_inside_houdini(e):
+        # [LAW:no-silent-failure] a bug in this process is neither Houdini's answer
+        # nor the link's; it goes on raw, to be classified as the bug it is
+        if not raised_inside_houdini(e) and transport_failure(e) is None:
             raise
         raise OperationFailed(f"{what}: {reason(e)}", **context) from e
 

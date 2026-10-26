@@ -66,7 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in Houdini's words, naming both paths, where it answered with an
   unclassified error and a traceback. A pane capture that Houdini refuses to
   frame or to take into a network is the same `operation_failed`; a fault in
-  the server there is now reported as one, not as Houdini's refusal.
+  the server there is now reported as one, not as Houdini's refusal. A link
+  lost during any of these steps is `connection_lost` carrying the step's
+  fields and naming it.
 
 - On macOS, a call waiting for Houdini's main thread holds off App Nap
   (houdini-install-aby.80r): a graphical Houdini whose window was covered
