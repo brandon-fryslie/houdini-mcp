@@ -326,7 +326,7 @@ def list_node_types(
     Args:
         category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop"),
             case-insensitive; a name that is no category Houdini has is refused
-            with invalid_input, naming the categories it has
+            with invalid_input, whose categories_available lists those it has
         name_filter: Optional substring filter for node type names (case-insensitive)
         limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
@@ -334,7 +334,8 @@ def list_node_types(
     Returns:
         List of node types with their categories and descriptions; a
         description Houdini would not give is {unread}.
-        Includes pagination info (has_more, cursor) when applicable.
+        Includes pagination info (has_more, cursor) when applicable, and
+        category, as Houdini names it, when filtered.
 
     Note:
         Large categories like "Sop" have thousands of node types.
@@ -347,6 +348,7 @@ def list_node_types(
         list_node_types(category="Sop", cursor=100)  # Get next page of SOPs
     """
     request = PageRequest(offset=cursor, limit=limit)
+    start = time.perf_counter()
     with using(host, port) as link:
         # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request
         # whatever the types Houdini offers, answered with one JSON string that
@@ -356,18 +358,23 @@ def list_node_types(
                 link.hou, category, name_filter, request.window
             )
         )
+    # [LAW:nothing-unseen] the walk runs on every call: its cost is on the event
+    elapsed_ms = (time.perf_counter() - start) * 1000
 
     if "refused" in answer:
-        raise InvalidInput(answer["refused"], category=category)
+        raise InvalidInput(
+            answer["refused"], category=category, categories_available=answer["categories"]
+        )
     log_refused(answer["refused_reads"])
     page = page_from(answer["total"], answer["node_types"], request)
     logger.info(
-        "node types category=%s name_filter=%s total=%d returned=%d unread=%d",
-        category,
+        "node types category=%s name_filter=%s total=%d returned=%d unread=%d elapsed_ms=%.1f",
+        answer["category"],
         name_filter,
         page.total,
         len(page.items),
         len(answer["refused_reads"]),
+        elapsed_ms,
     )
 
     result: dict[str, Any] = {
@@ -375,10 +382,10 @@ def list_node_types(
         "node_types": page.items,
         **paging_fields(page),
     }
-    if category is None:
+    if answer["category"] is None:
         result["categories_available"] = answer["categories"]
     else:
-        result["category"] = category
+        result["category"] = answer["category"]
     return result
 
 

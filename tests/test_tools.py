@@ -1,6 +1,7 @@
 """Tests for the Houdini MCP tools."""
 
 import logging
+import re
 import sys
 from types import SimpleNamespace
 from typing import Any, get_args
@@ -10,6 +11,7 @@ import httpx
 import pytest
 
 from tests.conftest import (
+    NODE_TYPES,
     SUMMARIZER,
     HouPermissionError,
     LoadWarning,
@@ -1287,8 +1289,15 @@ class TestListNodeTypes:
 
         assert result["kind"] == "invalid_input"
         assert "'NonExistentCategory' is not a node type category" in result["message"]
-        assert "Sop" in result["message"]
+        assert result["categories_available"] == sorted(NODE_TYPES)
         assert "node_types" not in result
+
+    def test_a_filtered_listing_names_the_category_as_houdini_does(self, mock_connection):
+        from houdini_mcp.tools import list_node_types
+
+        result = list_node_types("sop", limit=1)
+
+        assert result["category"] == "Sop" == result["node_types"][0]["category"]
 
     def test_a_type_installed_between_calls_is_in_the_next_answer(
         self, mock_connection, monkeypatch
@@ -1298,7 +1307,6 @@ class TestListNodeTypes:
         import dataclasses
 
         from houdini_mcp.tools import list_node_types
-        from tests.conftest import NODE_TYPES
 
         assert list_node_types("Sop", name_filter="mcp_listed")["returned"] == 0
         box = NODE_TYPES["Sop"]["box"]
@@ -1327,11 +1335,14 @@ class TestListNodeTypes:
         from houdini_mcp.tools import list_node_types
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.nodes"):
-            result = list_node_types("Sop", name_filter="o", limit=1)
+            result = list_node_types("sop", name_filter="o", limit=1)
 
-        assert [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.nodes"] == [
-            f"node types category=Sop name_filter=o total={result['total']} returned=1 unread=0"
-        ]
+        [event] = [r.getMessage() for r in caplog.records if r.name == "houdini_mcp.tools.nodes"]
+        assert re.fullmatch(
+            f"node types category=Sop name_filter=o total={result['total']} returned=1 "
+            r"unread=0 elapsed_ms=\d+\.\d",
+            event,
+        ), event
         assert result["total"] > 1
 
     def test_list_node_types_limit_default(self, mock_connection):

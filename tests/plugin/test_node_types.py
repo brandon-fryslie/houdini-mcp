@@ -65,9 +65,14 @@ def test_a_category_houdini_does_not_have_is_refused_naming_those_it_has(
     refused = answer(hou, "Sopp", None, slice(0, 10))
 
     assert refused == {
-        "refused": "category 'Sopp' is not a node type category Houdini has; "
-        f"it has {', '.join(sorted(NODE_TYPES))}"
+        "refused": "category 'Sopp' is not a node type category Houdini has",
+        "categories": sorted(NODE_TYPES),
     }
+
+
+def test_the_category_searched_is_named_as_houdini_names_it(hou: MockHouModule) -> None:
+    assert answer(hou, "sop", None, slice(0, 1))["category"] == "Sop"
+    assert answer(hou, None, None, slice(0, 1))["category"] is None
 
 
 def test_a_description_houdini_will_not_give_is_unread_and_its_refusal_kept(

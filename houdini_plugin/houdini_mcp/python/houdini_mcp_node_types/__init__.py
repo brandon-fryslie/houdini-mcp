@@ -34,16 +34,19 @@ class NodeType(TypedDict):
 # final, so a reader tells the two answers apart by their keys
 @final
 class Refused(TypedDict):
-    """The category asked for is not one Houdini has: why, for the caller."""
+    """The category asked for is not one Houdini has: why, and the ones it has."""
 
     refused: str
+    categories: list[str]
 
 
 @final
 class Listing(TypedDict):
-    """Every category Houdini has, how many types match, and the window's types."""
+    """Every category Houdini has, the one searched as Houdini names it (None for
+    every category), how many types match, and the window's types."""
 
     categories: list[str]
+    category: str | None
     total: int
     node_types: list[NodeType]
     refused_reads: list[RefusedRead]
@@ -72,11 +75,11 @@ def _answer(hou: Any, category: str | None, name_filter: str | None, window: sli
         if not searched:
             # [LAW:no-silent-failure] a misspelt category is not one with no types
             return Refused(
-                refused=f"category {category!r} is not a node type category Houdini has; "
-                f"it has {', '.join(names)}"
+                refused=f"category {category!r} is not a node type category Houdini has",
+                categories=names,
             )
-    # [LAW:no-ambient-temporal-coupling] sorted, so a cursor names the same place in
-    # the listing on every call, whatever order Houdini's dicts come back in
+    # [LAW:no-ambient-temporal-coupling] sorted, so the same types are listed in the
+    # same order on every call, whatever order Houdini's dicts come back in
     needle = (name_filter or "").lower()
     matches = [
         (category_name, type_name, node_type)
@@ -98,5 +101,9 @@ def _answer(hou: Any, category: str | None, name_filter: str | None, window: sli
         for category_name, type_name, node_type in matches[window]
     ]
     return Listing(
-        categories=names, total=len(matches), node_types=page, refused_reads=reads.refused
+        categories=names,
+        category=None if category is None else searched[0],
+        total=len(matches),
+        node_types=page,
+        refused_reads=reads.refused,
     )
