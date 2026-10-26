@@ -21,6 +21,8 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
+from . import app_nap
+
 logger = logging.getLogger("houdini_mcp_plugin.main_thread")
 
 __all__ = ["PICKUP_TIMEOUT", "SERVE_ROUND_SECONDS", "call", "call_as_step", "serve", "stop"]
@@ -226,8 +228,10 @@ def call(fn: Callable[[], Any], silence: float) -> str | None:
 
     Raises:
         Exception: whatever calling ``fn`` raised.
+        OSError: macOS gave no activity to hold off App Nap, so ``fn`` was
+            never posted.
     """
-    return _posted(_Call(lambda: _call_while_heard(fn, silence)))
+    return _posted(lambda: _call_while_heard(fn, silence))
 
 
 def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | None:
@@ -246,22 +250,26 @@ def call_as_step(fn: Callable[[], Any], label: str, silence: float) -> str | Non
         with hou.undos.group(label):
             _call_while_heard(fn, silence)
 
-    return _posted(_Call(as_step))
+    return _posted(as_step)
 
 
-def _posted(pending: _Call) -> str | None:
-    """``pending``, handed to the main thread and waited for."""
+def _posted(work: Callable[[], object]) -> str | None:
+    """``work``, handed to the main thread as a call and waited for."""
     import hou
 
-    # [LAW:dataflow-not-control-flow] The one difference between a graphical and a
-    # headless Houdini is who hands the main thread its calls.
-    if hou.isUIAvailable():
-        import hdefereval
+    # [LAW:no-ambient-temporal-coupling] held from the hand-over to the wait's end,
+    # on this thread: the call's wait is the whole of the need (houdini-install-aby.80r).
+    with app_nap.prevented("houdini-mcp: a client's call waits for Houdini's main thread"):
+        pending = _Call(work)
+        # [LAW:dataflow-not-control-flow] The one difference between a graphical and a
+        # headless Houdini is who hands the main thread its calls.
+        if hou.isUIAvailable():
+            import hdefereval
 
-        hdefereval.executeDeferred(pending.run)
-    else:
-        _drain.post(pending)
-    return pending.wait()
+            hdefereval.executeDeferred(pending.run)
+        else:
+            _drain.post(pending)
+        return pending.wait()
 
 
 def serve() -> None:
