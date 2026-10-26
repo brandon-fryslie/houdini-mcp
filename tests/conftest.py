@@ -1068,6 +1068,8 @@ def _heard(fn):
 
 def main_thread_of(key):
     # Houdini's own undo stack, not one reached over the link the call came on.
+    # Each entry records on it how long the client asked Houdini to wait on it
+    # while it says nothing.
     undos = local_undos(key)
 
     class main_thread:
@@ -1075,6 +1077,7 @@ def main_thread_of(key):
 
         @staticmethod
         def call(fn, silence):
+            undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
                 try:
@@ -1084,6 +1087,7 @@ def main_thread_of(key):
 
         @staticmethod
         def call_without_undo(fn, silence):
+            undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
                 try:
@@ -1094,7 +1098,6 @@ def main_thread_of(key):
 
         @staticmethod
         def call_as_step(fn, label, silence):
-            # How long the client asked Houdini to wait on it while it says nothing.
             undos.silence = silence
             with FAKE_MAIN_THREAD:
                 undos.enter_main_thread()
@@ -2022,9 +2025,12 @@ class MockUndos:
         found = (
             copy.deepcopy(self._hou._root) if self._depth == 0 and self._records_edits() else None
         )
-        yield
-        if found is not None and found.state() != self._hou._root.state():
-            self._steps.append((label, found))
+        try:
+            yield
+        finally:
+            # A step records what changed, as group's does, whether or not the edit raised.
+            if found is not None and found.state() != self._hou._root.state():
+                self._steps.append((label, found))
 
     def _records_edits(self) -> bool:
         return (

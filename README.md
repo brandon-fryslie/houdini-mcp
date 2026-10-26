@@ -78,8 +78,8 @@ The shelf's **Start Remote** starts it on a port you choose when none is running
 finds the port taken and says so in a dialog.
 
 A headless `hython` runs no UI, so it starts the listener itself, then takes the
-editing tools' calls on its main thread until `main_thread.stop()` is called from
-another thread:
+editing tools' and renders' calls on its main thread until `main_thread.stop()` is
+called from another thread:
 
 ```python
 from houdini_mcp_plugin import main_thread, start_hrpyc_server

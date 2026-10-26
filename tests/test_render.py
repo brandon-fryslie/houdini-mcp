@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from houdini_mcp.tools.transactions import BODY_SILENCE
 from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
 
 
@@ -922,6 +923,7 @@ class TestRenderLeavesSceneUnchanged:
             getattr(tools, tool)(host="localhost", port=18811)
 
         assert hou.undos.undoLabels() == before == ("artist step",)
+        assert hou.undos.silence == BODY_SILENCE
         assert f"{tool} runs on Houdini's main thread with undo disabled" in caplog.text
 
     @pytest.mark.parametrize("tool", TOOLS)
