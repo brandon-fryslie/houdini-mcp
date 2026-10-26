@@ -1502,7 +1502,8 @@ class MockHouModule:
         return "", f"Unknown command: {verb}\n"
 
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
-        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
+        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<name>``,
+        whose name is its number + 1."""
         node = self.node(path)
         if node is not None:
             return node
