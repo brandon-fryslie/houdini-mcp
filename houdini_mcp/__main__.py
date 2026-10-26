@@ -1,7 +1,11 @@
 """The ``houdini-mcp`` command, also run as: python -m houdini_mcp"""
 
+import argparse
 import os
+import sys
+from pathlib import Path
 
+from . import install
 from .connection import remote_houdini, use_houdini
 from .results import Results
 from .server import run_server
@@ -16,6 +20,19 @@ from .settings import (
 
 
 def main() -> None:
+    """Serve, or with ``install``, install the plugin and register this server."""
+    parser = argparse.ArgumentParser(prog="houdini-mcp", description=__doc__)
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser(
+        "install",
+        help="install the plugin into Houdini and register this server with each MCP client",
+    )
+    if parser.parse_args().command == "install":
+        raise SystemExit(install.main(install.Machine(os.environ, Path.home(), sys.platform)))
+    serve()
+
+
+def serve() -> None:
     """Serve as the environment says to, reaching the Houdini it names."""
     try:
         settings = server_settings(os.environ)

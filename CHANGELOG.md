@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `houdini-mcp install` sets up Houdini and the MCP clients on this machine
+  (houdini-install-aby.fes), so installing is `uv tool install
+  git+https://github.com/brandon-fryslie/houdini-mcp` and `houdini-mcp install`,
+  with no clone. It points Houdini 22's packages directory at the plugin the
+  distribution ships, which now includes the whole plugin, and registers the
+  server over stdio with Claude Code, Claude Desktop, Cursor and Codex where
+  they are installed, keeping the environment and the other settings an earlier
+  entry set; an entry pointed at a URL (a server in Docker) is left as it is.
+  The server it registers runs with `-P`, so a project's own modules do not
+  load in its place. Each step prints what it did; any that failed makes
+  the command exit 1.
+
+- The plugin starts its hrpyc listener when a graphical Houdini's UI is up, so
+  the server reaches Houdini without a click on the shelf or a `uiready.py` of
+  your own. A listener variable it cannot use is shown in a dialog.
+
+### Changed
+
+- `houdini-mcp` refuses arguments it does not know instead of ignoring them.
+
 ### Fixed
 
 - `list_node_types` lists the types Houdini offers when it is called

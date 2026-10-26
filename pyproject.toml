@@ -80,12 +80,14 @@ houdini-mcp = "houdini_mcp.__main__:main"
 
 [tool.setuptools.packages.find]
 # houdini_mcp_handshake and houdini_mcp_read are defined once, in the plugin tree
-# (Houdini's path), and ship in this distribution from that same source. The plugin
-# itself does not, nor do houdini_mcp_search, houdini_mcp_schema, houdini_mcp_geometry,
-# houdini_mcp_node_types and houdini_mcp_scene: the server reaches them only inside
-# Houdini. This is the one list of what ships from there.
+# (Houdini's path), and ship in this distribution from that same source, as modules the
+# server imports. The rest of the plugin's modules are not the server's to import: the
+# server reaches them only inside Houdini. This is the one list of what ships from there.
+# The whole tree also ships, as the houdini_plugin packages directory Houdini loads the
+# plugin from once `houdini-mcp install` points it there; an editable install is the
+# tree itself.
 where = [".", "houdini_plugin/houdini_mcp/python"]
-include = ["houdini_mcp*"]
+include = ["houdini_mcp*", "houdini_plugin*"]
 exclude = [
     "houdini_mcp_plugin*",
     "houdini_mcp_search*",
@@ -94,6 +96,14 @@ exclude = [
     "houdini_mcp_node_types*",
     "houdini_mcp_scene*",
 ]
+
+[tool.setuptools.package-data]
+# The whole plugin tree, whatever kinds of file it holds (tests/test_wheel.py)
+houdini_plugin = ["**/*"]
+
+[tool.setuptools.exclude-package-data]
+# Bytecode an interpreter left in the tree, and Finder's folder settings, are not the plugin's
+houdini_plugin = ["**/__pycache__/*", "**/*.pyc", "**/.DS_Store"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]
@@ -196,6 +206,10 @@ exclude = ["tests/", "build/"]
 # houdini_mcp_handshake and houdini_mcp_read ship from the plugin tree; the editable
 # install reaches them through an import hook mypy cannot follow.
 mypy_path = "houdini_plugin/houdini_mcp/python"
+# The plugin's modules are top-level where Houdini and the server import them, though the
+# houdini_plugin package (the tree the distribution ships) also holds them: their names
+# are taken from mypy_path, not from the packages around them.
+explicit_package_bases = true
 
 # Bandit security configuration
 [tool.bandit]
