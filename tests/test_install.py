@@ -232,9 +232,10 @@ def test_a_json_client_with_no_config_file_yet_gets_one(tmp_path: Path) -> None:
 
     _CURSOR(machine, SERVER)
 
-    assert list(json.loads((machine.home / ".cursor" / "mcp.json").read_text())["mcpServers"]) == [
-        "houdini"
-    ]
+    config = machine.home / ".cursor" / "mcp.json"
+    assert list(json.loads(config.read_text())["mcpServers"]) == ["houdini"]
+    # Nobody else may read the tokens a client config holds, or rewrite the command it runs.
+    assert config.stat().st_mode & 0o777 == 0o600
 
 
 def test_a_json_client_that_is_not_installed_is_not_found(tmp_path: Path) -> None:

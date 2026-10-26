@@ -414,7 +414,8 @@ def _replace(path: Path, text: str) -> None:
     """
     target = path.resolve()
     staged = target.with_name(f".{target.name}.houdini-mcp")
-    mode = target.stat().st_mode & 0o777 if target.exists() else 0o666
+    # A config this creates is its owner's alone: client configs hold tokens.
+    mode = target.stat().st_mode & 0o777 if target.exists() else 0o600
     try:
         with os.fdopen(
             os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w", encoding="utf-8"
