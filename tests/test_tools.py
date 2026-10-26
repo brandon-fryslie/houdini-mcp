@@ -1313,7 +1313,9 @@ class TestListNodeTypes:
         monkeypatch.setitem(
             NODE_TYPES["Sop"],
             "mcp_listed",
-            dataclasses.replace(box, type="mcp_listed", description="MCP listed"),
+            dataclasses.replace(
+                box, type="mcp_listed", description="MCP listed", namespace_order=("mcp_listed",)
+            ),
         )
 
         result = list_node_types("Sop", name_filter="mcp_listed")

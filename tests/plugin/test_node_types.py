@@ -121,7 +121,9 @@ def test_a_type_houdini_has_just_installed_is_listed(
     monkeypatch.setitem(
         NODE_TYPES["Sop"],
         "mcp_listed",
-        dataclasses.replace(box, type="mcp_listed", description="MCP listed"),
+        dataclasses.replace(
+            box, type="mcp_listed", description="MCP listed", namespace_order=("mcp_listed",)
+        ),
     )
 
     listed = answer(hou, "Sop", "mcp_listed", slice(0, 10))
