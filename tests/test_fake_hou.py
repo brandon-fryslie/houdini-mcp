@@ -134,11 +134,12 @@ def test_a_node_has_the_indirect_inputs_its_type_gives(
     mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], count: int
 ) -> None:
     """What hython reads from indirectInputs() on each, created in a fresh Houdini
-    22.0.466 scene; each one resolves by its path."""
+    22.0.466 scene: named from 1, numbered from 0; each one resolves by its path."""
     node = _created(mock_hou.node(context), *node_types)
     names = [str(n) for n in range(1, count + 1)]
 
     assert [i.name() for i in node.indirectInputs()] == names
+    assert [i.number() for i in node.indirectInputs()] == list(range(count))
     assert [mock_hou.item(f"{node.path()}/{name}") for name in names] == list(node.indirectInputs())
 
 
