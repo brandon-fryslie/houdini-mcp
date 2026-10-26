@@ -137,7 +137,7 @@ class ExecutionGrant:
     capability off this value instead of recombining the inputs.
     """
 
-    policy: str
+    policy: Policy
     bypass_config_enabled: bool
     dangerous_requested: bool
     heavy_geometry_requested: bool
@@ -162,15 +162,12 @@ class ExecutionGrant:
     def resolve(
         cls,
         *,
-        policy: str,
+        policy: Policy,
         allow_dangerous: bool,
         allow_heavy_geometry: bool,
         bypass_config_enabled: bool,
     ) -> "ExecutionGrant":
-        """The public decision: a bypass needs policy "normal", the request flag AND the config.
-
-        Any other policy - read-only, or a value that does not exist - grants nothing.
-        """
+        """The public decision: a bypass needs policy "normal", the request flag AND the config."""
         bypassable = policy == "normal"
 
         # In precedence order: a refusal's reason is its first unmet requirement.
@@ -328,21 +325,6 @@ def _bypass_refusal(
             )
         case "request":
             return (gate.pattern_reason, gate.found)
-
-
-@dataclass(frozen=True)
-class _Diff:
-    """What a program changed under ``_DIFF_ROOT``, capped."""
-
-    changes: CappedDiff
-
-
-@dataclass(frozen=True)
-class _DiffFailed:
-    """Why a program that ran has no diff: the link's loss, already dropped, when
-    that is what failed."""
-
-    error: Exception
 
 
 class _ReportedOutput(TypedDict):

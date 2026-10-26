@@ -1364,14 +1364,14 @@ class TestSyntaxGate:
         self, mock_connection, caplog, code, compiler_says
     ):
         """The parser accepts these; the compiler does not. The gate's verdict is the
-        compiler's, so they are refused here rather than failing in the worker."""
+        compiler's, so they are refused here, before any process is started."""
         from houdini_mcp.tools import code as code_mod
 
         def _tripwire(*_a, **_k):
-            raise AssertionError("exec must not run for code that does not compile")
+            raise AssertionError("no process may start for code that does not compile")
 
         with (
-            patch.object(code_mod, "exec", _tripwire, create=True),
+            patch.object(code_mod, "run_program", _tripwire),
             caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
         ):
             result = code_mod.execute_code(
@@ -1398,8 +1398,8 @@ class TestSyntaxGate:
         assert result["stdout"] == "True\n"
 
     def test_the_program_is_compiled_once(self, mock_connection):
-        """The worker runs the code object the gate compiled and never compiles the
-        source again, so the compiler's SyntaxWarning is given once."""
+        """The program's process runs the code object the gate compiled and never
+        compiles the source again, so the compiler's SyntaxWarning is given once."""
         import warnings
 
         from houdini_mcp.tools import execute_code

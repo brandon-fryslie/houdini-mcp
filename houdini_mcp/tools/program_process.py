@@ -46,7 +46,10 @@ REPORT_GRACE = 5.0
 start (cold, under a second) and its writing one line after its own clock fired.
 A process that has written nothing by then is wedged."""
 
-Phase = Literal["starting", "running", "closing"]
+ProcessPhase = Literal["starting", "closing"]
+"""A phase whose clock the process owns, and the call only backs up."""
+
+Phase = Literal[ProcessPhase, "running"]
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,7 @@ class Run:
     ran_seconds: float | None
 
 
-def _backstop(phase: Phase, request: Request) -> float:
+def _backstop(phase: ProcessPhase, request: Request) -> float:
     """[LAW:one-source-of-truth] The call's backstop over a phase the process owns,
     from the number the process's own clock in that phase is set from."""
     match phase:
@@ -99,8 +102,6 @@ def _backstop(phase: Phase, request: Request) -> float:
             return request.start_timeout + REPORT_GRACE
         case "closing":
             return request.sync_timeout + REPORT_GRACE
-        case "running":
-            raise ValueError("the program's run is the call's own clock, its timeout")
         case _:
             assert_never(phase)
 

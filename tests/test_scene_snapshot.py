@@ -426,7 +426,7 @@ class TestADiffIsItsOwnRunsAlone:
             return read(*args)
 
         monkeypatch.setattr(code_module, "scene_snapshot", after_read_outlasts_the_timeout)
-        # The program is instant; the wait expires while the worker reads after it.
+        # The program is instant; the scene read after it outlasts its timeout.
         result = execute_code(
             "hou.node('/obj').createNode('geo', 'quick')",
             capture_diff=True,
