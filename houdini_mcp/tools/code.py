@@ -17,8 +17,8 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
                        nothing.
     - ``normal``     : default; recognized dangerous operations and
                        heavy-geometry calls are blocked unless the caller opts
-                       in *and* the server is configured to permit bypass. A
-                       guard rail against accidents, not a sandbox.
+                       in *and* the server is configured to permit bypass.
+  Both are guard rails against accidents, not a sandbox (``code_policy``).
 * Every gate reads the parsed program, the same AST ``exec`` compiles, so text
   in comments and strings is not code and a program that does not parse is
   refused before any rail.
@@ -508,8 +508,8 @@ def execute_code(
     - Policy profiles: "read-only" (inspection only: the code may name only
       recognized inspection APIs, pure stdlib and dicts for its own records;
       anything else, including hou APIs added after this release, is refused,
-      and bypass flags grant nothing) and "normal" (default; a guard rail
-      against accidents, not a sandbox).
+      and bypass flags grant nothing) and "normal" (default). Both are guard
+      rails against accidents, not a sandbox.
     - Dangerous operation detection: hou.exit(), discarding the open scene
       (hou.hipFile.clear(), hou.hipFile.load(), hou.hipFile.importFBX() with
       merge_into_scene=False, hou.hipFile.merge() with

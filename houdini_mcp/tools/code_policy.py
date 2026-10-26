@@ -13,9 +13,11 @@ Two kinds of rail live here, and they fail in opposite directions on purpose:
   unrecognized, not because it was enumerated.
 * ``normal`` is a **denylist** against accidents. It refuses the operations
   that destroy work (process exit, scene wipe, file deletion, shell and
-  network access, dynamic execution, HScript) and admits everything else. It is a
-  guard rail, not a sandbox; a caller who needs a guarantee asks for
-  ``read-only``.
+  network access, dynamic execution, HScript) and admits everything else. A
+  caller who wants a program limited to inspection asks for ``read-only``.
+
+Both are guard rails against accidents in the code an agent ordinarily writes,
+not a sandbox: neither is built to hold against a program written to get past it.
 
 The caller parses the program once through :func:`parse_code` and hands the
 tree to every detector [LAW:single-enforcer]: the decision about unparseable

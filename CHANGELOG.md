@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `execute_code`'s documentation states one scope for both policies
+  (houdini-laws-etg.aep): `read-only` and `normal` are guard rails against
+  accidents in the code an agent ordinarily writes, not a sandbox. The gate
+  module called `read-only` a guarantee, and the tool contract said it blocks
+  every mutation; it admits only recognized inspection.
+
 - `execute_code` refuses the calls that run HScript as it refuses `eval`
   (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
   expansion (`hou.text.expandString()` and kin) of a string holding a backtick
