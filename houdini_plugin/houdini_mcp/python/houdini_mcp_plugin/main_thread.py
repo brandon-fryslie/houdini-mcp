@@ -53,9 +53,8 @@ class _Call:
     while it is pending, so a call given up on can never run late.
     """
 
-    def __init__(self, work: Callable[[], object], nap: str) -> None:
+    def __init__(self, work: Callable[[], object]) -> None:
         self._work = work
-        self._nap = nap
         self._lock = threading.Lock()
         self._state = _State.PENDING
         self._posted_at = time.monotonic()
@@ -73,9 +72,8 @@ class _Call:
             self._state = _State.RUNNING
         self._settled.set()
         logger.info(
-            "Houdini's main thread began a call %.3fs after it was posted (%s)",
+            "Houdini's main thread began a call %.3fs after it was posted",
             time.monotonic() - self._posted_at,
-            self._nap,
         )
         try:
             self._work()
@@ -91,7 +89,7 @@ class _Call:
                 return
             self._state = _State.REFUSED
             self._refusal = why
-        logger.warning("Refused a call, which never ran (%s): %s", self._nap, why)
+        logger.warning("Refused a call, which never ran: %s", why)
         self._settled.set()
         self._ended.set()
 
@@ -261,8 +259,8 @@ def _posted(work: Callable[[], object]) -> str | None:
 
     # [LAW:no-ambient-temporal-coupling] held from the hand-over to the wait's end,
     # on this thread: the call's wait is the whole of the need (houdini-install-aby.80r).
-    with app_nap.prevented("houdini-mcp: a client's call waits for Houdini's main thread") as nap:
-        pending = _Call(work, nap)
+    with app_nap.prevented("houdini-mcp: a client's call waits for Houdini's main thread"):
+        pending = _Call(work)
         # [LAW:dataflow-not-control-flow] The one difference between a graphical and a
         # headless Houdini is who hands the main thread its calls.
         if hou.isUIAvailable():

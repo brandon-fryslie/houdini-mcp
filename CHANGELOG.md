@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On macOS, a call waiting for Houdini's main thread holds off App Nap
+  (houdini-install-aby.80r): a graphical Houdini whose window was covered
+  refused `create_node` and every other edit after 30 s while reads answered.
+  The plugin's log says, at the first such call, that calls hold off App Nap;
+  if macOS gives no activity, the call fails with an `OSError` before it is
+  posted, and the log says why. Not yet confirmed in a graphical Houdini.
+
 - `list_node_types` lists the types Houdini offers when it is called
   (houdini-laws-etg.tva). It answered from a cache that only `load_scene` and
   `new_scene` dropped, so an asset installed or removed any other way, by

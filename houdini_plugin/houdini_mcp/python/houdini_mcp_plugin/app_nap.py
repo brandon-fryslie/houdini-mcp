@@ -15,6 +15,7 @@ holds nothing there.
 from __future__ import annotations
 
 import ctypes
+import functools
 import logging
 import sys
 from collections.abc import Callable, Iterator
@@ -66,47 +67,73 @@ class _ProcessInfo:
             objc.objc_getClass(b"NSProcessInfo"), objc.sel_registerName(b"processInfo")
         )
 
-    def _begin(self, reason: str) -> int:
+    @contextmanager
+    def _pool(self) -> Iterator[None]:
+        # What the runtime autoreleases is drained here, not left to a socket
+        # thread's implicit pool, which drains only when the thread exits.
+        pool = self._objc.objc_autoreleasePoolPush()
+        try:
+            yield
+        finally:
+            self._objc.objc_autoreleasePoolPop(pool)
+
+    def begin(self, reason: str) -> int:
         """Begin an activity for ``reason``; the activity object, retained."""
         text = self._cf.CFStringCreateWithCString(None, reason.encode(), _CF_STRING_ENCODING_UTF8)
         if not text:
             raise OSError(f"CoreFoundation made no string of {reason!r}")
-        # The activity comes back autoreleased: drained here, on whatever thread
-        # this is, with the retain below keeping it until _end().
-        pool = self._objc.objc_autoreleasePoolPush()
         try:
-            activity = self._send_begin(
-                self._info, self._begin_activity, _USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP, text
-            )
-            if not activity:
-                raise OSError(f"NSProcessInfo began no activity for {reason!r}")
-            retained: int = self._send(activity, self._retain)
+            with self._pool():
+                activity = self._send_begin(
+                    self._info,
+                    self._begin_activity,
+                    _USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP,
+                    text,
+                )
+                if not activity:
+                    raise OSError(f"NSProcessInfo began no activity for {reason!r}")
+                # It comes back autoreleased; the retain keeps it until end().
+                retained: int = self._send(activity, self._retain)
+                return retained
         finally:
-            self._objc.objc_autoreleasePoolPop(pool)
             self._cf.CFRelease(text)
-        return retained
 
-    def _end(self, activity: int) -> None:
-        self._send_end(self._info, self._end_activity, activity)
-        self._send(activity, self._release)
+    def end(self, activity: int) -> None:
+        with self._pool():
+            self._send_end(self._info, self._end_activity, activity)
+            self._send(activity, self._release)
 
-    @contextmanager
-    def held(self, reason: str) -> Iterator[str]:
-        activity = self._begin(reason)
-        logger.debug("Began an App Nap activity: %s", reason)
-        try:
-            yield "App Nap held off by an NSProcessInfo activity"
-        finally:
-            self._end(activity)
-            logger.debug("Ended the App Nap activity: %s", reason)
+
+@functools.cache
+def _process_info() -> _ProcessInfo:
+    """Built at the first call, not at import: a bridge that cannot be built
+    fails the calls that need it, not the listener that serves reads too."""
+    process_info = _ProcessInfo()
+    logger.info(
+        "Calls waiting for Houdini's main thread hold off App Nap with an NSProcessInfo activity"
+    )
+    return process_info
+
+
+@contextmanager
+def _held(reason: str) -> Iterator[None]:
+    try:
+        process_info = _process_info()
+        activity = process_info.begin(reason)
+    except Exception:
+        logger.exception("Could not hold off App Nap for %r", reason)
+        raise
+    logger.debug("Began an App Nap activity: %s", reason)
+    try:
+        yield
+    finally:
+        process_info.end(activity)
+        logger.debug("Ended the App Nap activity: %s", reason)
 
 
 # [LAW:dataflow-not-control-flow] the platform is chosen once, here; every call
-# enters the same context manager, and what it yields says what it holds.
-prevented: Callable[[str], AbstractContextManager[str]] = (
-    _ProcessInfo().held
-    if sys.platform == "darwin"
-    else lambda _reason: nullcontext(f"no App Nap on {sys.platform}")
+# enters the same context manager.
+prevented: Callable[[str], AbstractContextManager[None]] = (
+    _held if sys.platform == "darwin" else lambda _reason: nullcontext()
 )
-"""``prevented(reason)``: macOS does not nap this process while the block runs.
-The block is given what holds the nap off, for the call's own event."""
+"""``prevented(reason)``: macOS does not nap this process while the block runs."""

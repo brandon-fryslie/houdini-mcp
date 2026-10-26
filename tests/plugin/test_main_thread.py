@@ -68,10 +68,10 @@ def recording_prevented(events: list[str]) -> Callable[[str], Any]:
     """An ``app_nap.prevented`` that records its hold in ``events``."""
 
     @contextmanager
-    def prevented(reason: str) -> Iterator[str]:
+    def prevented(reason: str) -> Iterator[None]:
         events.append("held")
         try:
-            yield "the hold"
+            yield
         finally:
             events.append("ended")
 
@@ -240,9 +240,7 @@ class TestHeadless:
             refusal = call_on_main(conn, lambda: ran.append(True))
         assert time.monotonic() - started < 1
         assert "houdini_mcp_plugin.main_thread.serve()" in refusal
-        assert re.search(
-            r"Refused a call, which never ran \(.+\): " + re.escape(refusal), caplog.text
-        )
+        assert f"Refused a call, which never ran: {refusal}" in caplog.text
         assert ran == []
 
     def test_a_call_the_main_thread_has_not_begun_in_time_never_runs(self, houdini, monkeypatch):
@@ -276,8 +274,7 @@ class TestHeadless:
         with houdini() as conn, caplog.at_level(logging.INFO, "houdini_mcp_plugin.main_thread"):
             assert serving_main_thread(lambda: call_on_main(conn, lambda: None)) == []
         assert re.search(
-            r"Houdini's main thread began a call \d+\.\d{3}s after it was posted \(.+\)",
-            caplog.text,
+            r"Houdini's main thread began a call \d+\.\d{3}s after it was posted", caplog.text
         )
 
     def test_stop_with_nothing_serving_leaves_the_next_serve_taking_calls(self, houdini, caplog):
@@ -314,12 +311,11 @@ class TestHeadless:
         assert "the client's own failure" in str(raised)
         assert seen == [("open", "the call", "MainThread"), ("close", "the call", "MainThread")]
 
-    def test_a_call_holds_off_app_nap_for_exactly_its_wait(self, houdini, monkeypatch, caplog):
-        """Held from before the hand-over until the call returns, ran or refused,
-        and the call's event names the hold."""
+    def test_a_call_holds_off_app_nap_for_exactly_its_wait(self, houdini, monkeypatch):
+        """Held from before the hand-over until the call returns, ran or refused."""
         events: list[str] = []
         monkeypatch.setattr(main_thread.app_nap, "prevented", recording_prevented(events))
-        with houdini() as conn, caplog.at_level(logging.INFO, "houdini_mcp_plugin.main_thread"):
+        with houdini() as conn:
             assert (
                 serving_main_thread(lambda: call_on_main(conn, lambda: events.append("ran"))) == []
             )
@@ -327,8 +323,19 @@ class TestHeadless:
             refusal = call_on_main(conn, lambda: events.append("ran late"))
         assert "houdini_mcp_plugin.main_thread.serve()" in refusal
         assert events == ["held", "ran", "ended", "held", "ended"]
-        assert re.search(r"began a call \d+\.\d{3}s after it was posted \(the hold\)", caplog.text)
-        assert f"Refused a call, which never ran (the hold): {refusal}" in caplog.text
+
+    def test_a_call_app_nap_cannot_be_held_off_for_is_never_posted(self, houdini, monkeypatch):
+        @contextmanager
+        def prevented(reason: str) -> Iterator[None]:
+            raise OSError("no activity")
+            yield
+
+        monkeypatch.setattr(main_thread.app_nap, "prevented", prevented)
+        ran: list[bool] = []
+        with houdini() as conn:
+            (raised,) = serving_main_thread(lambda: call_on_main(conn, lambda: ran.append(True)))
+        assert "no activity" in str(raised)
+        assert ran == []
 
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []
