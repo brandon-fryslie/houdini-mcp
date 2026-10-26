@@ -16,7 +16,6 @@ from tests.conftest import (
     HouPermissionError,
     LoadWarning,
     MockHouNode,
-    MockNodeLacking,
     link_failure,
     raised_inside_houdini,
 )
@@ -1785,12 +1784,7 @@ class TestListChildren:
         from houdini_mcp.tools import list_children
 
         # a DopNode has a display flag and no render flag, in Houdini 22
-        child = MockNodeLacking(
-            path="/obj/dopnet1/solver",
-            name="solver",
-            node_type="subnet",
-            lacks=("isRenderFlagSet",),
-        )
+        child = MockHouNode(path="/obj/dopnet1/solver", name="solver", node_type="subnet")
         mock_connection.add_node(
             MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet", children=[child])
         )
@@ -2615,8 +2609,8 @@ class TestSetNodeFlags:
         assert result["flags_set"]["display"] is True
         assert result["flags_set"]["render"] is True
         assert "bypass" not in result["flags_set"]
-        assert sphere._display_flag is True
-        assert sphere._render_flag is True
+        assert sphere.isDisplayFlagSet() is True
+        assert sphere.isRenderFlagSet() is True
 
     def test_set_node_flags_bypass_only(self, mock_connection):
         """Test setting bypass flag only."""
@@ -2655,9 +2649,7 @@ class TestSetNodeFlags:
         flag is set."""
         from houdini_mcp.tools import set_node_flags
 
-        geo = MockNodeLacking(
-            path="/obj/geo1", name="geo1", node_type="geo", lacks=("bypass", "isBypassed")
-        )
+        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo)
 
         result = set_node_flags("/obj/geo1", display=False, bypass=True)
@@ -2674,9 +2666,9 @@ class TestSetNodeFlags:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
-        box._display_flag = False
         box.setRenderFlag = lambda _on: None  # type: ignore[method-assign]
         mock_connection.add_node(box)
+        box.setDisplayFlag(False)
 
         result = set_node_flags("/obj/geo1/box1", display=True, render=False)
 
@@ -2730,9 +2722,9 @@ class TestSetNodeFlags:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        sphere._display_flag = False
-        sphere._render_flag = False
         mock_connection.add_node(sphere)
+        sphere.setDisplayFlag(False)
+        sphere.setRenderFlag(False)
 
         result = set_node_flags(
             "/obj/geo1/sphere1",
@@ -2747,21 +2739,6 @@ class TestSetNodeFlags:
         assert result["flags_set"] == {"display": True}
         assert sphere.isDisplayFlagSet() is True
         assert sphere.isRenderFlagSet() is False  # Unchanged
-
-    def test_set_node_flags_a_flag_it_cannot_read_back_is_refused(self, mock_connection):
-        """A flag is the node's only when its class can both write and read it."""
-        from houdini_mcp.tools import set_node_flags
-
-        mock_connection.node("/obj").createNode("geo", "geo1")
-        noise = MockNodeLacking(
-            path="/obj/geo1/noise1", name="noise1", node_type="attribnoise", lacks=("isBypassed",)
-        )
-        mock_connection.add_node(noise)
-
-        result = set_node_flags("/obj/geo1/noise1", bypass=True)
-
-        assert (result["kind"], result["flags"]) == ("invalid_input", ["bypass"]), result
-        assert noise._bypass is False
 
 
 class TestReorderInputs:
@@ -3333,7 +3310,6 @@ class TestMaterialTools:
         # Create geometry node with a child SOP (required for material assignment)
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        sphere._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(sphere)
 
@@ -3377,7 +3353,6 @@ class TestMaterialTools:
             node_type="material",
             params={"num_materials": 0},
         )
-        mat_sop._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(mat_sop)
         mock_connection.add_node(
@@ -3409,7 +3384,6 @@ class TestMaterialTools:
             node_type="material",
             params={"shop_materialpath1": ""},
         )
-        mat_sop._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(mat_sop)
         mock_connection.add_node(

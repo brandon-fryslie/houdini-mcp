@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from houdini_mcp.tools.transactions import BODY_SILENCE
-from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 class TestRenderViewportValidation:
@@ -406,12 +406,11 @@ class TestListRenderNodes:
         caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.rendering")
 
         rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
-        rop.bypass(True)
         mock_connection.add_node(rop)
+        rop.bypass(True)
+        # a sopnet in /out is an ObjNode holding SOPs: a display flag, and no bypass flag
         mock_connection.add_node(
-            MockNodeLacking(
-                path="/out/sopnet1", name="sopnet1", node_type="sopnet", lacks=("isBypassed",)
-            )
+            MockHouNode(path="/out/sopnet1", name="sopnet1", node_type="sopnet")
         )
 
         listed = list_render_nodes()["render_nodes"]
@@ -1774,6 +1773,22 @@ class TestRenderFraming:
         obj = framed_scene.node("/obj")
         for node_type in ("null", "light", "cam"):
             obj.createNode(node_type, f"user_{node_type}").parm("tx").set(1000.0)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_objects_with_no_display_flag_are_not_framed(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        """A ropnet has only a bypass flag and a chopnet none, in Houdini 22: neither shows."""
+        import houdini_mcp.tools as tools
+
+        obj = framed_scene.node("/obj")
+        for node_type in ("ropnet", "chopnet"):
+            obj.createNode(node_type, f"user_{node_type}")
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 

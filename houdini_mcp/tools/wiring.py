@@ -10,8 +10,10 @@ from typing import Any
 from ._common import (
     FLAGS,
     UNDOABLE,
+    Flag,
     InvalidInput,
     OperationFailed,
+    flag_read,
     node_at,
     node_category,
     refused_by_houdini,
@@ -222,21 +224,13 @@ def set_node_flags(
 
         node = node_at(hou, node_path)
 
-        requested = {
-            flag: value
-            for flag, value in (("display", display), ("render", render), ("bypass", bypass))
-            if value is not None
-        }
-        # A flag is the node's when its class has both its methods: one this call
-        # cannot read back is one it cannot report. [LAW:no-silent-failure] looked up,
-        # then called, as node_flag reads: an AttributeError Houdini raises while
-        # writing or reading is a refused call, not a flag the node lacks
-        found = {
-            flag: (getattr(node, FLAGS[flag].read, None), getattr(node, FLAGS[flag].write, None))
-            for flag in requested
-        }
-        methods = {flag: pair for flag, pair in found.items() if all(m is not None for m in pair)}
-        lacking = [flag for flag in requested if flag not in methods]
+        asked: dict[Flag, bool | None] = {"display": display, "render": render, "bypass": bypass}
+        requested = {flag: value for flag, value in asked.items() if value is not None}
+        # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
+        # AttributeError Houdini raises while writing or reading is a refused call, not
+        # a flag the node lacks
+        reads = {flag: flag_read(node, flag) for flag in requested}
+        lacking = [flag for flag, read in reads.items() if read is None]
         if lacking:
             raise InvalidInput(
                 f"{node_path} ({node.type().name()}) has no {' or '.join(lacking)} flag; "
@@ -244,6 +238,12 @@ def set_node_flags(
                 node_path=node_path,
                 flags=lacking,
             )
+        # every write looked up before the first is made, so none is missing mid-way
+        methods = {
+            flag: (read, getattr(node, FLAGS[flag].write))
+            for flag, read in reads.items()
+            if read is not None
+        }
 
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():

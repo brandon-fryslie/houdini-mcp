@@ -7,6 +7,7 @@
       "holds": "Manager",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -22,6 +23,7 @@
       "holds": "Object",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -37,6 +39,7 @@
       "holds": "Driver",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -52,6 +55,7 @@
       "holds": "ChopNet",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -65,6 +69,7 @@
       "holds": "Shop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -78,6 +83,7 @@
       "holds": "CopNet",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -91,6 +97,7 @@
       "holds": "VopNet",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -104,6 +111,7 @@
       "holds": "Vop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {
@@ -197,6 +205,7 @@
       "holds": "Lop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -210,6 +219,7 @@
       "holds": "TopNet",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -227,6 +237,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -281,6 +294,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -326,6 +342,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -371,6 +390,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {},
       "create_node": {
         "network": {},
@@ -389,6 +411,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -434,6 +459,9 @@
       "holds": "Object",
       "locked": false,
       "indirect_inputs": 4,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -472,6 +500,9 @@
       "holds": "Dop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -516,6 +547,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {
         "t": {
           "components": [
@@ -628,6 +662,9 @@
       "holds": "Driver",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "bypass"
+      ],
       "parms": {},
       "create_node": {
         "network": {},
@@ -645,6 +682,7 @@
       "holds": "Chop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [],
       "parms": {},
       "create_node": {
         "network": {},
@@ -662,6 +700,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "box": {
@@ -673,6 +716,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "grid": {
@@ -684,6 +732,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "tube": {
@@ -695,6 +748,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "torus": {
@@ -706,6 +764,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "circle": {
@@ -717,6 +780,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "line": {
@@ -728,6 +796,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "curve::2.0": {
@@ -740,6 +813,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "mountain::2.0": {
@@ -752,6 +830,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "mountain": {
@@ -766,6 +849,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "apex::controlextract::2.0": {
@@ -778,6 +866,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribnoise::2.0": {
@@ -790,6 +883,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "cloudnoise": {
@@ -801,6 +899,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "heightfield_noise": {
@@ -812,6 +915,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "xform": {
@@ -823,6 +931,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "blast": {
@@ -834,6 +947,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "delete": {
@@ -845,6 +963,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "dissolve::2.0": {
@@ -857,6 +980,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "fuse::2.0": {
@@ -869,6 +997,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "clean": {
@@ -880,6 +1013,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "merge": {
@@ -891,6 +1029,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "switch": {
@@ -902,6 +1045,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "copy": {
@@ -913,6 +1061,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "scatter::2.0": {
@@ -925,6 +1078,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "copytopoints::2.0": {
@@ -937,6 +1095,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "foreach": {
@@ -948,6 +1111,11 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "vex": {
@@ -959,6 +1127,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribwrangle": {
@@ -970,6 +1143,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "pointwrangle": {
@@ -981,6 +1159,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "volumewrangle": {
@@ -992,6 +1175,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "vdb": {
@@ -1003,6 +1191,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "vdbfromparticles": {
@@ -1014,6 +1207,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "vdbsmooth": {
@@ -1025,6 +1223,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "vdbcombine": {
@@ -1036,6 +1239,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "file": {
@@ -1047,6 +1255,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "alembic": {
@@ -1058,6 +1271,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "filecache::2.0": {
@@ -1072,6 +1290,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "cache": {
@@ -1083,6 +1306,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "stash": {
@@ -1094,6 +1322,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "group": {
@@ -1105,6 +1338,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "groupcreate": {
@@ -1116,6 +1354,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "groupcombine": {
@@ -1127,6 +1370,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "groupexpression": {
@@ -1138,6 +1386,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "subdivide": {
@@ -1149,6 +1402,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "polyextrude::2.0": {
@@ -1161,6 +1419,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "polybevel::3.0": {
@@ -1176,6 +1439,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "polyreduce::2.0": {
@@ -1188,6 +1456,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "polyfill": {
@@ -1199,6 +1472,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "null": {
@@ -1210,6 +1488,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "output": {
@@ -1221,6 +1504,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "object_merge": {
@@ -1234,6 +1522,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "timeshift": {
@@ -1245,6 +1538,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "trail": {
@@ -1256,6 +1554,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "material": {
@@ -1267,6 +1570,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {
         "shop_materialpath1": {
           "components": [
@@ -1298,6 +1606,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "split": {
@@ -1309,6 +1622,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "add": {
@@ -1320,6 +1638,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "align": {
@@ -1331,6 +1654,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribblur": {
@@ -1344,6 +1672,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribcast": {
@@ -1355,6 +1688,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribcopy": {
@@ -1366,6 +1704,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribdelete": {
@@ -1377,6 +1720,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribexpression": {
@@ -1388,6 +1736,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribfade": {
@@ -1399,6 +1752,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 3,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribpromote": {
@@ -1410,6 +1768,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribrandomize": {
@@ -1421,6 +1784,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribremap": {
@@ -1432,6 +1800,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribtransfer": {
@@ -1443,6 +1816,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "attribvop": {
@@ -1454,6 +1832,11 @@
       "holds": "Vop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {},
       "create_node": {
         "network": {
@@ -1486,6 +1869,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "blastbyattribute": {
@@ -1497,6 +1885,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "bound": {
@@ -1508,6 +1901,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "bridge": {
@@ -1519,6 +1917,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "bulge": {
@@ -1530,6 +1933,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "cap": {
@@ -1541,6 +1949,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "carve": {
@@ -1552,6 +1965,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "chain": {
@@ -1563,6 +1981,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "circlefromedges": {
@@ -1574,6 +1997,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "clip::2.0": {
@@ -1586,6 +2014,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "cluster": {
@@ -1597,6 +2030,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "color": {
@@ -1608,6 +2046,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "comb": {
@@ -1619,6 +2062,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "connectivity": {
@@ -1630,6 +2078,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "convert": {
@@ -1641,6 +2094,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "convertline": {
@@ -1652,6 +2110,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 1,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "convertvdb": {
@@ -1663,6 +2126,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "cookie": {
@@ -1674,6 +2142,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "copyxform": {
@@ -1685,6 +2158,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "crease": {
@@ -1696,6 +2174,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "creep": {
@@ -1707,6 +2190,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "deform": {
@@ -1718,6 +2206,11 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "deltamush::2.0": {
@@ -1730,6 +2223,11 @@
       "holds": "Sop",
       "locked": true,
       "indirect_inputs": 2,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "subnet": {
@@ -1741,6 +2239,11 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {}
     },
     "dopnet": {
@@ -1752,6 +2255,11 @@
       "holds": "Dop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display",
+        "render",
+        "bypass"
+      ],
       "parms": {},
       "create_node": {
         "network": {},
@@ -1774,6 +2282,10 @@
       "holds": "Dop",
       "locked": true,
       "indirect_inputs": 5,
+      "flags": [
+        "display",
+        "bypass"
+      ],
       "parms": {}
     },
     "subnet": {
@@ -1785,6 +2297,10 @@
       "holds": "Dop",
       "locked": false,
       "indirect_inputs": 4,
+      "flags": [
+        "display",
+        "bypass"
+      ],
       "parms": {}
     }
   },
@@ -1799,6 +2315,9 @@
       "holds": "Vop",
       "locked": true,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {
         "basecolor": {
           "components": [
@@ -1842,6 +2361,9 @@
       "holds": "Vop",
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     },
     "subinput": {
@@ -1853,6 +2375,9 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     },
     "geometryvopglobal::2.0": {
@@ -1865,6 +2390,9 @@
       "holds": "Vop",
       "locked": true,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     },
     "geometryvopoutput": {
@@ -1876,6 +2404,9 @@
       "holds": "Vop",
       "locked": true,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     },
     "collect": {
@@ -1887,6 +2418,9 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     }
   },
@@ -1900,6 +2434,9 @@
       "holds": null,
       "locked": false,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {
         "camera": {
           "components": [
@@ -1963,6 +2500,9 @@
       "holds": "Driver",
       "locked": true,
       "indirect_inputs": 0,
+      "flags": [
+        "bypass"
+      ],
       "parms": {
         "camera": {
           "components": [
@@ -2027,6 +2567,9 @@
       "holds": "Driver",
       "locked": false,
       "indirect_inputs": 31,
+      "flags": [
+        "bypass"
+      ],
       "parms": {}
     },
     "sopnet": {
@@ -2038,6 +2581,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {},
       "create_node": {
         "network": {},
@@ -2058,6 +2604,9 @@
       "holds": "Sop",
       "locked": false,
       "indirect_inputs": null,
+      "flags": [
+        "display"
+      ],
       "parms": {},
       "create_node": {
         "network": {},
