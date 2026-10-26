@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-laws-etg.aep): `read-only` and `normal` are guard rails against
   accidents in the code an agent ordinarily writes, not a sandbox. The gate
   module called `read-only` a guarantee, and the tool contract said it blocks
-  every mutation; it admits only recognized inspection.
+  every mutation; it admits only recognized inspection. The gate's names now
+  say so too: `blocked_reason` `read_only_mutation` is `read_only_non_inspection`,
+  `mutation_patterns` is `non_inspection_patterns`, and `audit.granted.mutation`
+  is `audit.granted.non_inspection`.
 
 - `execute_code` refuses the calls that run HScript as it refuses `eval`
   (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
