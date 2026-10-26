@@ -7,7 +7,7 @@ their own names, and for each type the parameter tuples a fresh node carries. Ev
 fact under them is Houdini's answer, read by ``read_node_types``: the refresh script
 writes the file from it under hython, and a live test checks the file against it, so
 the table stays what Houdini 22.0.466 says. That a locked asset and a node that is not
-a network refuse every child, whatever the name, is the fake's own rule (``_admit`` in
+a network refuse every child, whatever the name, is the fake's own rule (``_holding`` in
 tests/conftest.py), which the live name test checks.
 
 Imported by hython as well as by the tests, so it imports nothing beyond the
@@ -207,23 +207,24 @@ def _answers_by_type(answers: dict[str, Any]) -> dict[str, Answers]:
 
 
 def _answers(own: str, given: dict[str, Any]) -> Answers:
-    with_none = _answer(given["with_none"])
+    with_none = _answer(own, given["with_none"])
     # with_one is null exactly where createNode refused the first one
     if (given["with_one"] is None) != isinstance(with_none, Refused):
         raise ValueError(f"{own}'s answer with one held is {given['with_one']!r}")
     return Answers(
-        with_none, with_none if given["with_one"] is None else _answer(given["with_one"])
+        with_none, with_none if given["with_one"] is None else _answer(own, given["with_one"])
     )
 
 
-def _answer(answer: Any) -> Answer:
-    if answer == "made":
-        return Made()
-    if answer["raises"] == "OperationFailed":
-        return Refused(answer["message"])
-    if answer["raises"] == "MatchDefinitionError":
-        return Mismatched(answer["message"], tuple(answer["errors"]))
-    raise ValueError(f"the fake models no createNode answer that raises {answer['raises']!r}")
+def _answer(own: str, answer: Any) -> Answer:
+    match answer:
+        case "made":
+            return Made()
+        case {"raises": "OperationFailed", "message": str(message)}:
+            return Refused(message)
+        case {"raises": "MatchDefinitionError", "message": str(message), "errors": list(errors)}:
+            return Mismatched(message, tuple(errors))
+    raise ValueError(f"the fake models no createNode answer for {own} like {answer!r}")
 
 
 def read_node_types(hou: Any, table: Table) -> Table:
@@ -279,7 +280,8 @@ class _Reader:
         if held not in self._table:
             raise LookupError(
                 f"{network.path()} holds {held}, which the table has no entry for: add "
-                f"one of its types, hython tests/refresh_fake_node_types.py {held}/<type>"
+                f'"{held}": {{}} to {TABLE_PATH.name}, or any of its types the fake needs '
+                f"with hython tests/refresh_fake_node_types.py {held}/<type>"
             )
         self._create_node[_type_key(network)] = {
             "network": self._ask_all(network, held, keep=True),
@@ -296,21 +298,27 @@ class _Reader:
             if facts is None or facts["holds"] != held or facts["locked"]:
                 continue
             answer, subnetwork = self._ask(network, own)
-            if answer != "made":
-                continue
-            # a root first met in a subnetwork is not kept: the subnetwork goes
-            subnetworks[own] = self._ask_all(subnetwork, held, keep=False)
-            subnetwork.destroy()
+            if answer == "made":
+                subnetworks[own] = self._ask_all(subnetwork, held, keep=False)
+            # a root first met in a subnetwork is not kept: the subnetwork goes, as does
+            # one Houdini made and could not match
+            if subnetwork is not None:
+                subnetwork.destroy()
 
     def _ask_all(self, network: Any, category: str, keep: bool) -> dict[str, Any]:
         """createNode's answers in ``network`` for each registered type of
         ``category`` it does not simply make, asked with none of it held and again."""
+        # the nodes Houdini builds with a fresh network, each cleared before its type is
+        # asked for; no other node of a type is in the network until that type is asked
+        built: dict[str, list[Any]] = {}
+        for child in network.children():
+            built.setdefault(child.type().name(), []).append(child)
         answers = {}
         for own in self._table[category]:
             facts = self._facts.get((category, own))
             if facts is not None and not _registered(own, facts["namespace_order"]):
                 continue
-            for held in [c for c in network.children() if c.type().name() == own]:
+            for held in built.get(own, []):
                 held.destroy()
             with_none, first = self._ask(network, own)
             with_one = None

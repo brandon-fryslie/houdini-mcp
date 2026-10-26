@@ -363,6 +363,15 @@ def test_the_table_holds_create_node_answers_for_an_unlocked_context_root_alone(
         node_types({"Sop": table["Sop"]})
 
 
+def test_the_table_names_the_type_whose_create_node_answer_the_fake_does_not_model() -> None:
+    table = load_table()
+    answers = table["Manager"]["mat"]["create_node"]["network"]
+    answers["geometryvopglobal::2.0"]["with_none"] = "refused"
+
+    with pytest.raises(ValueError, match="no createNode answer for geometryvopglobal::2.0"):
+        node_types({"Manager": table["Manager"]})
+
+
 def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
     mock_hou: MockHouModule,
 ) -> None:
@@ -496,7 +505,8 @@ def test_an_asset_whose_contents_do_not_match_where_it_is_made_is_left_unlocked(
     mock_hou: MockHouModule,
 ) -> None:
     """geometryvopglobal::2.0 is a CVEX asset: /mat makes it and raises, leaving it
-    unlocked with an error for each child VOP that failed; an attribvop makes it."""
+    unlocked and never cooked, with an error for each child VOP that failed; an
+    attribvop makes it."""
     mat = mock_hou.node("/mat")
     attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
 
@@ -508,6 +518,7 @@ def test_an_asset_whose_contents_do_not_match_where_it_is_made_is_left_unlocked(
     assert left is not None
     assert (left.type().name(), left.isLockedHDA()) == ("geometryvopglobal::2.0", False)
     assert left.errors() == [f"Error in child VOP '{vop}'." for vop in ("P", "Time", "N")]
+    assert (left.needsToCook(), left.cookCount()) == (True, 0)
     assert (made.isLockedHDA(), made.errors()) == (True, [])
 
 
@@ -546,10 +557,13 @@ def test_a_locked_asset_holds_a_category_and_refuses_every_child(
     wrangle = mock_hou.node("/obj").createNode("geo").createNode("attribwrangle")
 
     assert (wrangle.childTypeCategory().name(), wrangle.isNetwork()) == ("Sop", True)
-    with pytest.raises(
-        Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
-    ):
-        wrangle.createNode("null")
+    # curve:: names the unversioned curve, which the table lacks: the lock refuses
+    # before the name is read
+    for name in ("null", "curve::"):
+        with pytest.raises(
+            Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
+        ):
+            wrangle.createNode(name)
     assert wrangle.children() == ()
 
 

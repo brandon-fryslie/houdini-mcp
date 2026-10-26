@@ -553,8 +553,7 @@ class MockHouNode:
         for node, placement, answer in admitted:
             node._placement = placement
             if isinstance(answer, Mismatched):
-                # Houdini leaves a node it could not match with an error per child VOP
-                node._errors = list(answer.errors)
+                node._made_unmatched(answer.errors)
         return admitted[0][2]
 
     def _chain(self) -> "Chain":
@@ -787,8 +786,7 @@ class MockHouNode:
         # The name a type gives is its own, without namespace or version
         # ("v_mountain" gives mountain1, "apex::controlextract" controlextract1); a
         # name that reaches no type is refused before it names a node.
-        held = self._held()
-        row = None if held is None else _named(held, node_type)
+        row = _named(_holding(self._placed()), node_type)
         base = name or (node_type if row is None else _name_components(row.type)[2])
         stem = base.rstrip("0123456789")
         carried = base[len(stem) :]
@@ -922,6 +920,14 @@ class MockHouNode:
         """Leave the node as a cook that failed with ``errors`` leaves it."""
         self._errors = list(errors)
         self._count_cook()
+
+    def _made_unmatched(self, errors: tuple[str, ...]) -> None:
+        """Leave the node as Houdini 22's createNode leaves an asset whose contents did
+        not match its definition: never cooked and needing to, with an error per child
+        VOP that failed."""
+        self._cook_count = 0
+        self._needs_to_cook = True
+        self._errors = list(errors)
 
     def _count_cook(self) -> None:
         # [LAW:one-source-of-truth] what a cook leaves, failed or not: the attempt
@@ -1133,6 +1139,21 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 Chain = tuple[tuple[MockHouNode, str, Placed], ...]
 
 
+def _holding(placed: Placed) -> str:
+    """[LAW:single-enforcer] the category a network placed as ``placed`` holds, which
+    names in it resolve in; Houdini refuses every child, whatever its name, of a node
+    that is not a network and of a locked asset, before it reads the name."""
+    if placed.row.holds is None:
+        raise raised_inside_houdini(
+            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
+        )
+    if placed.locked:
+        raise raised_inside_houdini(
+            HouPermissionError("Cannot create a node inside a locked asset")
+        )
+    return placed.row.holds
+
+
 def _admit(
     chain: Chain, node: MockHouNode, siblings: Sequence[tuple[str, NodeType]]
 ) -> list[tuple[MockHouNode, Placed, Answer]]:
@@ -1150,15 +1171,7 @@ def _admit(
     network, _, placed = chain[0]
     if node._parent is not None:
         raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
-    held = placed.row.holds
-    if held is None:
-        raise raised_inside_houdini(
-            OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
-        )
-    if placed.locked:
-        raise raised_inside_houdini(
-            HouPermissionError("Cannot create a node inside a locked asset")
-        )
+    held = _holding(placed)
     answer: Answer
     if isinstance(node._placement, Placed):
         placement, answer = node._placement, Made()
