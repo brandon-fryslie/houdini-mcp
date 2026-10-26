@@ -96,41 +96,52 @@ A program that raises is undone, and the failure's message ends by saying so
 (or why its changes may remain). While a program runs, a graphical Houdini's
 interface does not redraw, and other calls wait for it.
 
-### Timeouts Cut the Program Off
+### A Program Runs in a Process of Its Own
 
-At `timeout` the program is cut off from Houdini: its link is shut down, which
-frees Houdini's main thread once the request it is serving returns, and its
-step is undone. The response waits for that undo, which the main thread
-refuses if it is still serving that request 30 seconds later (a long cook),
-so it can come about 30 seconds after `timeout`. Python cannot stop the program's thread, which runs on until it
-ends; a program waiting on Houdini, or that touches `hou` again, ends there. The response is the
-`worker_still_running` arm, since waiting for that thread is the remedy, with
-`timeout`, a `warning`, the `worker` block, and a message ending with what
+Each program runs in a child process of the server, with its own link to
+Houdini and its own stdout and stderr. A program that reassigns `sys.stdout`
+or uses `contextlib.redirect_stdout` changes only its own output, and what
+any of its threads writes to its stdout is in the response. The server
+starts no thread for a program, and nothing of the program runs once the
+call has returned: its process group is killed on every way out.
+
+A program that never began - its process could not open its link, the
+Houdini lacks this release's plugin, Houdini's main thread refused the call,
+or the start took longer than 60 seconds - is `operation_failed` with a
+message starting `The program never ran: `. Nothing was undone, because
+nothing ran.
+
+A program whose own link to Houdini failed has raised: the response is
+`operation_failed`, with the link's `EOFError` or `TimeoutError` in its
+`traceback`, and its step is undone. The server's link was not involved,
+so the next call needs no reconnect.
+
+### Timeouts Kill the Program
+
+At `timeout` the program's process is killed, and its step is undone. The
+response is the `timeout` arm with `cut_off: "program"` and
+`retry: "check_scene"`: a killed program may have changed what undo does not
+reach (a file, a preference), so check before calling again. It carries the
+output written up to the kill, `timeout`, and a message ending with what
 became of the program's changes:
 
 ```json
 {
     "status": "error",
-    "kind": "worker_still_running",
-    "retry": "wait_for_worker",
+    "kind": "timeout",
+    "retry": "check_scene",
+    "cut_off": "program",
+    "message": "Execution timeout: code did not complete within 30 seconds\nIts changes to the scene were undone.",
     "timeout": 30,
-    "worker": {
-        "operation": "execute_code",
-        "code_sha256": "...",
-        "timeout": 30,
-        "running_for_seconds": 30.0
-    },
+    "stdout": "...",
     "audit": {"timed_out": true, "code_sha256": "..."}
 }
 ```
 
-Until that program ends, every scene-writing tool, another `execute_code`,
-`render_viewport` and `render_quad_view` (which add a camera and a ROP for
-the call), and the pane captures (`capture_pane_screenshot`,
-`capture_multiple_panes`, `render_node_network`) return
-`kind: "worker_still_running"` (with `retry: "wait_for_worker"`) naming the same
-worker; plain reads and
-`save_scene` still work. See `docs/implementation/error-handling-patterns.md`.
+The undo waits behind any request the killed program had in flight, which
+Houdini finishes first; Houdini's main thread refuses the undo if that takes
+past 30 seconds (a long cook), and the message then says the changes may
+remain. The next call, of any tool, runs as soon as this one returns.
 
 ### Concurrent Calls Wait Their Turn
 
@@ -156,9 +167,7 @@ undo is their own. A capture is the pane as its own
 window draws it, so a window in front of Houdini is never in the picture. Like
 the undoable tools, renders and captures need the plugin installed in that Houdini.
 
-A call that finds the scene free has no `scene_wait`. A call still waiting
-when a timed-out program takes over the scene is refused with
-`worker_still_running`, as above. A call cancelled while it waits (its client
+A call that finds the scene free has no `scene_wait`. A call cancelled while it waits (its client
 timed out or gave up) leaves the queue and never runs. A call cancelled after
 it started still finishes its write.
 

@@ -219,11 +219,13 @@ class TestServedSchemas:
         no Houdini answers an async tool's read. The names a body builds are
         test_a_tool_names_no_other_tool's."""
 
+        from houdini_mcp.connection import HoudiniTarget, use_houdini
+
         def broken(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("injected")
 
         monkeypatch.setattr("houdini_mcp.tools._common.recovering", broken)
-        monkeypatch.setattr("houdini_mcp.connection.handshake.connect", broken)
+        use_houdini(HoudiniTarget(broken, "Nothing answers here.", broken))
         for name, served_tool in served.items():
             arguments = {
                 parameter: REQUIRED_ARGUMENTS[parameter]

@@ -437,52 +437,15 @@ class TestExecuteCodeTimeout:
 class TestExecuteCodeOutputCapture:
     """A program's capture holds what the program wrote and nothing else."""
 
-    def test_a_capture_keeps_its_bound_counts_the_rest_and_outlives_its_close(self):
-        import pytest
-
+    def test_a_capture_keeps_its_bound_and_counts_the_rest(self):
         from houdini_mcp.tools.program_output import Capture, Written
 
         capture = Capture(5)
         capture.write("abc")
         capture.write("defgh")
-        capture.close()
 
-        with pytest.raises(ValueError, match="closed file"):
-            capture.write("i")
         assert capture.written() == Written("abcde", 8)
         assert capture.written().truncated
-
-    def test_a_write_takes_the_strings_value_and_runs_none_of_its_code(self):
-        """A program's str subclass cannot write, block, or lie about its length
-        inside a write: the capture reads the value, as any stream does."""
-        from houdini_mcp.tools.program_output import Capture, Written
-
-        capture = Capture(10)
-        ran: list[str] = []
-
-        class Hooked(str):
-            def __len__(self) -> int:
-                ran.append("__len__")
-                capture.write("F")
-                return 0
-
-            def __getitem__(self, key: object) -> str:
-                ran.append("__getitem__")
-                capture.write("F")
-                return ""
-
-        assert capture.write(Hooked("abc")) == 3
-        assert (capture.written(), ran) == (Written("abc", 3), [])
-
-    def test_a_write_refuses_what_is_not_a_str(self):
-        import pytest
-
-        from houdini_mcp.tools.program_output import Capture, Written
-
-        capture = Capture(10)
-        with pytest.raises(TypeError):
-            capture.write(42)  # type: ignore[arg-type]
-        assert capture.written() == Written("", 0)
 
     def test_other_threads_write_past_a_running_program(self, mock_connection, capsys):
         """A write from another thread while a program runs reaches its own stream, not the capture."""
@@ -528,108 +491,36 @@ class TestExecuteCodeOutputCapture:
         assert bystander.err == "bystander err"
         assert (sys.stdout, sys.stderr) == streams_before
 
-    def test_a_stream_the_program_swaps_is_restored_and_reported(self, caplog):
-        """A program's own sys.stdout swap does not outlive it, and the output it diverted is reported."""
-        import io
-        import logging
+    def test_a_program_that_swaps_its_streams_swaps_only_its_own(self, mock_connection):
+        """A program's stdout and stderr are its own process's: its swaps reach
+        nothing of the server's, and what it wrote to its fds is its output."""
         import sys
-
-        from houdini_mcp.tools.program_output import captured
-
-        original = sys.stdout
-        swapped = io.StringIO()
-        capture = io.StringIO()
-        try:
-            with (
-                caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.program_output"),
-                captured(capture, io.StringIO()),
-            ):
-                print("before")
-                sys.stdout = swapped
-                print("after")
-            assert sys.stdout is original
-        finally:
-            sys.stdout = original
-
-        assert capture.getvalue() == "before\n"
-        assert swapped.getvalue() == "after\n"
-        [record] = caplog.records
-        assert record.getMessage().startswith("sys.stdout was replaced by")
-
-    def test_the_swap_warning_reaches_the_server_not_the_capture(self, capsys):
-        """With no log handler configured, the warning goes to the real stderr, never the program's capture."""
-        import io
-        import logging
-        import sys
-
-        from houdini_mcp.tools.program_output import captured
-
-        logger = logging.getLogger("houdini_mcp.tools.program_output")
-        error_capture = io.StringIO()
-        original, propagate = sys.stdout, logger.propagate
-        logger.propagate = False  # no handler anywhere: logging.lastResort writes to sys.stderr
-        try:
-            with captured(io.StringIO(), error_capture):
-                sys.stdout = io.StringIO()
-        finally:
-            sys.stdout, logger.propagate = original, propagate
-
-        assert error_capture.getvalue() == ""
-        assert "sys.stdout was replaced by" in capsys.readouterr().err
-
-    def test_other_threads_write_past_a_timed_out_program(
-        self, mock_connection, stalled_program, capsys
-    ):
-        """After a timeout the program keeps its routers; other threads' writes still reach their streams."""
-        import sys
-
-        from houdini_mcp.tools import execute_code
-        from houdini_mcp.tools.workers import WORKERS
 
         streams_before = (sys.stdout, sys.stderr)
-        result = execute_code(
-            stalled_program, timeout=1, host="localhost", port=18811, bypass_config_enabled=False
+        result = _run(
+            "import contextlib, io, sys\n"
+            "print('to fd 1')\n"
+            "with contextlib.redirect_stdout(io.StringIO()):\n"
+            "    print('to the program only')\n"
+            "sys.stdout = io.StringIO()\n"
+            "print('to the program too')\n"
+            "sys.stderr.write('to fd 2')\n"
         )
-        assert result["audit"]["timed_out"] is True
 
-        print("bystander out")
-        assert capsys.readouterr().out == "bystander out\n"
-
-        mock_connection.stall_gate.set()
-        WORKERS.running().thread.join(5)
+        assert result["status"] == "success", result
+        assert (result["stdout"], result["stderr"]) == ("to fd 1\n", "to fd 2")
         assert (sys.stdout, sys.stderr) == streams_before
 
-    def test_a_thread_the_program_starts_writes_past_the_capture(self, capsys):
-        """Capture follows the program's thread: a child thread's output reaches the process's stream."""
-        import io
-        import threading
+    def test_a_thread_the_program_starts_writes_to_its_output(self, mock_connection):
+        """Its process's fd 1 is the program's, whichever of its threads writes there."""
+        result = _run(
+            "import threading\n"
+            "child = threading.Thread(target=print, args=('from its thread',))\n"
+            "child.start()\n"
+            "child.join()\n"
+        )
 
-        from houdini_mcp.tools.program_output import captured
-
-        capture = io.StringIO()
-        with captured(capture, io.StringIO()):
-            print("program")
-            child = threading.Thread(target=print, args=("child",))
-            child.start()
-            child.join()
-
-        assert capture.getvalue() == "program\n"
-        assert capsys.readouterr().out == "child\n"
-
-    def test_a_router_kept_past_the_run_captures_nothing(self, capsys):
-        """A stream reference taken mid-run sends everything past once the run ends, even from its thread."""
-        import io
-        import sys
-
-        from houdini_mcp.tools.program_output import captured
-
-        capture = io.StringIO()
-        with captured(capture, io.StringIO()):
-            kept = sys.stdout
-        print("later", file=kept)
-
-        assert capture.getvalue() == ""
-        assert capsys.readouterr().out == "later\n"
+        assert result["stdout"] == "from its thread\n", result
 
 
 class TestExecuteCodeEdgeCases:
@@ -787,51 +678,47 @@ def _closing_with(close: Callable[..., Any]) -> Callable[..., Any]:
     return closing
 
 
-class TestAProgramThatFailedOnTheLink:
-    """(houdini-laws-etg.il8) A program whose link failed under it reads as the link's
-    failure, keeps what it left behind, and leaves no dead link installed; a program
-    that failed on its own leaves the link alone, whatever type it raised."""
+class TestAProgramWhoseOwnLinkFailed:
+    """A program's link to Houdini is its process's own: one that fails under it is
+    the program's failure (operation_failed, the link's exception in its traceback),
+    its step undone from the server's link, which was not involved and stays up. A
+    program that failed on its own does the same, whatever type it raised."""
 
-    def test_a_real_sync_timeout_resets_the_connection_and_keeps_the_programs_output(
-        self, connected_to
+    def test_a_sync_timeout_on_its_own_link_is_its_failure_and_the_servers_link_stays(
+        self, mock_connection, monkeypatch
     ):
         from houdini_mcp.connection import houdini
-        from tests.conftest import MockHouModule, served_connection
+        from houdini_mcp.tools import code
 
-        with served_connection("import time\ndef slow(): time.sleep(1)\n") as conn:
-            conn._config["sync_request_timeout"] = 0.2
-            hou = MockHouModule()
-            hou.slow = conn.namespace["slow"]
-            connected_to(hou)
-            link = houdini().link()
-            result = _run("print('before')\nhou.slow()")
-
-        # rpyc's timeout leaves the program running in Houdini: calling again could
-        # run it twice, so the client checks the scene first.
-        assert (result["kind"], result["retry"]) == ("timeout", "check_scene")
-        assert result["connection_reset"] is True
-        assert result["exception"] == "TimeoutError"
-        assert result["stdout"] == "before\n"
-        assert 'File "<string>", line 2' in result["traceback"]
-        assert "TimeoutError: result expired" in result["message"]
-        assert result["policy"] == "normal"
-        assert result["audit"]["code_sha256"]
-        assert link.conn.closed and houdini().link() is None
-
-    def test_a_closed_link_is_connection_lost(self, mock_connection, monkeypatch):
-        from houdini_mcp.connection import houdini
-        from tests.conftest import link_failure
-
-        def lose() -> None:
-            raise link_failure(EOFError("stream has been closed"))
-
-        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
+        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.5)
+        monkeypatch.setattr(mock_connection, "slow", lambda: time.sleep(2), raising=False)
         link = houdini().link()
-        result = _run("print('before')\nhou.lose()")
+        result = _run("print('before')\nhou.node('/obj').createNode('geo', 'half')\nhou.slow()")
 
-        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
+        assert (result["kind"], result["retry"]) == ("operation_failed", "none"), result
+        assert result["message"].startswith("TimeoutError: result expired")
+        assert 'File "<string>", line 3' in result["traceback"]
         assert result["stdout"] == "before\n"
-        assert link.conn.closed and houdini().link() is None
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert mock_connection.node("/obj/half") is None
+        assert houdini().link() is link and link.alive
+
+    def test_a_link_houdini_dropped_under_it_is_its_failure_and_its_step_is_undone(
+        self, mock_connection, fake_houdini, monkeypatch
+    ):
+        from houdini_mcp.connection import houdini
+
+        monkeypatch.setattr(
+            mock_connection, "drop", fake_houdini.listener.drop_clients, raising=False
+        )
+        link = houdini().link()
+        result = _run("hou.node('/obj').createNode('geo', 'half')\nhou.drop()")
+
+        assert (result["kind"], result["retry"]) == ("operation_failed", "none"), result
+        assert result["message"].startswith("EOFError")
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert mock_connection.node("/obj/half") is None
+        assert houdini().link() is link and link.alive
 
     def test_a_program_raising_a_timeout_itself_is_its_own_failure(self, mock_connection):
         from houdini_mcp.connection import houdini
@@ -842,46 +729,6 @@ class TestAProgramThatFailedOnTheLink:
         assert (result["kind"], result["retry"]) == ("operation_failed", "none")
         assert result["message"] == "TimeoutError: my own deadline"
         assert houdini().link() is link and not link.conn.closed
-
-    def test_a_note_on_a_lost_link_is_told_once(self, mock_connection, monkeypatch):
-        from tests.conftest import link_failure
-
-        def lose() -> None:
-            raise link_failure(TimeoutError("result expired"))
-
-        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
-        result = _run(
-            "try:\n    hou.lose()\nexcept TimeoutError as e:\n"
-            "    e.add_note('while framing')\n    raise\n"
-        )
-
-        assert result["kind"] == "timeout"
-        assert result["message"].count("while framing") == 1
-        assert result["message"].count("TimeoutError: result expired") == 1
-
-    def test_a_program_whose_link_closed_under_it_is_undone_on_a_fresh_link(
-        self, mock_connection, monkeypatch
-    ):
-        """Houdini closes the step's group once its link closes; the step is undone on
-        the link the server opens to the same Houdini, and the link that failed is
-        not left installed."""
-        from houdini_mcp.connection import houdini
-        from tests.conftest import link_failure
-
-        link = houdini().link()
-
-        def cut() -> None:
-            link.conn.close()
-            raise link_failure(EOFError("stream has been closed"))
-
-        monkeypatch.setattr(mock_connection, "cut", cut, raising=False)
-        result = _run("hou.node('/obj').createNode('geo', 'half')\nhou.cut()")
-
-        assert (result["kind"], result["exception"]) == ("connection_lost", "EOFError")
-        assert result["message"].endswith("\nIts changes to the scene were undone.")
-        assert result["message"].count("Its changes to the scene were undone.") == 1
-        assert mock_connection.node("/obj/half") is None
-        assert houdini().link() is not link and houdini().link().alive
 
     def test_a_program_that_raises_is_undone(self, mock_connection):
         result = _run("hou.node('/obj').createNode('geo', 'half')\nraise ValueError('mine')")
@@ -1030,51 +877,8 @@ class TestAProgramThatFailedOnTheLink:
         result = _run("print('never')")
 
         assert result["kind"] == "operation_failed"
-        assert result["message"] == (
-            "Running it as one undo step on Houdini's main thread failed: ValueError: undo disabled"
-        )
+        assert result["message"] == "The program never ran: ValueError: undo disabled"
         assert result["stdout"] == ""
-
-    def test_a_judgment_of_the_link_that_raises_leaves_the_programs_failure(
-        self, mock_connection, monkeypatch
-    ):
-        """The judgment's own failure is the worker thread's, raised there."""
-        import threading
-
-        from houdini_mcp.tools import code
-
-        def broken(*args):
-            raise RuntimeError("judgment broke")
-
-        raised: list[threading.ExceptHookArgs] = []
-        monkeypatch.setattr(code, "link_lost", broken)
-        monkeypatch.setattr(threading, "excepthook", raised.append)
-        result = _run("raise ValueError('mine')")
-
-        assert (result["kind"], result["message"]) == ("operation_failed", "ValueError: mine")
-        assert [str(r.exc_value) for r in raised] == ["judgment broke"]
-
-    def test_the_worker_records_how_its_program_ended(self, mock_connection, monkeypatch, caplog):
-        import logging
-
-        from tests.conftest import link_failure
-
-        def lose() -> None:
-            raise link_failure(EOFError("stream has been closed"))
-
-        monkeypatch.setattr(mock_connection, "lose", lose, raising=False)
-        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
-            completed = _run("print('done')")
-            lost = _run("hou.lose()")
-
-        ended = [r.getMessage() for r in caplog.records if " program ended " in r.getMessage()]
-        assert len(ended) == 2
-        assert completed["audit"]["code_sha256"] in ended[0]
-        assert ended[0].endswith("faults=[] link_lost=None")
-        assert lost["audit"]["code_sha256"] in ended[1]
-        assert ended[1].endswith(
-            "faults=['program'] link_lost=link to Houdini at localhost:18811 failed: EOFError"
-        )
 
     def test_a_step_close_that_raised_a_base_exception_is_the_runs_failure(
         self, mock_connection, monkeypatch
@@ -1093,23 +897,105 @@ class TestAProgramThatFailedOnTheLink:
             "SystemExit: closed the hard way"
         )
 
-    def test_a_program_that_ended_in_time_is_not_timed_out_by_its_links_judgment(
-        self, mock_connection, monkeypatch
-    ):
-        import time
 
-        from houdini_mcp.tools import code, execute_code
+class TestTheRunsRecord:
+    """[LAW:nothing-unseen] Each run emits one record as its call ends: its process,
+    how the wait saw it end, and what became of its step."""
 
-        def slow(*args):
-            time.sleep(1.5)
+    @staticmethod
+    def _record(caplog, result) -> str:
+        [record] = [
+            r.getMessage()
+            for r in caplog.records
+            if " program ended " in r.getMessage()
+            and result["audit"]["code_sha256"] in r.getMessage()
+        ]
+        return record
 
-        monkeypatch.setattr(code, "link_lost", slow)
-        result = execute_code(
-            "raise ValueError('mine')",
-            host="localhost",
-            port=18811,
-            bypass_config_enabled=False,
-            timeout=1,
+    def test_a_completed_run(self, mock_connection, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = _run("print('done')")
+
+        record = self._record(caplog, result)
+        assert "ending={'ended': [], 'reply': 'confirmed'} undo=none attempted" in record
+        assert " pid=" in record and " began_after_ms=" in record
+
+    def test_a_raised_run(self, mock_connection, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = _run("hou.node('/obj').createNode('geo', 'half')\nraise ValueError('mine')")
+
+        record = self._record(caplog, result)
+        assert "ending={'ended': ['program'], 'reply': 'confirmed'}" in record
+        assert "undo={'told': ['Its changes to the scene were undone.'], 'lost': 'None'}" in record
+
+    def test_a_killed_run(self, mock_connection, caplog):
+        import logging
+
+        from houdini_mcp.tools import execute_code
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                "while True: pass",
+                timeout=1,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=False,
+            )
+
+        record = self._record(caplog, result)
+        assert "ending={'killed': 'running'}" in record
+        assert "undo={'told': ['no step'], 'lost': 'None'}" in record
+        assert " ran_seconds=None " in record
+
+    def test_a_run_that_never_began(self, mock_connection, caplog):
+        import logging
+
+        mock_connection.main_thread_behaviour.refusal = "Houdini is busy"
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = _run("print('never')")
+
+        record = self._record(caplog, result)
+        assert "ending={'did_not_run': 'Houdini is busy'} undo=none attempted" in record
+        assert " began_after_ms=None " in record
+
+    def test_a_run_whose_reply_was_lost(self, mock_connection, monkeypatch, caplog):
+        import logging
+
+        from houdini_mcp.tools import code
+
+        monkeypatch.setattr(code, "DEFAULT_SYNC_TIMEOUT", 0.5)
+        mock_connection.main_thread_behaviour.reply_hold = 1.5
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = _run("print('done')")
+
+        assert result["status"] == "success", result
+        assert result["warning"].startswith(
+            "Houdini did not confirm the program's undo step closed"
         )
+        record = self._record(caplog, result)
+        assert "ending={'ended': [], 'reply': 'lost'}" in record
 
-        assert (result["kind"], result["message"]) == ("operation_failed", "ValueError: mine")
+    def test_a_run_whose_process_died(self, mock_connection, caplog):
+        """A program that ends its own process before its outcome is written."""
+        import logging
+
+        from houdini_mcp.tools import execute_code
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = execute_code(
+                "hou.node('/obj').createNode('geo', 'half')\nimport os\nos._exit(3)",
+                allow_dangerous=True,
+                host="localhost",
+                port=18811,
+                bypass_config_enabled=True,
+            )
+
+        assert result["kind"] == "operation_failed", result
+        assert "exit status 3" in result["message"]
+        assert mock_connection.node("/obj/half") is None
+        record = self._record(caplog, result)
+        assert "ending={'died': 3}" in record

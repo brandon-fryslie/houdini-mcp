@@ -8,6 +8,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..plugin import plugin_module
 from ..settings import Summarizer
 from ._common import (
     READ,
@@ -20,7 +21,6 @@ from ._common import (
     using,
 )
 from .bounds import box_center, box_of_bounds, box_sides
-from .plugin import plugin_module
 from .reads import is_unread, log_refused
 from .summarization import GEOMETRY_BRIEF, summarized
 

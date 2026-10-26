@@ -67,12 +67,12 @@ discriminated on `kind`. Each kind fixes its own `retry`, except the two link ar
 | `HoudiniConnectionError` | `connection_unavailable` | `start_houdini` | `target`: the Houdini that was wanted |
 | `HoudiniTargetMismatch` (the live link reaches another Houdini) | `connection_mismatch` | `none` | `target`, `connected` |
 | A `LinkLost`: a `TransportFailure` raised inside a `using` scope (see below), not a timeout | `connection_lost` | `call_again`, or `check_scene` (below) | `exception`; that call's link was dropped first |
-| A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again`, or `check_scene` (below) | `connection_reset: true`, `exception` |
-| `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `connection_reset: false` plus the tool's fields |
-| `ProgramStillRunning` (the program this call launched outlived its bound: cut off from Houdini and undone, its thread still running) | `worker_still_running` | `wait_for_worker` | `worker` plus the tool's fields (`stdout`, `audit`, ...) |
+| A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again`, or `check_scene` (below) | `cut_off: "link"`, `exception` |
+| `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `cut_off: "request"` plus the tool's fields |
+| `ProgramTimedOut` (execute_code killed its program's process; the server's link is intact) | `timeout` | `check_scene` | `cut_off: "program"` plus the tool's fields (`stdout`, `timeout`, `audit`, ...) |
+| `PluginMissing` (Houdini's path lacks this release's plugin) or `MainThreadRefused` (Houdini's main thread refused the call, which never ran) | `operation_failed` | `none` | nothing more: the message says what to do |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
-| `WorkerStillRunning` | `worker_still_running` | `wait_for_worker` | `worker` |
 | Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error with the traceback |
 
 A link that fails mid-call says nothing about whether the call took effect: rpyc's sync
@@ -93,7 +93,7 @@ after the tool returned (`find_error_nodes`, `get_geo_summary` summarize, then c
 is under the same boundary, awaited.
 
 Tool bodies never build an error dict. They raise `InvalidInput`, `OperationFailed`,
-`TimedOut` or `ProgramStillRunning` with the fields their caller needs; and `node_at(hou, path, what)`
+`TimedOut` or `ProgramTimedOut` with the fields their caller needs; and `node_at(hou, path, what)`
 resolves a path or raises `InvalidInput` for them. A caller parses any failure back
 through `FAILURE` (a pydantic `TypeAdapter` over the union) and lands in exactly one
 arm; the contract tests do exactly that.
@@ -124,7 +124,7 @@ rejected token raises `HandshakeError` and is not retried.
 
 A bad save or render path, a denied file, or a Houdini operation error therefore never
 tears the session down and is never `connection_lost` or `timeout` with
-`connection_reset: true`.
+`cut_off: "link"`.
 
 ### 3. Connection loss as the caller reads it
 
@@ -140,7 +140,7 @@ and is reported as the bug it is: `operation_failed`, logged at error.
     "status": "error",
     "kind": "timeout",
     "retry": "call_again",
-    "connection_reset": True,
+    "cut_off": "link",
     "exception": "TimeoutError",
     "message": "Operation 'get_scene_info' timed out...",
     "operation": "get_scene_info",
@@ -233,55 +233,31 @@ All tools return consistent response dictionaries:
     | "connection_lost"
     | "timeout"
     | "invalid_input"
-    | "operation_failed"
-    | "worker_still_running",
-    "retry": "start_houdini"
-    | "call_again"
-    | "check_scene"
-    | "fix_input"
-    | "wait_for_worker"
-    | "none",
+    | "operation_failed",
+    "retry": "start_houdini" | "call_again" | "check_scene" | "fix_input" | "none",
     "operation": "tool_name",
     "message": "Human-readable error description",
-    # Per kind: target / exception / connection_reset / worker (see the table above),
+    # Per kind: target / exception / cut_off (see the table above),
     # then whatever fields the tool attached (a path, a URL, stdout so far, an audit).
 }
 ```
 
-### `worker_still_running`
+### `timeout` and what it cut off
 
-`execute_code` runs the caller's program in a thread the server cannot kill.
-When it times out, the program is cut off from Houdini and its undo step
-undone, but the thread runs on, and `WorkerLedger`
-(`houdini_mcp/tools/workers.py`) records it. Until that thread
-ends, every tool whose `ToolPolicy.access` is `EXCLUSIVE` (the policy
-its `@tool` declares, from `tools/transactions.py`: the scene writers and
-the render tools, which add a camera and a ROP for the call) is refused at
-the tool boundary:
+`cut_off` says what a timeout ended, one value per fact, and the retry follows
+from it; the arm refuses any other pair:
 
-```python
-{
-    "status": "error",
-    "kind": "worker_still_running",
-    "retry": "wait_for_worker",
-    "operation": "create_node",
-    "message": "create_node refused: a program launched by execute_code (sha256 ...) is still running ...",
-    "worker": {
-        "operation": "execute_code",
-        "code_sha256": "...",
-        "timeout": 30,
-        "running_for_seconds": 41.2,
-    },
-}
-```
+| `cut_off` | What ended | `retry` |
+|------|------|------|
+| `request` | a request exceeded its bound on an intact link; nothing of it still runs | `call_again` |
+| `link` | the server's link never answered and was dropped; the next call reconnects | `call_again`, or `check_scene` for a tool that changes the scene |
+| `program` | execute_code killed its program's process at a clock the call owns; the server's link is intact | `check_scene` |
 
-`worker.operation` is the tool that launched the program and `worker.code_sha256`
-matches `audit.code_sha256` of the timeout response that started it. Plain reads
-and `save_scene` proceed; the pane captures are refused, as they run on Houdini's
-main thread. Recovery: wait for the program to finish; a program that uses
-`hou` ends when Houdini restarts, one that never touches Houdini ends only with
-the MCP server. Nothing clears the slot while the thread lives, because a cleared
-slot with a live thread would be a lie.
+A killed program may have changed what its undo cannot reach, so the scene is
+always checked before calling again. The program's process owns the clocks on
+its own link - its 60-second start deadline, each request's bound, its undo
+step's reply - and reports each expiry itself; the call owns the program's
+timeout, and kills a process that stops reporting a phase it owns.
 
 ## Input Validation
 
@@ -342,11 +318,11 @@ def render_viewport(
 connects: it raises `_blocked(...)`, which builds the `InvalidInput`, for a program
 that does not compile, an `import hou`, code outside the inspection allowlist under `read-only`, or a rail the
 caller did not unlock.
-Once the program runs, it raises `OperationFailed` when the program raised,
-`ProgramStillRunning` when the program outlived its timeout, and, as it came, the
-exception from a scene read that failed before the program ran or from a worker
-that died. Every failure is
-raised; none is a dict the body builds.
+Once the program's process starts, it raises `OperationFailed` when the program
+raised or its process died, `ProgramTimedOut` when the call killed the process,
+`ProgramDidNotRun` (an `OperationFailed`) when the program never began, and, as it
+came, the exception from a scene read that failed before the program ran. Every
+failure is raised; none is a dict the body builds.
 
 ## Testing Error Handling
 

@@ -5,7 +5,6 @@ backs up the scene's unsaved work first."""
 
 from __future__ import annotations
 
-import contextlib
 import inspect
 import logging
 import time
@@ -13,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from houdini_mcp.connection import houdini
+from houdini_mcp.main_thread import MainThread, MainThreadRefused
 from houdini_mcp.tools import (
     create_node,
     execute_code,
@@ -23,18 +24,13 @@ from houdini_mcp.tools import (
     set_parameter,
 )
 from houdini_mcp.tools._common import RENDER, UNDOABLE, InvalidInput, tool, using
-from houdini_mcp.tools.failure import OperationFailed
+from houdini_mcp.tools.scene_hold import Admission
 from houdini_mcp.tools.transactions import (
-    BODY_SILENCE,
     FILE_WRITE_ON_MAIN_THREAD,
-    MainThread,
-    MainThreadRefused,
     ToolPolicy,
     TransactionPolicy,
-    UndoStep,
     policy_of,
 )
-from houdini_mcp.tools.workers import Admission
 from tests import conftest
 from tests.conftest import MockHouModule, MockUndos, link_failure, raised_inside_houdini
 
@@ -42,8 +38,7 @@ from tests.conftest import MockHouModule, MockUndos, link_failure, raised_inside
 @pytest.mark.parametrize("render_tool", [render_viewport, render_quad_view])
 def test_a_render_changes_the_scene_while_it_runs(render_tool):
     """A render's temporary nodes are its own to destroy, and a link that fails
-    mid-render leaves them; that it still waits for a running program is
-    test_execute_code_worker's."""
+    mid-render leaves them."""
     policy = policy_of(render_tool)
     assert policy.recovery is TransactionPolicy.TEMPORARY_NODES
     assert policy.changes_scene
@@ -136,7 +131,7 @@ def test_a_driving_tool_is_handed_the_main_thread_its_callers_cannot_pass(mock_c
     # Houdini records undo groups only on its main thread, so the fake's are on there alone.
     assert ran_on == [True]
     with pytest.raises(TypeError):
-        drives(main_thread=MainThread())
+        drives(main_thread=MainThread(houdini().drop))
 
 
 async def _async_body(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
@@ -404,57 +399,17 @@ def _creates_then_is_refused(host: str = "localhost", port: int = 18811) -> dict
         raise MainThreadRefused("a nested call was refused")
 
 
-def _raises() -> str:
-    raise ValueError("raised")
-
-
-class TestTheStepsWork:
-    """Whether a step's work ended or was cut off is decided once."""
-
-    def test_a_refusal_the_work_raised_is_its_failure_and_undone(self, mock_connection):
+class TestARefusalTheWorkRaised:
+    def test_is_its_failure_and_undone(self, mock_connection):
+        """Only the main thread's own refusal is a call that never ran: the same type
+        raised by the work is the work's failure, and its step is undone."""
         result = _creates_then_is_refused()
 
         assert result["message"].endswith("\nIts changes to the scene were undone."), result
         assert mock_connection.node("/obj/half_done") is None
 
-    @pytest.mark.parametrize("work", [lambda: "returned", _raises], ids=["returned", "raised"])
-    def test_work_that_ended_is_not_cut_off(self, mock_connection, work):
-        from houdini_mcp.connection import houdini
 
-        link = houdini().ensure("localhost", 18811)
-        step = UndoStep("probe", BODY_SILENCE)
-
-        with contextlib.suppress(ValueError):
-            step.run(link, work)
-
-        assert step.cut_off() is False
-        assert houdini().link() is link and link.alive
-
-    def test_work_that_never_began_is_not_cut_off(self, mock_connection):
-        assert UndoStep("probe", BODY_SILENCE).cut_off() is False
-
-    def test_what_work_cut_off_returns_is_not_the_calls_and_its_step_is_undone(
-        self, mock_connection
-    ):
-        from houdini_mcp.connection import houdini
-
-        link = houdini().ensure("localhost", 18811)
-        step = UndoStep("probe", BODY_SILENCE)
-
-        def work() -> str:
-            link.hou.node("/obj").createNode("geo", "half")
-            assert step.cut_off() is True
-            return "done"
-
-        with pytest.raises(OperationFailed, match="returned after it was cut off"):
-            step.run(link, work)
-
-        assert step.told() == ("Its changes to the scene were undone.",)
-        assert mock_connection.node("/obj/half") is None
-        assert houdini().link() is not link
-
-
-class TestUndoStep:
+class TestUndoingAStep:
     """What a failed call's rollback finds on Houdini's undo stack, and says."""
 
     def _stack(self, hou: MockHouModule, *labels: str) -> MockUndos:
@@ -565,7 +520,7 @@ def failing_after(undos):
     ):
         with (
             conftest.served_namespace(self._PLUGINS) as plugins,
-            caplog.at_level(logging.INFO, logger="houdini_mcp.tools.transactions"),
+            caplog.at_level(logging.INFO, logger="houdini_mcp.main_thread"),
         ):
             self._served(monkeypatch, plugins, "losing_the_link")
             result = create_node("geo", "/obj", "made", host="localhost", port=18811)

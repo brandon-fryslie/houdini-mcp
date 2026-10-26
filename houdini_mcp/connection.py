@@ -8,7 +8,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 
 import logging
 import random
-import socket
 import threading
 import time
 from collections.abc import Callable
@@ -136,16 +135,28 @@ def describe_target(host: str, port: int) -> str:
     return f"{host}:{port}"
 
 
-class HoudiniTarget(NamedTuple):
-    """The Houdini connections reach: how to open a connection to it, and the
-    remedy for failing to.
+class Reach(NamedTuple):
+    """What another process opens its own link to a Houdini from: where it
+    listens, and the token it takes (None: none). Data, so it can cross to a
+    child process on a pipe; never argv or the environment, which others can read."""
 
-    [LAW:one-source-of-truth] the opener and its remedy travel together, so an
-    error never prescribes a listener the connection was not opened to.
+    host: str
+    port: int
+    token: str | None
+
+
+class HoudiniTarget(NamedTuple):
+    """The Houdini connections reach: how to open a connection to it, the remedy
+    for failing to, and how another process reaches the same Houdini.
+
+    [LAW:one-source-of-truth] the opener, its remedy and its reach travel
+    together, so an error never prescribes a listener the connection was not
+    opened to, and a program's process reaches the Houdini the server does.
     """
 
     open: Callable[[str, int, float], Any]
     remedy: str
+    reach: Callable[[str, int], Reach]
 
 
 def remote_houdini(token: str | None) -> HoudiniTarget:
@@ -155,16 +166,24 @@ def remote_houdini(token: str | None) -> HoudiniTarget:
     def open_presenting_token(host: str, port: int, sync_timeout: float) -> Any:
         return _open_rpyc(token, host, port, sync_timeout)
 
+    def reached_presenting_token(host: str, port: int) -> Reach:
+        return Reach(host, port, token)
+
     return HoudiniTarget(
         open_presenting_token,
         "Make sure Houdini is running with RPC server enabled "
         "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
         "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
         "(a listener that rejects this client's stream looks like one that is not running).",
+        reached_presenting_token,
     )
 
 
 def _open_uninstalled(host: str, port: int, sync_timeout: float) -> Any:
+    raise LookupError("no Houdini is installed for connections to reach")
+
+
+def _reach_uninstalled(host: str, port: int) -> Reach:
     raise LookupError("no Houdini is installed for connections to reach")
 
 
@@ -175,6 +194,7 @@ NO_HOUDINI = HoudiniTarget(
     _open_uninstalled,
     "The entry point that serves installs the Houdini its connections reach with "
     "use_houdini(remote_houdini(token)).",
+    _reach_uninstalled,
 )
 
 
@@ -214,24 +234,6 @@ class Link:
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
-    def cut_off(self) -> None:
-        """End the link under a thread that may be waiting on it, which then closes it.
-
-        [LAW:no-ambient-temporal-coupling] Only the thread serving a socket closes it:
-        on macOS a socket closed under a thread polling it leaves that poll asleep
-        until its request's timeout (0 of 40 polls woke in a bare-socket repro). Shut
-        down, it reads as ended at once (40 of 40): a waiting request fails and rpyc
-        closes the link from that thread, a thread not waiting fails at its next
-        request, and Houdini reads the end as it reads a close.
-        """
-        try:
-            # A dup is shut down and closed here; the socket being polled is left open.
-            # socket.dup duplicates a Windows socket handle too, which os.dup cannot.
-            with socket.socket(fileno=socket.dup(self.conn.fileno())) as sock:
-                sock.shutdown(socket.SHUT_RDWR)
-        except Exception as e:
-            logger.warning(f"Error cutting off {self.name}: {e}")
-
     def info(self) -> dict[str, Any]:
         """The Houdini this link reaches: where, version, build and current hip file.
 
@@ -253,8 +255,9 @@ class Link:
         }
 
 
-def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
-    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini.
+def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches
+    Houdini: the connect path's, and a program's process's, which retries nothing.
 
     The proof is ``hou`` imported across the link: a sync request, so a Houdini
     too busy to answer fails it like one that is not there. [LAW:single-enforcer]
@@ -304,7 +307,7 @@ def _open_link_with_retries(
 
     for attempt in range(max_retries):
         try:
-            return _open_link(target, host, port, sync_timeout)
+            return open_link(target, host, port, sync_timeout)
 
         except Exception as e:
             if not _open_is_retryable(e):
@@ -450,18 +453,6 @@ class HoudiniConnection:
             link.close()
             logger.info(
                 f"Dropped failed link to Houdini at {link.name} "
-                f"({'was installed' if installed else 'not installed'})"
-            )
-
-    def cut_off(self, link: Link) -> None:
-        """End ``link`` under the thread using it (:meth:`Link.cut_off`), and uninstall
-        it if it is still the installed one, so the next call opens a fresh link: a link
-        cut off reads as open until its user has closed it."""
-        with self._lock:
-            installed = self._uninstall(link)
-            link.cut_off()
-            logger.info(
-                f"Cut off link to Houdini at {link.name} "
                 f"({'was installed' if installed else 'not installed'})"
             )
 

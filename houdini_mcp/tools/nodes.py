@@ -17,6 +17,7 @@ from functools import partial
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Literal
 
+from ..plugin import plugin_module
 from ._common import (
     FLAGS,
     READ,
@@ -41,7 +42,6 @@ from ._common import (
 from .connections import input_connections, input_paths
 from .failure import InvalidInput, Undone, batch_status
 from .parms import evaluated
-from .plugin import plugin_module
 from .reads import UNREAD, is_unread, log_refused, read
 
 if TYPE_CHECKING:

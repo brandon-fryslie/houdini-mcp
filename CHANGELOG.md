@@ -27,6 +27,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `execute_code` runs each program in a process of its
+  own, with its own link to Houdini and its own stdout and stderr, and kills
+  that process at the program's `timeout` (houdini-execute-code-kwc.28w). A
+  timed-out program used to run on as a thread nothing could stop, and every
+  scene-writing call was refused until it ended; now nothing of it runs once
+  the call returns, and the next call runs at once. On the wire:
+  - The timeout is the `timeout` arm with `cut_off: "program"` and
+    `retry: "check_scene"`, carrying the output up to the kill. The
+    `worker_still_running` kind, the `wait_for_worker` retry and the `worker`
+    block are gone.
+  - The `timeout` arm's `connection_reset` is replaced by `cut_off`:
+    `"request"` where it was `false`, `"link"` where it was `true`.
+  - A program whose own link to Houdini fails is `operation_failed`, the
+    link's exception in its `traceback`, and no longer `connection_lost` or a
+    reset timeout: the server's link was not involved.
+  - A program that never began (its link would not open, the plugin is
+    missing, Houdini's main thread refused it, or its start passed 60
+    seconds) is `operation_failed` with a message starting
+    `The program never ran: `, and nothing is undone.
+  - A program's swap of `sys.stdout` or `sys.stderr` changes only its own
+    output, and its threads' output is in its `stdout` and `stderr`.
+  - `audit.woke_early` is gone.
+
 - `houdini-mcp` refuses arguments it does not know instead of ignoring them.
 
 ### Fixed

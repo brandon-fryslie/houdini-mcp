@@ -13,11 +13,12 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 import rpyc
+import rpyc.utils.helpers
 import rpyc.utils.server
 from fastmcp import FastMCP
 from rpyc.core import vinegar
@@ -1053,9 +1054,12 @@ class MockHouNode:
 # closes with the link, and a call is out only while its link is open: the main
 # thread serves the call's connection until the call returns or it closes.
 _MAIN_THREAD = """
+import contextlib
+import time
+
 import rpyc
 
-from tests.conftest import FAKE_MAIN_THREAD, local_undos
+from tests.conftest import FAKE_MAIN_THREAD, local_behaviour, local_undos
 
 
 def _heard(fn):
@@ -1066,48 +1070,74 @@ def _heard(fn):
     return reply.value
 
 
+def _posted(undos, behaviour, fn, around):
+    # How the main thread takes a call, as its behaviour says: refused, never
+    # taken (its client's requests still served, until it is gone), or run, its
+    # reply then held back.
+    if behaviour.refusal is not None:
+        return behaviour.refusal
+    if not behaviour.takes_calls:
+        conn = object.__getattribute__(fn, "____conn__")
+        with contextlib.suppress(EOFError):
+            while not conn.closed:
+                if behaviour.asks_while_waiting:
+                    # A request to the client, which it serves while it waits.
+                    fn.__name__
+                conn.serve(0.05)
+        raise EOFError("the client went away before the main thread took its call")
+    with FAKE_MAIN_THREAD:
+        undos.enter_main_thread()
+        try:
+            with around():
+                _heard(fn)
+        finally:
+            undos.leave_main_thread()
+    time.sleep(behaviour.reply_hold)
+    return None
+
+
 def main_thread_of(key):
     # Houdini's own undo stack, not one reached over the link the call came on.
     # Each entry records on it how long the client asked Houdini to wait on it
     # while it says nothing.
     undos = local_undos(key)
+    behaviour = local_behaviour(key)
 
     class main_thread:
-        PICKUP_TIMEOUT = 30.0
+        PICKUP_TIMEOUT = behaviour.pickup_timeout
 
         @staticmethod
         def call(fn, silence):
             undos.silence = silence
-            with FAKE_MAIN_THREAD:
-                undos.enter_main_thread()
-                try:
-                    _heard(fn)
-                finally:
-                    undos.leave_main_thread()
+            return _posted(undos, behaviour, fn, contextlib.nullcontext)
 
         @staticmethod
         def call_without_undo(fn, silence):
             undos.silence = silence
-            with FAKE_MAIN_THREAD:
-                undos.enter_main_thread()
-                try:
-                    with undos.disabler():
-                        _heard(fn)
-                finally:
-                    undos.leave_main_thread()
+            return _posted(undos, behaviour, fn, undos.disabler)
 
         @staticmethod
         def call_as_step(fn, label, silence):
             undos.silence = silence
-            with FAKE_MAIN_THREAD:
-                undos.enter_main_thread()
-                try:
-                    with undos.group(label):
-                        _heard(fn)
-                finally:
-                    undos.leave_main_thread()
+            return _posted(undos, behaviour, fn, lambda: undos.group(label))
     return main_thread
 """
+
+
+@dataclass
+class MainThreadBehaviour:
+    """How the double's Houdini main thread takes a call: by default it takes each
+    at once and replies as soon as it ends. ``refusal`` refuses every call in those
+    words; ``takes_calls`` False neither takes nor refuses one, asking its client
+    something all the while if ``asks_while_waiting``; ``reply_hold`` holds the
+    reply that many seconds after the call ends."""
+
+    refusal: str | None = None
+    takes_calls: bool = True
+    asks_while_waiting: bool = False
+    reply_hold: float = 0.0
+    pickup_timeout: float = 30.0
+
 
 # Re-entrant: a call's own requests run inside it, on its connection's thread.
 FAKE_MAIN_THREAD = threading.RLock()
@@ -1119,6 +1149,14 @@ _undos_by_key: dict[int, "MockUndos"] = {}
 
 def local_undos(key: int) -> "MockUndos":
     return _undos_by_key[key]
+
+
+# How each Houdini's main thread takes calls, keyed as its undo stack is.
+_behaviour_by_key: dict[int, "MainThreadBehaviour"] = {}
+
+
+def local_behaviour(key: int) -> "MainThreadBehaviour":
+    return _behaviour_by_key.setdefault(key, MainThreadBehaviour())
 
 
 # [LAW:no-shared-mutable-globals] The session's one main_thread server, opened by
@@ -1354,6 +1392,11 @@ class MockRpycConnection:
 
 class MockHouModule:
     """Mock hou module for testing."""
+
+    @property
+    def main_thread_behaviour(self) -> MainThreadBehaviour:
+        """How this Houdini's main thread takes calls (:class:`MainThreadBehaviour`)."""
+        return local_behaviour(id(self.undos))
 
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
@@ -1706,41 +1749,155 @@ def reset_connection_state() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def mock_rpyc_with_reset(
-    mock_hou: MockHouModule, reset_connection_state: None
-) -> Generator[MockHouModule, None, None]:
-    """Patch the handshake connect seam to hand out a connection to ``mock_hou``."""
-    mock_conn = MockRpycConnection(mock_hou)
+def mock_rpyc_with_reset(mock_hou: MockHouModule, fake_houdini: "FakeHoudini") -> MockHouModule:
+    """The installed Houdini reaches ``mock_hou``; nothing is connected yet."""
+    fake_houdini.reaches(mock_hou)
+    return mock_hou
 
-    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-        mock_rpyc_module.connect.return_value = mock_conn
-        yield mock_hou
+
+class FakeHoudiniService(rpyc.ClassicService):  # type: ignore[misc]
+    """The double as a program's own process reaches it: over a real link, its
+    ``hou`` the double itself and its plugin's main thread the one the server's
+    calls reach, so the program's edits and its step land on the same scene."""
+
+    def __init__(self, listener: "FakeHoudiniListener") -> None:
+        super().__init__()
+        self._listener = listener
+
+    def on_connect(self, conn: Any) -> None:
+        super().on_connect(conn)
+        self._listener.clients.append(conn)
+
+    def getmodule(self, name: Any) -> Any:
+        name = ".".join(name) if isinstance(name, tuple) else name
+        time.sleep(self._listener.answer_delay)
+        hou = self._listener.hou()
+        if name == "hou":
+            return hou
+        if name == "houdini_mcp_plugin.main_thread":
+            if not self._listener.serves_plugin:
+                raise ImportError(f"No module named {name!r}")
+            return local_main_thread(hou.undos)
+        return importlib.import_module(name)
+
+
+class FakeHoudiniListener:
+    """A listener for the double, speaking the token handshake as the plugin's
+    does, opened when a program's process first needs it and closed with the test.
+
+    ``serves_plugin`` False serves a Houdini whose path lacks the plugin;
+    ``answer_delay`` makes it answer each module it serves that much later.
+    """
+
+    def __init__(self, hou: Callable[[], Any]) -> None:
+        import secrets
+
+        import houdini_mcp_handshake as handshake
+
+        self.hou = hou
+        self.serves_plugin = True
+        # Seconds each module it serves takes to answer: a slow Houdini.
+        self.answer_delay = 0.0
+        self.clients: list[Any] = []
+        self._token = secrets.token_hex(16)
+        self._authenticator = handshake.token_authenticator(self._token)
+        self._server: rpyc.utils.server.ThreadedServer | None = None
+        self._lock = threading.Lock()
+
+    def reach(self, host: str, port: int) -> Any:
+        from houdini_mcp.connection import Reach
+
+        with self._lock:
+            if self._server is None:
+                self._server = rpyc.utils.server.ThreadedServer(
+                    rpyc.utils.helpers.classpartial(FakeHoudiniService, self),
+                    hostname="127.0.0.1",
+                    port=0,
+                    authenticator=self._authenticator,
+                    logger=logging.getLogger("fake_houdini_listener"),
+                    protocol_config={"sync_request_timeout": 30.0},
+                )
+                self._server._start_in_thread()
+            return Reach("127.0.0.1", self._server.port, self._token)
+
+    def drop_clients(self) -> None:
+        """Close every program's link from Houdini's side, as a listener that drops them does."""
+        for conn in self.clients:
+            conn.close()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._server is not None:
+                await_clients_served(self._server)
+                self._server.close()
+                self._server = None
+
+
+_local_main_thread: dict[str, Any] = {}
+
+
+def local_main_thread(undos: "MockUndos") -> Any:
+    """``houdini_mcp_plugin.main_thread`` as the double's own Houdini runs it, in this
+    process: the same definition the server's links reach on the served one."""
+    if not _local_main_thread:
+        exec(_MAIN_THREAD, _local_main_thread)
+    _undos_by_key[id(undos)] = undos
+    return _local_main_thread["main_thread_of"](id(undos))
+
+
+class FakeHoudini:
+    """The Houdini this process's connections reach: whichever double it was last
+    told to (:meth:`reaches`). The server's links reach it through the installed
+    target's opener; a program's own process reaches the same double over a real
+    listener (:class:`FakeHoudiniListener`)."""
+
+    def __init__(self) -> None:
+        self._reached: list[Any] = []
+        self.listener = FakeHoudiniListener(lambda: self._reached[-1])
+
+    def reaches(self, hou: Any) -> None:
+        self._reached.append(hou)
+
+    def target(self) -> Any:
+        from houdini_mcp.connection import HoudiniTarget
+
+        return HoudiniTarget(
+            lambda *_args: MockRpycConnection(self._reached[-1]),
+            "Start the test's double.",
+            self.listener.reach,
+        )
 
 
 @pytest.fixture
-def connected_to(reset_connection_state: None) -> Generator[Callable[[Any], Any], None, None]:
+def fake_houdini(reset_connection_state: None) -> Generator[FakeHoudini, None, None]:
+    """A :class:`FakeHoudini` installed through the connection module's own API."""
+    from houdini_mcp.connection import use_houdini
+
+    fake = FakeHoudini()
+    use_houdini(fake.target())
+    try:
+        yield fake
+    finally:
+        fake.listener.close()
+
+
+@pytest.fixture
+def connected_to(fake_houdini: FakeHoudini) -> Callable[[Any], Any]:
     """Connect to any ``hou`` double through the connection module's own API.
 
-    The handshake seam hands out a connection to the double and ``connect`` installs
-    it, replacing whatever link stood: the ``hou`` returned is the one installed, in
-    a test that connects twice as in one that connects once. The double outlives
-    its link, as Houdini does: once a link is dropped, the next connect reaches the
-    same double on a new one.
+    ``connect`` installs a link to the double, replacing whatever link stood: the
+    ``hou`` returned is the one installed, in a test that connects twice as in one
+    that connects once. The double outlives its link, as Houdini does: once a link
+    is dropped, the next connect reaches the same double on a new one.
     """
     from houdini_mcp.connection import houdini
 
-    reached: list[Any] = []
-    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-        mock_rpyc_module.connect.side_effect = lambda *_args, **_kwargs: MockRpycConnection(
-            reached[-1]
-        )
+    def _connect(hou: Any) -> Any:
+        fake_houdini.reaches(hou)
+        houdini().connect("localhost", 18811)
+        return hou
 
-        def _connect(hou: Any) -> Any:
-            reached.append(hou)
-            houdini().connect("localhost", 18811)
-            return hou
-
-        yield _connect
+    return _connect
 
 
 @pytest.fixture
@@ -2409,31 +2566,8 @@ def raised_inside_houdini(exc: BaseException) -> BaseException:
     )
 
 
-@pytest.fixture
-def stalled_program(mock_connection: MockHouModule) -> Generator[str, None, None]:
-    """A program that runs until this fixture releases it.
-
-    execute_code cannot kill a timed-out program, so a test that times one out
-    must hand it a way to end: the program waits on a gate hung off the fake
-    hou, and teardown opens the gate and waits for the worker to leave the
-    ledger. A program that loops forever would stall every later writing test.
-    """
-    import threading
-
-    from houdini_mcp.tools.workers import WORKERS
-
-    gate = threading.Event()
-    mock_connection.stall_gate = gate
-    yield "hou.stall_gate.wait()"
-    gate.set()
-    worker = WORKERS.running()
-    if worker is not None:
-        worker.thread.join(5)
-    assert WORKERS.running() is None, "stalled program did not release its worker"
-
-
 class _Heard(logging.Handler):
-    """Sets an event the moment the ledger logs a message containing ``text``."""
+    """Sets an event the moment the scene hold logs a message containing ``text``."""
 
     def __init__(self, text: str) -> None:
         super().__init__()
@@ -2447,8 +2581,8 @@ class _Heard(logging.Handler):
 
 @pytest.fixture
 def heard() -> Generator[Callable[[str], threading.Event], None, None]:
-    """``heard(text)`` is set once the ledger has logged ``text``."""
-    logger = logging.getLogger("houdini_mcp.tools.workers")
+    """``heard(text)`` is set once the scene hold has logged ``text``."""
+    logger = logging.getLogger("houdini_mcp.tools.scene_hold")
     handlers: list[_Heard] = []
     level = logger.level
     logger.setLevel(logging.INFO)
