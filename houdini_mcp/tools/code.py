@@ -71,7 +71,15 @@ from .code_policy import (
 )
 from .failure import add_note, failed_on, failure_for
 from .program_output import Capture
-from .program_process import PROGRAM_START_TIMEOUT, Died, Garbled, Killed, Run, run_program
+from .program_process import (
+    PROGRAM_START_TIMEOUT,
+    Died,
+    Garbled,
+    Killed,
+    Phase,
+    Run,
+    run_program,
+)
 from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
 from .transactions import Recovered, raised_after_undo, step_label, undo_latest
 
@@ -745,7 +753,7 @@ def execute_code(
                     failure = ProgramTimedOut(
                         # [LAW:one-source-of-truth] The start deadline named is the
                         # one the process and the call's backstop were set from.
-                        _KILLED[phase].format(timeout=timeout, start_timeout=request.start_timeout),
+                        _killed(phase, timeout, request.start_timeout),
                         policy=grant.policy,
                         **output,
                         timeout=timeout,
@@ -767,18 +775,23 @@ class ProgramDidNotRun(OperationFailed):
     start deadline passed. Nothing was undone, because nothing ran."""
 
 
-# How the timeout response reads for each phase whose clock the call killed the process on.
-_KILLED: dict[str, str] = {
-    "running": "Execution timeout: code did not complete within {timeout} seconds",
-    "starting": (
-        "Execution timeout: the program's process had not reported by its start "
-        "deadline ({start_timeout}s) and a grace, so it was killed"
-    ),
-    "closing": (
-        "Execution timeout: the program ended, but its process had not reported "
-        "how its undo step closed within the sync timeout and a grace, so it was killed"
-    ),
-}
+def _killed(phase: Phase, timeout: int, start_timeout: float) -> str:
+    """How the timeout response reads for the phase whose clock the call killed the process on."""
+    match phase:
+        case "running":
+            return f"Execution timeout: code did not complete within {timeout} seconds"
+        case "starting":
+            return (
+                "Execution timeout: the program's process had not reported by its start "
+                f"deadline ({start_timeout}s) and a grace, so it was killed"
+            )
+        case "closing":
+            return (
+                "Execution timeout: the program ended, but its process had not reported "
+                "how its undo step closed within the sync timeout and a grace, so it was killed"
+            )
+        case _:
+            assert_never(phase)
 
 
 def _diff_after(

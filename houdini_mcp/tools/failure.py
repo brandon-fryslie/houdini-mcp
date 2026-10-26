@@ -366,8 +366,8 @@ class LinkLost(Exception):
     def reported_by(self, e: BaseException) -> LinkLost:
         """This loss as ``e`` reported it: what this loss carries, then a tool
         failure's fields and its message as a note, then ``e``'s notes."""
-        fields, told = (e.fields, [e.message]) if isinstance(e, ToolError) else ({}, [])
-        found = LinkLost(self.link, self.lost, {**self.fields, **fields})
+        told = [e.message] if isinstance(e, ToolError) else []
+        found = LinkLost(self.link, self.lost, {**self.fields, **payload_of(e)})
         found.__notes__ = [*getattr(self, "__notes__", ()), *told, *getattr(e, "__notes__", ())]
         return found
 
@@ -375,13 +375,18 @@ class LinkLost(Exception):
         """This loss, which stopped the undo after ``operation`` failed with
         ``failure``: ``failure``'s fields ride beside this loss's (a program's
         output, its audit), and what it was is told as a note."""
-        fields = failure.fields if isinstance(failure, ToolError) else {}
-        found = LinkLost(self.link, self.lost, {**self.fields, **fields})
+        found = LinkLost(self.link, self.lost, {**self.fields, **payload_of(failure)})
         found.__notes__ = [*getattr(self, "__notes__", ()), f"{operation} had failed: {failure}"]
         return found
 
 
 Failed = TypeVar("Failed", bound=BaseException)
+
+
+def payload_of(e: BaseException) -> dict[str, Any]:
+    """[LAW:one-source-of-truth] The fields ``e`` carries to the arm it becomes,
+    whatever arm that is: a tool failure's own, and none for any other exception."""
+    return e.fields if isinstance(e, ToolError) else {}
 
 
 def _cause(e: BaseException) -> BaseException:
@@ -474,7 +479,7 @@ def _classify(e: Exception, operation: str, changes_scene: bool) -> _Failure:
     cause = _cause(e)
     if isinstance(cause, HoudiniConnectionError):
         return ConnectionUnavailableFailure(
-            operation=operation, message=str(cause), target=cause.target
+            operation=operation, message=str(cause), target=cause.target, **payload_of(e)
         )
     if isinstance(cause, HoudiniTargetMismatch):
         return ConnectionMismatchFailure(

@@ -146,7 +146,8 @@ past 30 seconds (a long cook), and the message then says the changes may
 remain. The next call, of any tool, runs as soon as this one returns.
 
 If the server's link fails while it undoes the step, the response is that
-link's arm (`connection_lost`, or `timeout` with `cut_off: "link"`), and it
+link's arm (`connection_lost`, or `timeout` with `cut_off: "link"`); if
+Houdini cannot be reached again, it is `connection_unavailable`. Either
 still carries the program's output, `timeout` and `audit`, its message
 telling the timeout it was undoing.
 

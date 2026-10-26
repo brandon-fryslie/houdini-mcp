@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -62,6 +63,11 @@ class TestAProgramThatNeverRan:
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
         assert why == "Houdini's main thread is busy"
         assert mock_connection.undos.undoLabels() == ()
+
+    def test_a_step_houdini_fails_before_its_program_begins(self, mock_connection):
+        mock_connection.main_thread_behaviour.step_failure = "the undo group would not open"
+        why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
+        assert why == "RuntimeError: the undo group would not open"
 
     def test_a_main_thread_that_neither_takes_nor_refuses_it(self, mock_connection, monkeypatch):
         """Its process's own pickup expiry ends the start, before the call's backstop."""
@@ -462,3 +468,70 @@ def losing_the_link(undos):
             in result["message"]
         )
         assert result["message"].endswith("so the scene may hold part of them.")
+
+
+class TestAHoudiniGoneWhileUndoing:
+    def test_its_failure_carries_what_the_program_wrote(self, mock_connection, monkeypatch):
+        """Houdini cannot be reached again for the undo: the response is that arm,
+        and the program's own failure still reaches the caller."""
+        from houdini_mcp.connection import HoudiniConnectionError, houdini
+
+        def gone(host: str, port: int) -> Any:
+            raise HoudiniConnectionError("No Houdini answered", target=f"{host}:{port}")
+
+        result = _run_then(
+            "print('before the crash')\nraise ValueError('boom')\n",
+            lambda: monkeypatch.setattr(houdini(), "ensure", gone),
+        )
+
+        assert result["kind"] == "connection_unavailable", result
+        assert result["stdout"] == "before the crash\n"
+        assert "ValueError: boom" in result["traceback"]
+        assert "execute_code had failed: ValueError: boom" in result["message"]
+        assert result["message"].endswith("so the scene may hold part of them.")
+
+
+def _run_then(program: str, after_run: Callable[[], None]) -> dict[str, Any]:
+    """Run ``program``, with ``after_run`` done once its process is reaped and
+    before the call undoes its step."""
+    real = code.run_program
+
+    def run_then(*args: Any) -> program_process.Run:
+        run = real(*args)
+        after_run()
+        return run
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(code, "run_program", run_then)
+        return _run(program)
+
+
+class TestTheStartDecisionEndsTheProcess:
+    def test_even_when_its_fact_cannot_be_written(self) -> None:
+        script = textwrap.dedent(
+            """
+            import os, signal, time
+            from houdini_mcp.program import _Facts, _Start
+
+            facts_out, facts_in = os.pipe()
+            os.close(facts_out)
+            start = _Start(_Facts(facts_in), 0.2)
+            time.sleep(2)
+            print("ran on")
+            """
+        )
+        ran = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False
+        )
+
+        assert (ran.returncode, ran.stdout) == (1, ""), ran.stderr
+
+
+class TestTheProcessImportsTheServersPackage:
+    def test_from_the_root_the_server_imported_it_from(self, mock_connection):
+        import houdini_mcp
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(houdini_mcp.__file__)))
+        result = _run(f"import sys\nprint(sys.path.index({root!r}) < len(sys.path))\n")
+
+        assert (result["status"], result["stdout"]) == ("success", "True\n"), result

@@ -28,6 +28,7 @@ import termios
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO, Literal, assert_never
 
 from ..program import Began, DidNotRun, Ended, ProgramEnded, Request, decode_fact
@@ -133,6 +134,7 @@ def run_program(request: Request, timeout: float, stdout: Capture, stderr: Captu
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_importing_this_package(),
             pass_fds=(facts_in, lifeline_out),
             start_new_session=True,
         )
@@ -163,6 +165,15 @@ def run_program(request: Request, timeout: float, stdout: Capture, stderr: Captu
         process.stdout.close()  # type: ignore[union-attr]
         process.stderr.close()  # type: ignore[union-attr]
     return Run(ending, process.pid, exit_status, *clock.took())
+
+
+def _importing_this_package() -> dict[str, str]:
+    """The server's environment, with the root it imported this package from
+    first on the path, so the process imports the server's own package however
+    the server found it: installed, editable, or a checkout it runs from."""
+    root = str(Path(__file__).resolve().parents[2])
+    path = os.environ.get("PYTHONPATH")
+    return {**os.environ, "PYTHONPATH": root if not path else os.pathsep.join((root, path))}
 
 
 class _Decoded:
@@ -282,8 +293,8 @@ def _wait(facts: int, feed: _Feed, streams: dict[int, _Decoded], clock: _Clock) 
                         return Garbled(line[:GARBLED_SHOWN])
                     # [LAW:types-are-the-program] Each fact moves the run on from the
                     # one phase that admits it: the program begins once and ends once,
-                    # and an outcome comes outside its run (a step Houdini failed
-                    # before the program began ends with no Began).
+                    # an outcome before it began is that it never ran, and one after
+                    # it ended is how its run ended.
                     match clock.phase, fact:
                         case "starting", Began():
                             clock.began()
@@ -291,7 +302,7 @@ def _wait(facts: int, feed: _Feed, streams: dict[int, _Decoded], clock: _Clock) 
                             clock.program_ended()
                         case "starting", DidNotRun() as outcome:
                             return outcome
-                        case "starting" | "closing", Ended() as outcome:
+                        case "closing", Ended() as outcome:
                             return outcome
                         case _:
                             return Garbled(line[:GARBLED_SHOWN])

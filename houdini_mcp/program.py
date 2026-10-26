@@ -2,8 +2,9 @@
 
 The call runs this module as
 ``python -P -u -X utf8 -m houdini_mcp.program <facts> <lifeline>`` in a process
-group of its own: ``-P`` keeps the working directory off its path, and leaves
-it importing this package as the server does. On stdin it reads one
+group of its own: ``-P`` keeps the working directory off its path, and the
+root the server imported this package from leads ``PYTHONPATH``, so it imports
+the server's own package. On stdin it reads one
 :class:`Request`; it opens its own link to the Houdini the server reaches, runs
 the program as one undo step on Houdini's main thread, and writes what happened
 as :class:`Fact` lines on ``facts``, a pipe the program's stdout cannot forge;
@@ -241,12 +242,16 @@ class _Start:
         # A signal already pending when the timer was disarmed finds the decision closed.
         if self._open:
             self._open = False
-            self._facts.write(
-                DidNotRun(
-                    f"the program did not begin within {self._timeout}s of its process starting"
+            # The process ends even when the write fails (the call already gone):
+            # nothing raised here may reach the frame the signal interrupted.
+            try:
+                self._facts.write(
+                    DidNotRun(
+                        f"the program did not begin within {self._timeout}s of its process starting"
+                    )
                 )
-            )
-            os._exit(1)
+            finally:
+                os._exit(1)
 
 
 def _did_not_run(facts: _Facts, start: _Start, why: str) -> NoReturn:

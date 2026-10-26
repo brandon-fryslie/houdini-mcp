@@ -26,7 +26,7 @@ from typing import Any, NoReturn, assert_never
 
 from ..connection import HoudiniConnectionError, Link, houdini, transport_failure
 from ..main_thread import BODY_SILENCE, MainThread, Raised, Refused, Returned
-from .failure import LinkLost, OperationFailed, add_note, link_lost
+from .failure import LinkLost, OperationFailed, ToolError, add_note, link_lost
 from .scene_hold import Admission
 
 logger = logging.getLogger("houdini_mcp.tools.transactions")
@@ -264,20 +264,26 @@ def raised_after_undo(operation: str, failure: BaseException, recovered: Recover
     """Raise how a call whose step was undone ended: ``failure``, or the link's loss
     that stopped the undo, telling the failure it was undoing; either ends with
     what became of the changes."""
-    raised: BaseException
+    told = recovered.told
     match recovered.lost:
         case None:
-            raised = failure
+            raise _told(failure, told)
         case LinkLost() as lost:
-            raised = lost.stopped_undo_of(operation, failure)
+            raise _told(lost.stopped_undo_of(operation, failure), told) from failure
+        # A tool failure raised from an unreachable Houdini is that arm, carrying
+        # the tool failure's own fields (a program's output, its audit).
+        case HoudiniConnectionError() as unreachable if isinstance(failure, ToolError):
+            told = (f"{operation} had failed: {failure}", *told)
+            raise _told(failure, told) from unreachable
         case unreachable:
-            add_note(unreachable, f"{operation} had failed: {failure}")
-            raised = unreachable
-    for note in recovered.told:
-        add_note(raised, note)
-    if raised is failure:
-        raise failure
-    raise raised from failure
+            told = (f"{operation} had failed: {failure}", *told)
+            raise _told(unreachable, told) from failure
+
+
+def _told(e: BaseException, notes: tuple[str, ...]) -> BaseException:
+    for note in notes:
+        add_note(e, note)
+    return e
 
 
 def _undone_on_failure(

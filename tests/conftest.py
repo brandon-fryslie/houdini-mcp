@@ -1119,6 +1119,8 @@ def main_thread_of(key):
         @staticmethod
         def call_as_step(fn, label, silence):
             undos.silence = silence
+            if behaviour.step_failure is not None:
+                raise RuntimeError(behaviour.step_failure)
             return _posted(undos, behaviour, fn, lambda: undos.group(label))
     return main_thread
 """
@@ -1130,9 +1132,11 @@ class MainThreadBehaviour:
     at once and replies as soon as it ends. ``refusal`` refuses every call in those
     words; ``takes_calls`` False neither takes nor refuses one, asking its client
     something all the while if ``asks_while_waiting``; ``reply_hold`` holds the
-    reply that many seconds after the call ends."""
+    reply that many seconds after the call ends; ``step_failure`` fails each step
+    in those words before its call begins."""
 
     refusal: str | None = None
+    step_failure: str | None = None
     takes_calls: bool = True
     asks_while_waiting: bool = False
     reply_hold: float = 0.0
