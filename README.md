@@ -46,6 +46,9 @@ houdini-mcp install
 ```
 
 Restart Houdini and your MCP client, and ask the client to build something in Houdini.
+Install with `uv tool install`, not `uvx`: the clients and Houdini run the server and
+the plugin from where they are installed, and `uvx` installs them into a cache that
+`uv cache clean` removes.
 
 `houdini-mcp install` prints a line for everything it set up:
 
@@ -60,7 +63,8 @@ Restart Houdini and your MCP client, and ask the client to build something in Ho
   environment.
 
 Running it again is safe, and keeps anything you added to the server's environment
-in a client, such as `HOUDINI_HOST`. A step that cannot finish says why, and the
+in a client, such as `HOUDINI_HOST`; an entry you pointed at a URL, as for
+[Docker](#docker-houdini-on-another-machine), is left as it is. A step that cannot finish says why, and the
 command exits non-zero. To upgrade, run `uv tool upgrade houdini-mcp`, then
 `houdini-mcp install` again. From a clone of this repository, `uv run houdini-mcp install`
 points Houdini and the clients at the clone, so your edits take effect at their next

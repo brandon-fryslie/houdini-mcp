@@ -1,4 +1,4 @@
-"""The wheel `uv tool install` builds ships the whole plugin tree Houdini loads."""
+"""The wheel `uv tool install` builds ships the plugin tree Houdini loads, as git holds it."""
 
 import shutil
 import subprocess
@@ -8,11 +8,13 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_the_wheel_holds_every_file_of_the_plugin_tree(tmp_path: Path) -> None:
+def test_the_wheel_holds_the_plugin_tree_git_holds(tmp_path: Path) -> None:
     uv = shutil.which("uv")
     assert uv, "uv on PATH builds the wheel"
+    # The wheel is built from the sdist, in a directory of its own: not from this checkout,
+    # whose build/ keeps files a fresh install would not ship.
     built = subprocess.run(
-        [uv, "build", "--wheel", "--out-dir", str(tmp_path), str(_ROOT)],
+        [uv, "build", "--out-dir", str(tmp_path), str(_ROOT)],
         capture_output=True,
         text=True,
         timeout=300,
@@ -27,7 +29,8 @@ def test_the_wheel_holds_every_file_of_the_plugin_tree(tmp_path: Path) -> None:
         check=True,
     ).stdout.split()
 
-    shipped = set(zipfile.ZipFile(wheel).namelist())
+    shipped = [
+        name for name in zipfile.ZipFile(wheel).namelist() if name.startswith("houdini_plugin/")
+    ]
 
-    assert tracked and set(tracked) <= shipped, sorted(set(tracked) - shipped)
-    assert not [name for name in shipped if "__pycache__" in name or name.endswith(".pyc")]
+    assert sorted(shipped) == sorted(tracked)

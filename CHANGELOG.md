@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distribution ships, which now includes the whole plugin, and registers the
   server over stdio with Claude Code, Claude Desktop, Cursor and Codex where
   they are installed, keeping the environment and the other settings an earlier
-  entry set. The server it registers runs with `-P`, so a project's own modules
-  do not load in its place. Each step prints what it did; any that failed makes
+  entry set; an entry pointed at a URL (a server in Docker) is left as it is.
+  The server it registers runs with `-P`, so a project's own modules do not
+  load in its place. Each step prints what it did; any that failed makes
   the command exit 1.
 
 - The plugin starts its hrpyc listener when a graphical Houdini's UI is up, so

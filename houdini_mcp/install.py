@@ -55,9 +55,9 @@ class ServerEntry:
         return {"command": self.argv[0], "args": list(self.argv[1:]), "env": dict(self.env)}
 
 
-# The keys of an ``mcpServers`` entry that say how a client starts or reaches a server,
-# stdio or http: an install replaces them, and keeps the rest (disabled, autoApprove, ...).
-_HOW_REACHED = frozenset({"command", "args", "env", "type", "url", "headers"})
+# The keys of a stdio entry that say how a client starts the server: an install replaces
+# them, and keeps the rest (Cursor's disabled and autoApprove, Codex's cwd, ...).
+_HOW_STARTED = frozenset({"command", "args", "env", "type"})
 
 
 def this_server() -> ServerEntry:
@@ -82,11 +82,19 @@ class NotFound:
 
 
 @dataclass(frozen=True)
+class Kept:
+    """The client reaches this server at a URL the user gave it (a server run in Docker),
+    and keeps that entry: an install does not repoint it at a server of its own."""
+
+    url: str
+
+
+@dataclass(frozen=True)
 class Failed:
     why: str
 
 
-Outcome = Installed | NotFound | Failed
+Outcome = Installed | NotFound | Kept | Failed
 
 
 def houdini_pref_dir(machine: Machine) -> Path:
@@ -98,9 +106,11 @@ def houdini_pref_dir(machine: Machine) -> Path:
     named = machine.environ.get("HOUDINI_USER_PREF_DIR", "")
     if "__HVER__" in named:
         return Path(named.replace("__HVER__", HOUDINI_VERSION))
+    # On Windows Houdini's $HOME is the environment's HOME, else the Documents folder.
+    windows_home = machine.environ.get("HOME") or machine.home / "Documents"
     defaults = {
         "darwin": machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION,
-        "win32": machine.home / "Documents" / f"houdini{HOUDINI_VERSION}",
+        "win32": Path(windows_home) / f"houdini{HOUDINI_VERSION}",
     }
     return defaults.get(machine.platform, machine.home / f"houdini{HOUDINI_VERSION}")
 
@@ -146,8 +156,10 @@ def _said(done: subprocess.CompletedProcess[str]) -> str:
     return (done.stdout + done.stderr).strip()
 
 
-def _cli(machine: Machine, name: str) -> str | None:
-    return shutil.which(name, path=machine.environ.get("PATH"))
+def _cli(machine: Machine, name: str, *installed: Path) -> str | None:
+    """The client's command on PATH, else where the client's own installer puts it."""
+    on_path = shutil.which(name, path=machine.environ.get("PATH"))
+    return on_path or next((str(cli) for cli in installed if shutil.which(cli)), None)
 
 
 @dataclass(frozen=True)
@@ -156,6 +168,7 @@ class Entry:
 
     fields: dict[str, object]
     env: dict[str, str]
+    url: str | None  # the URL the client reaches the server at, for a server not over stdio
 
 
 def _entry(servers: object) -> Entry | None:
@@ -163,9 +176,14 @@ def _entry(servers: object) -> Entry | None:
     None for a shape no client writes."""
     entry = servers.get(SERVER_NAME, {}) if isinstance(servers, dict) else None
     env = entry.get("env", {}) if isinstance(entry, dict) else None
-    if not (isinstance(env, dict) and all(isinstance(value, str) for value in env.values())):
+    url = entry.get("url") if isinstance(entry, dict) else None
+    if not (
+        isinstance(env, dict)
+        and all(isinstance(value, str) for value in env.values())
+        and (url is None or isinstance(url, str))
+    ):
         return None
-    return Entry(entry, env)
+    return Entry(entry, env, url)
 
 
 @dataclass(frozen=True)
@@ -208,13 +226,20 @@ def _codex_config(machine: Machine) -> Path:
 
 def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     """Register the server in Claude Code's user scope, replacing any earlier registration."""
-    claude = _cli(machine, "claude")
+    claude = _cli(
+        machine,
+        "claude",
+        machine.home / ".claude" / "local" / "claude",
+        machine.home / ".local" / "bin" / "claude",
+    )
     if claude is None:
-        return NotFound("claude on PATH")
+        return NotFound("claude on PATH, in ~/.claude/local or in ~/.local/bin")
     path = _claude_config(machine)
     earlier = registered(path, json.loads, "mcpServers")
     if isinstance(earlier, Failed):
         return earlier
+    if earlier.entry.url is not None:
+        return Kept(earlier.entry.url)
     projects = _projects(earlier.config, path)
     if isinstance(projects, Failed):
         return projects
@@ -229,11 +254,12 @@ def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     server = server.keeping(carried)
     # [LAW:one-source-of-truth] the claude command owns its config file, which running
     # sessions write too; `add` refuses a name that exists, so the old one goes first.
-    removed = _run([claude, "mcp", "remove", "--scope", "user", SERVER_NAME], machine)
-    if isinstance(removed, Failed):
-        return removed
-    if removed.returncode != 0 and f'No MCP server named "{SERVER_NAME}"' not in _said(removed):
-        return Failed(f"claude mcp remove: {_said(removed)}")
+    if user:
+        removed = _run([claude, "mcp", "remove", "--scope", "user", SERVER_NAME], machine)
+        if isinstance(removed, Failed):
+            return removed
+        if removed.returncode != 0:
+            return Failed(f"claude mcp remove: {_said(removed)}")
     env = [flag for name, value in server.env.items() for flag in ("-e", f"{name}={value}")]
     add = [claude, "mcp", "add", "--scope", "user", SERVER_NAME, *env, "--", *server.argv]
     added = _run(add, machine)
@@ -312,6 +338,8 @@ def codex(machine: Machine, server: ServerEntry) -> Outcome:
     earlier = registered(_codex_config(machine), tomllib.loads, "mcp_servers")
     if isinstance(earlier, Failed):
         return earlier
+    if earlier.entry.url is not None:
+        return Kept(earlier.entry.url)
     server = server.keeping(earlier.entry.env)
     env = [flag for name, value in server.env.items() for flag in ("--env", f"{name}={value}")]
     added = _run([cli, "mcp", "add", SERVER_NAME, *env, "--", *server.argv], machine)
@@ -320,7 +348,7 @@ def codex(machine: Machine, server: ServerEntry) -> Outcome:
     if added.returncode != 0:
         return Failed(f"codex mcp add: {_said(added)}")
     # `codex mcp add` writes the whole entry anew and takes no flag for the rest of it.
-    dropped = sorted(set(earlier.entry.fields) - _HOW_REACHED)
+    dropped = sorted(set(earlier.entry.fields) - _HOW_STARTED)
     lost = f" (codex mcp add did not keep the earlier entry's {', '.join(dropped)})"
     return Installed("its config" + (lost if dropped else ""))
 
@@ -342,11 +370,13 @@ class JsonConfig:
         earlier = registered(path, json.loads, "mcpServers")
         if isinstance(earlier, Failed):
             return earlier
-        kept = {k: v for k, v in earlier.entry.fields.items() if k not in _HOW_REACHED}
+        if earlier.entry.url is not None:
+            return Kept(earlier.entry.url)
+        kept = {k: v for k, v in earlier.entry.fields.items() if k not in _HOW_STARTED}
         earlier.servers[SERVER_NAME] = kept | server.keeping(earlier.entry.env).as_json()
         earlier.config["mcpServers"] = earlier.servers
         try:
-            _replace(path, json.dumps(earlier.config, indent=2) + "\n")
+            _replace(path, json.dumps(earlier.config, indent=2, ensure_ascii=False) + "\n")
         except OSError as e:
             return Failed(str(e))
         return Installed(str(path))
@@ -357,12 +387,18 @@ def _replace(path: Path, text: str) -> None:
 
     The client reads its config while this writes it, and an interrupted write would leave
     half of it; a file renamed over another is the old one or the new one. A link (a config
-    kept in a dotfiles repository) stays a link: the file it names is the one replaced.
+    kept in a dotfiles repository) stays a link: the file it names is the one replaced, and
+    keeps its permissions (a config holding a token may be readable by its owner alone).
     """
     target = path.resolve()
     staged = target.with_name(f".{target.name}.houdini-mcp")
-    staged.write_text(text)
-    os.replace(staged, target)
+    try:
+        staged.write_text(text)
+        if target.exists():
+            shutil.copymode(target, staged)
+        os.replace(staged, target)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def _claude_desktop_dir(machine: Machine) -> Path | NotFound:
@@ -402,6 +438,8 @@ def _described(outcome: Outcome) -> str:
             return f"installed in {where}"
         case NotFound(looked):
             return f"not found ({looked})"
+        case Kept(url):
+            return f"kept its entry, which reaches the server at {url}"
         case Failed(why):
             return f"FAILED: {why}"
 

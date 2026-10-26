@@ -11,6 +11,7 @@ from houdini_mcp.install import (
     Failed,
     Installed,
     JsonConfig,
+    Kept,
     Machine,
     NotFound,
     ServerEntry,
@@ -48,7 +49,7 @@ elif sys.argv[1:3] == ["mcp", "add"]:
 
 
 def _cli(bin_dir: Path, name: str) -> Path:
-    bin_dir.mkdir(exist_ok=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
     cli = bin_dir / name
     cli.write_text(_FAKE_CLI.format(python=sys.executable))
     cli.chmod(0o755)
@@ -142,22 +143,44 @@ def test_claude_code_registers_the_server_in_its_user_scope(tmp_path: Path) -> N
     assert claude.with_name("known").exists()
 
 
+_EARLIER_CLAUDE = {"mcpServers": {"houdini": {"command": "old"}}}
+
+
 def test_claude_code_replaces_an_earlier_registration(tmp_path: Path) -> None:
     _cli(tmp_path / "bin", "claude")
     (tmp_path / "bin" / "known").touch()
+    machine = _claude_json(tmp_path, _EARLIER_CLAUDE)
+
+    assert claude_code(machine, SERVER) == Installed("its user config")
+
+    assert [call[:2] for call in _calls(tmp_path / "bin")] == [["mcp", "remove"], ["mcp", "add"]]
+
+
+def test_claude_code_with_no_earlier_registration_removes_nothing(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
 
     assert claude_code(_machine(tmp_path), SERVER) == Installed("its user config")
 
-    assert [call[:2] for call in _calls(tmp_path / "bin")] == [["mcp", "remove"], ["mcp", "add"]]
+    assert [call[:2] for call in _calls(tmp_path / "bin")] == [["mcp", "add"]]
 
 
 def test_a_registration_claude_code_will_not_remove_fails_and_adds_nothing(tmp_path: Path) -> None:
     _cli(tmp_path / "bin", "claude")
     (tmp_path / "bin" / "known").touch()
     (tmp_path / "bin" / "broken").touch()
+    machine = _claude_json(tmp_path, _EARLIER_CLAUDE)
 
-    assert claude_code(_machine(tmp_path), SERVER) == Failed("claude mcp remove: config is locked")
+    assert claude_code(machine, SERVER) == Failed("claude mcp remove: config is locked")
     assert [call[:2] for call in _calls(tmp_path / "bin")] == [["mcp", "remove"]]
+
+
+def test_claude_code_installed_by_its_local_installer_is_found_off_path(tmp_path: Path) -> None:
+    """The local installer puts claude in ~/.claude/local and an alias in the shell's rc."""
+    machine = _machine(tmp_path)
+    _cli(machine.home / ".claude" / "local", "claude")
+
+    assert claude_code(machine, SERVER) == Installed("its user config")
+    assert _calls(machine.home / ".claude" / "local")[-1][:2] == ["mcp", "add"]
 
 
 def test_codex_registers_the_server(tmp_path: Path) -> None:
@@ -173,7 +196,9 @@ def test_codex_registers_the_server(tmp_path: Path) -> None:
 
 def test_a_client_command_not_on_path_is_not_found(tmp_path: Path) -> None:
     machine = _machine(tmp_path)
-    assert claude_code(machine, SERVER) == NotFound("claude on PATH")
+    assert claude_code(machine, SERVER) == NotFound(
+        "claude on PATH, in ~/.claude/local or in ~/.local/bin"
+    )
     assert codex(machine, SERVER) == NotFound("codex on PATH")
 
 
@@ -457,7 +482,7 @@ def test_a_json_client_keeps_the_earlier_entrys_own_settings(tmp_path: Path) -> 
     machine = _machine(tmp_path)
     config = machine.home / ".cursor" / "mcp.json"
     config.parent.mkdir(parents=True)
-    earlier = {"url": "http://localhost:8000/mcp", "disabled": False, "autoApprove": ["get_scene"]}
+    earlier = {"command": "uv", "type": "stdio", "disabled": False, "autoApprove": ["get_scene"]}
     config.write_text(json.dumps({"mcpServers": {"houdini": earlier}}))
 
     _CURSOR(machine, SERVER)
@@ -497,6 +522,65 @@ def test_codex_says_what_of_its_earlier_entry_it_did_not_keep(tmp_path: Path) ->
     assert codex(machine, SERVER) == Installed(
         "its config (codex mcp add did not keep the earlier entry's startup_timeout_sec)"
     )
+
+
+# The README's Docker client entry: the client reaches a server run in a container.
+_DOCKER = "http://localhost:3055/mcp"
+
+
+def test_a_json_client_pointed_at_a_server_by_url_keeps_its_entry(tmp_path: Path) -> None:
+    machine = _machine(tmp_path)
+    config = machine.home / ".cursor" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    text = json.dumps({"mcpServers": {"houdini": {"url": _DOCKER}}})
+    config.write_text(text)
+
+    assert _CURSOR(machine, SERVER) == Kept(_DOCKER)
+    assert config.read_text() == text
+
+
+def test_claude_code_pointed_at_a_server_by_url_keeps_its_entry(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    machine = _claude_json(tmp_path, {"mcpServers": {"houdini": {"type": "http", "url": _DOCKER}}})
+
+    assert claude_code(machine, SERVER) == Kept(_DOCKER)
+    assert not (tmp_path / "bin" / "calls").exists()
+
+
+def test_codex_pointed_at_a_server_by_url_keeps_its_entry(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "codex")
+    machine = _machine(tmp_path, CODEX_HOME=str(tmp_path / "codex"))
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex" / "config.toml").write_text(f'[mcp_servers.houdini]\nurl = "{_DOCKER}"\n')
+
+    assert codex(machine, SERVER) == Kept(_DOCKER)
+    assert not (tmp_path / "bin" / "calls").exists()
+
+
+def test_a_kept_entry_is_reported_and_is_not_a_failure() -> None:
+    text, status = report([("Cursor", Kept(_DOCKER))], SERVER)
+    assert text.splitlines()[0] == f"Cursor: kept its entry, which reaches the server at {_DOCKER}"
+    assert status == 0
+
+
+def test_a_json_config_keeps_its_permissions_and_its_text(tmp_path: Path) -> None:
+    """A config holding a token may be readable by its owner alone."""
+    machine = _machine(tmp_path)
+    config = machine.home / ".cursor" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"mcpServers": {"other": {"description": "José's"}}}))
+    config.chmod(0o600)
+
+    _CURSOR(machine, SERVER)
+
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert "José's" in config.read_text()
+    assert sorted(path.name for path in config.parent.iterdir()) == ["mcp.json"]
+
+
+def test_houdinis_preferences_on_windows_follow_home(tmp_path: Path) -> None:
+    machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
+    assert houdini_pref_dir(machine) == tmp_path / "h" / "houdini22.0"
 
 
 def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:
