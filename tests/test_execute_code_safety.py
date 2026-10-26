@@ -1399,13 +1399,16 @@ class TestSyntaxGate:
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
 
-    def test_the_program_is_compiled_once(self, mock_connection):
+    def test_the_program_is_compiled_once(self, mock_connection, monkeypatch):
         """The program's process runs the code object the gate compiled and never
         compiles the source again, so the compiler's SyntaxWarning is given once."""
         import warnings
 
         from houdini_mcp.tools import execute_code
 
+        # The program's process inherits the environment; a filter there would
+        # hide the warning a second compile writes to its stderr.
+        monkeypatch.delenv("PYTHONWARNINGS", raising=False)
         with warnings.catch_warnings(record=True) as given:
             warnings.simplefilter("always", SyntaxWarning)
             result = execute_code(
