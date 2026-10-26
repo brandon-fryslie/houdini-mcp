@@ -9,7 +9,7 @@ from tests.conftest import (
     MockHouNode,
     _built_as,
 )
-from tests.fake_node_types import ParmTuple, load_table, read_node_types
+from tests.fake_node_types import ParmTuple, load_table, node_types, read_node_types
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -342,6 +342,27 @@ def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> 
     assert read_node_types(mock_hou, table) == table
 
 
+def test_the_reader_refuses_a_network_holding_a_category_the_table_lacks(
+    mock_hou: MockHouModule,
+) -> None:
+    table = load_table()
+    del table["Vop"]
+
+    with pytest.raises(LookupError, match="holds Vop, which the table has no entry for"):
+        read_node_types(mock_hou, table)
+
+
+def test_the_table_holds_create_node_answers_for_an_unlocked_context_root_alone() -> None:
+    table = load_table()
+    del table["Manager"]["mat"]["create_node"]
+    table["Sop"]["box"]["create_node"] = {"network": {}, "subnetworks": {}}
+
+    with pytest.raises(ValueError, match="Manager/mat lacks createNode answers"):
+        node_types({"Manager": table["Manager"]})
+    with pytest.raises(ValueError, match="Sop/box has createNode answers"):
+        node_types({"Sop": table["Sop"]})
+
+
 def test_a_type_is_created_by_either_of_its_names_and_reports_its_own(
     mock_hou: MockHouModule,
 ) -> None:
@@ -448,6 +469,27 @@ def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModu
         with pytest.raises(Exception, match=INVALID_TYPE):
             attribvop.createNode(refused)
     assert attribvop.children() == (collect,)
+
+
+def test_an_undone_scene_is_judged_as_the_scene_it_puts_back(mock_hou: MockHouModule) -> None:
+    """An undo puts back a copy of the scene whose nodes are still the table's types:
+    its attribvop holding a collect refuses a second, and its subnet goes back in."""
+    geo = mock_hou.node("/obj").createNode("geo")
+    subnet = geo.createNode("subnet")
+    attribvop = geo.createNode("attribvop")
+    attribvop.createNode("collect")
+    mock_hou.undos.enter_main_thread()
+    with mock_hou.undos.group("add a geo"):
+        mock_hou.node("/obj").createNode("geo")
+
+    mock_hou.undos.performUndo()
+    restored = mock_hou.node(subnet.path())
+    restored.destroy()
+    mock_hou.add_node(restored)
+
+    with pytest.raises(Exception, match=INVALID_TYPE):
+        mock_hou.node(attribvop.path()).createNode("collect")
+    assert mock_hou.node(subnet.path()) is restored
 
 
 def test_an_asset_whose_contents_do_not_match_where_it_is_made_is_left_unlocked(

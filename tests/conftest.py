@@ -63,7 +63,7 @@ def join_path(parent: str, name: str) -> str:
 
 
 # [LAW:one-source-of-truth] the fake's node types are the table Houdini 22.0.466
-# wrote (tests/fake_node_types.py): category -> a type's own name -> the type, and
+# wrote (tests/fake_node_types.json): category -> a type's own name -> the type, and
 # createNode's answers in each kind of network. A node's category is the one its
 # network holds; the root and its contexts come with the scene, placed as their types.
 NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
@@ -374,7 +374,8 @@ def _place(
 
 def _built_as(node_type: NodeType, path: str, name: str) -> "MockHouNode":
     """A node Houdini builds as its type, with no name resolved: the root and the
-    contexts of a fresh scene, which no name reaches."""
+    contexts of a fresh scene, which no name reaches, and a node Houdini builds
+    inside another where createNode may refuse it (an attribvop's subinput1)."""
     node = MockHouNode(path=path, name=name, node_type=node_type.type)
     node._placement = _place(node, node_type, None, Made())
     return node
@@ -456,7 +457,8 @@ class MockHouNode:
     ):
         self._path = path
         self._name = name
-        # the name it is created with; its type is the row that name gives in its network
+        # the name it is created with, which its network resolves to the type it is
+        # placed as; a node built as its type is built with its type's own name
         self._node_type = node_type
         # [LAW:one-source-of-truth] the tree is the scene graph: a node is in the
         # scene exactly when it is in its parent's children, and hou.node() walks it.
@@ -605,7 +607,7 @@ class MockHouNode:
             held = self._parent._held()
             assert held is not None, "attach places no child in a node that is not a network"
             return held
-        if self._node_type != "root":
+        if self._row() is not NODE_TYPES["Director"]["root"]:
             raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
         return "Director"
 
@@ -1140,7 +1142,8 @@ def _admit(
     answer for it.
 
     A node built by name is judged as createNode judges that name there. A node built
-    as its type (the scene's own, or one placed before) keeps it and is judged only by
+    as its type (the scene's own, one Houdini builds inside another, or one placed
+    before) keeps it and is judged only by
     its network's category: Houdini builds such nodes where createNode refuses them,
     and moves none to a network whose category would make it another type.
     """
@@ -1417,9 +1420,10 @@ class MockHouModule:
         return {category: MockNodeTypeCategory(category) for category in NODE_TYPES}
 
     def preferredNodeType(self, name: str) -> MockNodeType | None:
-        """The type createNode gives for a name in Houdini's category-qualified form,
-        the category before the type's own name (``apex::Sop/controlextract``); None
-        for a name it refuses."""
+        """The registered type a name in Houdini's category-qualified form, the
+        category before the type's own name (``apex::Sop/controlextract``), resolves
+        to as rebuilt from its parts, which reads a trailing "::" as no version; None
+        for a name no type answers. It takes no alias, and no network's answers."""
         scope, namespace, qualified, version = _name_components(name)
         category, _, base = qualified.partition("/")
         if category not in NODE_TYPES:

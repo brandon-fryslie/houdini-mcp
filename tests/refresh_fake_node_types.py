@@ -19,7 +19,12 @@ REPO = Path(__file__).resolve().parents[1]
 # the repo, and the plugin tree's modules, which put houdini_mcp_read on Houdini's path
 sys.path[:0] = [str(REPO), str(REPO / "houdini_plugin" / "houdini_mcp" / "python")]
 
-from tests.fake_node_types import TABLE_PATH, load_table, read_node_types  # noqa: E402
+from tests.fake_node_types import (  # noqa: E402
+    TABLE_PATH,
+    load_table,
+    node_types,
+    read_node_types,
+)
 
 table = load_table()
 for added in sys.argv[1:]:
@@ -29,4 +34,7 @@ for added in sys.argv[1:]:
     table.setdefault(category, {}).setdefault(own, {"parms": {}})
 
 hou.hipFile.clear(suppress_save_prompt=True)
-TABLE_PATH.write_text(json.dumps(read_node_types(hou, table), indent=2) + "\n")
+read = read_node_types(hou, table)
+# [LAW:single-enforcer] the loader refuses here what the fake could not load
+node_types(read)
+TABLE_PATH.write_text(json.dumps(read, indent=2) + "\n")

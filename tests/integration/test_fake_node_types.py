@@ -58,11 +58,12 @@ def test_the_fake_splits_a_type_name_as_houdini_does(houdini: Target) -> None:
     assert {name: _name_components(name) for name in NAMES} == read
 
 
-def _networks(hou: Any) -> dict[str, Any]:
-    """The networks the name tests ask in, each as createNode leaves it in a fresh
-    scene: the contexts, a context root of each kind the table's types name, and a
-    subnet in each Vop and Sop root and one in that, for the depth the reader does
-    not ask at."""
+def _networks(hou: Any) -> dict[str, tuple[Any, str]]:
+    """The nodes the name tests ask in, each as createNode leaves it in a fresh scene,
+    with the category whose names each is asked: the contexts, a context root of each
+    kind the table's types name, a subnet in each Vop and Sop root and one in that,
+    for the depth the reader does not ask at, and a locked asset and a node that is
+    not a network, which the table does not answer for."""
     obj = hou.node("/obj")
     geo = obj.createNode("geo")
     networks = {
@@ -73,11 +74,13 @@ def _networks(hou: Any) -> dict[str, Any]:
         "geo": geo,
         "dopnet": obj.createNode("dopnet"),
         "attribvop": geo.createNode("attribvop"),
+        "geo/attribwrangle": geo.createNode("attribwrangle"),
     }
     for root in ("geo", "/mat", "attribvop"):
         subnet = networks[f"{root}/subnet"] = networks[root].createNode("subnet")
         networks[f"{root}/subnet/subnet"] = subnet.createNode("subnet")
-    return networks
+    asked = {label: (n, n.childTypeCategory().name()) for label, n in networks.items()}
+    return {**asked, "geo/box": (geo.createNode("box"), "Sop")}
 
 
 def _forms(category: str, resolve: Callable[[str, str], object]) -> list[str]:
@@ -122,14 +125,11 @@ def _created(network: Any, name: str) -> tuple[str, str]:
 
 
 def _create_node_answers(hou: Any) -> dict[str, dict[str, tuple[str, str]]]:
-    """createNode's answer in each network for every form of the types of the
-    category it holds."""
+    """createNode's answer in each node for every form of the types of the category
+    it is asked."""
     return {
-        label: {
-            name: _created(network, name)
-            for name in _forms(network.childTypeCategory().name(), _named)
-        }
-        for label, network in _networks(hou).items()
+        label: {name: _created(network, name) for name in _forms(category, _named)}
+        for label, (network, category) in _networks(hou).items()
     }
 
 

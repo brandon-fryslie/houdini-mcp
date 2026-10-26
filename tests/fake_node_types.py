@@ -1,12 +1,14 @@
 """The fake hou's node types: the table Houdini wrote, and the reader that writes it.
 
 [LAW:one-source-of-truth] ``fake_node_types.json`` is the one record of the node
-types the fake has and of what createNode does with them. Its keys are the fake's
-choice: for each category, the types it holds, under their own names, and for each
-type the parameter tuples a fresh node carries. Every fact under them is Houdini's
-answer, read by ``read_node_types``: the refresh script writes the file from it under
-hython, and a live test checks the file against it, so the table stays what Houdini
-22.0.466 says.
+types the fake has and of what createNode does with each in a network that makes
+nodes. Its keys are the fake's choice: for each category, the types it holds, under
+their own names, and for each type the parameter tuples a fresh node carries. Every
+fact under them is Houdini's answer, read by ``read_node_types``: the refresh script
+writes the file from it under hython, and a live test checks the file against it, so
+the table stays what Houdini 22.0.466 says. That a locked asset and a node that is not
+a network refuse every child, whatever the name, is the fake's own rule (``_admit`` in
+tests/conftest.py), which the live name test checks.
 
 Imported by hython as well as by the tests, so it imports nothing beyond the
 standard library and ``houdini_mcp_read``, the plugin tree's leaf that says how a
@@ -90,7 +92,8 @@ class CreateNode:
     A context root is a network that holds a category other than its own (/mat, an
     attribvop, a geo): Houdini answers createNode by the root a network is in, by
     whether it is that root or a subnetwork of some type inside it, and by whether it
-    already holds a node of the type asked for, and by nothing else seen.
+    already holds a node of the type asked for, and by nothing else seen. A locked
+    one refuses every child alike, so the table holds answers for the unlocked alone.
     """
 
     network: dict[str, Answers]
@@ -111,7 +114,7 @@ class NodeType:
     inputs, named "1" on, a node of it has; None for a node Houdini says is not a
     subnetwork, whose indirectInputs() raises. A node that is neither has none: a Sop
     null, or a karma ROP. ``create_node`` is createNode's answers in a node of it, for
-    a context root; None for any other type.
+    an unlocked context root; None for any other type.
     """
 
     type: str
@@ -129,6 +132,18 @@ class NodeType:
         """Whether Houdini's registry has it, and so whether any name reaches it."""
         return _registered(self.type, self.namespace_order)
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "NodeType":
+        # [LAW:one-source-of-truth] a type is the table's one record of it, so a copy
+        # of a scene (an undo step) holds the same types, which the fake compares by
+        # identity
+        return self
+
+
+def _has_answers(category: str, holds: str | None, locked: bool) -> bool:
+    """Whether the table holds createNode's answers in a node of a ``category`` type
+    that ``holds`` a category and is ``locked`` or not: an unlocked context root."""
+    return holds not in (None, category) and not locked
+
 
 def _registered(own: str, namespace_order: Any) -> bool:
     # [LAW:one-source-of-truth] the namespace order is Houdini's answer: a type it
@@ -145,12 +160,20 @@ def load_table() -> Table:
 def node_types(table: Table) -> dict[str, dict[str, NodeType]]:
     """The table as records: category -> a type's own name -> the type."""
     return {
-        category: {own: _node_type(own, facts) for own, facts in types.items()}
+        category: {own: _node_type(category, own, facts) for own, facts in types.items()}
         for category, types in table.items()
     }
 
 
-def _node_type(own: str, facts: dict[str, Any]) -> NodeType:
+def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
+    # [LAW:parse-dont-validate] a context root's answers, parsed once here, on exactly
+    # the types the table holds them for
+    answered = "create_node" in facts
+    if answered != _has_answers(category, facts["holds"], facts["locked"]):
+        raise ValueError(
+            f"{category}/{own} {'has' if answered else 'lacks'} createNode answers, "
+            "which the table holds for an unlocked context root alone"
+        )
     return NodeType(
         type=own,
         description=facts["description"],
@@ -165,8 +188,7 @@ def _node_type(own: str, facts: dict[str, Any]) -> NodeType:
             )
             for tuple_name, parm in facts["parms"].items()
         },
-        # [LAW:parse-dont-validate] a context root's answers, parsed once here
-        create_node=None if "create_node" not in facts else _create_node(facts["create_node"]),
+        create_node=_create_node(facts["create_node"]) if answered else None,
     )
 
 
@@ -246,7 +268,7 @@ class _Reader:
             return False
         category, own = key
         facts = self._facts[key] = _facts(node, self._table[category][own])
-        is_root = facts["holds"] not in (None, category) and not facts["locked"]
+        is_root = _has_answers(category, facts["holds"], facts["locked"])
         if keep and is_root:
             self.roots.append(node)
         return keep and is_root
@@ -254,6 +276,11 @@ class _Reader:
     def explore(self, network: Any) -> None:
         """createNode's answers in the context root ``network`` itself."""
         held = network.childTypeCategory().name()
+        if held not in self._table:
+            raise LookupError(
+                f"{network.path()} holds {held}, which the table has no entry for: add "
+                f"one of its types, hython tests/refresh_fake_node_types.py {held}/<type>"
+            )
         self._create_node[_type_key(network)] = {
             "network": self._ask_all(network, held, keep=True),
             "subnetworks": {},
@@ -264,7 +291,7 @@ class _Reader:
         root ``network`` makes that holds its category."""
         held = network.childTypeCategory().name()
         subnetworks = self._create_node[_type_key(network)]["subnetworks"]
-        for own in self._table.get(held, {}):
+        for own in self._table[held]:
             facts = self._facts.get((held, own))
             if facts is None or facts["holds"] != held or facts["locked"]:
                 continue
@@ -279,7 +306,7 @@ class _Reader:
         """createNode's answers in ``network`` for each registered type of
         ``category`` it does not simply make, asked with none of it held and again."""
         answers = {}
-        for own in self._table.get(category, {}):
+        for own in self._table[category]:
             facts = self._facts.get((category, own))
             if facts is not None and not _registered(own, facts["namespace_order"]):
                 continue
