@@ -658,7 +658,7 @@ def execute_code(
             reason="read_only_non_inspection",
             message=(
                 "Blocked under read-only policy: the code names something outside "
-                "the inspection allowlist. Use policy='normal' (default) for anything else."
+                "the inspection allowlist."
             ),
             hint=(
                 "read-only admits only recognized inspection (navigation, parameter "
