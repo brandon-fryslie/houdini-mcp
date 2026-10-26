@@ -201,7 +201,7 @@ class MockNodeType:
     """Mock hou.NodeType as its category holds it: a row of the table, and what the
     category's registry says of it."""
 
-    def __init__(self, category: str, row: NodeType) -> None:
+    def __init__(self, category: Category, row: NodeType) -> None:
         self._category = category
         self._row = row
 
@@ -212,10 +212,10 @@ class MockNodeType:
         return self._row.description
 
     def namespaceOrder(self) -> tuple[str, ...]:
-        return CATEGORIES[self._category].namespace_order(self._row.type)
+        return self._category.namespace_order(self._row.type)
 
     def aliases(self) -> tuple[str, ...]:
-        return CATEGORIES[self._category].aliases_of(self._row.type)
+        return self._category.aliases_of(self._row.type)
 
 
 class MockNodeTypeCategory:
@@ -233,7 +233,7 @@ class MockNodeTypeCategory:
         name."""
         category = CATEGORIES[self._name]
         return {
-            own: MockNodeType(self._name, row)
+            own: MockNodeType(category, row)
             for own, row in category.types.items()
             if category.registered(own)
         }
@@ -241,7 +241,7 @@ class MockNodeTypeCategory:
     def nodeType(self, name: str) -> MockNodeType | None:
         """The registered type whose own name ``name`` is; None when no type has it."""
         category = CATEGORIES[self._name]
-        return MockNodeType(self._name, category.held(name)) if category.registered(name) else None
+        return MockNodeType(category, category.held(name)) if category.registered(name) else None
 
 
 class _SopNodeClass(type):
@@ -1426,7 +1426,7 @@ class MockHouModule:
         if category not in CATEGORIES:
             return None
         row = _resolved(category, full_name(scope, namespace, base, version))
-        return None if row is None else MockNodeType(category, row)
+        return None if row is None else MockNodeType(CATEGORIES[category], row)
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""

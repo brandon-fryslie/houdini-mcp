@@ -33,9 +33,9 @@ for added in sys.argv[1:]:
     category, _, own = added.partition("/")
     if not own:
         raise SystemExit(f"{added!r} names no type: name one as Category/type")
-    if category not in table:
-        raise SystemExit(f"{added!r} names a category this Houdini does not have")
-    table[category]["types"].setdefault(own, {"parms": {}})
+    # [LAW:single-enforcer] the reader refuses a category this Houdini does not have
+    entry = table.setdefault(category, {"namespace_orders": [], "aliases": {}, "types": {}})
+    entry["types"].setdefault(own, {"parms": {}})
 
 hou.hipFile.clear(suppress_save_prompt=True)
 read = read_node_types(hou, table)

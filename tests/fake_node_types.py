@@ -16,8 +16,10 @@ Houdini exception reads on either side of the link.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from houdini_mcp_read import reason
@@ -169,13 +171,28 @@ class Category:
     registry, which lists every type it registers, and no other. ``aliases`` is the
     other names createNode takes, each for its type's own name. ``types`` is the types
     the fake has, by own name: registered ones, and for Director and Manager the root
-    and its contexts, which Houdini registers no type for.
+    and its contexts, in categories where Houdini registers no type.
+
+    Read-only: a test changes a category by replacing it, and every one built passes
+    the check below.
     """
 
     name: str
-    namespace_orders: dict[str, tuple[str, ...]]
-    aliases: dict[str, str]
-    types: dict[str, NodeType]
+    namespace_orders: Mapping[str, tuple[str, ...]]
+    aliases: Mapping[str, str]
+    types: Mapping[str, NodeType]
+
+    def __post_init__(self) -> None:
+        for field in ("namespace_orders", "aliases", "types"):
+            object.__setattr__(self, field, MappingProxyType(dict(getattr(self, field))))
+        # [LAW:types-are-the-program] a type the fake holds and Houdini does not
+        # register would be refused as Houdini refuses a name it has no type for
+        unregistered = sorted(own for own in self.types if not self.registered(own))
+        if unregistered and self.namespace_orders:
+            raise ValueError(f"{self.name} holds types Houdini does not register: {unregistered}")
+        aliased = sorted(own for own in self.aliases.values() if not self.registered(own))
+        if aliased:
+            raise ValueError(f"{self.name}'s aliases name types it does not register: {aliased}")
 
     def namespace_order(self, own: str) -> tuple[str, ...]:
         """The namespace order the type named ``own`` is in; none for a type Houdini
@@ -232,16 +249,12 @@ def _category(name: str, entry: dict[str, Any]) -> Category:
                 f"{name}'s namespace order {order} is not the one order of one base name"
             )
         namespace_orders[bases.pop()] = tuple(order)
-    category = Category(
+    return Category(
         name=name,
         namespace_orders=namespace_orders,
         aliases=entry["aliases"],
         types={own: _node_type(name, own, facts) for own, facts in entry["types"].items()},
     )
-    unregistered = sorted(own for own in entry["aliases"].values() if not category.registered(own))
-    if unregistered:
-        raise ValueError(f"{name}'s aliases name types it does not register: {unregistered}")
-    return category
 
 
 def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:

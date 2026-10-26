@@ -1,5 +1,7 @@
 """The fake hou keeps one scene graph: what createNode and destroy do is what hou.node sees."""
 
+import dataclasses
+
 import pytest
 
 from tests.conftest import (
@@ -394,6 +396,20 @@ def test_the_table_holds_one_namespace_order_for_each_base_name(orders: list[lis
 
     with pytest.raises(ValueError, match="is not the one order of one base name"):
         categories({"Sop": table["Sop"]})
+
+
+def test_a_category_holds_no_type_houdini_does_not_register() -> None:
+    """However it is built: Houdini would refuse a name of it, where the fake has it."""
+    sop = CATEGORIES["Sop"]
+    unregistered = dataclasses.replace(sop.types["box"], type="houdini_mcp_unregistered")
+
+    with pytest.raises(ValueError, match=r"holds types Houdini does not register"):
+        dataclasses.replace(sop, types={**sop.types, unregistered.type: unregistered})
+
+
+def test_a_category_is_changed_by_replacing_it() -> None:
+    with pytest.raises(TypeError):
+        CATEGORIES["Sop"].types["box"] = CATEGORIES["Sop"].types["box"]  # type: ignore[index]
 
 
 def test_the_table_holds_no_alias_of_a_type_houdini_does_not_register() -> None:

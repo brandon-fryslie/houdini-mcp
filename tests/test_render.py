@@ -1338,15 +1338,17 @@ class TestRenderFraming:
         from tests.conftest import CATEGORIES
 
         # the cam a studio's defaults give: rotate zxy, transform trs, as menu indices
-        cam = CATEGORIES["Object"].types["cam"]
+        objects = CATEGORIES["Object"]
+        cam = objects.types["cam"]
         orders = {
             name: dataclasses.replace(cam.parms[name], values=(index,))
             for name, index in (("rOrd", 4), ("xOrd", 5))
         }
+        studio_cam = dataclasses.replace(cam, parms={**cam.parms, **orders})
         monkeypatch.setitem(
-            CATEGORIES["Object"].types,
-            "cam",
-            dataclasses.replace(cam, parms={**cam.parms, **orders}),
+            CATEGORIES,
+            "Object",
+            dataclasses.replace(objects, types={**objects.types, "cam": studio_cam}),
         )
 
         result = getattr(tools, tool)(host="localhost", port=18811)
