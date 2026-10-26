@@ -149,7 +149,7 @@ def _full_name(scope: str, namespace: str, name: str, version: str) -> str:
 
 
 class OperationFailed(Exception):
-    """hou.OperationFailed, which Houdini 22 raises for a cook that fails."""
+    """hou.OperationFailed, which Houdini 22 raises for an operation it refuses or that fails."""
 
 
 OperationFailed.__module__ = "hou"
@@ -892,7 +892,11 @@ class MockHouNode:
         source_node: "MockHouNode | MockSubnetIndirectInput | None",
         output_index: int = 0,
     ) -> None:
-        """Set input connection from a node or a subnet indirect input."""
+        """Set input connection from a node or a subnet indirect input. As Houdini 22's,
+        it refuses a source outside this node's own network, a subnet's indirect input
+        included, and leaves the inputs as they were."""
+        if source_node is not None and source_node.parent() is not self.parent():
+            raise raised_inside_houdini(OperationFailed("The attempted operation failed."))
         # Extend inputs list if needed
         while len(self._inputs) <= input_index:
             self._inputs.append(None)

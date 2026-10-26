@@ -27,6 +27,7 @@ from tests.conftest import (
     MockPaneTabType,
     OperationFailed as HouOperationFailed,
     link_failure,
+    raised_inside_houdini,
     served_namespace,
 )
 
@@ -581,7 +582,7 @@ def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
     editor = _network_editor(mock_connection)
 
     def refuse(path: str) -> None:
-        raise HouOperationFailed("The attempted operation failed.")
+        raise raised_inside_houdini(HouOperationFailed("The attempted operation failed."))
 
     editor.cd = refuse  # type: ignore[method-assign]
 
@@ -669,7 +670,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
 
     def refuse() -> None:
-        raise RuntimeError("viewport is gone")
+        raise raised_inside_houdini(RuntimeError("viewport is gone"))
 
     viewport = _viewport(events, "persp", viewer)
     viewport.frameAll = refuse

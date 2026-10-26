@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `connect_nodes` from a source outside the destination's network
+  (houdini-laws-etg.z7i), which Houdini refuses, answers `operation_failed`
+  in Houdini's words, naming both paths, where it answered with an
+  unclassified error and a traceback. A pane capture that Houdini refuses to
+  frame or to take into a network is the same `operation_failed`; a fault in
+  the server there is now reported as one, not as Houdini's refusal.
+
 - On macOS, a call waiting for Houdini's main thread holds off App Nap
   (houdini-install-aby.80r): a graphical Houdini whose window was covered
   refused `create_node` and every other edit after 30 s while reads answered.
