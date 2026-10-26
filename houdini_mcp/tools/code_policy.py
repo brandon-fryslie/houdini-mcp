@@ -1,8 +1,8 @@
 """Static policy gates for ``execute_code``.
 
-Every gate here reads the program's AST, which is the same grammar the server's
-``exec`` will compile a moment later - so what the gate sees is what runs, and
-text inside comments or string literals is not code.
+Every gate here reads the program's AST, the tree the program ``exec`` runs was
+compiled from - so what the gate sees is what runs, and text inside comments or
+string literals is not code.
 
 Two kinds of rail live here, and they fail in opposite directions on purpose:
 
@@ -19,9 +19,10 @@ Two kinds of rail live here, and they fail in opposite directions on purpose:
 Both are guard rails against accidents in the code an agent ordinarily writes,
 not a sandbox: neither is built to hold against a program written to get past it.
 
-The caller parses the program once through :func:`parse_code` and hands the
-tree to every detector [LAW:single-enforcer]: the decision about unparseable
-code is made in one place, and the detectors are pure functions of the tree.
+The caller compiles the program once through :func:`compile_program` and hands
+the tree to every detector [LAW:single-enforcer]: the decision about a program
+that cannot be read is made in one place, and the detectors are pure functions of
+the tree.
 """
 
 from __future__ import annotations
@@ -30,10 +31,12 @@ import ast
 import enum
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import CodeType
 from typing import Generic, Literal, Protocol, TypeVar
 
 __all__ = [
-    "parse_code",
+    "CompiledProgram",
+    "compile_program",
     "_detect_dangerous_code",
     "_detect_heavy_geometry_code",
     "_detect_import_hou",
@@ -41,14 +44,31 @@ __all__ = [
 ]
 
 
-def parse_code(code: str) -> ast.Module:
-    """Parse user code; raises ``SyntaxError`` so the caller can refuse loudly."""
+@dataclass(frozen=True)
+class CompiledProgram:
+    """A program read once: the tree the gates judge and the code object ``exec`` runs,
+    compiled from that tree, so what was judged is what runs [LAW:one-source-of-truth]."""
+
+    tree: ast.Module
+    code: CodeType
+
+
+def compile_program(code: str) -> CompiledProgram:
+    """Parse, then compile, user code; raises ``SyntaxError`` so the caller can refuse loudly.
+
+    A program can parse and still not compile (``return`` outside a function), so
+    the gate's verdict is the compiler's, not the parser's alone.
+    """
     try:
-        return ast.parse(code)
+        tree = ast.parse(code)
+        # "<string>" is the filename exec gives a source string, so a program's
+        # traceback reads as it always has. dont_inherit: this module's
+        # ``from __future__ import annotations`` is not the program's.
+        return CompiledProgram(tree, compile(tree, "<string>", "exec", dont_inherit=True))
     except (ValueError, RecursionError, MemoryError) as exc:
-        # Early 3.11 releases report a null byte as ValueError, and the parser
-        # reports a program nested past its stack as RecursionError or
-        # MemoryError; each is still a program the gates cannot read
+        # Early 3.11 releases report a null byte as ValueError, and the parser or
+        # the compiler reports a program nested past its stack as RecursionError
+        # or MemoryError; each is still a program the gates cannot read
         # [LAW:no-silent-failure], refused by the one syntax gate.
         raise SyntaxError(str(exc)) from exc
 

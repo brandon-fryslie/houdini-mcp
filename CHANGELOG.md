@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `execute_code` refuses a program that parses but does not compile as
+  `syntax_error`, before any rail (houdini-laws-etg.r9q). The gate only parsed
+  the program, and the worker compiled the source again, so `return 1` or
+  `break` at module level, or, on Python 3.14, an expression nested deep enough
+  to overflow the compiler's stack, got past the gate and came back as the
+  program's own failure (`operation_failed`, with a traceback). The gate now
+  compiles the program and the worker runs that compiled program. The refusal
+  reads "Code does not compile: ...", where it read "Code does not parse: ...".
+
 - `list_node_types` lists the types Houdini offers when it is called
   (houdini-laws-etg.tva). It answered from a cache that only `load_scene` and
   `new_scene` dropped, so an asset installed or removed any other way, by
