@@ -103,7 +103,9 @@ Houdini and its own stdout and stderr. A program that reassigns `sys.stdout`
 or uses `contextlib.redirect_stdout` changes only its own output, and what
 any of its threads writes to its stdout is in the response. The server
 starts no thread for a program, and nothing of the program runs once the
-call has returned: its process group is killed on every way out.
+call has returned: its process group is killed on every way out, and its
+process ends with the server's, so a server killed mid-call leaves no
+program running against Houdini.
 
 A program that never began - its process could not open its link, the
 Houdini lacks this release's plugin, Houdini's main thread refused the call,
@@ -142,6 +144,11 @@ The undo waits behind any request the killed program had in flight, which
 Houdini finishes first; Houdini's main thread refuses the undo if that takes
 past 30 seconds (a long cook), and the message then says the changes may
 remain. The next call, of any tool, runs as soon as this one returns.
+
+If the server's link fails while it undoes the step, the response is that
+link's arm (`connection_lost`, or `timeout` with `cut_off: "link"`), and it
+still carries the program's output, `timeout` and `audit`, its message
+telling the timeout it was undoing.
 
 ### Concurrent Calls Wait Their Turn
 

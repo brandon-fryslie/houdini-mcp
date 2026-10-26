@@ -1,13 +1,17 @@
 """An execute_code program's own process, and what it tells the call that started it.
 
-The call runs this module as ``python -I -u -X utf8 -m houdini_mcp.program <fd>``
-in a process group of its own. On stdin it reads one :class:`Request`; it opens
-its own link to the Houdini the server reaches, runs the program as one undo
-step on Houdini's main thread, and writes what happened as :class:`Fact` lines on
-``fd``, a pipe the program's stdout cannot forge. The program's stdout and
-stderr are this process's own fds 1 and 2, so whatever it does to ``sys.stdout``
-reaches nothing but itself, and the call kills the process, and with it the
-program, at its timeout.
+The call runs this module as
+``python -P -u -X utf8 -m houdini_mcp.program <facts> <lifeline>`` in a process
+group of its own: ``-P`` keeps the working directory off its path, and leaves
+it importing this package as the server does. On stdin it reads one
+:class:`Request`; it opens its own link to the Houdini the server reaches, runs
+the program as one undo step on Houdini's main thread, and writes what happened
+as :class:`Fact` lines on ``facts``, a pipe the program's stdout cannot forge.
+The program's stdout and stderr are this process's own fds 1 and 2, so whatever
+it does to ``sys.stdout`` reaches nothing but itself, and the call kills the
+process, and with it the program, at its timeout. ``lifeline`` is a pipe whose
+write end only the call holds: its end is the call's process gone, and this
+process ends with it, so a server killed mid-call leaves no program running.
 
 [LAW:one-way-deps] Imports nothing under ``houdini_mcp.tools``: the server's tool
 layer costs a second to import, and a program's start is counted in milliseconds.
@@ -19,12 +23,14 @@ from __future__ import annotations
 
 import base64
 import builtins
+import contextlib
 import json
 import logging
 import marshal
 import os
 import signal
 import sys
+import threading
 import traceback
 from dataclasses import dataclass
 from types import CodeType, FrameType
@@ -162,17 +168,22 @@ def encode_fact(fact: Fact) -> bytes:
 
 
 def decode_fact(line: bytes) -> Fact:
-    """[LAW:parse-dont-validate] One line back into its fact, or a ``ValueError``."""
-    fields = json.loads(line)
-    match fields["fact"]:
-        case "began":
-            return Began()
-        case "program_ended":
-            return ProgramEnded()
-        case "ended":
-            return Ended(tuple(Fault(*fault) for fault in fields["faults"]), fields["reply_lost"])
-        case "did_not_run":
-            return DidNotRun(fields["why"])
+    """[LAW:parse-dont-validate] One line back into its fact, or a ``ValueError``:
+    the program can write this pipe too, so any line may be malformed."""
+    try:
+        fields = json.loads(line)
+        match fields["fact"]:
+            case "began":
+                return Began()
+            case "program_ended":
+                return ProgramEnded()
+            case "ended":
+                faults = tuple(Fault(*fault) for fault in fields["faults"])
+                return Ended(faults, fields["reply_lost"])
+            case "did_not_run":
+                return DidNotRun(fields["why"])
+    except (ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"not a program's fact: {line!r}") from error
     raise ValueError(f"not a program's fact: {line!r}")
 
 
@@ -199,7 +210,7 @@ class _Start:
     writes the did-not-run outcome and ends the process, so no frame between it
     and the call - rpyc's dispatch, whose bare ``except`` boxes a failure off to
     Houdini, among them - can intercept it. The handler and everything that
-    closes the decision run on this process's one thread, and a Python signal
+    closes the decision run on this process's main thread, and a Python signal
     handler runs only between bytecodes, so exactly one of them acts.
     """
 
@@ -295,8 +306,18 @@ def _run(request: Request, facts: _Facts, start: _Start) -> NoReturn:
     os._exit(0)
 
 
+def _outlive_no_call(lifeline: int) -> None:
+    """End this process once the call that started it is gone: its read of the
+    lifeline returns only at the pipe's end, which only the call's process ending
+    brings while this process lives."""
+    with contextlib.suppress(OSError):
+        os.read(lifeline, 1)
+    os._exit(1)
+
+
 def main(argv: list[str]) -> NoReturn:
     facts = _Facts(int(argv[1]))
+    threading.Thread(target=_outlive_no_call, args=(int(argv[2]),), daemon=True).start()
     # The process's own records would otherwise reach the program's stderr; what
     # it knows the call needs, it writes as facts.
     for name in ("houdini_mcp", "houdini_mcp_handshake"):

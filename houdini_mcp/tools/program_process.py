@@ -16,16 +16,19 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import fcntl
 import logging
 import os
 import selectors
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, assert_never
+from typing import IO, Literal, assert_never
 
 from ..program import Began, DidNotRun, Ended, ProgramEnded, Request, decode_fact
 from .program_output import Capture
@@ -58,7 +61,19 @@ class Died:
     """The process ended its facts without an outcome."""
 
 
-Ending = Ended | DidNotRun | Killed | Died
+@dataclass(frozen=True)
+class Garbled:
+    """The process wrote a line on its facts that is no fact, so nothing it says
+    after can be trusted: the program writes that pipe as easily as it does.
+    ``line`` is that line's first :data:`GARBLED_SHOWN` bytes."""
+
+    line: bytes
+
+
+GARBLED_SHOWN = 200
+
+
+Ending = Ended | DidNotRun | Killed | Died | Garbled
 """How a program's process ended, as the call's wait saw it."""
 
 
@@ -98,33 +113,39 @@ def run_program(request: Request, timeout: float, stdout: Capture, stderr: Captu
     takes process creation the policy refuses without the dangerous bypass,
     outlives it.
     """
-    facts_out, facts_in = os.pipe()
-    spawned = time.monotonic()
-    process = subprocess.Popen(
-        [sys.executable, "-I", "-u", "-X", "utf8", "-m", "houdini_mcp.program", str(facts_in)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        pass_fds=(facts_in,),
-        start_new_session=True,
-    )
+    with contextlib.ExitStack() as unspawned:
+        facts_out, facts_in = os.pipe()
+        unspawned.callback(os.close, facts_out)
+        unspawned.callback(os.close, facts_in)
+        # The process's lifeline: its read end ends when this one closes, which
+        # this process's own ending does, however it ends.
+        lifeline_out, lifeline_in = os.pipe()
+        unspawned.callback(os.close, lifeline_out)
+        unspawned.callback(os.close, lifeline_in)
+        spawned = time.monotonic()
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                *("-P", "-u", "-X", "utf8", "-m", "houdini_mcp.program"),
+                *(str(facts_in), str(lifeline_out)),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=(facts_in, lifeline_out),
+            start_new_session=True,
+        )
+        unspawned.pop_all()
     os.close(facts_in)
+    os.close(lifeline_out)
     streams = {
         process.stdout.fileno(): _Decoded(stdout),  # type: ignore[union-attr]
         process.stderr.fileno(): _Decoded(stderr),  # type: ignore[union-attr]
     }
     clock = _Clock(spawned, request, timeout)
     try:
-        # The process reads its whole request before anything else; one that died
-        # first leaves its facts ended, which the wait reads as Died.
-        try:
-            process.stdin.write(request.encode())  # type: ignore[union-attr]
-            process.stdin.close()  # type: ignore[union-attr]
-        except BrokenPipeError:
-            logger.warning(
-                "execute_code's program process %d ended before its request", process.pid
-            )
-        ending = _wait(facts_out, streams, clock)
+        feed = _Feed(process.stdin, request.encode())  # type: ignore[arg-type]
+        ending = _wait(facts_out, feed, streams, clock)
     finally:
         # No live process of the group left to kill is what the kill is for: once
         # the group is gone that is ESRCH, and while its only members are zombies
@@ -136,6 +157,8 @@ def run_program(request: Request, timeout: float, stdout: Capture, stderr: Captu
         for fd, decoded in streams.items():
             decoded.drain(fd)
         os.close(facts_out)
+        os.close(lifeline_in)
+        process.stdin.close()  # type: ignore[union-attr]
         process.stdout.close()  # type: ignore[union-attr]
         process.stderr.close()  # type: ignore[union-attr]
     return Run(ending, process.pid, exit_status, *clock.took())
@@ -152,15 +175,39 @@ class _Decoded:
         self._capture.write(self._decoder.decode(data, final=not data))
 
     def drain(self, fd: int) -> None:
-        """What the pipe holds now, without waiting for its end: a process that
-        left the group may hold its write end open."""
-        os.set_blocking(fd, False)
-        try:
-            while data := os.read(fd, 65536):
-                self.feed(data)
-        except BlockingIOError:
-            pass
+        """What the pipe holds now, and no more, without waiting for its end: a
+        process that left the group may hold its write end open, and write on."""
+        held = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+        while held > 0:
+            data = os.read(fd, held)
+            held -= len(data)
+            self.feed(data)
         self.feed(b"")
+
+
+class _Feed:
+    """The request on its way into the process's stdin, written as the pipe takes
+    it, so no write waits outside the wait's clock."""
+
+    def __init__(self, stdin: IO[bytes], request: bytes) -> None:
+        self._stdin = stdin
+        self.fd = stdin.fileno()
+        self._pending = memoryview(request)
+        os.set_blocking(self.fd, False)
+
+    def write(self) -> bool:
+        """Write what the pipe takes now; whether the request is all in, or the
+        process closed its end - its facts' end then tells the wait it died."""
+        try:
+            self._pending = self._pending[os.write(self.fd, self._pending) :]
+        except BrokenPipeError:
+            logger.warning("execute_code's program process ended before its whole request")
+            return True
+        return not self._pending
+
+    def close(self) -> None:
+        """End the request: the process reads its stdin to its end."""
+        self._stdin.close()
 
 
 class _Clock:
@@ -189,24 +236,32 @@ class _Clock:
         return began_after_ms, ran
 
 
-def _wait(facts: int, streams: dict[int, _Decoded], clock: _Clock) -> Ending:
-    """Read the process until its outcome, its facts' end, or its phase's deadline.
+def _wait(facts: int, feed: _Feed, streams: dict[int, _Decoded], clock: _Clock) -> Ending:
+    """Write the process its request, and read it until its outcome, its facts'
+    end, or its phase's deadline.
 
     One loop on the call's own thread, no thread started. Every fact that is
     ready is read before the deadline is judged, so a program whose end arrived
-    in time is never killed as running. Nothing waits on the process's exit.
+    in time is never killed as running; the deadline is judged on every pass, so
+    output that never stops cannot postpone it. Nothing waits on the process's exit.
     """
     pending = b""
     readers: dict[int, Callable[[bytes], None]] = {
         fd: decoded.feed for fd, decoded in streams.items()
     }
     with selectors.DefaultSelector() as selector:
+        selector.register(feed.fd, selectors.EVENT_WRITE)
         selector.register(facts, selectors.EVENT_READ)
         for fd in readers:
             selector.register(fd, selectors.EVENT_READ)
         while True:
             ready = selector.select(max(0.0, clock.deadline - time.monotonic()))
             for key, _ in ready:
+                if key.fd == feed.fd:
+                    if feed.write():
+                        selector.unregister(feed.fd)
+                        feed.close()
+                    continue
                 data = os.read(key.fd, 65536)
                 if not data:
                     selector.unregister(key.fd)
@@ -218,12 +273,16 @@ def _wait(facts: int, streams: dict[int, _Decoded], clock: _Clock) -> Ending:
                 pending += data
                 *lines, pending = pending.split(b"\n")
                 for line in lines:
-                    match decode_fact(line):
+                    try:
+                        fact = decode_fact(line)
+                    except ValueError:
+                        return Garbled(line[:GARBLED_SHOWN])
+                    match fact:
                         case Began():
                             clock.began()
                         case ProgramEnded():
                             clock.program_ended()
                         case Ended() | DidNotRun() as outcome:
                             return outcome
-            if not ready and time.monotonic() >= clock.deadline:
+            if time.monotonic() >= clock.deadline:
                 return Killed(clock.phase)

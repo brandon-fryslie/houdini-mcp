@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `The program never ran: `, and nothing is undone.
   - A program's swap of `sys.stdout` or `sys.stderr` changes only its own
     output, and its threads' output is in its `stdout` and `stderr`.
+  - A program's process ends with the server's, so a server killed mid-call
+    leaves no program running against Houdini.
+  - A link lost while undoing a failed call's step is the link's arm, and it
+    carries the failure's fields: a program's output, `timeout` and `audit`.
   - `audit.woke_early` is gone.
 
 - `houdini-mcp` refuses arguments it does not know instead of ignoring them.

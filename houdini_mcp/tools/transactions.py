@@ -264,14 +264,20 @@ def raised_after_undo(operation: str, failure: BaseException, recovered: Recover
     """Raise how a call whose step was undone ended: ``failure``, or the link's loss
     that stopped the undo, telling the failure it was undoing; either ends with
     what became of the changes."""
-    lost = recovered.lost
-    if lost is not None:
-        add_note(lost, f"{operation} had failed: {failure}")
+    raised: BaseException
+    match recovered.lost:
+        case None:
+            raised = failure
+        case LinkLost() as lost:
+            raised = lost.stopped_undo_of(operation, failure)
+        case unreachable:
+            add_note(unreachable, f"{operation} had failed: {failure}")
+            raised = unreachable
     for note in recovered.told:
-        add_note(failure if lost is None else lost, note)
-    if lost is not None:
-        raise lost from failure
-    raise failure
+        add_note(raised, note)
+    if raised is failure:
+        raise failure
+    raise raised from failure
 
 
 def _undone_on_failure(

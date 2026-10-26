@@ -9,6 +9,7 @@ stopped reporting.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -252,3 +253,159 @@ class TestTheStartDecision:
                 "why": "the program did not begin within 60s of its process starting",
             }
         ]
+
+
+def _granted(program: str, **options: Any) -> dict[str, Any]:
+    return execute_code(
+        program,
+        allow_dangerous=True,
+        host="localhost",
+        port=18811,
+        bypass_config_enabled=True,
+        **options,
+    )
+
+
+class TestWhatTheProcessSaysIsParsed:
+    """The program can write its process's facts pipe, so a line there that is no
+    fact ends the run, undone and recorded, as one more way its process ended."""
+
+    @pytest.mark.parametrize("line", [b"nonsense", b'{"fact": "ended"}', b'["began"]'])
+    def test_a_line_that_is_no_fact_is_not_one(self, line: bytes) -> None:
+        from houdini_mcp.program import decode_fact
+
+        with pytest.raises(ValueError, match="not a program's fact"):
+            decode_fact(line)
+
+    def test_a_program_that_writes_a_false_fact_is_undone_and_recorded(
+        self, mock_connection, caplog
+    ):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
+            result = _granted(
+                "import os, sys\n"
+                "hou.node('/obj').createNode('geo', 'forged')\n"
+                'os.write(int(sys.argv[1]), b\'{"fact": "ended"}\\n\')\n'
+            )
+
+        assert result["kind"] == "operation_failed", result
+        assert result["message"].startswith(
+            'The program\'s process wrote a line that is not a fact: b\'{"fact": "ended"}\''
+        )
+        assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert mock_connection.node("/obj/forged") is None
+        assert "ending={'garbled': '{\"fact\": \"ended\"}'}" in caplog.text
+
+
+class TestTheCallsClocksHoldUnderLoad:
+    def test_output_that_never_stops_does_not_postpone_the_timeout(self, mock_connection):
+        result = _run("import sys\nwhile True:\n    sys.stdout.write('x' * 65536)\n", timeout=1)
+
+        assert (result["kind"], result["cut_off"]) == ("timeout", "program"), result
+
+    def test_a_request_larger_than_a_pipe_holds_is_written_whole(self, mock_connection):
+        result = _run(f"data = {'x' * 300_000!r}\nprint(len(data))\n")
+
+        assert (result["status"], result["stdout"]) == ("success", "300000\n"), result
+
+    def test_the_start_deadline_named_is_the_one_the_clocks_were_set_from(
+        self, mock_connection, monkeypatch
+    ):
+        monkeypatch.setattr(code, "PROGRAM_START_TIMEOUT", 0.5)
+        monkeypatch.setattr(program_process, "REPORT_GRACE", 0.5)
+        monkeypatch.setattr(program_process.subprocess, "Popen", _StoppedAtBirth)
+        result = _run("print('never')")
+
+        assert "by its start deadline (0.5s)" in result["message"], result
+
+
+class TestTheProcessResolvesImportsAsTheServerDoes:
+    def test_its_path_has_the_servers_pythonpath_and_not_its_working_directory(
+        self, mock_connection, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+        result = _run(
+            f"import sys\nprint({str(tmp_path)!r} in sys.path, '' in sys.path, sys.flags.safe_path)\n"
+        )
+
+        assert (result["status"], result["stdout"]) == ("success", "True False True\n"), result
+
+
+class TestNothingOfTheProgramOutlivesTheCall:
+    def test_the_process_ends_once_its_lifeline_does(self) -> None:
+        """Its read of the lifeline ends only when the call's process does: here
+        the call's end of it closes while the process still waits for its request."""
+        facts_out, facts_in = os.pipe()
+        lifeline_out, lifeline_in = os.pipe()
+        process = subprocess.Popen(
+            [sys.executable, "-P", "-m", "houdini_mcp.program", str(facts_in), str(lifeline_out)],
+            stdin=subprocess.PIPE,
+            pass_fds=(facts_in, lifeline_out),
+        )
+        os.close(facts_in)
+        os.close(lifeline_out)
+        try:
+            os.close(lifeline_in)
+            assert process.wait(timeout=10) == 1
+        finally:
+            process.kill()
+            process.wait()
+            process.stdin.close()  # type: ignore[union-attr]
+            os.close(facts_out)
+
+    def test_output_from_a_process_that_left_the_group_holds_nothing(
+        self, mock_connection, tmp_path
+    ):
+        """A process the program started in a session of its own outlives the kill
+        and writes on into the inherited stdout; the call reads what the pipe holds
+        and returns."""
+        pid_file = tmp_path / "pid"
+        result = _granted(
+            "import subprocess, sys\n"
+            "escaped = subprocess.Popen([sys.executable, '-c', "
+            "'import sys\\nwhile True: sys.stdout.write(\"y\" * 65536)'], start_new_session=True)\n"
+            f"open({str(pid_file)!r}, 'w').write(str(escaped.pid))\n",
+            timeout=5,
+        )
+        try:
+            assert result["status"] == "success", result
+        finally:
+            with contextlib.suppress(ProcessLookupError, FileNotFoundError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+class TestALinkLostUndoingAKilledProgram:
+    _PLUGINS = """
+def losing_the_link(undos):
+    class main_thread:
+        PICKUP_TIMEOUT = 30.0
+
+        @staticmethod
+        def call(fn, silence):
+            object.__getattribute__(fn, "____conn__").close()
+    return main_thread
+"""
+
+    def test_the_links_failure_carries_what_the_program_wrote(self, mock_connection, monkeypatch):
+        """The server's link failing as it undoes the killed program's step makes
+        the response the link's arm, and the timeout it was undoing still reaches
+        the caller: its output, its timeout, its audit, and what it was."""
+        from tests import conftest
+
+        with conftest.served_namespace(self._PLUGINS) as plugins:
+            monkeypatch.setattr(
+                conftest,
+                "served_main_thread",
+                lambda undos, _conn: plugins["losing_the_link"](undos),
+            )
+            result = _run("print('before the kill')\nwhile True: pass\n", timeout=1)
+
+        assert result["kind"] == "connection_lost", result
+        assert (result["stdout"], result["timeout"]) == ("before the kill\n", 1)
+        assert result["audit"]["timed_out"] is True
+        assert (
+            "execute_code had failed: Execution timeout: code did not complete within 1 seconds"
+            in result["message"]
+        )
+        assert result["message"].endswith("so the scene may hold part of them.")

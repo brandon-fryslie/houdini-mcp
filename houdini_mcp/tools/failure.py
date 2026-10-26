@@ -371,6 +371,15 @@ class LinkLost(Exception):
         found.__notes__ = [*getattr(self, "__notes__", ()), *told, *getattr(e, "__notes__", ())]
         return found
 
+    def stopped_undo_of(self, operation: str, failure: BaseException) -> LinkLost:
+        """This loss, which stopped the undo after ``operation`` failed with
+        ``failure``: ``failure``'s fields ride beside this loss's (a program's
+        output, its audit), and what it was is told as a note."""
+        fields = failure.fields if isinstance(failure, ToolError) else {}
+        found = LinkLost(self.link, self.lost, {**self.fields, **fields})
+        found.__notes__ = [*getattr(self, "__notes__", ()), f"{operation} had failed: {failure}"]
+        return found
+
 
 Failed = TypeVar("Failed", bound=BaseException)
 

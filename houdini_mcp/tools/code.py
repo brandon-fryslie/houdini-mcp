@@ -71,7 +71,7 @@ from .code_policy import (
 )
 from .failure import add_note, failed_on, failure_for
 from .program_output import Capture
-from .program_process import PROGRAM_START_TIMEOUT, Died, Killed, Run, run_program
+from .program_process import PROGRAM_START_TIMEOUT, Died, Garbled, Killed, Run, run_program
 from .snapshot import CappedDiff, SceneSnapshot, capped, scene_diff, scene_snapshot
 from .transactions import Recovered, raised_after_undo, step_label, undo_latest
 
@@ -661,22 +661,18 @@ def execute_code(
                 add_note(error, "The program never ran: the scene before it could not be read.")
                 raise
         label = step_label(operation)
-        run = run_program(
-            Request(
-                reach=houdini().target.reach(link.host, link.port),
-                code=code_object,
-                label=label,
-                # [LAW:no-ambient-temporal-coupling] Houdini's own give-up, for a call
-                # whose process is gone, starts before the timeout's clock, so it
-                # waits a body's silence longer rather than racing the kill.
-                silence=timeout + BODY_SILENCE,
-                sync_timeout=DEFAULT_SYNC_TIMEOUT,
-                start_timeout=PROGRAM_START_TIMEOUT,
-            ),
-            timeout,
-            stdout_capture,
-            stderr_capture,
+        request = Request(
+            reach=houdini().target.reach(link.host, link.port),
+            code=code_object,
+            label=label,
+            # [LAW:no-ambient-temporal-coupling] Houdini's own give-up, for a call
+            # whose process is gone, starts before the timeout's clock, so it
+            # waits a body's silence longer rather than racing the kill.
+            silence=timeout + BODY_SILENCE,
+            sync_timeout=DEFAULT_SYNC_TIMEOUT,
+            start_timeout=PROGRAM_START_TIMEOUT,
         )
+        run = run_program(request, timeout, stdout_capture, stderr_capture)
         output = _reported_output(operation, stdout_capture, stderr_capture)
         # [LAW:single-enforcer] A run that may have left its step - it raised, died
         # or was killed - has it undone by the one undo; one that completed, or
@@ -732,9 +728,18 @@ def execute_code(
                         policy=grant.policy,
                         audit=audit,
                     )
+                case Garbled(line):
+                    failure = OperationFailed(
+                        f"The program's process wrote a line that is not a fact: {line!r}",
+                        **output,
+                        policy=grant.policy,
+                        audit=audit,
+                    )
                 case Killed(phase):
                     failure = ProgramTimedOut(
-                        _KILLED[phase].format(timeout=timeout),
+                        # [LAW:one-source-of-truth] The start deadline named is the
+                        # one the process and the call's backstop were set from.
+                        _KILLED[phase].format(timeout=timeout, start_timeout=request.start_timeout),
                         policy=grant.policy,
                         **output,
                         timeout=timeout,
@@ -761,7 +766,7 @@ _KILLED: dict[str, str] = {
     "running": "Execution timeout: code did not complete within {timeout} seconds",
     "starting": (
         "Execution timeout: the program's process had not reported by its start "
-        f"deadline ({PROGRAM_START_TIMEOUT}s) and a grace, so it was killed"
+        "deadline ({start_timeout}s) and a grace, so it was killed"
     ),
     "closing": (
         "Execution timeout: the program ended, but its process had not reported "
@@ -839,6 +844,8 @@ def _ending_record(run: Run) -> dict[str, Any]:
             return {"killed": phase}
         case Died():
             return {"died": run.exit_status}
+        case Garbled(line):
+            return {"garbled": line.decode("utf-8", "replace")}
         case _:
             assert_never(run.ending)
 
