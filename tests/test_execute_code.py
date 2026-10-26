@@ -653,6 +653,99 @@ class TestExecuteCodeOutputCapture:
         assert (sys.stdout, sys.stderr) == streams_before
         assert caplog.records == []
 
+    def test_a_capture_nested_on_one_thread_hands_back_to_the_outer(self):
+        """When the inner capture ends, the thread's writes reach the outer capture again."""
+        import io
+
+        from houdini_mcp.tools.program_output import captured
+
+        outer, inner = io.StringIO(), io.StringIO()
+        with captured(outer, io.StringIO()):
+            print("outer")
+            with captured(inner, io.StringIO()):
+                print("inner")
+            print("outer again")
+
+        assert outer.getvalue() == "outer\nouter again\n"
+        assert inner.getvalue() == "inner\n"
+
+    def test_a_stream_swapped_beside_another_capture_is_restored_when_its_capture_ends(
+        self, capsys, caplog
+    ):
+        """A program's swap is undone when its own capture ends, though a capture that
+        started first is still routing."""
+        import io
+        import logging
+        import sys
+        import threading
+
+        from houdini_mcp.tools.program_output import captured
+
+        streams_before = (sys.stdout, sys.stderr)
+        first, second, swapped = io.StringIO(), io.StringIO(), io.StringIO()
+        entered, release = threading.Event(), threading.Event()
+
+        def _first():
+            with captured(first, io.StringIO()):
+                entered.set()
+                release.wait(5)
+                print("first")
+
+        other = threading.Thread(target=_first)
+        other.start()
+        entered.wait(5)
+        try:
+            with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.program_output"):
+                with captured(second, io.StringIO()):
+                    sys.stdout = swapped
+                    print("swapped")
+                print("bystander")
+        finally:
+            release.set()
+            other.join(5)
+            sys.stdout = streams_before[0]
+
+        assert swapped.getvalue() == "swapped\n"
+        assert second.getvalue() == ""
+        assert first.getvalue() == "first\n"
+        assert capsys.readouterr().out == "bystander\n"
+        [record] = caplog.records
+        assert record.getMessage().startswith("sys.stdout was replaced by")
+
+    def test_a_capture_started_after_a_swap_gets_its_threads_writes(self):
+        """A capture routes past whatever stream is installed, a program's own included,
+        while a capture that started before the swap is still routing."""
+        import io
+        import sys
+        import threading
+
+        from houdini_mcp.tools.program_output import captured
+
+        original = sys.stdout
+        swapped, later = io.StringIO(), io.StringIO()
+        entered, release = threading.Event(), threading.Event()
+
+        def _first():
+            with captured(io.StringIO(), io.StringIO()):
+                entered.set()
+                release.wait(5)
+
+        other = threading.Thread(target=_first)
+        other.start()
+        entered.wait(5)
+        try:
+            sys.stdout = swapped
+            with captured(later, io.StringIO()):
+                print("later")
+            assert sys.stdout is swapped
+        finally:
+            sys.stdout = original
+            release.set()
+            other.join(5)
+
+        assert later.getvalue() == "later\n"
+        assert swapped.getvalue() == ""
+
     def test_a_router_kept_past_the_run_captures_nothing(self, capsys):
         """A stream reference taken mid-run sends everything past once the run ends, even from its thread."""
         import io

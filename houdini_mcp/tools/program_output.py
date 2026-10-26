@@ -74,103 +74,89 @@ class Capture(TextIOBase):
 
 
 class _ThreadRoutedStream:
-    """A sys stream that sends each captured thread's operations to its capture and
-    every other thread's past it.
+    """A sys stream that sends one thread's operations to a capture and the rest past it.
 
-    The routing lasts as long as the router is installed: a reference kept beyond
-    that (a logging handler built from ``sys.stderr`` mid-run) then sends
-    everything past, even from a later thread that is handed a captured thread's
-    reused ident.
+    The routing lasts as long as the run: a reference kept beyond it (a logging
+    handler built from ``sys.stderr`` mid-run) then sends everything past, even
+    from a later thread that is handed the program thread's reused ident.
     """
 
-    def __init__(self, past: TextIO) -> None:
+    def __init__(self, thread: int, capture: TextIOBase, past: TextIO) -> None:
+        self._thread: int | None = thread
+        self._capture = capture
         self.past = past
-        self._routes: dict[int, TextIOBase] = {}
 
     def __getattr__(self, attr: str) -> object:
         # Every stream operation - write, flush, encoding, fileno - resolves
-        # against the calling thread's capture, or the prior stream for a thread
-        # that has none.
-        return getattr(self._routes.get(threading.get_ident(), self.past), attr)
+        # against the capture for the program's thread, the prior stream for any other.
+        return getattr(self._capture if threading.get_ident() == self._thread else self.past, attr)
 
     @property
-    def routing(self) -> bool:
-        return bool(self._routes)
-
-    def route(self, thread: int, capture: TextIOBase) -> None:
-        self._routes = {**self._routes, thread: capture}
-
-    def unroute(self, thread: int) -> None:
-        self._routes = {ident: c for ident, c in self._routes.items() if ident != thread}
+    def ended(self) -> bool:
+        return self._thread is None
 
     def end(self) -> None:
-        self._routes = {}
+        self._thread = None
 
 
-_Routers = tuple[_ThreadRoutedStream, _ThreadRoutedStream]
+def _beneath(stream: object, router: _ThreadRoutedStream) -> bool:
+    """Whether ``router`` is ``stream`` or lies past it, under a later capture's routers."""
+    while isinstance(stream, _ThreadRoutedStream):
+        if stream is router:
+            return True
+        stream = stream.past
+    return False
 
 
-class _Switchboard:
-    """The one owner of the sys stream swap [LAW:no-shared-mutable-globals].
-
-    One pair of routers is installed while any thread is captured, and the streams
-    they replaced are restored when the last capture ends, in whatever order
-    captures end: a program's run and the gate compiling the next call's program
-    overlap, and neither ends the other's routing.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._installed: _Routers | None = None
-
-    def route(self, thread: int, stdout: TextIOBase, stderr: TextIOBase) -> _Routers:
-        """Route the thread to these captures, installing the routers if none are."""
-        with self._lock:
-            if self._installed is None:
-                self._installed = (_ThreadRoutedStream(sys.stdout), _ThreadRoutedStream(sys.stderr))
-                sys.stdout, sys.stderr = self._installed
-            for router, capture in zip(self._installed, (stdout, stderr), strict=True):
-                router.route(thread, capture)
-            return self._installed
-
-    def unroute(self, routers: _Routers, thread: int) -> list[tuple[str, object]]:
-        """End the thread's routing; the last to end restores the prior streams and
-        reports each sys stream that was not the router when it did."""
-        with self._lock:
-            for router in routers:
-                router.unroute(thread)
-            if any(router.routing for router in routers):
-                return []
-            self._installed = None
-            left = (sys.stdout, sys.stderr)
-            for router in routers:
-                router.end()
-            sys.stdout, sys.stderr = (router.past for router in routers)
-            return [
-                (name, stream)
-                for name, router, stream in zip(("stdout", "stderr"), routers, left, strict=True)
-                if stream is not router
-            ]
+def _live(stream: TextIO) -> TextIO:
+    """The stream writes reach past every router that has ended."""
+    while isinstance(stream, _ThreadRoutedStream) and stream.ended:
+        stream = stream.past
+    return stream
 
 
-_SWITCHBOARD = _Switchboard()
+# [LAW:no-shared-mutable-globals] The one owner of assigning sys.stdout and
+# sys.stderr here: a program's run and the gate reading the next call's program
+# capture on two threads, and each reads the streams it routes past and sets them.
+_SWAP = threading.Lock()
 
 
 @contextmanager
 def captured(stdout: TextIOBase, stderr: TextIOBase) -> Iterator[None]:
-    """Send the calling thread's stdout and stderr writes to these captures."""
+    """Send the calling thread's stdout and stderr writes to these captures.
+
+    Captures nest and overlap, and end in any order: one that ends beneath a later
+    capture's routers leaves them installed, and the later capture restores past it.
+    """
     thread = threading.get_ident()
-    routers = _SWITCHBOARD.route(thread, stdout, stderr)
+    with _SWAP:
+        routers = (
+            _ThreadRoutedStream(thread, stdout, sys.stdout),
+            _ThreadRoutedStream(thread, stderr, sys.stderr),
+        )
+        sys.stdout, sys.stderr = routers
     try:
         yield
     finally:
+        replaced: list[tuple[str, object]] = []
         # Restored before logging: a warning on a host with no log handler is
         # written to sys.stderr, which until now still routed into the capture.
-        for name, stream in _SWITCHBOARD.unroute(routers, thread):
-            # [LAW:no-silent-failure] A program left its own stream installed;
-            # restoring keeps a closed file from becoming every later print's
-            # target, and the warning says its output after the swap is not in
-            # the capture.
+        with _SWAP:
+            for name, router in zip(("stdout", "stderr"), routers, strict=True):
+                router.end()
+                left = getattr(sys, name)
+                if left is not router and _beneath(left, router):
+                    # A later capture's routers are installed over this one's, and
+                    # restore past it when that capture ends.
+                    continue
+                if left is not router:
+                    replaced.append((name, left))
+                setattr(sys, name, _live(router.past))
+        for name, stream in replaced:
+            # [LAW:no-silent-failure] The program (nothing else here swaps the
+            # streams) left its own stream installed; restoring keeps a closed
+            # file from becoming every later print's target, and the warning
+            # says its output after the swap is not in the capture.
             logger.warning(
                 "sys.%s was replaced by %r while a program ran; its later output "
                 "went there instead of the capture, and the prior stream is restored",
