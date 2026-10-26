@@ -171,7 +171,7 @@ fails fails the call, with `updated` and `failed` beside its message saying
 which writes were made and undone, and which one failed and why.
 
 These calls run on Houdini's main thread, the one whose undo steps Houdini
-records, so they need the plugin [installed](../README.md#houdini-plugin) in
+records, so they need the plugin [installed](../README.md#installation) in
 that Houdini; a headless `hython` also runs
 `houdini_mcp_plugin.main_thread.serve()` on its main thread once its listener
 is started. A graphical Houdini's interface does not redraw while one runs.
