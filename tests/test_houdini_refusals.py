@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 
 from tests.conftest import (
+    HouInvalidInput,
     HouPermissionError,
-    InvalidInput,
     MockHouModule,
     MockHouNode,
     raised_inside_houdini,
@@ -59,7 +59,7 @@ def test_connect_nodes_index_houdini_refuses_is_the_callers_to_fix(
     merge = _wired(mock_connection, "box1")
 
     def refuse_index(*_args: Any) -> None:
-        raise InvalidInput("Invalid input.")
+        raise HouInvalidInput("Invalid input.")
 
     merge.setInput = refuse_index  # type: ignore[method-assign]
 

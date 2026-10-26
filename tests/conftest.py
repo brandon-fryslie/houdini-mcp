@@ -188,12 +188,13 @@ class MatchDefinitionError(Exception):
 MatchDefinitionError.__module__ = "hou"
 
 
-class InvalidInput(Exception):
+class HouInvalidInput(Exception):
     """hou.InvalidInput, which Houdini 22's setInput raises for an input or output index
     the nodes do not have."""
 
 
-InvalidInput.__module__ = "hou"
+HouInvalidInput.__name__ = HouInvalidInput.__qualname__ = "InvalidInput"
+HouInvalidInput.__module__ = "hou"
 
 
 class LoadWarning(Exception):
@@ -1431,7 +1432,7 @@ class MockHouModule:
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
         self.LoadWarning = LoadWarning
-        self.InvalidInput = InvalidInput
+        self.InvalidInput = HouInvalidInput
         self.hda = SimpleNamespace(
             componentsFromFullNodeTypeName=_name_components,
             fullNodeTypeNameFromComponents=_full_name,
