@@ -206,6 +206,10 @@ exclude = ["tests/", "build/"]
 # houdini_mcp_handshake and houdini_mcp_read ship from the plugin tree; the editable
 # install reaches them through an import hook mypy cannot follow.
 mypy_path = "houdini_plugin/houdini_mcp/python"
+# The plugin's modules are top-level where Houdini and the server import them, though the
+# houdini_plugin package (the tree the distribution ships) also holds them: their names
+# are taken from mypy_path, not from the packages around them.
+explicit_package_bases = true
 
 # Bandit security configuration
 [tool.bandit]
