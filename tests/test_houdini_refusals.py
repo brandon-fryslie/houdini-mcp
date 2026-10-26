@@ -7,11 +7,18 @@ the fake does not lock assets, so each test refuses the write it names.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
 
-from tests.conftest import HouPermissionError, MockHouModule, MockHouNode, raised_inside_houdini
+from tests.conftest import (
+    HouInvalidInput,
+    HouPermissionError,
+    MockHouModule,
+    MockHouNode,
+    raised_inside_houdini,
+)
 
 LOCKED = (
     "Failed to modify node or parameter because of a permission error.  Possible causes "
@@ -40,6 +47,61 @@ def _assert_refused(result: dict[str, Any], request: str) -> None:
     assert (result["kind"], result["retry"]) == ("operation_failed", "none"), result
     assert result["message"].startswith(f"Houdini did not {request}: {REFUSAL}"), result
     assert "traceback" not in result
+
+
+def test_connect_nodes_index_houdini_refuses_is_the_callers_to_fix(
+    mock_connection: MockHouModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Houdini 22 refuses an input or output index its nodes lack with hou.InvalidInput
+    (checked in hython); the fake knows no limits (houdini-laws-etg.0is), so it is forced."""
+    from houdini_mcp.tools import connect_nodes
+
+    merge = _wired(mock_connection, "box1")
+
+    def refuse_index(*_args: Any) -> None:
+        raise HouInvalidInput("Invalid input.")
+
+    merge.setInput = refuse_index  # type: ignore[method-assign]
+
+    result = connect_nodes("/obj/geo1/box1", "/obj/geo1/merge1", 1, 3)
+
+    assert (result["kind"], result["retry"]) == ("invalid_input", "fix_input"), result
+    assert result["message"] == (
+        "Houdini refused input 1 of /obj/geo1/merge1 or output 3 of /obj/geo1/box1: "
+        "hou.InvalidInput: Invalid input."
+    )
+    assert (result["dst_input_index"], result["src_output_index"]) == (1, 3)
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        ("WARNING", f"connect_nodes failed (invalid_input, retry fix_input): {result['message']}")
+    ]
+
+
+def test_connect_nodes_houdini_refuses_is_its_refusal(mock_connection: MockHouModule) -> None:
+    from houdini_mcp.tools import connect_nodes
+
+    merge = _wired(mock_connection, "box1")
+    merge.setInput = _refuse  # type: ignore[method-assign]
+
+    result = connect_nodes("/obj/geo1/box1", "/obj/geo1/merge1", 1)
+
+    _assert_refused(result, "connect /obj/geo1/box1 to /obj/geo1/merge1[1]")
+    assert (result["dst_input_index"], result["src_output_index"]) == (1, 0)
+
+
+def test_connect_nodes_without_this_releases_plugin_wires_nothing(
+    mock_connection: MockHouModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Houdini whose path lacks houdini_mcp_wiring is told to install the plugin."""
+    from houdini_mcp.tools import connect_nodes
+
+    merge = _wired(mock_connection, "box1")
+    monkeypatch.setitem(sys.modules, "houdini_mcp_wiring", None)
+
+    result = connect_nodes("/obj/geo1/box1", "/obj/geo1/merge1", 1)
+
+    assert (result["kind"], result["retry"]) == ("operation_failed", "none"), result
+    assert result["message"].startswith("Houdini cannot import houdini_mcp_wiring"), result
+    assert [c.inputIndex() for c in merge.inputConnections()] == [0]
 
 
 def test_disconnect_node_input_houdini_refuses_is_its_refusal(

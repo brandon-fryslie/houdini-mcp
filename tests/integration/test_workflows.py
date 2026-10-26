@@ -377,6 +377,26 @@ class TestErrorHandling:
         assert "Remote Traceback" not in refused["message"]
         assert get_node_info(null["node_path"], **at)["input_connections"] == []
 
+    @pytest.mark.parametrize(
+        ("dst_input_index", "src_output_index"), [(1, 0), (0, 1)], ids=["input", "output"]
+    )
+    def test_an_index_the_nodes_lack_is_the_callers_to_fix(
+        self, at: dict[str, Any], dst_input_index: int, src_output_index: int
+    ) -> None:
+        """An xform has one input and a box one output; Houdini refuses any other index."""
+        geo = create_node("geo", "/obj", "indexes", **at)["node_path"]
+        box = create_node("box", geo, **at)["node_path"]
+        xform = create_node("xform", geo, **at)["node_path"]
+
+        refused = connect_nodes(box, xform, dst_input_index, src_output_index, **at)
+
+        assert (refused["kind"], refused["retry"]) == ("invalid_input", "fix_input"), refused
+        assert refused["message"] == (
+            f"Houdini refused input {dst_input_index} of {xform} or output "
+            f"{src_output_index} of {box}: hou.InvalidInput: Invalid input."
+        )
+        assert get_node_info(xform, **at)["input_connections"] == []
+
     async def test_safe_geometry_access_pattern(
         self, at: dict[str, Any], summarizing: dict[str, Any]
     ) -> None:

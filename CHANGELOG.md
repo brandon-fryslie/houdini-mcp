@@ -174,6 +174,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `vector`, `tuple_size` 3). A tuple's name (`rad`, `t`) still answers the
   vector. Needs this release's plugin.
 
+- `connect_nodes` answers an input the destination does not have, or an output
+  the source does not, as `invalid_input` (retry `fix_input`) in Houdini's
+  words, where it answered `operation_failed` (houdini-laws-etg.859). The
+  served schemas of `connect_nodes` and `disconnect_node_input` refuse a
+  negative index, and `reorder_inputs`' a negative position in `new_order`. Needs this release's plugin, which adds `houdini_mcp_wiring`.
+
 - `load_scene` of a file Houdini loads with warnings, such as a node whose
   asset definition is missing, reports the load as a success carrying
   Houdini's text under `warning` (houdini-laws-etg.79h). Houdini raises

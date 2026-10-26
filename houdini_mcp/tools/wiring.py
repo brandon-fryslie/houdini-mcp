@@ -7,10 +7,12 @@ node connections in Houdini networks.
 import logging
 from typing import Any
 
+from ..plugin import plugin_module
 from ._common import (
     FLAGS,
     UNDOABLE,
     Flag,
+    Index,
     InvalidInput,
     OperationFailed,
     flag_read,
@@ -35,8 +37,8 @@ logger = logging.getLogger("houdini_mcp.tools.wiring")
 def connect_nodes(
     src_path: str,
     dst_path: str,
-    dst_input_index: int = 0,
-    src_output_index: int = 0,
+    dst_input_index: Index = 0,
+    src_output_index: Index = 0,
     host: str = "localhost",
     port: int = 18811,
 ) -> dict[str, Any]:
@@ -47,6 +49,8 @@ def connect_nodes(
     Automatically disconnects existing connection if the destination input is already wired.
     The source sits in the destination's own network: a node or dot beside it, or,
     inside a subnet, one of that subnet's indirect inputs. Houdini refuses any other.
+    An input the destination does not have, or an output the source does not, is
+    refused as invalid_input in Houdini's words.
 
     Args:
         src_path: Path to source node (e.g., "/obj/geo1/grid1")
@@ -101,8 +105,22 @@ def connect_nodes(
             src_path=src_path,
             dst_path=dst_path,
             dst_input_index=dst_input_index,
+            src_output_index=src_output_index,
         ):
-            dst_node.setInput(dst_input_index, src.item, src_output_index)
+            refused: str | None = plugin_module(link, "houdini_mcp_wiring").set_input(
+                hou, dst_node, dst_input_index, src.item, src_output_index
+            )
+        if refused is not None:
+            # [LAW:single-enforcer] how far an index may reach is Houdini's to say;
+            # the fix is the caller's index
+            raise InvalidInput(
+                f"Houdini refused input {dst_input_index} of {dst_path} or output "
+                f"{src_output_index} of {src_path}: {refused}",
+                src_path=src_path,
+                dst_path=dst_path,
+                dst_input_index=dst_input_index,
+                src_output_index=src_output_index,
+            )
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
@@ -128,7 +146,7 @@ def connect_nodes(
 
 @tool(UNDOABLE)
 def disconnect_node_input(
-    node_path: str, input_index: int = 0, host: str = "localhost", port: int = 18811
+    node_path: str, input_index: Index = 0, host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
     """
     Break/disconnect an input connection on a node.
@@ -283,7 +301,7 @@ def set_node_flags(
 
 @tool(UNDOABLE)
 def reorder_inputs(
-    node_path: str, new_order: list[int], host: str = "localhost", port: int = 18811
+    node_path: str, new_order: list[Index], host: str = "localhost", port: int = 18811
 ) -> dict[str, Any]:
     """
     Reorder inputs on a node (useful for merge nodes).
