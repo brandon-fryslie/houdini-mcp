@@ -226,7 +226,7 @@ def _capture_pane_to_bytes(
 
     def framed() -> dict[str, Any]:
         shown = navigate(pane)
-        with refused_by_houdini(f"Failed to frame {pane_type_name}", pane_type=pane_type_name):
+        with refused_by_houdini(f"frame {pane_type_name}", pane_type=pane_type_name):
             frame(pane)
         return shown
 
@@ -502,7 +502,7 @@ def render_node_network(
         # is entered where it now is, and one deleted since fails the capture, so
         # no other node is ever entered.
         def into_network(pane: Any) -> dict[str, Any]:
-            with refused_by_houdini(f"Failed to navigate to {node_path}", path=node_path):
+            with refused_by_houdini(f"take the pane into {node_path}", path=node_path):
                 # [LAW:one-source-of-truth] the network's own path, which a
                 # caller's spelling of it ("/obj/geo1/") is not.
                 path = network.path()

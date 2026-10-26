@@ -88,23 +88,17 @@ def connect_nodes(
                 dst_path=dst_path,
             )
 
-        # setInput replaces whatever wire is at the input; once it has, say which one.
-        # A refused write leaves that wire in place.
+        # setInput replaces whatever wire is at the input; once Houdini holds the new
+        # one, say which. A refused write leaves that wire in place.
         replaced = wire_at(input_connections(dst_node), dst_input_index)
 
         with refused_by_houdini(
-            f"Houdini did not connect {src_path} to {dst_path}[{dst_input_index}]",
+            f"connect {src_path} to {dst_path}[{dst_input_index}]",
             src_path=src_path,
             dst_path=dst_path,
             dst_input_index=dst_input_index,
         ):
             dst_node.setInput(dst_input_index, src.item, src_output_index)
-
-        if replaced is not None:
-            logger.info(
-                f"Replaced connection from {replaced.source.path()} "
-                f"to {dst_path}[{dst_input_index}]"
-            )
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
@@ -114,6 +108,11 @@ def connect_nodes(
                 f"Houdini reports no wire at {dst_path}[{dst_input_index}] after connecting {src_path}",
                 dst_path=dst_path,
                 dst_input_index=dst_input_index,
+            )
+        if replaced is not None:
+            logger.info(
+                f"Replaced connection from {replaced.source.path()} "
+                f"to {dst_path}[{dst_input_index}]"
             )
 
         return {

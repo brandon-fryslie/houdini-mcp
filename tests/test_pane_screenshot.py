@@ -591,7 +591,7 @@ def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
 
     assert result["kind"] == "operation_failed", result
     assert result["message"] == (
-        "Failed to navigate to /obj/geo1: hou.OperationFailed: The attempted operation failed."
+        "Houdini did not take the pane into /obj/geo1: hou.OperationFailed: The attempted operation failed."
     )
     assert result["path"] == "/obj/geo1"
     assert (editor.network_path, editor.view) == ("/obj", "as left")
@@ -682,7 +682,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
-    assert result["message"] == "Failed to frame SceneViewer: RuntimeError: viewport is gone"
+    assert result["message"] == "Houdini did not frame SceneViewer: RuntimeError: viewport is gone"
     assert "traceback" not in result
     assert events == []
 

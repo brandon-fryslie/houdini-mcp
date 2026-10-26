@@ -811,14 +811,15 @@ class TestATeardownDropsTheLinkThatFailed:
         with (
             pytest.raises(Exception) as lost,
             held_link(owner, "localhost", 18811),
-            refused_by_houdini("Failed to navigate to /obj/geo1", path="/obj/geo1"),
+            refused_by_houdini("take the pane into /obj/geo1", path="/obj/geo1"),
         ):
             raise link_failure(EOFError("stream closed"))
 
         failure = failure_for(lost.value, "capture_pane_screenshot")
         assert (failure.kind, failure.path) == ("connection_lost", "/obj/geo1")
         assert failure.message.endswith(
-            "\nFailed to navigate to /obj/geo1: EOFError: stream closed"
+            "\nThe link failed while asking Houdini to take the pane into /obj/geo1: "
+            "EOFError: stream closed"
         )
 
     def test_a_lost_link_judged_again_by_an_outer_scope_is_told_once(self):
