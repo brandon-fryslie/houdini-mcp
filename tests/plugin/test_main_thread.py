@@ -297,6 +297,28 @@ class TestHeadless:
         assert "the client's own failure" in str(raised)
         assert seen == [("open", "the call", "MainThread"), ("close", "the call", "MainThread")]
 
+    def test_a_call_holds_off_app_nap_for_exactly_its_wait(self, houdini, monkeypatch):
+        """Held from before the hand-over until the call returns, ran or refused."""
+        events: list[str] = []
+
+        @contextmanager
+        def prevented(reason: str) -> Iterator[None]:
+            events.append("held")
+            try:
+                yield
+            finally:
+                events.append("ended")
+
+        monkeypatch.setattr(main_thread.app_nap, "prevented", prevented)
+        with houdini() as conn:
+            assert (
+                serving_main_thread(lambda: call_on_main(conn, lambda: events.append("ran"))) == []
+            )
+            assert events == ["held", "ran", "ended"]
+            refusal = call_on_main(conn, lambda: events.append("ran late"))
+        assert "houdini_mcp_plugin.main_thread.serve()" in refusal
+        assert events == ["held", "ran", "ended", "held", "ended"]
+
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []
 
