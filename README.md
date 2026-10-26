@@ -142,10 +142,11 @@ The server answers only clients on this machine; to admit one on another, see
 
 ### Windows and Linux
 
-`houdini-mcp install` writes to Houdini's preferences directory for your platform:
-`%USERPROFILE%\Documents\houdini22.0` on Windows and `~/houdini22.0` on Linux, or the
-one `HOUDINI_USER_PREF_DIR` names when it holds `__HVER__`, as Houdini requires. None
-of this has been tested on Windows or Linux with Houdini 22.
+Windows is not supported.
+
+On Linux, `houdini-mcp install` writes to `~/houdini22.0`, or to the directory
+`HOUDINI_USER_PREF_DIR` names when it holds `__HVER__`, as Houdini requires. This has
+not been tested on Linux with Houdini 22.
 
 ## Configuration
 
