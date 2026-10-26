@@ -322,11 +322,12 @@ def _object_shapes(obj: Any) -> list[_Shape]:
 
 
 def _displayed_shapes(network: Any) -> list[_Shape]:
-    """The shapes of the objects a network of objects shows: display flag on."""
+    """The shapes of the objects a network of objects shows: display flag on. An
+    object with no display flag, as a ropnet or a chopnet, shows nothing."""
     return [
         shape
         for child in network.children()
-        if child.isDisplayFlagSet()
+        if node_flag(child, FLAGS["display"].read)
         for shape in _object_shapes(child)
     ]
 

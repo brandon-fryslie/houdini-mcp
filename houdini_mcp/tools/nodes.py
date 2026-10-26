@@ -212,9 +212,11 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
         "is_displayed": read(
-            f"display flag of {path}", partial(node_flag, node, "isDisplayFlagSet")
+            f"display flag of {path}", partial(node_flag, node, FLAGS["display"].read)
         ),
-        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "isRenderFlagSet")),
+        "is_rendered": read(
+            f"render flag of {path}", partial(node_flag, node, FLAGS["render"].read)
+        ),
     }
 
     info["input_connections"] = [conn.as_record() for conn in connections]

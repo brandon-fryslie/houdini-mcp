@@ -227,16 +227,13 @@ def set_node_flags(
             for flag, value in (("display", display), ("render", render), ("bypass", bypass))
             if value is not None
         }
-        # A flag is the node's when its class has both its methods: one this call
-        # cannot read back is one it cannot report. [LAW:no-silent-failure] looked up,
-        # then called, as node_flag reads: an AttributeError Houdini raises while
-        # writing or reading is a refused call, not a flag the node lacks
-        found = {
-            flag: (getattr(node, FLAGS[flag].read, None), getattr(node, FLAGS[flag].write, None))
-            for flag in requested
-        }
-        methods = {flag: pair for flag, pair in found.items() if all(m is not None for m in pair)}
-        lacking = [flag for flag in requested if flag not in methods]
+        # [LAW:single-enforcer] A flag is the node's when its class has the flag's read,
+        # as node_flag decides; Houdini 22 gives a flag's read and write together.
+        # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
+        # AttributeError Houdini raises while writing or reading is a refused call, not
+        # a flag the node lacks
+        reads = {flag: getattr(node, FLAGS[flag].read, None) for flag in requested}
+        lacking = [flag for flag, read in reads.items() if read is None]
         if lacking:
             raise InvalidInput(
                 f"{node_path} ({node.type().name()}) has no {' or '.join(lacking)} flag; "
@@ -247,12 +244,11 @@ def set_node_flags(
 
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
-            read, write = methods[flag]
-            write(value)
+            getattr(node, FLAGS[flag].write)(value)
             # Each flag is read back after its write, not taken as asked for: a SOP
             # network keeps its display and render flags on one node, so turning
             # either off writes nothing. [LAW:no-silent-failure]
-            held = bool(read())
+            held = bool(reads[flag]())
             if held != value:
                 raise OperationFailed(
                     f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",
