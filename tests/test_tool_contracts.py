@@ -174,7 +174,6 @@ class TestServedSchemas:
             "list_render_nodes",
             "list_visible_panes",
             "load_scene",
-            "manage_cache",
             "new_scene",
             "ping_houdini",
             "render_node_network",
@@ -331,7 +330,6 @@ class TestServedSchemas:
             ("render_quad_view", "renderer", ["opengl", "karma"], {}),
             ("render_quad_view", "output_format", ["png", "jpg", "exr"], {}),
             ("render_quad_view", "karma_engine", ["cpu", "gpu"], {}),
-            ("manage_cache", "action", ["stats", "invalidate", "warmup"], {}),
             (
                 "get_houdini_help",
                 "help_type",
@@ -811,18 +809,6 @@ class TestServedFailures:
         )
         assert failure.kind == "operation_failed"
         assert "after" in failure.message
-
-    async def test_a_warmup_that_cannot_reach_houdini_is_connection_unavailable(
-        self, client: Client[Any], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from houdini_mcp.tools import cache
-
-        def refuse(*_a: Any, **_k: Any) -> None:
-            raise HoudiniConnectionError("no Houdini at farm:1", target="farm:1")
-
-        monkeypatch.setattr(cache, "using", refuse)
-        failure = await self.failure_of(client, "manage_cache", {"action": "warmup"})
-        assert (failure.kind, failure.target) == ("connection_unavailable", "farm:1")
 
     async def test_the_probes_report_success_as_success(self, client: Client[Any]) -> None:
         for probe in ("check_connection", "ping_houdini"):

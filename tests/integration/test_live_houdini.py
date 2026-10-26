@@ -590,6 +590,66 @@ def test_houdini_22_loads_a_scene_whose_asset_is_missing_with_its_warning(
     assert tools.get_node_info("/obj/it_g/it_s", **at)["status"] == "success"
 
 
+def test_an_asset_installed_or_removed_outside_the_server_is_in_the_next_listing(
+    at: dict[str, Any], tmp_path: Path
+) -> None:
+    """Houdini 22 offers a digital asset's type from the moment it is made and stops
+    the moment its file is uninstalled; neither passes through this server."""
+
+    def listed() -> list[str]:
+        result = tools.list_node_types("Sop", name_filter="it_listed", **at)
+        assert result["status"] == "success", result
+        return [t["name"] for t in result["node_types"]]
+
+    hda = tmp_path / "listed.hda"
+    assert listed() == []
+    with using(**at) as link:
+        subnet = link.hou.node("/obj").createNode("geo", "it_listed").createNode("subnet")
+        subnet.createDigitalAsset(name="it_listed", hda_file_name=str(hda), description="it_listed")
+    try:
+        assert listed() == ["it_listed"]
+    finally:
+        with using(**at) as link:
+            link.hou.node("/obj/it_listed").destroy()
+            link.hou.hda.uninstallFile(str(hda))
+    assert listed() == []
+
+
+def test_a_listing_costs_the_link_the_same_requests_whatever_it_lists(
+    at: dict[str, Any],
+) -> None:
+    """Every type Houdini 22 offers, one category's, and one name's are read in the
+    same requests: the walk runs inside Houdini, and only the page crosses."""
+    with using(**at) as link:
+        conn = link.conn
+    # the plugin module's import is paid once a link, not once a listing
+    tools.list_node_types(**at)
+    send = conn.sync_request
+
+    def requests_of(**listing: Any) -> int:
+        sent: list[Any] = []
+
+        def counted(*request: Any) -> Any:
+            sent.append(request[0])
+            return send(*request)
+
+        conn.sync_request = counted
+        try:
+            result = tools.list_node_types(**listing, limit=500, **at)
+        finally:
+            conn.sync_request = send
+        assert result["status"] == "success", result
+        return len(sent)
+
+    counts = {
+        requests_of(),
+        requests_of(category="Sop"),
+        requests_of(category="Sop", name_filter="box"),
+    }
+    # [LAW:verifiable-goals] at least one request, or the count measured nothing
+    assert len(counts) == 1 and 0 < min(counts) < 20, counts
+
+
 def _program(code: str, at: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     return tools.execute_code(code, **at, **kwargs, bypass_config_enabled=False)
 

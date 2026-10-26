@@ -18,12 +18,6 @@ from typing import Any
 # Import from extracted modules
 # Import shared utilities from _common (needed by some tests)
 from ._common import using
-from .cache import (
-    get_cache_stats,
-    invalidate_all_caches,
-    manage_cache as manage_cache,
-    node_type_cache,
-)
 from .code import execute_code as execute_code, get_last_scene_diff as get_last_scene_diff
 from .code_policy import (
     _detect_dangerous_code,
@@ -121,10 +115,6 @@ __all__ = [
     "_detect_heavy_geometry_code",
     "_detect_non_inspection_code",
     "parse_code",
-    # Cache management
-    "node_type_cache",
-    "invalidate_all_caches",
-    "get_cache_stats",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
     "using",

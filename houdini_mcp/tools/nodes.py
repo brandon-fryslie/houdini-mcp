@@ -4,17 +4,18 @@ This module provides tools for managing Houdini nodes:
 - create_node: Create a new node
 - get_node_info: Get detailed node information
 - delete_node: Delete a node
-- list_node_types: List available node types (with caching)
+- list_node_types: List the node types Houdini offers
 - list_children: List child nodes with connection info
 - find_nodes: Find nodes by pattern or type
 """
 
+import json
 import logging
 import time
 from collections.abc import Iterator
 from functools import partial
 from itertools import islice
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ._common import (
     FLAGS,
@@ -37,12 +38,16 @@ from ._common import (
     tool,
     using,
 )
-from .cache import node_type_cache
 from .connections import input_connections, input_paths
 from .failure import InvalidInput, Undone, batch_status
 from .parms import evaluated
 from .plugin import plugin_module
-from .reads import UNREAD, is_unread, read
+from .reads import UNREAD, is_unread, log_refused, read
+
+if TYPE_CHECKING:
+    # [LAW:types-are-the-program] the answer's shape is the plugin module's, which
+    # the server never imports: it only reaches it inside Houdini.
+    from houdini_mcp_node_types import Answer as NodeTypesAnswer
 
 logger = logging.getLogger("houdini_mcp.tools.nodes")
 
@@ -199,7 +204,7 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "name": node.name(),
         "type": type_name,
         # a broken HDA definition refuses its description; the node is still there.
-        # [LAW:one-source-of-truth] labelled as list_node_types labels the same read
+        # [LAW:one-source-of-truth] labelled as houdini_mcp_node_types labels the same read
         "type_description": read(
             f"description of {node_type.nameWithCategory()}", node_type.description
         ),
@@ -314,12 +319,14 @@ def list_node_types(
     """
     List available Houdini node types.
 
-    The first call reads every node type from Houdini into a cache; later
-    calls filter that cache. A read Houdini refuses fails the call with
-    operation_failed and caches nothing, so the next call reads again.
+    Every call reads the types Houdini offers at that moment, so an asset
+    installed or removed since the last call is already in the answer. Types
+    are listed in category, then name, order.
 
     Args:
-        category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop")
+        category: Optional category filter (e.g., "Object", "Sop", "Cop2", "Vop"),
+            case-insensitive; a name that is no category Houdini has is refused
+            with invalid_input, whose categories_available lists those it has
         name_filter: Optional substring filter for node type names (case-insensitive)
         limit: Maximum number of results per page (default: 100)
         cursor: Pagination cursor for the next page (default: 0)
@@ -327,7 +334,8 @@ def list_node_types(
     Returns:
         List of node types with their categories and descriptions; a
         description Houdini would not give is {unread}.
-        Includes pagination info (has_more, cursor) when applicable.
+        Includes pagination info (has_more, cursor) when applicable, and
+        category, as Houdini names it, when filtered.
 
     Note:
         Large categories like "Sop" have thousands of node types.
@@ -339,29 +347,46 @@ def list_node_types(
         list_node_types(category="Sop", name_filter="vdb", limit=50)  # VDB SOPs
         list_node_types(category="Sop", cursor=100)  # Get next page of SOPs
     """
+    request = PageRequest(offset=cursor, limit=limit)
+    start = time.perf_counter()
     with using(host, port) as link:
-        hou = link.hou
-        request = PageRequest(offset=cursor, limit=limit)
+        # [LAW:effects-at-boundaries] The walk runs inside Houdini: one request
+        # whatever the types Houdini offers, answered with one JSON string that
+        # holds the page.
+        answer: NodeTypesAnswer = json.loads(
+            plugin_module(link, "houdini_mcp_node_types").node_types(
+                link.hou, category, name_filter, request.window
+            )
+        )
+    # [LAW:nothing-unseen] the walk runs on every call: its cost is on the event
+    elapsed_ms = (time.perf_counter() - start) * 1000
 
-        lookup = node_type_cache.lookup(hou)
+    if "refused" in answer:
+        raise InvalidInput(
+            answer["refused"], category=category, categories_available=answer["categories"]
+        )
+    log_refused(answer["refused_reads"])
+    page = page_from(answer["total"], answer["node_types"], request)
+    logger.info(
+        "node types category=%s name_filter=%s total=%d returned=%d unread=%d elapsed_ms=%.1f",
+        answer["category"],
+        name_filter,
+        page.total,
+        len(page.items),
+        len(answer["refused_reads"]),
+        elapsed_ms,
+    )
 
-        page = paginate(lookup.types.filter(category=category, name_filter=name_filter), request)
-        result: dict[str, Any] = {
-            "status": "success",
-            "node_types": page.items,
-            **paging_fields(page),
-        }
-
-        # Include category in result if filtered
-        if category:
-            result["category"] = category
-        else:
-            # Get available categories from cache
-            result["categories_available"] = list(lookup.types.categories)
-
-        result["_cache_info"] = {"hit": lookup.hit, "total_cached": len(lookup.types.all)}
-
-        return result
+    result: dict[str, Any] = {
+        "status": "success",
+        "node_types": page.items,
+        **paging_fields(page),
+    }
+    if answer["category"] is None:
+        result["categories_available"] = answer["categories"]
+    else:
+        result["category"] = answer["category"]
+    return result
 
 
 @tool(READ)

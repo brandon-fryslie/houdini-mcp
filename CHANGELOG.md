@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_node_types` lists the types Houdini offers when it is called
+  (houdini-laws-etg.tva). It answered from a cache that only `load_scene` and
+  `new_scene` dropped, so an asset installed or removed any other way, by
+  `execute_code`, a file merged with embedded assets, or an artist in the UI,
+  was missing from the listing, or still in it, until the next scene load. The
+  listing is now read inside Houdini on every call, filtered and cut to the page
+  there, so one request carries only the page. Types are listed in category,
+  then name, order, so the same types are listed in the same order on every
+  call. Each call's event in the server log carries its `elapsed_ms`. Needs
+  this release's plugin.
+
 - `execute_code`'s documentation states one scope for both policies
   (houdini-laws-etg.aep): `read-only` and `normal` are guard rails against
   accidents in the code an agent ordinarily writes, not a sandbox. The gate
@@ -260,6 +271,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener serves is logged as an error with one traceback, not two.
 
 ### Changed
+
+- **BREAKING (wire)**: `list_node_types` refuses a `category` Houdini does not
+  have as `invalid_input`, whose `categories_available` lists those it has,
+  where a misspelt category answered success with no types and `category=""`
+  listed every type (houdini-laws-etg.tva). A filtered listing's `category` is the category's
+  name as Houdini spells it (`"Sop"` for `category="sop"`), where it echoed
+  the caller's.
 
 - **BREAKING (wire)**: `execute_code`'s read-only refusal is named for what it
   refuses, code outside the inspection allowlist (houdini-laws-etg.aep):
@@ -961,6 +979,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when Houdini will not give it.
 
 ### Removed
+
+- The node type cache, and with it the `manage_cache` tool and
+  `list_node_types`' `_cache_info` field (houdini-laws-etg.tva): every listing
+  reads Houdini, so there is no cache to report on, drop or warm.
 
 - `examples/`, `docs/implementation/examples-docs.md` and
   `docs/reference/examples-ref.md` (houdini-tuneup-ef3.bl1). Every example script
