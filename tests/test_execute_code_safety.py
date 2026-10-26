@@ -1367,16 +1367,18 @@ class TestSyntaxGate:
         compiler's, so they are refused here, before any process is started."""
         from houdini_mcp.tools import code as code_mod
 
-        def _tripwire(*_a, **_k):
-            raise AssertionError("no process may start for code that does not compile")
+        # Recorded, not raised: the tool boundary would turn a raise into a failure
+        # response, and the test would fail on its fields, not on the process.
+        started: list[object] = []
 
         with (
-            patch.object(code_mod, "run_program", _tripwire),
+            patch.object(code_mod, "run_program", lambda *a, **_k: started.append(a)),
             caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
         ):
             result = code_mod.execute_code(
                 code, host="localhost", port=18811, bypass_config_enabled=False
             )
+        assert started == [], "no process may start for code that does not compile"
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
         assert result["message"] == f"Code does not compile: {compiler_says} (line 1)"
@@ -1412,6 +1414,8 @@ class TestSyntaxGate:
         assert result["status"] == "success"
         assert result["stdout"] == "True\n"
         assert [w.category for w in given] == [SyntaxWarning]
+        # The program's process writes a compile's warnings to its own stderr.
+        assert "SyntaxWarning" not in result["stderr"]
 
     def test_code_that_parses_but_does_not_compile_is_audited_in_full(self, mock_connection):
         """The gates read the tree the parser gave, so the audit names what the program

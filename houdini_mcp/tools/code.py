@@ -733,9 +733,9 @@ def execute_code(
                     )
                 case Killed(phase):
                     failure = ProgramTimedOut(
-                        # [LAW:one-source-of-truth] The start deadline named is the
-                        # one the process and the call's backstop were set from.
-                        _killed(phase, timeout, request.start_timeout),
+                        # [LAW:one-source-of-truth] The deadline named is the one
+                        # the process and the call's backstop were set from.
+                        _killed(phase, timeout, request),
                         policy=grant.policy,
                         **output,
                         timeout=timeout,
@@ -757,7 +757,7 @@ class ProgramDidNotRun(OperationFailed):
     start deadline passed. Nothing was undone, because nothing ran."""
 
 
-def _killed(phase: Phase, timeout: int, start_timeout: float) -> str:
+def _killed(phase: Phase, timeout: int, request: Request) -> str:
     """How the timeout response reads for the phase whose clock the call killed the process on."""
     match phase:
         case "running":
@@ -765,12 +765,13 @@ def _killed(phase: Phase, timeout: int, start_timeout: float) -> str:
         case "starting":
             return (
                 "Execution timeout: the program's process had not reported by its start "
-                f"deadline ({start_timeout}s) and a grace, so it was killed"
+                f"deadline ({request.start_timeout}s) and a grace, so it was killed"
             )
         case "closing":
             return (
                 "Execution timeout: the program ended, but its process had not reported "
-                "how its undo step closed within the sync timeout and a grace, so it was killed"
+                f"how its undo step closed within the sync timeout ({request.sync_timeout}s) "
+                "and a grace, so it was killed"
             )
         case _:
             assert_never(phase)

@@ -343,13 +343,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (wire)**: `execute_code` refuses a program that parses but does
   not compile, before any rail, as `invalid_input` with `blocked_reason`
   `syntax_error` (houdini-laws-etg.r9q). The gate only parsed the program, and
-  the worker compiled the source again, so `return 1` or `break` at module
+  the source was compiled again to run it, so `return 1` or `break` at module
   level, or, on Python 3.14, an expression nested deep enough to overflow the
   compiler's stack, got past the gate and came back as `operation_failed` with
   the program's traceback. The refusal reads "Code does not compile: ...",
   where it read "Code does not parse: ...", and its traceback names the file
-  `<string>`, where a parse refusal's named `<unknown>`. The worker runs the
-  code object the gate compiled, so the parser's and the compiler's
+  `<string>`, where a parse refusal's named `<unknown>`. The program's process
+  runs the code object the gate compiled, so the parser's and the compiler's
   SyntaxWarnings (`invalid escape sequence`, `"is" with 'int' literal`) go to
   the server's stderr, once, and a program's `stderr` no longer starts with
   them.
