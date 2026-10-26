@@ -74,9 +74,9 @@ NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
 INVALID_TYPE_NAME = "The attempted operation failed.\nInvalid node type name"
 
 
-def _registered(category: str, row: NodeType | None) -> "MockNodeType | None":
+def _registered(row: NodeType | None) -> "MockNodeType | None":
     """``row`` as Houdini's registry answers it: None for a type it does not register."""
-    return None if row is None or not row.registered else MockNodeType(category, row)
+    return None if row is None or not row.registered else MockNodeType(row)
 
 
 def _resolved(category: str, name: str) -> NodeType | None:
@@ -226,21 +226,27 @@ class MockSubnetIndirectInput:
 
 
 class MockNodeType:
-    """Mock hou.NodeType: a row of the table in its category. [LAW:one-type-per-behavior]
-    the one fake of it, whether a category hands it out or a node's type() does."""
+    """Mock hou.NodeType: a row of the table. [LAW:one-type-per-behavior] one fake of
+    it, whether a category hands it out or a node's type() does; two of one row are
+    equal, as Houdini's two objects for one type are."""
 
-    def __init__(self, category: str, row: NodeType) -> None:
-        self._category = category
+    def __init__(self, row: NodeType) -> None:
         self._row = row
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeType) and other._row is self._row
+
+    def __hash__(self) -> int:
+        return hash((self._row.category, self._row.type))
 
     def name(self) -> str:
         return self._row.type
 
     def category(self) -> "MockNodeTypeCategory":
-        return MockNodeTypeCategory(self._category)
+        return MockNodeTypeCategory(self._row.category)
 
     def nameWithCategory(self) -> str:
-        return f"{self._category}/{self._row.type}"
+        return f"{self._row.category}/{self._row.type}"
 
     def description(self) -> str:
         return self._row.description
@@ -265,19 +271,17 @@ class MockNodeTypeCategory:
     def nodeTypes(self) -> dict[str, MockNodeType]:
         """Every type the category registers, under its own name."""
         return {
-            own: MockNodeType(self._name, row)
-            for own, row in NODE_TYPES[self._name].items()
-            if row.registered
+            own: MockNodeType(row) for own, row in NODE_TYPES[self._name].items() if row.registered
         }
 
     def nodeType(self, name: str) -> MockNodeType | None:
         """The registered type whose own name ``name`` is; None when no type has it."""
-        return _registered(self._name, NODE_TYPES[self._name].get(name))
+        return _registered(NODE_TYPES[self._name].get(name))
 
 
 class _SopNodeClass(type):
     def __instancecheck__(cls, node: object) -> bool:
-        return isinstance(node, MockHouNode) and node._category() == "Sop"
+        return isinstance(node, MockHouNode) and node._row().category == "Sop"
 
 
 class MockSopNode(metaclass=_SopNodeClass):
@@ -592,7 +596,7 @@ class MockHouNode:
         chain = []
         network: MockHouNode | None = self
         while network is not None:
-            chain.append((network, network._category(), network._placed()))
+            chain.append((network, network._row().category, network._placed()))
             network = network._parent
         return tuple(chain)
 
@@ -616,21 +620,7 @@ class MockHouNode:
         return self._name
 
     def type(self) -> MockNodeType:
-        return MockNodeType(self._category(), self._row())
-
-    def _category(self) -> str:
-        """The category this node's network holds, as Houdini's node takes it.
-
-        The root is the one node with no network, and it is the Director. Any other
-        parentless node is not in a scene, and Houdini has no such node.
-        """
-        if self._parent is not None:
-            held = self._parent._held()
-            assert held is not None, "attach places no child in a node that is not a network"
-            return held
-        if self._row() is not NODE_TYPES["Director"]["root"]:
-            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
-        return "Director"
+        return MockNodeType(self._row())
 
     def _row(self) -> NodeType:
         """This node's type, which its placement stamped."""
@@ -1527,9 +1517,7 @@ class MockHouModule:
         category, _, base = qualified.partition("/")
         if category not in NODE_TYPES:
             return None
-        return _registered(
-            category, _resolved(category, _full_name(scope, namespace, base, version))
-        )
+        return _registered(_resolved(category, _full_name(scope, namespace, base, version)))
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""

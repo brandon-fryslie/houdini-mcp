@@ -122,7 +122,8 @@ class CreateNode:
 class NodeType:
     """One node type as Houdini gives it.
 
-    ``type`` is its own name, the table's key. ``namespace_order`` is every type its
+    ``category`` is the category Houdini lists it in. ``type`` is its own name, the
+    table's key. ``namespace_order`` is every type its
     name without scope, namespace or version could mean, as ``namespaceOrder`` gives
     them, the preferred first (``mountain::2.0`` and the older ``mountain``); none
     for the root and its contexts, which Houdini registers no type for. ``aliases``
@@ -137,6 +138,7 @@ class NodeType:
     an unlocked context root; None for any other type.
     """
 
+    category: str
     type: str
     description: str
     namespace_order: tuple[str, ...]
@@ -196,6 +198,7 @@ def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
             "which the table holds for an unlocked context root alone"
         )
     return NodeType(
+        category=category,
         type=own,
         description=facts["description"],
         namespace_order=tuple(facts["namespace_order"]),
