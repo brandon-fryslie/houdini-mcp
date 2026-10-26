@@ -51,11 +51,9 @@ def _qt_core(link: Link) -> Any:
     # and hutil.PySide is where Houdini states it; a binding named here is a copy
     # that goes stale the release SideFX moves to another one. Its submodules are
     # attributes of the package, which serves the ones it loads lazily the same way.
-    try:
+    with refused_by_houdini("import its Qt, hutil.PySide"):
         QtCore = conn.modules["hutil.PySide"].QtCore
-    except (ImportError, AttributeError) as e:
-        raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
-    logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
+        logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
     return QtCore
 
 
@@ -377,7 +375,7 @@ def list_visible_panes(
         hou = link.hou
 
         current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
-        try:
+        with refused_by_houdini("list its desktops' panes"):
             desktops = [
                 (read("desktop name", desktop.name), desktop.paneTabs())
                 for desktop in hou.ui.desktops()
@@ -387,8 +385,6 @@ def list_visible_panes(
                 for name, pane_tabs in desktops
                 for index, pane_tab in enumerate(pane_tabs)
             ]
-        except Exception as e:
-            raise OperationFailed(f"Failed to enumerate panes: {e}") from e
 
         # Capturable first, then by type name
         panes_info.sort(key=lambda p: (p["capturable"] is not True, str(p["type"])))

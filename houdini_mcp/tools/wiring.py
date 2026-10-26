@@ -93,7 +93,7 @@ def connect_nodes(
         # setInput replaces whatever wire is at the input; once Houdini holds the new
         # one, say which. A refused write leaves that wire in place. Its source is read
         # now, so nothing asked of Houdini after a write it took can fail the call.
-        replaced = wire_at(input_connections(dst_node), dst_input_index)
+        replaced = wire_at(input_connections(dst_node, dst_path), dst_input_index)
         replaced_source = None if replaced is None else replaced.source.path()
 
         with refused_by_houdini(
@@ -106,7 +106,7 @@ def connect_nodes(
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
-        wire = wire_at(input_connections(dst_node), dst_input_index)
+        wire = wire_at(input_connections(dst_node, dst_path), dst_input_index)
         if wire is None:
             raise OperationFailed(
                 f"Houdini reports no wire at {dst_path}[{dst_input_index}] after connecting {src_path}",
@@ -154,7 +154,7 @@ def disconnect_node_input(
         # The wires and the input span both come from Houdini's connection records:
         # inputs() looks through a subnet's indirect input to None, which would cut
         # that wire and call it absent. [LAW:one-source-of-truth]
-        connections = input_connections(node)
+        connections = input_connections(node, node_path)
         span = input_span(connections)
         if input_index not in span:
             raise InvalidInput(
@@ -165,7 +165,10 @@ def disconnect_node_input(
 
         existing = wire_at(connections, input_index)
 
-        node.setInput(input_index, None)
+        with refused_by_houdini(
+            f"disconnect {node_path}[{input_index}]", node_path=node_path, input_index=input_index
+        ):
+            node.setInput(input_index, None)
 
         # ``disconnected`` is the wire that was cut, as every tool reports a wire, or
         # None when the input was already unwired.
@@ -248,11 +251,14 @@ def set_node_flags(
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
             read, write = methods[flag]
-            write(value)
             # Each flag is read back after its write, not taken as asked for: a SOP
             # network keeps its display and render flags on one node, so turning
             # either off writes nothing. [LAW:no-silent-failure]
-            held = bool(read())
+            with refused_by_houdini(
+                f"set {flag}={value} on {node_path}", node_path=node_path, flag=flag
+            ):
+                write(value)
+                held = bool(read())
             if held != value:
                 raise OperationFailed(
                     f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",
@@ -311,7 +317,7 @@ def reorder_inputs(
         # [LAW:one-source-of-truth] the wire records are the only read: the input span
         # comes from them too, not from inputs(), which looks through a subnet's indirect
         # input to the parent network and so does not count the same wires.
-        connections = input_connections(node)
+        connections = input_connections(node, node_path)
         span = list(input_span(connections))
 
         # new_order is a permutation of the span: every wire gets exactly one new
@@ -331,14 +337,19 @@ def reorder_inputs(
         # wire, plus the input it came from.
         rewired = sorted(connections, key=lambda conn: new_position[conn.input_index])
         reconnection_info: list[dict[str, Any]] = []
-        for conn in rewired:
-            moved = InputConnection(new_position[conn.input_index], conn.source, conn.output_index)
-            node.setInput(moved.input_index, moved.source, moved.output_index)
-            reconnection_info.append(
-                {**moved.as_record(), "previous_input_index": conn.input_index}
-            )
-        for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
-            node.setInput(idx, None)
+        with refused_by_houdini(
+            f"reorder the inputs of {node_path}", node_path=node_path, new_order=new_order
+        ):
+            for conn in rewired:
+                moved = InputConnection(
+                    new_position[conn.input_index], conn.source, conn.output_index
+                )
+                node.setInput(moved.input_index, moved.source, moved.output_index)
+                reconnection_info.append(
+                    {**moved.as_record(), "previous_input_index": conn.input_index}
+                )
+            for idx in sorted(set(span) - {new_position[conn.input_index] for conn in connections}):
+                node.setInput(idx, None)
 
         logger.info(f"Reordered inputs on {node_path}: {new_order}, {len(connections)} wires")
 

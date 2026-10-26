@@ -372,7 +372,9 @@ MCP client, not by calling the tool function. See
 5. **Write to the scene inside `refused_by_houdini`** - Houdini's refusal of the write
    reaches the caller as `operation_failed` in Houdini's words, a lost link as
    `connection_lost` naming what was asked, and a fault in this process as a bug; create nodes
-   with `created_in`, which writes through it
+   with `created_in`, which writes through it. A handler that must see a lost link raw (the
+   render's cleanup) raises `houdini_refusal` for what `raised_inside_houdini`, and re-raises
+   the rest
 6. **Clean up connections** - The decorator handles this, but be aware of the pattern
 
 ## Files Reference
@@ -380,7 +382,7 @@ MCP client, not by calling the tool function. See
 | File | Purpose |
 |------|---------|
 | `houdini_mcp/tools/failure.py` | `ToolFailure`, its arms, what tools raise, and `failure_for` |
-| `houdini_mcp/tools/_common.py` | The `@tool` boundary, `node_at`, `network_at`, `refused_by_houdini` and `created_in` |
+| `houdini_mcp/tools/_common.py` | The `@tool` boundary, `node_at`, `network_at`, `houdini_refusal`, `refused_by_houdini` and `created_in` |
 | `houdini_mcp/connection.py` | Connection management with retry logic |
 | `tests/conftest.py` | Mock infrastructure for testing |
 | `tests/test_tools.py` | Tests for error handling decorator |

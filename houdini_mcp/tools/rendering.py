@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, cast
 
-from ..connection import Link, transport_failure
+from ..connection import Link, raised_inside_houdini, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
     READ,
@@ -29,6 +29,7 @@ from ._common import (
     Vec3,
     batch_status,
     created_in,
+    houdini_refusal,
     node_at,
     node_category,
     node_flag,
@@ -521,12 +522,12 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
             with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
                 image = f.read()
         except Exception as e:
-            # [LAW:no-silent-failure] a dead link stays itself, so cleanup knows
-            # to send nothing more; anything else is Houdini's machine not
-            # producing the picture
-            if transport_failure(e):
+            # [LAW:no-silent-failure] only what Houdini raised is its machine not
+            # producing the picture; a dead link stays itself, so cleanup knows to
+            # send nothing more, and a bug here is the call's
+            if not raised_inside_houdini(e):
                 raise
-            raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
+            raise houdini_refusal("render the picture", e, exception=type(e).__name__) from e
     except BaseException as e:
         # A link that failed is sent nothing more: the file is Houdini's to keep.
         if transport_failure(e) is None:

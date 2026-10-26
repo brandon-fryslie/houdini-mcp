@@ -9,7 +9,7 @@ outputs feeds it. ``inputs()`` alone cannot say that, and nothing here guesses i
 from dataclasses import dataclass
 from typing import Any
 
-from ._common import node_category
+from ._common import node_category, refused_by_houdini
 
 
 @dataclass(frozen=True)
@@ -42,11 +42,7 @@ class InputConnection:
         }
 
 
-class InputConnectionsUnreadable(RuntimeError):
-    """Houdini could not report a node's input connections; the message names the node."""
-
-
-def input_connections(node: Any) -> list[InputConnection]:
+def input_connections(node: Any, node_path: str) -> list[InputConnection]:
     """The node's connected inputs, in input order, from Houdini's connection records.
 
     ``inputItem()`` / ``inputItemOutputIndex()`` are HOM's pair for this: unlike
@@ -54,23 +50,20 @@ def input_connections(node: Any) -> list[InputConnection]:
     looking through an indirect input to whatever is wired into the parent subnet
     (which may be nothing, and then ``inputNode()`` is None).
 
-    [LAW:no-silent-failure] A failed read raises, naming the node, to the tool's
-    error boundary. There is no fallback output index: a guessed index rewires the
-    user's network wrong while reporting success.
+    [LAW:no-silent-failure] A failed read raises, naming the node by ``node_path``,
+    the path its caller already holds (a walk reads connections node by node, and
+    asking Houdini for each path again is a round trip per node). There is no
+    fallback output index: a guessed index rewires the user's network wrong while
+    reporting success.
     """
-    try:
-        records = node.inputConnections()
-    except Exception as e:
-        raise InputConnectionsUnreadable(
-            f"Could not read input connections of {node.path()}: {e}"
-        ) from e
-    return sorted(
-        (
-            InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())
-            for conn in records
-        ),
-        key=lambda conn: conn.input_index,
-    )
+    with refused_by_houdini(f"read the input connections of {node_path}", node_path=node_path):
+        return sorted(
+            (
+                InputConnection(conn.inputIndex(), conn.inputItem(), conn.inputItemOutputIndex())
+                for conn in node.inputConnections()
+            ),
+            key=lambda conn: conn.input_index,
+        )
 
 
 @dataclass(frozen=True)

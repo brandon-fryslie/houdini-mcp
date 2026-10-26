@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from tests.conftest import MockHouNode
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 def _merge_fed_from_split_output_1(mock_connection):
@@ -106,7 +106,7 @@ class TestReorderPreservesSourceOutput:
 
 class _NodeWithUnreadableWires(MockHouNode):
     def inputConnections(self):
-        raise RuntimeError("connection records unavailable")
+        raise raised_inside_houdini(RuntimeError("connection records unavailable"))
 
 
 class TestUnreadableWireIsAnError:

@@ -16,6 +16,7 @@ from ._common import (
     network_at,
     node_at,
     node_category,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -172,9 +173,16 @@ def assign_material(
         else:
             # Create new Material SOP
             mat_sop = created_in(geo_node, "material", "material1")
-            mat_sop.setFirstInput(display_node)
-            mat_sop.setDisplayFlag(True)
-            mat_sop.setRenderFlag(True)
+            mat_sop_path = mat_sop.path()
+            # one block per write, so a refusal names the step that did not land
+            with refused_by_houdini(
+                f"wire {display_node.path()} into {mat_sop_path}", material_sop_path=mat_sop_path
+            ):
+                mat_sop.setFirstInput(display_node)
+            with refused_by_houdini(f"display {mat_sop_path}", material_sop_path=mat_sop_path):
+                mat_sop.setDisplayFlag(True)
+            with refused_by_houdini(f"render {mat_sop_path}", material_sop_path=mat_sop_path):
+                mat_sop.setRenderFlag(True)
 
         values = {"shop_materialpath1": material_path}
         if group:

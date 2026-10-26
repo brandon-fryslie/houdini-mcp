@@ -763,7 +763,9 @@ class TestFindErrorNodesUninspected:
         )
 
         assert result.kind == "operation_failed"
-        assert result.message.startswith("Could not list the nodes under /obj: locked HDA")
+        assert result.message.startswith(
+            "Houdini did not list the nodes under /obj: RuntimeError: locked HDA"
+        )
         assert houdini().link() is link and not link.conn.closed
 
     async def test_a_link_lost_reading_a_node_is_connection_loss(self, mock_connection):

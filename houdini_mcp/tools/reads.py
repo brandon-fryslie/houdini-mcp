@@ -31,7 +31,6 @@ __all__ = [
     "log_refused",
     "read",
     "reason",
-    "reraise_transport_failure",
     "unread",
 ]
 
@@ -54,7 +53,11 @@ def read(what: str, fetch: Callable[[], T]) -> T | Unread:
     """
 
     def explain(e: Exception) -> str:
-        reraise_transport_failure(e)
+        # [LAW:single-enforcer] a lost link is the connection module's failure, not
+        # the read's; it goes on up to the ``using`` scope that drops the link. A
+        # read is wider than a write: a value this side cannot convert is unread too.
+        if transport_failure(e) is not None:
+            raise e
         why = reason(e)
         _log_unread(what, why)
         return why
@@ -72,10 +75,3 @@ def log_refused(refused_reads: list[RefusedRead]) -> None:
     that module cannot reach this log, so it hands its refusals back."""
     for refused in refused_reads:
         _log_unread(refused["what"], refused["reason"])
-
-
-def reraise_transport_failure(e: Exception) -> None:
-    # [LAW:single-enforcer] a lost link is the connection module's failure, not
-    # the read's; it goes on up to the ``using`` scope that drops the link.
-    if transport_failure(e) is not None:
-        raise e
