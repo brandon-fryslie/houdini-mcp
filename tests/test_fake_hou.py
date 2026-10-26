@@ -602,12 +602,15 @@ def test_the_root_and_the_contexts_are_no_registered_types(mock_hou: MockHouModu
 
 
 def test_a_node_and_its_category_answer_one_type(mock_hou: MockHouModule) -> None:
-    """node.type() and the category's nodeType() give equal hou.NodeTypes, as Houdini 22's
-    two objects for one type are."""
+    """node.type() and the category's nodeType() give equal hou.NodeTypes in equal
+    categories, as Houdini 22's two objects for one type or category are."""
     mountain = mock_hou.node("/obj").createNode("geo").createNode("mountain")
-    by_category = mock_hou.nodeTypeCategories()["Sop"].nodeType("mountain::2.0")
+    sop = mock_hou.nodeTypeCategories()["Sop"]
+    by_category = sop.nodeType("mountain::2.0")
 
     assert mountain.type() == by_category
+    assert mountain.type().category() == sop
+    assert len({mountain.type().category(), sop}) == 1
     assert len({mountain.type(), by_category}) == 1
     assert mountain.type().nameWithCategory() == "Sop/mountain::2.0"
 

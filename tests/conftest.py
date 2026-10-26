@@ -260,10 +260,17 @@ class MockNodeType:
 
 class MockNodeTypeCategory:
     """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
-    so rpyc reads it as it reads Houdini's."""
+    so rpyc reads it as it reads Houdini's; two of one name are equal, as Houdini's
+    two objects for one category are."""
 
     def __init__(self, name: str) -> None:
         self._name = name
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeTypeCategory) and other._name == self._name
+
+    def __hash__(self) -> int:
+        return hash(self._name)
 
     def name(self) -> str:
         return self._name

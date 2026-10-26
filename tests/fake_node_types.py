@@ -123,10 +123,10 @@ class NodeType:
     """One node type as Houdini gives it.
 
     ``category`` is the category Houdini lists it in. ``type`` is its own name, the
-    table's key. ``namespace_order`` is every type its
-    name without scope, namespace or version could mean, as ``namespaceOrder`` gives
-    them, the preferred first (``mountain::2.0`` and the older ``mountain``); none
-    for the root and its contexts, which Houdini registers no type for. ``aliases``
+    table's key. ``namespace_order`` is every type its name without scope, namespace
+    or version could mean, as ``namespaceOrder`` gives them, the preferred first
+    (``mountain::2.0`` and the older ``mountain``); none for the root and its
+    contexts, which Houdini registers no type for. ``aliases``
     is the other names createNode takes for it. ``holds`` is the category of the
     nodes it holds, None for a node that is not a network. A ``locked`` asset holds a
     category and refuses every child at once. ``indirect_inputs`` is how many indirect
