@@ -315,7 +315,7 @@ class TestGetNodeInfoWithErrors:
     @staticmethod
     def _type_refusing_description(node: MockHouNode, exc: BaseException) -> None:
         node_type = node.type()
-        node_type.description.side_effect = exc
+        node_type.description = MagicMock(side_effect=exc)  # type: ignore[method-assign]
         node.type = MagicMock(return_value=node_type)  # type: ignore[method-assign]
 
     def test_a_type_description_houdini_will_not_read_is_unread_beside_the_node_info(
@@ -324,10 +324,10 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mock_connection.add_node(geo1)
         self._type_refusing_description(
             geo1, raised_inside_houdini(RuntimeError("bad HDA definition"))
         )
-        mock_connection.add_node(geo1)
 
         for detail in ("standard", "full"):
             caplog.clear()
@@ -346,8 +346,8 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        self._type_refusing_description(geo1, link_failure(EOFError("stream has been closed")))
         mock_connection.add_node(geo1)
+        self._type_refusing_description(geo1, link_failure(EOFError("stream has been closed")))
 
         result = get_node_info("/obj/geo1", detail="standard")
 

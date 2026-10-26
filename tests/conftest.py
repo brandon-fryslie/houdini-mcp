@@ -226,13 +226,27 @@ class MockSubnetIndirectInput:
 
 
 class MockNodeType:
-    """Mock hou.NodeType as its category holds it: a row of the table."""
+    """Mock hou.NodeType: a row of the table. [LAW:one-type-per-behavior] one fake of
+    it, whether a category hands it out or a node's type() does; two of one row are
+    equal, as Houdini's two objects for one type are."""
 
     def __init__(self, row: NodeType) -> None:
         self._row = row
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeType) and other._row is self._row
+
+    def __hash__(self) -> int:
+        return hash((self._row.category, self._row.type))
+
     def name(self) -> str:
         return self._row.type
+
+    def category(self) -> "MockNodeTypeCategory":
+        return MockNodeTypeCategory(self._row.category)
+
+    def nameWithCategory(self) -> str:
+        return f"{self._row.category}/{self._row.type}"
 
     def description(self) -> str:
         return self._row.description
@@ -246,10 +260,17 @@ class MockNodeType:
 
 class MockNodeTypeCategory:
     """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
-    so rpyc reads it as it reads Houdini's."""
+    so rpyc reads it as it reads Houdini's; two of one name are equal, as Houdini's
+    two objects for one category are."""
 
     def __init__(self, name: str) -> None:
         self._name = name
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeTypeCategory) and other._name == self._name
+
+    def __hash__(self) -> int:
+        return hash(self._name)
 
     def name(self) -> str:
         return self._name
@@ -267,7 +288,7 @@ class MockNodeTypeCategory:
 
 class _SopNodeClass(type):
     def __instancecheck__(cls, node: object) -> bool:
-        return isinstance(node, MockHouNode) and node._category() == "Sop"
+        return isinstance(node, MockHouNode) and node._row().category == "Sop"
 
 
 class MockSopNode(metaclass=_SopNodeClass):
@@ -582,7 +603,7 @@ class MockHouNode:
         chain = []
         network: MockHouNode | None = self
         while network is not None:
-            chain.append((network, network._category(), network._placed()))
+            chain.append((network, network._row().category, network._placed()))
             network = network._parent
         return tuple(chain)
 
@@ -605,31 +626,8 @@ class MockHouNode:
     def name(self) -> str:
         return self._name
 
-    def type(self) -> MagicMock:
-        mock_type = MagicMock()
-        # Read when asked, not when type() is: a node's type is its network's to
-        # give, which a node built by hand has only once it is placed.
-        mock_type.name = MagicMock(side_effect=lambda: self._row().type)
-        mock_type.description = MagicMock(side_effect=lambda: self._row().description)
-        mock_type.category = lambda: MockNodeTypeCategory(self._category())
-        mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
-        mock_type.namespaceOrder = lambda: self._row().namespace_order
-        mock_type.aliases = lambda: self._row().aliases
-        return mock_type
-
-    def _category(self) -> str:
-        """The category this node's network holds, as Houdini's node takes it.
-
-        The root is the one node with no network, and it is the Director. Any other
-        parentless node is not in a scene, and Houdini has no such node.
-        """
-        if self._parent is not None:
-            held = self._parent._held()
-            assert held is not None, "attach places no child in a node that is not a network"
-            return held
-        if self._row() is not NODE_TYPES["Director"]["root"]:
-            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
-        return "Director"
+    def type(self) -> MockNodeType:
+        return MockNodeType(self._row())
 
     def _row(self) -> NodeType:
         """This node's type, which its placement stamped."""

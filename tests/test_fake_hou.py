@@ -459,9 +459,9 @@ def test_a_nested_duplicate_name_is_refused(mock_hou: MockHouModule) -> None:
         mock_hou.add_node(MockHouNode(path="/obj/geo1", name="geo1", children=twins))
 
 
-def test_a_node_outside_any_scene_has_no_category() -> None:
-    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene"):
-        MockHouNode(path="/obj/geo1", name="geo1").type().category()
+def test_a_node_outside_any_scene_has_no_type() -> None:
+    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene, so it has no type"):
+        MockHouNode(path="/obj/geo1", name="geo1").type()
 
 
 def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> None:
@@ -599,6 +599,20 @@ def test_the_root_and_the_contexts_are_no_registered_types(mock_hou: MockHouModu
     assert [categories[c].nodeTypes() for c in ("Director", "Manager")] == [{}, {}]
     assert categories["Manager"].nodeType("obj") is None
     assert mock_hou.preferredNodeType("Manager/obj") is None
+
+
+def test_a_node_and_its_category_answer_one_type(mock_hou: MockHouModule) -> None:
+    """node.type() and the category's nodeType() give equal hou.NodeTypes in equal
+    categories, as Houdini 22's two objects for one type or category are."""
+    mountain = mock_hou.node("/obj").createNode("geo").createNode("mountain")
+    sop = mock_hou.nodeTypeCategories()["Sop"]
+    by_category = sop.nodeType("mountain::2.0")
+
+    assert mountain.type() == by_category
+    assert mountain.type().category() == sop
+    assert len({mountain.type().category(), sop}) == 1
+    assert len({mountain.type(), by_category}) == 1
+    assert mountain.type().nameWithCategory() == "Sop/mountain::2.0"
 
 
 def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModule) -> None:
