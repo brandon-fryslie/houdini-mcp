@@ -58,9 +58,8 @@ the plugin from where they are installed, and `uvx` installs them into a cache t
   Houdini through, on `127.0.0.1:18811`, as soon as Houdini's UI is up, and adds the
   "Houdini MCP" shelf.
 - **MCP clients**: it registers the server with each of Claude Code (user scope),
-  Claude Desktop, Cursor and Codex that it finds on this machine. Any other client
-  runs the command the installer prints, with `MCP_TRANSPORT=stdio` in its
-  environment.
+  Claude Desktop, Cursor and Codex that it finds on this machine. For any other
+  client, put the `houdini` entry the installer prints in its config.
 
 Running it again is safe, and keeps anything you added to the server's environment
 in a client, such as `HOUDINI_HOST`; an entry you pointed at a URL, as for

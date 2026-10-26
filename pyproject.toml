@@ -102,8 +102,8 @@ exclude = [
 houdini_plugin = ["**/*"]
 
 [tool.setuptools.exclude-package-data]
-# Bytecode an interpreter left in the tree is that interpreter's, not the plugin's
-houdini_plugin = ["**/__pycache__/*", "**/*.pyc"]
+# Bytecode an interpreter left in the tree, and Finder's folder settings, are not the plugin's
+houdini_plugin = ["**/__pycache__/*", "**/*.pyc", "**/.DS_Store"]
 
 # Ruff configuration (replaces black, isort, flake8)
 [tool.ruff]

@@ -265,7 +265,11 @@ def test_the_report_says_what_each_step_did_and_fails_when_one_failed(tmp_path: 
         "B: not found (b on PATH)",
         "C: FAILED: broke",
     ]
-    assert "MCP_TRANSPORT=stdio /venv/bin/python -P -m houdini_mcp" in text
+    assert (
+        "Any other MCP client's 'houdini' entry: "
+        '{"command": "/venv/bin/python", "args": ["-P", "-m", "houdini_mcp"], '
+        '"env": {"MCP_TRANSPORT": "stdio"}}'
+    ) in text
     assert status == 1
     assert report([("A", Installed("here")), ("B", NotFound("x"))], SERVER)[1] == 0
 
@@ -578,9 +582,10 @@ def test_a_json_config_keeps_its_permissions_and_its_text(tmp_path: Path) -> Non
     assert sorted(path.name for path in config.parent.iterdir()) == ["mcp.json"]
 
 
-def test_houdinis_preferences_on_windows_follow_home(tmp_path: Path) -> None:
+def test_houdinis_preferences_on_windows_are_not_moved_by_a_shells_home(tmp_path: Path) -> None:
+    """Git Bash sets HOME in its own shell; Houdini started from the Start menu has none."""
     machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
-    assert houdini_pref_dir(machine) == tmp_path / "h" / "houdini22.0"
+    assert houdini_pref_dir(machine) == machine.home / "Documents" / "houdini22.0"
 
 
 def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:
@@ -588,7 +593,47 @@ def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) 
     assert results["Claude Desktop"] == NotFound("APPDATA, unset")
 
 
-def test_the_command_another_client_is_shown_quotes_a_path_with_a_space() -> None:
+def test_the_entry_another_client_is_shown_is_one_its_config_takes() -> None:
     server = ServerEntry((r"C:\Users\Jane Doe\python.exe", "-P", "-m", "houdini_mcp"), {})
     text, _ = report([], server)
-    assert "runs it as: 'C:\\Users\\Jane Doe\\python.exe' -P -m houdini_mcp" in text
+    shown = text.splitlines()[-1].split(" entry: ", 1)[1]
+    assert json.loads(shown) == server.as_json()
+
+
+def test_claude_code_keeps_a_projects_entry_that_reaches_the_server_at_a_url(
+    tmp_path: Path,
+) -> None:
+    _cli(tmp_path / "bin", "claude")
+    docker = {"mcpServers": {"houdini": {"type": "http", "url": _DOCKER}}}
+    machine = _claude_json(
+        tmp_path,
+        {
+            "mcpServers": {"houdini": {"env": {"HOUDINI_PORT": "19000"}}},
+            "projects": {"/work/docker": docker, "/work/shot": {"mcpServers": {}}},
+        },
+    )
+    (tmp_path / "bin" / "known").touch()
+
+    outcome = claude_code(machine, SERVER)
+
+    project = str(tmp_path / "work" / "docker")
+    assert outcome == Installed(
+        f"its user config (kept the entries of projects that reach the server at a URL: {project})"
+    )
+    # The project's URL entry is neither compared with the user's nor carried into it.
+    added = _calls(tmp_path / "bin")[-1]
+    assert added[added.index("houdini") + 1 : added.index("--")] == [
+        "-e", "HOUDINI_PORT=19000", "-e", "MCP_TRANSPORT=stdio",
+    ]  # fmt: skip
+
+
+def test_claude_code_says_what_of_its_earlier_entry_it_did_not_keep(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "bin" / "known").touch()
+    machine = _claude_json(
+        tmp_path, {"mcpServers": {"houdini": {"type": "stdio", "command": "uv", "timeout": 30}}}
+    )
+
+    assert claude_code(machine, SERVER) == Installed(
+        "its user config (claude mcp add did not keep the earlier entry's timeout)"
+    )

@@ -106,11 +106,9 @@ def houdini_pref_dir(machine: Machine) -> Path:
     named = machine.environ.get("HOUDINI_USER_PREF_DIR", "")
     if "__HVER__" in named:
         return Path(named.replace("__HVER__", HOUDINI_VERSION))
-    # On Windows Houdini's $HOME is the environment's HOME, else the Documents folder.
-    windows_home = machine.environ.get("HOME") or machine.home / "Documents"
     defaults = {
         "darwin": machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION,
-        "win32": Path(windows_home) / f"houdini{HOUDINI_VERSION}",
+        "win32": machine.home / "Documents" / f"houdini{HOUDINI_VERSION}",
     }
     return defaults.get(machine.platform, machine.home / f"houdini{HOUDINI_VERSION}")
 
@@ -202,7 +200,7 @@ def registered(path: Path, load: Callable[[str], object], table: str) -> Registe
     refused here, once, and left as it is: nothing past this reads or writes it.
     """
     try:
-        config = load(path.read_text()) if path.exists() else {}
+        config = load(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, ValueError) as e:  # JSON's and TOML's decode errors are ValueErrors
         return Failed(f"{path} could not be read, and was left as it is: {e}")
     servers = config.get(table, {}) if isinstance(config, dict) else None
@@ -243,7 +241,7 @@ def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     projects = _projects(earlier.config, path)
     if isinstance(projects, Failed):
         return projects
-    local, gone = projects
+    local = projects.local
     # A project's local-scope entry runs over the user's (`claude mcp add`'s default scope,
     # which a hand-made registration used), so what it set is carried here too: removing
     # it afterwards, as the report asks, loses nothing.
@@ -275,25 +273,46 @@ def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
             f"{SERVER_NAME!r} set, but Claude Code runs theirs there instead: "
             f"{', '.join(local)}. In each, run: claude mcp remove --scope local {SERVER_NAME}"
         )
-    passed = f" (passed over the entries of projects that no longer exist: {', '.join(gone)})"
-    return Installed("its user config" + (passed if gone else ""))
+    return Installed(
+        "its user config"
+        + _note("kept the entries of projects that reach the server at a URL:", projects.at_url)
+        + _note("passed over the entries of projects that no longer exist:", projects.gone)
+        + _note("claude mcp add did not keep the earlier entry's", _dropped(earlier.entry))
+    )
 
 
-def _projects(
-    config: dict[str, object], path: Path
-) -> tuple[dict[str, dict[str, str]], list[str]] | Failed:
-    """The environment each project's own local-scope entry for this server sets, by project,
-    and the projects holding an entry whose folder is gone.
+def _dropped(entry: Entry) -> list[str]:
+    """What an earlier stdio entry held beyond how it started the server."""
+    return sorted(set(entry.fields) - _HOW_STARTED)
 
-    Claude Code keeps a project's settings after its folder is deleted (a removed worktree).
-    It cannot run a server there, and ``claude mcp remove --scope local`` cannot be run from
+
+def _note(what: str, names: list[str]) -> str:
+    """A note on how a step went, naming *names*; nothing when there are none."""
+    return f" ({what} {', '.join(names)})" if names else ""
+
+
+@dataclass(frozen=True)
+class Projects:
+    """The projects whose own local-scope entry for this server Claude Code keeps.
+
+    ``local``: the environment each stdio entry sets, by project; these run over the user's.
+    ``at_url``: those reaching a server at a URL the user gave them, which stay as they are.
+    ``gone``: those whose folder is deleted (a removed worktree), which Claude Code keeps. It
+    cannot run a server there, and ``claude mcp remove --scope local`` cannot be run from
     there, so such an entry neither runs over the user's nor carries into it.
     """
+
+    local: dict[str, dict[str, str]]
+    at_url: list[str]
+    gone: list[str]
+
+
+def _projects(config: dict[str, object], path: Path) -> Projects | Failed:
+    """The projects in Claude Code's config with an entry of their own for this server."""
     projects = config.get("projects", {})
     if not isinstance(projects, dict):
         return Failed(f"{path} does not hold projects as Claude Code writes it; left as it is")
-    found: dict[str, dict[str, str]] = {}
-    gone: list[str] = []
+    found = Projects({}, [], [])
     for project, settings in projects.items():
         servers = settings.get("mcpServers", {}) if isinstance(settings, dict) else None
         if isinstance(servers, dict) and SERVER_NAME not in servers:
@@ -304,11 +323,13 @@ def _projects(
                 f"{path} does not hold {project}'s servers as Claude Code writes them; "
                 "left as it is"
             )
-        if Path(project).is_dir():
-            found[project] = entry.env
+        if not Path(project).is_dir():
+            found.gone.append(project)
+        elif entry.url is not None:
+            found.at_url.append(project)
         else:
-            gone.append(project)
-    return found, gone
+            found.local[project] = entry.env
+    return found
 
 
 def _agreed(
@@ -348,9 +369,10 @@ def codex(machine: Machine, server: ServerEntry) -> Outcome:
     if added.returncode != 0:
         return Failed(f"codex mcp add: {_said(added)}")
     # `codex mcp add` writes the whole entry anew and takes no flag for the rest of it.
-    dropped = sorted(set(earlier.entry.fields) - _HOW_STARTED)
-    lost = f" (codex mcp add did not keep the earlier entry's {', '.join(dropped)})"
-    return Installed("its config" + (lost if dropped else ""))
+    return Installed(
+        "its config"
+        + _note("codex mcp add did not keep the earlier entry's", _dropped(earlier.entry))
+    )
 
 
 @dataclass(frozen=True)
@@ -392,10 +414,13 @@ def _replace(path: Path, text: str) -> None:
     """
     target = path.resolve()
     staged = target.with_name(f".{target.name}.houdini-mcp")
+    mode = target.stat().st_mode & 0o777 if target.exists() else 0o666
     try:
-        staged.write_text(text)
-        if target.exists():
-            shutil.copymode(target, staged)
+        with os.fdopen(
+            os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w", encoding="utf-8"
+        ) as file:
+            file.write(text)
+        os.chmod(staged, mode)  # as the target is, whatever the umask took from it
         os.replace(staged, target)
     finally:
         staged.unlink(missing_ok=True)
@@ -446,13 +471,12 @@ def _described(outcome: Outcome) -> str:
 
 def report(results: list[tuple[str, Outcome]], server: ServerEntry) -> tuple[str, int]:
     """What the install did, for a person to read, and the exit status that says it."""
-    env = [f"{name}={value}" for name, value in server.env.items()]
     lines = [
         *(f"{name}: {_described(outcome)}" for name, outcome in results),
         "",
         "Restart Houdini: the plugin starts its listener once the UI is up.",
         "Restart each MCP client above to load the server.",
-        f"Any other MCP client runs it as: {shlex.join([*env, *server.argv])}",
+        f"Any other MCP client's {SERVER_NAME!r} entry: {json.dumps(server.as_json())}",
     ]
     failed = any(isinstance(outcome, Failed) for _, outcome in results)
     return "\n".join(lines), int(failed)
