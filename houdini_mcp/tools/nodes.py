@@ -211,12 +211,8 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
-        "is_displayed": read(
-            f"display flag of {path}", partial(node_flag, node, FLAGS["display"].read)
-        ),
-        "is_rendered": read(
-            f"render flag of {path}", partial(node_flag, node, FLAGS["render"].read)
-        ),
+        "is_displayed": read(f"display flag of {path}", partial(node_flag, node, "display")),
+        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "render")),
     }
 
     info["input_connections"] = [conn.as_record() for conn in connections]
@@ -456,7 +452,7 @@ def list_children(
         def compact_flags(node: Any) -> str:
             # Three-character bitset: display/render/bypassed. `-` means the node
             # class does not expose that flag API.
-            flags = (node_flag(node, FLAGS[f].read) for f in ("display", "render", "bypass"))
+            flags = (node_flag(node, flag) for flag in FLAGS)
             return "".join("-" if f is None else "1" if f else "0" for f in flags)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:

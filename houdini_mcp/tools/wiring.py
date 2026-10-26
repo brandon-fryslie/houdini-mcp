@@ -10,8 +10,10 @@ from typing import Any
 from ._common import (
     FLAGS,
     UNDOABLE,
+    Flag,
     InvalidInput,
     OperationFailed,
+    flag_read,
     node_at,
     node_category,
     refused_by_houdini,
@@ -222,17 +224,12 @@ def set_node_flags(
 
         node = node_at(hou, node_path)
 
-        requested = {
-            flag: value
-            for flag, value in (("display", display), ("render", render), ("bypass", bypass))
-            if value is not None
-        }
-        # [LAW:single-enforcer] A flag is the node's when its class has the flag's read,
-        # as node_flag decides; Houdini 22 gives a flag's read and write together.
+        asked: dict[Flag, bool | None] = {"display": display, "render": render, "bypass": bypass}
+        requested = {flag: value for flag, value in asked.items() if value is not None}
         # [LAW:no-silent-failure] looked up, then called, as node_flag reads: an
         # AttributeError Houdini raises while writing or reading is a refused call, not
         # a flag the node lacks
-        reads = {flag: getattr(node, FLAGS[flag].read, None) for flag in requested}
+        reads = {flag: flag_read(node, flag) for flag in requested}
         lacking = [flag for flag, read in reads.items() if read is None]
         if lacking:
             raise InvalidInput(
@@ -241,14 +238,21 @@ def set_node_flags(
                 node_path=node_path,
                 flags=lacking,
             )
+        # every write looked up before the first is made, so none is missing mid-way
+        methods = {
+            flag: (read, getattr(node, FLAGS[flag].write))
+            for flag, read in reads.items()
+            if read is not None
+        }
 
         flags_set: dict[str, bool] = {}
         for flag, value in requested.items():
-            getattr(node, FLAGS[flag].write)(value)
+            read, write = methods[flag]
+            write(value)
             # Each flag is read back after its write, not taken as asked for: a SOP
             # network keeps its display and render flags on one node, so turning
             # either off writes nothing. [LAW:no-silent-failure]
-            held = bool(reads[flag]())
+            held = bool(read())
             if held != value:
                 raise OperationFailed(
                     f"Houdini holds {flag}={held} on {node_path} after setting it to {value}",

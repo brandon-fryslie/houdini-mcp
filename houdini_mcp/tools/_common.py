@@ -10,7 +10,7 @@ This module contains common utilities used across all tool modules:
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Generic, NamedTuple, TypeVar, cast
+from typing import Annotated, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as parsed_dataclass
@@ -352,26 +352,36 @@ class FlagMethods(NamedTuple):
     write: str
 
 
+Flag = Literal["display", "render", "bypass"]
+
 # [LAW:one-source-of-truth] Houdini's flag API, named once. Which flags a node has
 # follows its class: a SOP has all three, a ROP only bypass, an object only display.
-FLAGS = {
+FLAGS: dict[Flag, FlagMethods] = {
     "display": FlagMethods("isDisplayFlagSet", "setDisplayFlag"),
     "render": FlagMethods("isRenderFlagSet", "setRenderFlag"),
     "bypass": FlagMethods("isBypassed", "bypass"),
 }
 
 
-def node_flag(node: Any, method: str) -> bool | None:
-    """The flag ``method`` reads, or None when the node's class has no such flag.
+def flag_read(node: Any, flag: Flag) -> Callable[[], Any] | None:
+    """The method reading ``node``'s ``flag``, or None when its class has no such flag.
 
     Which flags a node has follows its class: on Houdini 22, for example, a SOP has
     a display and a render flag, an object only a display flag, and a network such
-    as /obj neither.
+    as /obj neither. Houdini gives a flag's read and write together, so the read
+    alone decides.
     """
+    # [LAW:single-enforcer] the one rule for whether a node has a flag
+    read: Callable[[], Any] | None = getattr(node, FLAGS[flag].read, None)
+    return read
+
+
+def node_flag(node: Any, flag: Flag) -> bool | None:
+    """``node``'s ``flag``, or None when its class has no such flag."""
     # [LAW:no-silent-failure] looked up, then called: an AttributeError Houdini raises
     # while reading the flag is a refused read, not a flag the node lacks
-    getter = getattr(node, method, None)
-    return None if getter is None else bool(getter())
+    read = flag_read(node, flag)
+    return None if read is None else bool(read())
 
 
 def node_at(hou: Any, path: str, what: str = "Node") -> Any:

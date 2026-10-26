@@ -18,7 +18,6 @@ from typing import Any, Literal, cast
 from ..connection import Link, transport_failure
 from ._common import (
     DEFAULT_RESOLUTION,
-    FLAGS,
     READ,
     RENDER,
     UNDOABLE,
@@ -327,7 +326,7 @@ def _displayed_shapes(network: Any) -> list[_Shape]:
     return [
         shape
         for child in network.children()
-        if node_flag(child, FLAGS["display"].read)
+        if node_flag(child, "display")
         for shape in _object_shapes(child)
     ]
 
@@ -860,9 +859,7 @@ def list_render_nodes(
                 "path": path,
                 "name": node.name(),
                 "type": node.type().name(),
-                "bypassed": read(
-                    f"bypass flag of {path}", partial(node_flag, node, FLAGS["bypass"].read)
-                ),
+                "bypassed": read(f"bypass flag of {path}", partial(node_flag, node, "bypass")),
             }
 
             # Output path lives under a different name per ROP type
