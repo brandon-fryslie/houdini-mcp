@@ -60,12 +60,7 @@ class TransactionPolicy(StrEnum):
 # Every policy but a file writer's (screenshots, save), which leaves the Houdini
 # scene as it was. A render leaves nothing it was asked for, yet changes the
 # scene while it runs.
-_SCENE_CHANGERS = (
-    TransactionPolicy.UNDOABLE,
-    TransactionPolicy.CHECKPOINT_REQUIRED,
-    TransactionPolicy.PROGRAM_UNDO_GROUP,
-    TransactionPolicy.TEMPORARY_NODES,
-)
+_SCENE_CHANGERS = frozenset(TransactionPolicy) - {TransactionPolicy.EXTERNAL_SIDE_EFFECT}
 # Whose recovery runs the whole body on Houdini's main thread: Houdini records an
 # undo group, and honours a disabler, only there.
 _WHOLE_ON_MAIN_THREAD = (TransactionPolicy.UNDOABLE, TransactionPolicy.TEMPORARY_NODES)

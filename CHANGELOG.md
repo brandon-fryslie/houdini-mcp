@@ -60,7 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and destroyed for the render was a step of its own on the artist's undo
   stack, so the next Ctrl+Z stepped through the render and could bring its
   camera and ROP back. They now run on Houdini's main thread with undo
-  disabled, the one place Houdini honours a disabler.
+  disabled, the one place Houdini honours a disabler, so a graphical Houdini's
+  interface waits for the render as it does for one started from its Render
+  menu. Needs this release's plugin.
 
 - `execute_code` refuses the calls that run HScript as it refuses `eval`
   (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
