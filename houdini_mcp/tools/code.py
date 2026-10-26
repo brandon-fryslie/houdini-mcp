@@ -40,6 +40,7 @@ Safety model (bead houdini-mcp-9e2, houdini-laws-etg.pic)
 
 import builtins
 import hashlib
+import io
 import logging
 import threading
 import time
@@ -67,6 +68,7 @@ from .code_policy import (
     _detect_import_hou,
     _detect_non_inspection_code,
     compile_program,
+    parse_program,
 )
 from .failure import LinkLost, add_note, failed_on, failure_for, link_lost
 from .program_output import Capture, captured
@@ -206,10 +208,11 @@ class ExecutionGrant:
 class DetectedPatterns:
     """Everything the static scan found in the code, whatever the grant says about it.
 
-    The program is compiled once, here; every gate reads the tree its code
-    object was compiled from, and that code object is what ``exec`` runs. A
-    program that does not compile carries its ``SyntaxError`` as ``program`` and
-    nothing else, because nothing else could be read [LAW:parse-dont-validate].
+    The program is parsed and compiled once, here; every gate reads the tree its
+    code object was compiled from, and that code object is what ``exec`` runs. A
+    program that does not compile carries its ``SyntaxError`` as ``program``, and
+    one that does not parse carries nothing else, because nothing else could be
+    read [LAW:parse-dont-validate].
     """
 
     code_sha256: str
@@ -218,30 +221,42 @@ class DetectedPatterns:
     heavy_geometry: list[str]
     import_hou: bool
     program: CodeType | SyntaxError
+    # What the parser and the compiler wrote to stderr reading it: their
+    # SyntaxWarnings, which the program's stderr starts with.
+    compiler_warnings: str
 
     @classmethod
     def scan(cls, code: str) -> "DetectedPatterns":
         # [LAW:one-source-of-truth] The program's identity is computed here once;
         # the audit, the worker ledger and every refusal name it from this field.
         code_sha256 = hashlib.sha256(code.encode("utf-8", "replace")).hexdigest()
-        try:
-            program = compile_program(code)
-        except SyntaxError as exc:
-            return cls(
-                code_sha256=code_sha256,
-                non_inspection=[],
-                dangerous=[],
-                heavy_geometry=[],
-                import_hou=False,
-                program=exc,
-            )
+        warnings = io.StringIO()
+        with captured(io.StringIO(), warnings):
+            try:
+                tree = parse_program(code)
+            except SyntaxError as exc:
+                return cls(
+                    code_sha256=code_sha256,
+                    non_inspection=[],
+                    dangerous=[],
+                    heavy_geometry=[],
+                    import_hou=False,
+                    program=exc,
+                    compiler_warnings=warnings.getvalue(),
+                )
+            program: CodeType | SyntaxError
+            try:
+                program = compile_program(tree)
+            except SyntaxError as exc:
+                program = exc
         return cls(
             code_sha256=code_sha256,
-            non_inspection=_detect_non_inspection_code(program.tree),
-            dangerous=_detect_dangerous_code(program.tree),
-            heavy_geometry=_detect_heavy_geometry_code(program.tree),
-            import_hou=_detect_import_hou(program.tree),
-            program=program.code,
+            non_inspection=_detect_non_inspection_code(tree),
+            dangerous=_detect_dangerous_code(tree),
+            heavy_geometry=_detect_heavy_geometry_code(tree),
+            import_hou=_detect_import_hou(tree),
+            program=program,
+            compiler_warnings=warnings.getvalue(),
         )
 
 
@@ -362,10 +377,17 @@ class _Ended:
 
 
 def _run_code_thread(
-    program: CodeType, hou: Any, stdout_capture: Capture, stderr_capture: Capture
+    program: CodeType,
+    compiler_warnings: str,
+    hou: Any,
+    stdout_capture: Capture,
+    stderr_capture: Capture,
 ) -> None:
     """Execute the gate's compiled program, capturing stdout/stderr."""
     exec_globals = {"hou": hou, "__builtins__": builtins.__dict__}
+    # The compiler's warnings lead the program's stderr, where exec compiling the
+    # source wrote them.
+    stderr_capture.write(compiler_warnings)
     # [LAW:effects-at-boundaries] Only this thread's writes are captured;
     # other threads keep writing to the streams they always did.
     with captured(stdout_capture, stderr_capture):
@@ -620,7 +642,7 @@ def execute_code(
             detected=detected,
             reason="syntax_error",
             message=f"Code does not compile: {exc.msg}{location}",
-            hint="Fix the syntax error; the gates judge the parsed program and refuse one they cannot read.",
+            hint="Fix the error the compiler reports; a program that does not compile cannot run.",
             traceback="".join(traceback.format_exception_only(exc)),
         )
     # [LAW:one-source-of-truth] What runs is the code object the gate compiled;
@@ -832,7 +854,9 @@ def execute_code(
                 started = time.monotonic()
                 program_starts.set()
                 try:
-                    _run_code_thread(code_object, hou, stdout_capture, stderr_capture)
+                    _run_code_thread(
+                        code_object, detected.compiler_warnings, hou, stdout_capture, stderr_capture
+                    )
                 # Whatever the program raises - SystemExit and KeyboardInterrupt too -
                 # is how it ended, not the worker's own failure: the caller reports it.
                 except BaseException as error:

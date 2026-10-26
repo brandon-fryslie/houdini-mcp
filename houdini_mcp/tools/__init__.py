@@ -24,6 +24,7 @@ from .code_policy import (
     _detect_heavy_geometry_code,
     _detect_non_inspection_code,
     compile_program,
+    parse_program,
 )
 from .errors import find_error_nodes as find_error_nodes
 from .geometry import get_geo_summary as get_geo_summary
@@ -115,6 +116,7 @@ __all__ = [
     "_detect_heavy_geometry_code",
     "_detect_non_inspection_code",
     "compile_program",
+    "parse_program",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
     "using",
