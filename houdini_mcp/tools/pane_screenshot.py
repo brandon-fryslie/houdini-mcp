@@ -31,11 +31,12 @@ from ._common import (
     failed_on,
     failure_for,
     network_at,
+    refused_by_houdini,
     tool,
     using,
 )
 from .failure import LinkLost
-from .reads import Unread, is_unread, read, reason
+from .reads import Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -225,14 +226,8 @@ def _capture_pane_to_bytes(
 
     def framed() -> dict[str, Any]:
         shown = navigate(pane)
-        try:
+        with refused_by_houdini(f"frame {pane_type_name}", pane_type=pane_type_name):
             frame(pane)
-        except ToolError:
-            raise
-        except Exception as e:
-            raise OperationFailed(
-                f"Failed to frame {pane_type_name}: {reason(e)}", pane_type=pane_type_name
-            ) from e
         return shown
 
     # Navigated and framed only once the input and the pane are known good, so a
@@ -507,15 +502,11 @@ def render_node_network(
         # is entered where it now is, and one deleted since fails the capture, so
         # no other node is ever entered.
         def into_network(pane: Any) -> dict[str, Any]:
-            try:
+            with refused_by_houdini(f"take the pane into {node_path}", path=node_path):
                 # [LAW:one-source-of-truth] the network's own path, which a
                 # caller's spelling of it ("/obj/geo1/") is not.
                 path = network.path()
                 pane.cd(path)
-            except Exception as e:
-                raise OperationFailed(
-                    f"Failed to navigate to {node_path}: {reason(e)}", path=node_path
-                ) from e
             child_count = read(f"children of {path}", lambda: len(network.children()))
             logger.info("Took %s into %s, child_count=%s", pane.name(), path, child_count)
             return {"node_path": path, "child_count": child_count}

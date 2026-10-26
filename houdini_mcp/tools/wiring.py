@@ -14,6 +14,7 @@ from ._common import (
     OperationFailed,
     node_at,
     node_category,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -42,6 +43,8 @@ def connect_nodes(
 
     Validates that node types are compatible (e.g., SOP→SOP, OBJ→OBJ) before connecting.
     Automatically disconnects existing connection if the destination input is already wired.
+    The source sits in the destination's own network: a node or dot beside it, or,
+    inside a subnet, one of that subnet's indirect inputs. Houdini refuses any other.
 
     Args:
         src_path: Path to source node (e.g., "/obj/geo1/grid1")
@@ -85,15 +88,19 @@ def connect_nodes(
                 dst_path=dst_path,
             )
 
-        # setInput replaces whatever wire is at the input; say which one.
+        # setInput replaces whatever wire is at the input; once Houdini holds the new
+        # one, say which. A refused write leaves that wire in place. Its source is read
+        # now, so nothing asked of Houdini after a write it took can fail the call.
         replaced = wire_at(input_connections(dst_node), dst_input_index)
-        if replaced is not None:
-            logger.info(
-                f"Disconnecting existing connection from {replaced.source.path()} "
-                f"to {dst_path}[{dst_input_index}]"
-            )
+        replaced_source = None if replaced is None else replaced.source.path()
 
-        dst_node.setInput(dst_input_index, src.item, src_output_index)
+        with refused_by_houdini(
+            f"connect {src_path} to {dst_path}[{dst_input_index}]",
+            src_path=src_path,
+            dst_path=dst_path,
+            dst_input_index=dst_input_index,
+        ):
+            dst_node.setInput(dst_input_index, src.item, src_output_index)
 
         # The wire is reported as Houdini holds it after the write, not as it was asked
         # for. [LAW:one-source-of-truth] [LAW:no-silent-failure]
@@ -103,6 +110,10 @@ def connect_nodes(
                 f"Houdini reports no wire at {dst_path}[{dst_input_index}] after connecting {src_path}",
                 dst_path=dst_path,
                 dst_input_index=dst_input_index,
+            )
+        if replaced_source is not None:
+            logger.info(
+                f"Replaced connection from {replaced_source} to {dst_path}[{dst_input_index}]"
             )
 
         return {

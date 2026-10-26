@@ -1,5 +1,7 @@
 """The fake hou keeps one scene graph: what createNode and destroy do is what hou.node sees."""
 
+from typing import Any
+
 import pytest
 
 from tests.conftest import (
@@ -152,6 +154,59 @@ def test_a_network_that_is_not_a_subnetwork_has_no_indirect_inputs(
         node.indirectInputs()
     assert mock_hou.item(f"{node.path()}/1") is None
     assert mock_hou.item("/1") is None
+
+
+def _wiring_probe(mock_hou: MockHouModule) -> dict[str, Any]:
+    """The items the cross-network wiring probe used in Houdini 22.0.466, by name."""
+    obj = mock_hou.node("/obj")
+    geo1, geo2 = obj.createNode("geo", "geo1"), obj.createNode("geo", "geo2")
+    subnet = geo1.createNode("subnet")
+    return {
+        "box2": geo2.createNode("box"),
+        "null": geo1.createNode("null"),
+        "box1": geo1.createNode("box"),
+        "wrangle's indirect input": geo1.createNode("attribwrangle").indirectInputs()[0],
+        "subnet's indirect input": subnet.indirectInputs()[0],
+        "inner": subnet.createNode("null"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("destination", "wired", "refused"),
+    [
+        ("null", "box1", "box2"),
+        ("null", "box1", "wrangle's indirect input"),
+        ("null", "box1", "subnet's indirect input"),
+        ("inner", "subnet's indirect input", "box1"),
+        ("null", "box1", "inner"),
+    ],
+)
+def test_a_source_outside_the_destinations_network_is_refused(
+    mock_hou: MockHouModule, destination: str, wired: str, refused: str
+) -> None:
+    """What hython's setInput does with each: raises, and the wire already there stays."""
+    items = _wiring_probe(mock_hou)
+    items[destination].setInput(0, items[wired])
+
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: The attempted operation failed\."):
+        items[destination].setInput(0, items[refused])
+
+    assert [c.inputItem() for c in items[destination].inputConnections()] == [items[wired]]
+
+
+@pytest.mark.parametrize(
+    ("destination", "source"), [("null", "box1"), ("inner", "subnet's indirect input")]
+)
+def test_a_source_in_the_destinations_network_is_wired(
+    mock_hou: MockHouModule, destination: str, source: str
+) -> None:
+    """What hython's setInput wires: a node beside the destination, and inside a subnet
+    one of that subnet's own indirect inputs."""
+    items = _wiring_probe(mock_hou)
+
+    items[destination].setInput(0, items[source])
+
+    assert [c.inputItem() for c in items[destination].inputConnections()] == [items[source]]
 
 
 def test_destroyed_node_leaves_its_network_box(mock_hou: MockHouModule) -> None:

@@ -362,6 +362,21 @@ class TestErrorHandling:
             or "category" in bad_conn["message"].lower()
         )
 
+    def test_a_source_in_another_network_is_houdinis_refusal(self, at: dict[str, Any]) -> None:
+        """Houdini refuses a wire from a SOP in another geo; the tool says so in its words."""
+        box = create_node("box", create_node("geo", "/obj", "elsewhere", **at)["node_path"], **at)
+        null = create_node("null", create_node("geo", "/obj", "here", **at)["node_path"], **at)
+
+        refused = connect_nodes(box["node_path"], null["node_path"], **at)
+
+        assert refused["kind"] == "operation_failed"
+        assert refused["message"].startswith(
+            f"Houdini did not connect {box['node_path']} to {null['node_path']}[0]: "
+            "hou.OperationFailed: The attempted operation failed."
+        )
+        assert "Remote Traceback" not in refused["message"]
+        assert get_node_info(null["node_path"], **at)["input_connections"] == []
+
     async def test_safe_geometry_access_pattern(
         self, at: dict[str, Any], summarizing: dict[str, Any]
     ) -> None:

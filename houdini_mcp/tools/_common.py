@@ -23,6 +23,7 @@ from ..connection import (
     houdini,
     is_connected,
     raised_inside_houdini,
+    transport_failure,
 )
 from .failure import (
     FAILURE,
@@ -433,25 +434,42 @@ NodeName = Annotated[str, Field(min_length=1)]
 a node Houdini is to name is given None, its one spelling."""
 
 
+@contextmanager
+def refused_by_houdini(request: str, **context: Any) -> Iterator[None]:
+    """A scene write Houdini refuses, inside the block, becomes ``operation_failed``
+    reading ``Houdini did not <request>: <Houdini's own words>``, carrying ``context``.
+    ``request`` is what the tool asked of Houdini, as a verb phrase ("frame
+    SceneViewer").
+
+    [LAW:single-enforcer] The one shape of a write Houdini refused, for node
+    creation, connect_nodes, and the pane capture's navigation and framing. A link
+    that fails inside the block is classified as the link's failure, keeping
+    ``context`` and noting what was asked, never whether it landed: a write cut off
+    mid-call may have.
+    """
+    try:
+        yield
+    except Exception as e:
+        if raised_inside_houdini(e):
+            raise OperationFailed(f"Houdini did not {request}: {reason(e)}", **context) from e
+        if transport_failure(e) is not None:
+            raise OperationFailed(
+                f"The link failed while asking Houdini to {request}: {reason(e)}", **context
+            ) from e
+        # [LAW:no-silent-failure] a bug in this process is neither Houdini's answer
+        # nor the link's; it goes on raw, to be classified as the bug it is
+        raise
+
+
 def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
     """A new ``node_type`` node in ``network``, named ``name``, or by Houdini when None.
 
     [LAW:one-source-of-truth] Every node a tool makes for the scene to keep is
     created here, so Houdini's refusal (a locked asset, a type the network does not
-    offer, a name it will not take) reaches each tool as the same
-    ``operation_failed`` in Houdini's own words, as a parameter set Houdini refused
-    does (parms.write_all).
+    offer, a name it will not take) reaches each tool as the same ``operation_failed``.
     """
-    try:
+    with refused_by_houdini(f"create a {node_type!r} node", node_type=node_type):
         return network.createNode(node_type, name)
-    except Exception as e:
-        # [LAW:no-silent-failure] a lost link or a bug in this process is not a
-        # refusal; it goes on raw, to be classified as what it is
-        if not raised_inside_houdini(e):
-            raise
-        raise OperationFailed(
-            f"Houdini did not create a {node_type!r} node: {reason(e)}", node_type=node_type
-        ) from e
 
 
 class ExecutionTimeoutError(Exception):

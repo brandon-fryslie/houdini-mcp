@@ -369,8 +369,10 @@ MCP client, not by calling the tool function. See
 4. **Resolve paths with `node_at`** - it returns the node or raises `invalid_input` for you;
    a path to a network a tool works inside resolves with `network_at`, which also refuses
    a node that holds no nodes
-5. **Create nodes with `created_in`** - Houdini's refusal of the node reaches every tool
-   as the same `operation_failed`, in Houdini's words
+5. **Write to the scene inside `refused_by_houdini`** - Houdini's refusal of the write
+   reaches the caller as `operation_failed` in Houdini's words, a lost link as
+   `connection_lost` naming what was asked, and a fault in this process as a bug; create nodes
+   with `created_in`, which writes through it
 6. **Clean up connections** - The decorator handles this, but be aware of the pattern
 
 ## Files Reference
@@ -378,7 +380,7 @@ MCP client, not by calling the tool function. See
 | File | Purpose |
 |------|---------|
 | `houdini_mcp/tools/failure.py` | `ToolFailure`, its arms, what tools raise, and `failure_for` |
-| `houdini_mcp/tools/_common.py` | The `@tool` boundary, `node_at`, `network_at` and `created_in` |
+| `houdini_mcp/tools/_common.py` | The `@tool` boundary, `node_at`, `network_at`, `refused_by_houdini` and `created_in` |
 | `houdini_mcp/connection.py` | Connection management with retry logic |
 | `tests/conftest.py` | Mock infrastructure for testing |
 | `tests/test_tools.py` | Tests for error handling decorator |

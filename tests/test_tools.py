@@ -2367,6 +2367,72 @@ class TestConnectNodes:
         assert "Sop" in result["message"]
         assert "Dop" in result["message"]
 
+    def test_a_source_outside_the_destinations_network_is_houdinis_refusal(
+        self, mock_connection, caplog
+    ):
+        """Houdini 22 refuses a wire from a node in another network, saying no more than
+        that the operation failed; the tool says so in Houdini's words, as an operation
+        Houdini refused, and the scene is as it was."""
+        from houdini_mcp.tools import connect_nodes
+
+        obj = mock_connection.node("/obj")
+        obj.createNode("geo", "geo1").createNode("null", "null1")
+        obj.createNode("geo", "geo2").createNode("box", "box1")
+        before = mock_connection.node("/").state()
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            result = connect_nodes("/obj/geo2/box1", "/obj/geo1/null1")
+
+        assert (result["kind"], result["src_path"], result["dst_path"]) == (
+            "operation_failed",
+            "/obj/geo2/box1",
+            "/obj/geo1/null1",
+        )
+        assert result["message"].startswith(
+            "Houdini did not connect /obj/geo2/box1 to /obj/geo1/null1[0]: "
+            "hou.OperationFailed: The attempted operation failed."
+        )
+        assert "Remote Traceback" not in result["message"]
+        assert mock_connection.node("/").state() == before
+        # the audit every failure gets, and not the alarm only a bug raises
+        assert [(r.levelname, r.getMessage()[:40]) for r in caplog.records] == [
+            ("WARNING", "connect_nodes failed (operation_failed, ")
+        ]
+
+    def test_a_replaced_wire_is_logged_only_once_houdini_holds_the_new_one(
+        self, mock_connection, caplog
+    ):
+        """The wire a connect replaces is logged after Houdini takes the new one; a
+        refused connect leaves the old wire, and logs no replacement."""
+        from houdini_mcp.tools import connect_nodes
+
+        obj = mock_connection.node("/obj")
+        geo1 = obj.createNode("geo", "geo1")
+        geo1.createNode("box", "box1")
+        geo1.createNode("sphere", "sphere1")
+        geo1.createNode("null", "null1")
+        obj.createNode("geo", "geo2").createNode("box", "box2")
+        assert connect_nodes("/obj/geo1/box1", "/obj/geo1/null1")["status"] == "success"
+
+        def replaced() -> list[str]:
+            return [r.getMessage() for r in caplog.records if "Replaced" in r.getMessage()]
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            assert connect_nodes("/obj/geo2/box2", "/obj/geo1/null1")["status"] == "error"
+            assert replaced() == []
+            assert connect_nodes("/obj/geo1/sphere1", "/obj/geo1/null1")["status"] == "success"
+            assert replaced() == ["Replaced connection from /obj/geo1/box1 to /obj/geo1/null1[0]"]
+
+    def test_a_fault_in_this_process_inside_a_refusal_scope_goes_on_raw(self):
+        """Only Houdini's answer and the link's failure are labeled; a bug here is
+        neither, and reaches the boundary as itself."""
+        from houdini_mcp.tools._common import refused_by_houdini
+
+        bug = KeyError("pane_type")
+        with pytest.raises(KeyError) as raised, refused_by_houdini("frame SceneViewer"):
+            raise bug
+        assert raised.value is bug
+
     def test_connect_nodes_source_not_found(self, mock_connection):
         """Test error when source node not found."""
         from houdini_mcp.tools import connect_nodes

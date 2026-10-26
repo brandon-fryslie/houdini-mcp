@@ -801,21 +801,26 @@ class TestATeardownDropsTheLinkThatFailed:
             "\nThe scene's unsaved work is backed up at /tmp/backup.hip."
         )
 
-    def test_a_tool_failure_around_a_lost_link_keeps_its_payload(self):
-        """``raise OperationFailed(..., path=...) from <the link's failure>`` reads as the
-        link's failure, carrying the tool's fields and, as a note, its message."""
-        from houdini_mcp.tools._common import held_link
-        from houdini_mcp.tools.failure import OperationFailed, failure_for
+    def test_a_link_lost_inside_a_refusal_scope_keeps_its_payload(self):
+        """A link that fails inside ``refused_by_houdini`` reads as the link's failure,
+        carrying the scope's fields and, as a note, the step it failed in."""
+        from houdini_mcp.tools._common import held_link, refused_by_houdini
+        from houdini_mcp.tools.failure import failure_for
 
         owner = _owner()
-        with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811):
-            raise OperationFailed(
-                "Failed to navigate to /obj/geo1", path="/obj/geo1"
-            ) from link_failure(EOFError("stream closed"))
+        with (
+            pytest.raises(Exception) as lost,
+            held_link(owner, "localhost", 18811),
+            refused_by_houdini("take the pane into /obj/geo1", path="/obj/geo1"),
+        ):
+            raise link_failure(EOFError("stream closed"))
 
         failure = failure_for(lost.value, "capture_pane_screenshot")
         assert (failure.kind, failure.path) == ("connection_lost", "/obj/geo1")
-        assert failure.message.endswith("\nFailed to navigate to /obj/geo1")
+        assert failure.message.endswith(
+            "\nThe link failed while asking Houdini to take the pane into /obj/geo1: "
+            "EOFError: stream closed"
+        )
 
     def test_a_lost_link_judged_again_by_an_outer_scope_is_told_once(self):
         """A scope inside another (a checkpointed tool's body) already judged the loss;
