@@ -12,7 +12,6 @@ from houdini_mcp.tools.summarization import Excerpt
 from tests.conftest import (
     SUMMARIZER,
     MockHouNode,
-    MockNodeLacking,
     link_failure,
     raised_inside_houdini,
 )
@@ -415,11 +414,8 @@ class TestGetNodeInfoWithErrors:
     def test_a_node_with_no_render_flag_reads_null_for_it(self, mock_connection):
         from houdini_mcp.tools import get_node_info
 
-        geo1 = MockNodeLacking(
-            path="/obj/geo1", name="geo1", node_type="geo", lacks=("isRenderFlagSet",)
-        )
-        geo1.setDisplayFlag(True)
-        mock_connection.add_node(geo1)
+        # an object has a display flag and no render flag
+        mock_connection.node("/obj").createNode("geo", "geo1")
 
         result = get_node_info("/obj/geo1", detail="standard")
 

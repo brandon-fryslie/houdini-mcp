@@ -11,7 +11,7 @@ from tests.conftest import (
     MockHouNode,
     _built_as,
 )
-from tests.fake_node_types import ParmTuple, load_table, node_types, read_node_types
+from tests.fake_node_types import FLAGS, ParmTuple, load_table, node_types, read_node_types
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -207,6 +207,37 @@ def test_a_source_in_the_destinations_network_is_wired(
     items[destination].setInput(0, items[source])
 
     assert [c.inputItem() for c in items[destination].inputConnections()] == [items[source]]
+
+
+@pytest.mark.parametrize(
+    ("context", "node_types", "flags"),
+    [
+        ("/obj", ("geo", "box"), ("display", "render", "bypass")),
+        ("/obj", ("geo",), ("display",)),
+        ("/obj", ("dopnet", "subnet"), ("display", "bypass")),
+        ("/out", ("opengl",), ("bypass",)),
+        ("/obj", (), ()),
+    ],
+)
+def test_a_node_has_the_flags_its_class_gives(
+    mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], flags: tuple[str, ...]
+) -> None:
+    """What hython finds on each, created in a fresh Houdini 22.0.466 scene: a flag's
+    read and write, which turn it and read it back, for each flag its class has, and
+    neither method for one it lacks."""
+    node = _created(mock_hou.node(context), *node_types)
+
+    for flag in flags:
+        read, write = (getattr(node, method) for method in FLAGS[flag])
+        was = read()
+        write(not was)
+        assert read() is not was, flag
+    assert {
+        method
+        for flag in set(FLAGS) - set(flags)
+        for method in FLAGS[flag]
+        if hasattr(node, method)
+    } == set()
 
 
 def test_destroyed_node_leaves_its_network_box(mock_hou: MockHouModule) -> None:

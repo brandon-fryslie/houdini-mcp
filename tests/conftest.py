@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock
 
@@ -30,6 +30,7 @@ from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
 from tests.fake_node_types import (
+    FLAGS,
     MAKES,
     Answer,
     Answers,
@@ -333,7 +334,7 @@ class HeldTuple:
 @dataclass(frozen=True)
 class Placed:
     """What a placed node holds because of its type: its parameter tuples, its indirect
-    inputs, its lock, and the type that gave them.
+    inputs, its lock, the state of each flag its type has, and the type that gave them.
 
     ``indirect`` is None for a node that is not a subnetwork, whose indirectInputs()
     raises instead; the items it lists are made once, as each holds its own wires.
@@ -345,6 +346,16 @@ class Placed:
     tuples: dict[str, HeldTuple]
     indirect: tuple[MockSubnetIndirectInput, ...] | None
     locked: bool
+    flags: dict[str, bool]
+
+
+# a fresh node's flags, of those its type has
+FRESH_FLAGS = {"display": True, "render": True, "bypass": False}
+
+# a flag method's name -> its flag, and whether it writes
+FLAG_METHODS = {
+    method: (flag, method == methods.write) for flag, methods in FLAGS.items() for method in methods
+}
 
 
 @dataclass(frozen=True)
@@ -370,6 +381,7 @@ def _place(
             MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
         ),
         node_type.locked and not isinstance(answer, Mismatched),
+        {flag: FRESH_FLAGS[flag] for flag in node_type.flags},
     )
 
 
@@ -489,9 +501,6 @@ class MockHouNode:
         # the same default as setInput().
         self._input_output_indexes: dict[int, int] = {}
         self._outputs: list[Any] = []
-        self._display_flag = True
-        self._render_flag = True
-        self._bypass = False
         # Cook state, as Houdini 22 reads it: how many cooks were attempted,
         # whether the node needs another, and the last cook's messages. A fake
         # node has cooked once, successfully, and is current.
@@ -536,7 +545,7 @@ class MockHouNode:
                 for index, source in enumerate(self._inputs)
                 if source is not None
             ),
-            (self._display_flag, self._render_flag, self._bypass),
+            tuple(sorted(self._placed().flags.items())),
             self._position,
             repr(self._color),
             tuple(
@@ -848,9 +857,6 @@ class MockHouNode:
                 if source is self:
                     sink.setInput(index, None)
 
-    def isDisplayFlagSet(self) -> bool:
-        return self._display_flag
-
     def worldTransform(self) -> "MockMatrix4":
         """The node's world transform, as hou.ObjNode.worldTransform: its own rotate,
         about X, then Y, then Z, then its translate (Houdini's default rOrd xyz and
@@ -871,20 +877,24 @@ class MockHouNode:
             )
         )
 
-    def isRenderFlagSet(self) -> bool:
-        return self._render_flag
+    def __getattr__(self, name: str) -> Any:
+        """A flag's read or write, which a node has when its type has the flag; any
+        other name it lacks, as Houdini's node class does: AttributeError."""
+        if name not in FLAG_METHODS:
+            raise AttributeError(name)
+        flag, writes = FLAG_METHODS[name]
+        flags = self._placed().flags
+        if flag not in flags:
+            raise AttributeError(f"{self._row().type} has no {flag} flag, so no {name}")
 
-    def setDisplayFlag(self, value: bool) -> None:
-        self._display_flag = value
+        def read(node: MockHouNode) -> bool:
+            return node._placed().flags[flag]
 
-    def setRenderFlag(self, value: bool) -> None:
-        self._render_flag = value
+        def write(node: MockHouNode, on: bool) -> None:
+            node._placed().flags[flag] = on
 
-    def bypass(self, on: bool) -> None:
-        self._bypass = on
-
-    def isBypassed(self) -> bool:
-        return self._bypass
+        # a bound method, as Houdini's is, which rpyc carries as it carries Houdini's
+        return MethodType(write if writes else read, self)
 
     def setInput(
         self,
@@ -1007,7 +1017,7 @@ class MockHouNode:
         if contained is None or contained.name() != "Sop":
             return None
         for child in self._children:
-            if child._display_flag:
+            if child.isDisplayFlagSet():
                 return child
         if self._children:
             return self._children[-1]
@@ -1315,20 +1325,6 @@ def _answers_in(chain: Chain) -> dict[str, Answers]:
             f"{root_placed.row.type}"
         )
     return answers
-
-
-class MockNodeLacking(MockHouNode):
-    """A node whose class lacks the methods ``lacks`` names, as an object has no
-    render flag on Houdini 22: looking one up raises AttributeError."""
-
-    def __init__(self, *args: Any, lacks: tuple[str, ...], **kwargs: Any):
-        object.__setattr__(self, "_lacks", frozenset(lacks))
-        super().__init__(*args, **kwargs)
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in object.__getattribute__(self, "_lacks"):
-            raise AttributeError(name)
-        return object.__getattribute__(self, name)
 
 
 class MockModuleNamespace:

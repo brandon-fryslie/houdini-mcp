@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from houdini_mcp.tools.transactions import BODY_SILENCE
-from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 class TestRenderViewportValidation:
@@ -406,12 +406,11 @@ class TestListRenderNodes:
         caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.rendering")
 
         rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
-        rop.bypass(True)
         mock_connection.add_node(rop)
+        rop.bypass(True)
+        # a sopnet in /out is an object network, with no bypass flag
         mock_connection.add_node(
-            MockNodeLacking(
-                path="/out/sopnet1", name="sopnet1", node_type="sopnet", lacks=("isBypassed",)
-            )
+            MockHouNode(path="/out/sopnet1", name="sopnet1", node_type="sopnet")
         )
 
         listed = list_render_nodes()["render_nodes"]
