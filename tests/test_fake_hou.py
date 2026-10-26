@@ -11,7 +11,14 @@ from tests.conftest import (
     MockHouNode,
     _built_as,
 )
-from tests.fake_node_types import FLAGS, ParmTuple, load_table, node_types, read_node_types
+from tests.fake_node_types import (
+    FLAGS,
+    ParmTuple,
+    _indirect_inputs,
+    load_table,
+    node_types,
+    read_node_types,
+)
 
 
 def test_created_node_resolves_by_path(mock_hou: MockHouModule) -> None:
@@ -134,12 +141,48 @@ def test_a_node_has_the_indirect_inputs_its_type_gives(
     mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], count: int
 ) -> None:
     """What hython reads from indirectInputs() on each, created in a fresh Houdini
-    22.0.466 scene; each one resolves by its path."""
+    22.0.466 scene: named from 1, numbered from 0; each one resolves by its path."""
     node = _created(mock_hou.node(context), *node_types)
     names = [str(n) for n in range(1, count + 1)]
 
     assert [i.name() for i in node.indirectInputs()] == names
+    assert [i.number() for i in node.indirectInputs()] == list(range(count))
     assert [mock_hou.item(f"{node.path()}/{name}") for name in names] == list(node.indirectInputs())
+
+
+class _Numbered:
+    """An indirect input as some Houdini might give it: a number and a name."""
+
+    def __init__(self, number: int, name: str):
+        self._number, self._name = number, name
+
+    def number(self) -> int:
+        return self._number
+
+    def name(self) -> str:
+        return self._name
+
+
+class _Subnet:
+    def __init__(self, *indirect: _Numbered):
+        self._indirect = indirect
+
+    def path(self) -> str:
+        return "/obj/subnet1"
+
+    def indirectInputs(self) -> tuple[_Numbered, ...]:
+        return self._indirect
+
+
+def test_the_reader_counts_indirect_inputs_numbered_and_named_as_houdinis_are() -> None:
+    """Houdini 22 numbers them from 0 and names them from 1, as the fake does."""
+    assert _indirect_inputs(_Subnet(_Numbered(0, "1"), _Numbered(1, "2"))) == 2
+
+
+def test_the_reader_refuses_indirect_inputs_numbered_unlike_the_fakes() -> None:
+    """A Houdini numbering them from 1 would leave a count the fake builds wrong."""
+    with pytest.raises(ValueError, match=r"\(number, name\) \[\(1, '1'\), \(2, '2'\)\]"):
+        _indirect_inputs(_Subnet(_Numbered(1, "1"), _Numbered(2, "2")))
 
 
 @pytest.mark.parametrize("node_types", [("geo",), ("geo", "attribvop")])

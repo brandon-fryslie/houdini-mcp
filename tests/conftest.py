@@ -200,7 +200,8 @@ class MockSubnetIndirectInput:
     """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
 
     Not a node, but a valid ``setInput`` source and a ``NetworkMovableItem`` with a
-    ``path()``. Houdini names them 1, 2, ... under the subnet.
+    ``path()``. Houdini 22 numbers them from 0, as the subnet's inputs are, and names
+    them from 1: the one named "1" under the subnet is number 0.
     """
 
     def __init__(self, subnet: "MockHouNode", number: int):
@@ -212,10 +213,10 @@ class MockSubnetIndirectInput:
         return self._number
 
     def name(self) -> str:
-        return str(self._number)
+        return str(self._number + 1)
 
     def path(self) -> str:
-        return f"{self._subnet.path()}/{self._number}"
+        return f"{self._subnet.path()}/{self.name()}"
 
     def parent(self) -> "MockHouNode":
         return self._subnet
@@ -377,9 +378,7 @@ def _place(
         _placed_parms(node_type, given),
         None
         if node_type.indirect_inputs is None
-        else tuple(
-            MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
-        ),
+        else tuple(MockSubnetIndirectInput(node, n) for n in range(node_type.indirect_inputs)),
         node_type.locked and not isinstance(answer, Mismatched),
         {flag: FRESH_FLAGS[flag] for flag in node_type.flags},
     )
@@ -1503,7 +1502,8 @@ class MockHouModule:
         return "", f"Unknown command: {verb}\n"
 
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
-        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
+        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<name>``,
+        whose name is its number + 1."""
         node = self.node(path)
         if node is not None:
             return node

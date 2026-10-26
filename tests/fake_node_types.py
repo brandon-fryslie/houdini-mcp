@@ -434,11 +434,12 @@ def _indirect_inputs(node: Any) -> int | None:
         if raised != "InvalidNodeType" or "Node is not a subnetwork" not in message:
             raise
         return None
-    names = [item.name() for item in indirect]
-    if names != [str(n) for n in range(1, len(names) + 1)]:
-        # the fake names them by number, so a count holds them only when Houdini does
-        raise ValueError(f"{node.path()}'s indirect inputs are named {names}")
-    return len(names)
+    numbered = [(item.number(), item.name()) for item in indirect]
+    if numbered != [(n, str(n + 1)) for n in range(len(numbered))]:
+        # the fake numbers them from 0 and names each its number + 1, so a count
+        # holds them only when Houdini does
+        raise ValueError(f"{node.path()}'s indirect inputs are (number, name) {numbered}")
+    return len(numbered)
 
 
 def _flags(node: Any) -> list[str]:
