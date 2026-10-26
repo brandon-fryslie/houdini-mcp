@@ -204,7 +204,7 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "name": node.name(),
         "type": type_name,
         # a broken HDA definition refuses its description; the node is still there.
-        # [LAW:one-source-of-truth] labelled as list_node_types labels the same read
+        # [LAW:one-source-of-truth] labelled as houdini_mcp_node_types labels the same read
         "type_description": read(
             f"description of {node_type.nameWithCategory()}", node_type.description
         ),

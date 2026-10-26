@@ -68,16 +68,14 @@ def node_types(hou: Any, category: str | None, name_filter: str | None, window: 
 def _answer(hou: Any, category: str | None, name_filter: str | None, window: slice) -> Answer:
     categories = hou.nodeTypeCategories()
     names = sorted(categories)
-    if category is None:
-        searched = names
-    else:
-        searched = [name for name in names if name.lower() == category.lower()]
-        if not searched:
-            # [LAW:no-silent-failure] a misspelt category is not one with no types
-            return Refused(
-                refused=f"category {category!r} is not a node type category Houdini has",
-                categories=names,
-            )
+    named = None if category is None else _category_named(category, names)
+    if category is not None and named is None:
+        # [LAW:no-silent-failure] a misspelt category is not one with no types
+        return Refused(
+            refused=f"category {category!r} is not a node type category Houdini has",
+            categories=names,
+        )
+    searched = names if named is None else [named]
     # [LAW:no-ambient-temporal-coupling] sorted, so the same types are listed in the
     # same order on every call, whatever order Houdini's dicts come back in
     needle = (name_filter or "").lower()
@@ -102,8 +100,18 @@ def _answer(hou: Any, category: str | None, name_filter: str | None, window: sli
     ]
     return Listing(
         categories=names,
-        category=None if category is None else searched[0],
+        category=named,
         total=len(matches),
         node_types=page,
         refused_reads=reads.refused,
     )
+
+
+def _category_named(category: str, names: list[str]) -> str | None:
+    """The one category of ``names`` that ``category`` names: the one spelt exactly
+    so, else the only one equal to it ignoring case. None when it names none, or
+    names two that differ only in case, since a listing is of one category."""
+    if category in names:
+        return category
+    folded = [name for name in names if name.lower() == category.lower()]
+    return folded[0] if len(folded) == 1 else None

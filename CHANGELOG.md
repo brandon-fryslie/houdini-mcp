@@ -274,8 +274,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING (wire)**: `list_node_types` refuses a `category` Houdini does not
   have as `invalid_input`, whose `categories_available` lists those it has,
-  where a misspelt category answered success with no types
-  (houdini-laws-etg.tva). A filtered listing's `category` is the category's
+  where a misspelt category answered success with no types and `category=""`
+  listed every type (houdini-laws-etg.tva). A filtered listing's `category` is the category's
   name as Houdini spells it (`"Sop"` for `category="sop"`), where it echoed
   the caller's.
 

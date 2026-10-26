@@ -129,3 +129,25 @@ def test_a_type_houdini_has_just_installed_is_listed(
     assert listed["node_types"] == [
         {"category": "Sop", "name": "mcp_listed", "description": "MCP listed"}
     ]
+
+
+def test_a_category_spelt_exactly_is_the_one_listed_beside_one_differing_in_case(
+    hou: MockHouModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(NODE_TYPES, "SOP", {"box": NODE_TYPES["Sop"]["box"]})
+
+    listed = answer(hou, "SOP", None, slice(0, 100_000))
+
+    assert (listed["category"], listed["total"]) == ("SOP", 1)
+
+
+def test_a_category_naming_two_that_differ_only_in_case_is_refused(
+    hou: MockHouModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A listing is of one category, so a name that picks out two picks out none."""
+    monkeypatch.setitem(NODE_TYPES, "SOP", {"box": NODE_TYPES["Sop"]["box"]})
+
+    refused = answer(hou, "sop", None, slice(0, 10))
+
+    assert refused["refused"] == "category 'sop' is not a node type category Houdini has"
+    assert {"Sop", "SOP"} <= set(refused["categories"])
