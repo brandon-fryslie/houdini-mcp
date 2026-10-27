@@ -162,7 +162,7 @@ class MainThread:
         reply saying ``work`` ended arrives, and the reply's loss is on it.
 
         Raises:
-            PluginMissing: Houdini's path lacks this release's plugin.
+            PluginMissing: Houdini's path lacks this server's plugin.
             Exception: the link failed before ``work`` began, or Houdini failed the call.
         """
         main_thread = plugin_module(link, "houdini_mcp_plugin.main_thread")

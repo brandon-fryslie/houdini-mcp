@@ -38,6 +38,7 @@ def ping_houdini(
     the server's own connection is left as it was. The record is the one
     ``check_connection`` reports, naming the target the probe used. An
     unreachable Houdini is the ``connection_unavailable`` failure, naming the
-    target and the cause.
+    target and the cause; a Houdini reached whose plugin is another build fails
+    as any call would, naming the plugin to replace.
     """
     return {"status": "success", **ping(host, port)}

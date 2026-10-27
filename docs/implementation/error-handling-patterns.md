@@ -70,7 +70,7 @@ discriminated on `kind`. Each kind fixes its own `retry`, except the two link ar
 | A `LinkLost` whose failure is a `TimeoutError` | `timeout` | `call_again`, or `check_scene` (below) | `cut_off: "link"`, `exception` |
 | `TimedOut` (a request exceeded its bound on an intact link; nothing still runs) | `timeout` | `call_again` | `cut_off: "request"` plus the tool's fields |
 | `ProgramTimedOut` (execute_code killed its program's process; the server's link is intact) | `timeout` | `check_scene` | `cut_off: "program"` plus the tool's fields (`stdout`, `timeout`, `audit`, ...) |
-| `PluginMissing` (Houdini's path lacks this release's plugin) or `MainThreadRefused` (Houdini's main thread refused the call, which never ran) | `operation_failed` | `none` | nothing more: the message says what to do |
+| `PluginMissing` (Houdini's path lacks this server's build of the plugin) or `MainThreadRefused` (Houdini's main thread refused the call, which never ran) | `operation_failed` | `none` | nothing more: the message says what to do |
 | `InvalidInput` | `invalid_input` | `fix_input` | the tool's fields (`path`, `renderer`, ...) |
 | `OperationFailed` | `operation_failed` | `none` | the tool's fields |
 | Anything else | `operation_failed` | `none` | `exception`, `traceback`; logged at error with the traceback |

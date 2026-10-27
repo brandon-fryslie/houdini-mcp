@@ -6,7 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from houdini_mcp.install import Installed, Machine, install_plugin, plugin_tree, this_server
+import houdini_plugin
+from houdini_mcp.install import Installed, Machine, install_plugin, this_server
 from tests.live_houdini import hython_executable
 
 # What Houdini made of the installed package, written as JSON to the file argv[1] names,
@@ -52,7 +53,7 @@ def test_houdini_mcp_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -
     environ |= {"HOUDINI_USER_PREF_DIR": str(pref)}
     machine = Machine(environ, tmp_path / "home", sys.platform)
     assert isinstance(install_plugin(machine, this_server()), Installed)
-    plugin = plugin_tree() / "houdini_mcp"
+    plugin = houdini_plugin.PACKAGES / "houdini_mcp"
     report = tmp_path / "loaded.json"
     probe = subprocess.run(
         [str(hython_executable(os.environ)), "-c", _PROBE, str(report)],

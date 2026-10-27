@@ -13,9 +13,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch, houdini
+from houdini_mcp.connection import (
+    HoudiniConnectionError,
+    HoudiniTargetMismatch,
+    PluginMissing,
+    houdini,
+)
 from houdini_mcp.main_thread import MainThreadRefused
-from houdini_mcp.plugin import PluginMissing
 from houdini_mcp.tools._common import (
     CHECKPOINTED,
     FAILURE,

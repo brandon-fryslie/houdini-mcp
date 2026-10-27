@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import houdini_plugin
 from houdini_mcp.install import (
     Failed,
     Installed,
@@ -20,7 +21,6 @@ from houdini_mcp.install import (
     houdini_pref_dir,
     install,
     install_plugin,
-    plugin_tree,
     report,
 )
 
@@ -88,11 +88,11 @@ def test_houdini_is_pointed_at_the_plugin_this_distribution_ships(tmp_path: Path
 
     pointer = tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json"
     assert outcome == Installed(str(pointer))
-    assert json.loads(pointer.read_text()) == {"package_path": plugin_tree().as_posix()}
+    assert json.loads(pointer.read_text()) == {"package_path": houdini_plugin.PACKAGES.as_posix()}
     # What Houdini finds there: the package file, and the startup script that starts the
     # listener in a graphical session.
-    assert (plugin_tree() / "houdini_mcp.json").is_file()
-    assert (plugin_tree() / "houdini_mcp" / "python3.13libs" / "uiready.py").is_file()
+    assert (houdini_plugin.PACKAGES / "houdini_mcp.json").is_file()
+    assert (houdini_plugin.PACKAGES / "houdini_mcp" / "python3.13libs" / "uiready.py").is_file()
 
 
 def test_a_second_install_points_at_the_plugin_again_in_place_of_an_earlier_one(
@@ -106,7 +106,7 @@ def test_a_second_install_points_at_the_plugin_again_in_place_of_an_earlier_one(
 
     install_plugin(machine, SERVER)
 
-    assert json.loads(pointer.read_text()) == {"package_path": plugin_tree().as_posix()}
+    assert json.loads(pointer.read_text()) == {"package_path": houdini_plugin.PACKAGES.as_posix()}
 
 
 @pytest.mark.parametrize(

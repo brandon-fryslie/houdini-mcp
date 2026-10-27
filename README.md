@@ -103,7 +103,10 @@ To run the server in Docker, on Houdini's machine or another one:
 
 **Step 1: Install the plugin and let the server reach it**
 
-Run `houdini-mcp install` on Houdini's machine, as [above](#installation). The
+On Houdini's machine, install the plugin from the commit the image is built from:
+in a clone at that commit, run `uv run houdini-mcp install`. The server refuses a
+Houdini whose plugin is another build, so a plugin from `uv tool install` works
+only when it is that same commit. The
 listener binds to `127.0.0.1`, so for a server in a container or on another host set
 `HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1` or
 `HOUDINI_RPC_TOKEN` (set the same token in the server's environment). See
@@ -319,6 +322,17 @@ tests that run against a live Houdini.
 - Verify Houdini is running with hrpyc server started
 - Run **Remote Self-Test** in Houdini for this OS's firewall command (on macOS it allows the Houdini executable, not the port)
 - Verify HOUDINI_HOST is correct
+
+### Houdini imports another build of the houdini_mcp plugin
+- The server refuses to connect, naming the plugin directory Houdini imported and
+  both builds. Replace that install with the plugin the server was built with
+  (`houdini-mcp install` from the server's install; for a server in Docker, from a
+  clone at the commit its image was built from), then restart Houdini. Two
+  installs from different commits are different builds even when both state the
+  same release
+- An older `houdini-mcp install` left in Houdini's preferences `packages`
+  directory loads ahead of `HOUDINI_PACKAGE_DIR`, so the directory named may not be
+  the plugin you meant Houdini to load
 
 ### Tools time out while `ping_houdini` answers
 - Close any modal dialog open in Houdini and try again

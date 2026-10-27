@@ -1,9 +1,11 @@
 """The plugin modules a call runs inside Houdini.
 
-[LAW:single-enforcer] The one place this package imports a module of the
-houdini_mcp plugin into the Houdini a link reaches, and the one way that import
-fails: a Houdini whose path lacks this release's plugin is told to install it.
-Below ``tools``, so a program's own process imports through it too.
+[LAW:single-enforcer] The one place a call imports a module of the houdini_mcp
+plugin into the Houdini a link reaches, and the one way that import fails: a
+Houdini whose path lacks the plugin is told to install it. Which build the
+plugin on that path is, is read and judged once, when the link is made
+(``connection.open_link``). Below ``tools``, so a program's own process imports
+through it too.
 """
 
 from __future__ import annotations
@@ -12,12 +14,7 @@ from typing import Any
 
 from houdini_mcp_read import reason
 
-from .connection import Link
-
-
-class PluginMissing(Exception):
-    """Houdini could not import a module of this release's plugin: its path lacks
-    the plugin, so every call that needs it meets the same until it is installed."""
+from .connection import INSTALL_PLUGIN, Link, PluginMissing
 
 
 def plugin_module(link: Link, name: str) -> Any:
@@ -31,6 +28,5 @@ def plugin_module(link: Link, name: str) -> Any:
     except ImportError as e:
         raise PluginMissing(
             f"Houdini cannot import {name} ({reason(e)}): Houdini's path lacks this "
-            "release's houdini_mcp plugin. Install the plugin from the same release, "
-            "then restart Houdini."
+            f"server's houdini_mcp plugin. {INSTALL_PLUGIN}"
         ) from e

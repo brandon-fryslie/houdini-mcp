@@ -2139,7 +2139,7 @@ class TestFindNodes:
     def test_find_nodes_names_the_plugin_when_houdini_lacks_the_search(
         self, mock_connection, monkeypatch
     ):
-        """A Houdini without this release's plugin fails the search with the fix."""
+        """A Houdini without this server's plugin fails the search with the fix."""
         from houdini_mcp.tools import find_nodes
 
         monkeypatch.setitem(sys.modules, "houdini_mcp_search", None)
@@ -2149,7 +2149,7 @@ class TestFindNodes:
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         message = result["message"]
         assert "Houdini cannot import houdini_mcp_search (ModuleNotFoundError: " in message
-        assert "Install the plugin from the same release" in message
+        assert "Install the plugin this server was built with" in message
 
 
 class TestFindErrorNodes:

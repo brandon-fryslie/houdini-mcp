@@ -25,7 +25,7 @@ from rpyc.core import vinegar
 from rpyc.core.async_ import AsyncResult
 from rpyc.utils.server import Server
 
-from houdini_mcp.connection import TransportException
+from houdini_mcp.connection import BUILD, RELEASE, TransportException
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
@@ -1786,9 +1786,16 @@ class FakeHoudiniService(rpyc.ClassicService):  # type: ignore[misc]
         hou = self._listener.hou()
         if name == "hou":
             return hou
+        plugin = self._listener.plugin
+        if plugin is None and name.startswith("houdini_mcp"):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        if name == "houdini_mcp_plugin" and plugin != BUILD:
+            return SimpleNamespace(
+                __version__=RELEASE,
+                BUILD=plugin,
+                __path__=[f"/plugins/{plugin}/houdini_mcp_plugin"],
+            )
         if name == "houdini_mcp_plugin.main_thread":
-            if not self._listener.serves_plugin:
-                raise ImportError(f"No module named {name!r}")
             return local_main_thread(hou.undos)
         return importlib.import_module(name)
 
@@ -1797,7 +1804,7 @@ class FakeHoudiniListener:
     """A listener for the double, speaking the token handshake as the plugin's
     does, opened when a program's process first needs it and closed with the test.
 
-    ``serves_plugin`` False serves a Houdini whose path lacks the plugin;
+    ``plugin`` is the build of the plugin on its Houdini's path (None: none);
     ``answer_delay`` makes it answer each module it serves that much later.
     """
 
@@ -1807,7 +1814,7 @@ class FakeHoudiniListener:
         import houdini_mcp_handshake as handshake
 
         self.hou = hou
-        self.serves_plugin = True
+        self.plugin: str | None = BUILD
         # Seconds each module it serves takes to answer: a slow Houdini.
         self.answer_delay = 0.0
         self.clients: list[Any] = []

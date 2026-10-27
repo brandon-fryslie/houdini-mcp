@@ -108,7 +108,7 @@ process ends with the server's, so a server killed mid-call leaves no
 program running against Houdini.
 
 A program that never began - its process could not open its link, the
-Houdini lacks this release's plugin, Houdini's main thread refused the call,
+Houdini lacks this server's build of the plugin, Houdini's main thread refused the call,
 or the start took longer than 60 seconds - is `operation_failed` with a
 message starting `The program never ran: `. Nothing was undone, because
 nothing ran.
@@ -174,6 +174,9 @@ disabled, so its camera and ROP never reach the undo stack and the artist's next
 undo is their own. A capture is the pane as its own
 window draws it, so a window in front of Houdini is never in the picture. Like
 the undoable tools, renders and captures need the plugin installed in that Houdini.
+A Houdini whose plugin is another build than the server's, or one it fails to
+import, is refused when the link is made, so every tool fails there with
+`operation_failed`, naming the plugin to replace.
 
 A call that finds the scene free has no `scene_wait`. A call cancelled while it waits (its client
 timed out or gave up) leaves the queue and never runs. A call cancelled after

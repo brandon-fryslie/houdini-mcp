@@ -287,7 +287,7 @@ class TestTheSeam:
             "Houdini cannot import houdini_mcp_geometry (ModuleNotFoundError: "
             in (result["message"])
         )
-        assert "Install the plugin from the same release" in result["message"]
+        assert "Install the plugin this server was built with" in result["message"]
 
 
 class _Raises:

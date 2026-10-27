@@ -4,14 +4,18 @@ import logging
 import socket
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
+from houdini_mcp_handshake import RELEASE, build
 
 from houdini_mcp.connection import (
+    BUILD,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
+    PluginMissing,
     TransportFailure,
     get_connection_info,
     houdini,
@@ -264,6 +268,223 @@ class TestConnect:
             assert mock_rpyc.connect.call_args.args == ("192.168.1.100", 19999)
         assert (link.host, link.port) == ("192.168.1.100", 19999)
         assert link.name == "192.168.1.100:19999"
+
+
+STALE_PLUGIN = "/prefs/houdini22.0/houdini_mcp/python/houdini_mcp_plugin"
+
+
+def stale_plugin(**stated: Any) -> SimpleNamespace:
+    """A ``houdini_mcp_plugin`` package as Houdini imports it from ``STALE_PLUGIN``,
+    stating what ``stated`` holds."""
+    return SimpleNamespace(__path__=[STALE_PLUGIN], **stated)
+
+
+class _BuildReadTimesOut:
+    __path__ = [STALE_PLUGIN]
+    __version__ = RELEASE
+
+    @property
+    def BUILD(self) -> str:  # noqa: N802 - the attribute the plugin states
+        raise TimeoutError("sync request")
+
+
+def raised_in_houdini(exc: Exception) -> Exception:
+    """``exc`` as rpyc raises it here when Houdini raised it: tagged with its traceback."""
+    exc._remote_tb = (
+        'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n'
+        f"{type(exc).__name__}: {exc}\n"
+    )  # type: ignore[attr-defined]
+    return exc
+
+
+def with_plugin(conn: MockRpycConnection, plugin: Any) -> MockRpycConnection:
+    """``conn`` with Houdini's ``houdini_mcp_plugin`` answered by ``plugin``: Houdini
+    raises it when it is an exception, and finds none when it is None."""
+    modules = conn.modules
+
+    class Path:
+        def __getitem__(self, name: str) -> Any:
+            if name != "houdini_mcp_plugin":
+                return modules[name]
+            if plugin is None:
+                raise raised_in_houdini(
+                    ModuleNotFoundError("No module named 'houdini_mcp_plugin'", name=name)
+                )
+            if isinstance(plugin, Exception):
+                raise plugin
+            return plugin
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(modules, name)
+
+    conn.modules = Path()
+    return conn
+
+
+class TestPluginBuild:
+    """A link is made only to a Houdini whose plugin, if it has one, is this server's build."""
+
+    @pytest.mark.parametrize(
+        ("plugin", "stated"),
+        [
+            (
+                stale_plugin(__version__=RELEASE, BUILD="0123456789abcdef"),
+                f"houdini_mcp plugin release {RELEASE}, build 0123456789abcdef from {STALE_PLUGIN}",
+            ),
+            (
+                stale_plugin(__version__="0.1.0"),
+                f"houdini_mcp plugin release 0.1.0, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                stale_plugin(),
+                f"houdini_mcp plugin release unstated, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                raised_in_houdini(ImportError("cannot import name 'build'")),
+                "a houdini_mcp plugin it fails to import (ImportError: cannot import name 'build')",
+            ),
+            (
+                raised_in_houdini(
+                    ModuleNotFoundError(
+                        "No module named 'houdini_mcp_handshake'", name="houdini_mcp_handshake"
+                    )
+                ),
+                "a houdini_mcp plugin it fails to import "
+                "(ModuleNotFoundError: No module named 'houdini_mcp_handshake')",
+            ),
+        ],
+        ids=[
+            "another commit of this release",
+            "a release before builds",
+            "a leftover directory",
+            "a plugin that fails to import",
+            "a plugin missing a module of its own",
+        ],
+    )
+    def test_another_builds_plugin_refuses_the_link_once(
+        self, reset_connection_state, mock_hou, plugin, stated
+    ):
+        stale = with_plugin(MockRpycConnection(mock_hou), plugin)
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = stale
+            with pytest.raises(PluginMissing) as exc_info:
+                houdini().connect("localhost", 18811, max_retries=3, retry_delay=0.01)
+
+        assert str(exc_info.value) == (
+            f"Houdini at localhost:18811 has {stated}; this server is release {RELEASE}, "
+            f"build {BUILD}. "
+            "Install the plugin this server was built with (`houdini-mcp install` from the "
+            "same install or clone), then restart Houdini."
+        )
+        assert mock_rpyc.connect.call_count == 1
+        assert stale.closed is True
+        assert installed_conn() is None
+
+    def test_ping_refuses_another_builds_plugin_the_same_way(self, mock_hou):
+        stale = with_plugin(
+            MockRpycConnection(mock_hou), stale_plugin(__version__=RELEASE, BUILD="0" * 16)
+        )
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = stale
+            with pytest.raises(PluginMissing, match=f"build {'0' * 16} from "):
+                ping("localhost", 18811)
+        assert stale.closed is True
+
+    def test_a_houdini_without_the_plugin_still_links(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        """Reads that need no plugin module still work; one that needs it is told then."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), None)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert "Houdini at localhost:18811 has no houdini_mcp plugin on its path" in caplog.messages
+
+    def test_this_builds_plugin_links_and_is_logged_with_its_path(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        current = stale_plugin(__version__=RELEASE, BUILD=BUILD)
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), current)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert (
+            f"Houdini at localhost:18811 has houdini_mcp plugin release {RELEASE}, "
+            f"build {BUILD} from {STALE_PLUGIN}" in caplog.messages
+        )
+
+    def test_the_plugin_this_server_ships_is_its_build(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        """The real plugin package, imported from the tree the server ships, links."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert any(f"build {BUILD} from " in message for message in caplog.messages)
+
+    def test_a_build_read_that_times_out_is_retried_like_the_hou_import(
+        self, reset_connection_state, mock_hou
+    ):
+        busy = with_plugin(MockRpycConnection(mock_hou), _BuildReadTimesOut())
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = [busy, MockRpycConnection(mock_hou)]
+            link = houdini().connect("localhost", 18811, max_retries=2, retry_delay=0.01)
+
+        assert mock_rpyc.connect.call_count == 2
+        assert busy.closed is True
+        assert houdini().link() is link
+
+
+class TestBuild:
+    """A plugin's build is the digest of its Python sources, and of nothing else."""
+
+    def test_a_changed_source_is_another_build(self, tmp_path):
+        source = tmp_path / "python" / "houdini_mcp_scene" / "__init__.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("ANSWER = 1\n")
+        before = build(tmp_path)
+        source.write_text("ANSWER = 2\n")
+        assert build(tmp_path) != before
+
+    def test_a_moved_source_is_another_build(self, tmp_path):
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / "a.py").rename(tmp_path / "b.py")
+        assert build(tmp_path) != before
+
+    def test_files_that_are_not_sources_are_the_same_build(self, tmp_path):
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / ".DS_Store").write_bytes(b"\0")
+        (tmp_path / "__pycache__").mkdir()
+        (tmp_path / "__pycache__" / "a.cpython-313.pyc").write_bytes(b"\0")
+        assert build(tmp_path) == before
+
+    def test_a_source_that_cannot_be_read_is_no_source(self, tmp_path):
+        """An editor's lock link names a file that is not there; it is no other build."""
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / ".#a.py").symlink_to(tmp_path / "gone")
+        assert build(tmp_path) == before
+
+    def test_the_plugin_states_the_build_of_the_tree_it_was_imported_from(self):
+        import houdini_mcp_plugin
+
+        assert houdini_mcp_plugin.BUILD == BUILD
 
 
 class TestNoHoudiniInstalled:
