@@ -1788,7 +1788,7 @@ class FakeHoudiniService(rpyc.ClassicService):  # type: ignore[misc]
             return hou
         plugin = self._listener.plugin
         if plugin is None and name.startswith("houdini_mcp"):
-            raise ImportError(f"No module named {name!r}")
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
         if name == "houdini_mcp_plugin" and plugin != BUILD:
             return SimpleNamespace(
                 __version__=RELEASE,

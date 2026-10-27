@@ -1046,7 +1046,7 @@ class RemoteListener:
         - loopback-only warning + firewall guidance,
         - the actual bound endpoints.
         """
-        from . import __version__ as plugin_version
+        from . import BUILD as plugin_build, __version__ as plugin_version
 
         held = self._running
         if held is None:
@@ -1119,6 +1119,7 @@ class RemoteListener:
             "houdini_version": houdini_version,
             "houdini_version_tuple": houdini_version_tuple,
             "plugin_version": plugin_version,
+            "plugin_build": plugin_build,
             "protocol": "rpyc/hrpyc SlaveService (classic)",
             "warnings": warnings,
             "executable": executable,

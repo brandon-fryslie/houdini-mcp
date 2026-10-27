@@ -289,9 +289,18 @@ class _BuildReadTimesOut:
         raise TimeoutError("sync request")
 
 
+def raised_in_houdini(exc: Exception) -> Exception:
+    """``exc`` as rpyc raises it here when Houdini raised it: tagged with its traceback."""
+    exc._remote_tb = (
+        'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n'
+        f"{type(exc).__name__}: {exc}\n"
+    )  # type: ignore[attr-defined]
+    return exc
+
+
 def with_plugin(conn: MockRpycConnection, plugin: Any) -> MockRpycConnection:
-    """``conn`` with Houdini's ``houdini_mcp_plugin`` answered by ``plugin``, or
-    failing to import when it is None: the plugin on that Houdini's path."""
+    """``conn`` with Houdini's ``houdini_mcp_plugin`` answered by ``plugin``: Houdini
+    raises it when it is an exception, and finds none when it is None."""
     modules = conn.modules
 
     class Path:
@@ -299,7 +308,11 @@ def with_plugin(conn: MockRpycConnection, plugin: Any) -> MockRpycConnection:
             if name != "houdini_mcp_plugin":
                 return modules[name]
             if plugin is None:
-                raise ModuleNotFoundError("No module named 'houdini_mcp_plugin'")
+                raise raised_in_houdini(
+                    ModuleNotFoundError("No module named 'houdini_mcp_plugin'", name=name)
+                )
+            if isinstance(plugin, Exception):
+                raise plugin
             return plugin
 
         def __getattr__(self, name: str) -> Any:
@@ -317,12 +330,37 @@ class TestPluginBuild:
         [
             (
                 stale_plugin(__version__=RELEASE, BUILD="0123456789abcdef"),
-                f"release {RELEASE}, build 0123456789abcdef",
+                f"houdini_mcp plugin release {RELEASE}, build 0123456789abcdef from {STALE_PLUGIN}",
             ),
-            (stale_plugin(__version__="0.1.0"), "release 0.1.0, build unstated"),
-            (stale_plugin(), "release unstated, build unstated"),
+            (
+                stale_plugin(__version__="0.1.0"),
+                f"houdini_mcp plugin release 0.1.0, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                stale_plugin(),
+                f"houdini_mcp plugin release unstated, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                raised_in_houdini(ImportError("cannot import name 'build'")),
+                "a houdini_mcp plugin it fails to import (ImportError: cannot import name 'build')",
+            ),
+            (
+                raised_in_houdini(
+                    ModuleNotFoundError(
+                        "No module named 'houdini_mcp_handshake'", name="houdini_mcp_handshake"
+                    )
+                ),
+                "a houdini_mcp plugin it fails to import "
+                "(ModuleNotFoundError: No module named 'houdini_mcp_handshake')",
+            ),
         ],
-        ids=["another commit of this release", "a release before builds", "a leftover directory"],
+        ids=[
+            "another commit of this release",
+            "a release before builds",
+            "a leftover directory",
+            "a plugin that fails to import",
+            "a plugin missing a module of its own",
+        ],
     )
     def test_another_builds_plugin_refuses_the_link_once(
         self, reset_connection_state, mock_hou, plugin, stated
@@ -335,8 +373,8 @@ class TestPluginBuild:
                 houdini().connect("localhost", 18811, max_retries=3, retry_delay=0.01)
 
         assert str(exc_info.value) == (
-            f"Houdini at localhost:18811 imports the houdini_mcp plugin from {STALE_PLUGIN}, "
-            f"{stated}; this server is release {RELEASE}, build {BUILD}. "
+            f"Houdini at localhost:18811 has {stated}; this server is release {RELEASE}, "
+            f"build {BUILD}. "
             "Install the plugin this server was built with (`houdini-mcp install` from the "
             "same install or clone), then restart Houdini."
         )
@@ -350,7 +388,7 @@ class TestPluginBuild:
         )
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
             mock_rpyc.connect.return_value = stale
-            with pytest.raises(PluginMissing, match=f"build {'0' * 16}; this server"):
+            with pytest.raises(PluginMissing, match=f"build {'0' * 16} from "):
                 ping("localhost", 18811)
         assert stale.closed is True
 

@@ -16,7 +16,7 @@ from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
 from houdini_mcp_handshake import RELEASE, build
-from houdini_mcp_read import raised_inside_houdini
+from houdini_mcp_read import raised_inside_houdini, reason
 
 import houdini_plugin
 
@@ -232,6 +232,14 @@ class InstalledPlugin:
     path: str
 
 
+@dataclass(frozen=True)
+class BrokenPlugin:
+    """A houdini_mcp plugin on the path of the Houdini a link reaches that Houdini fails
+    to import, and the reason it gave: its modules cannot be trusted to be any build."""
+
+    reason: str
+
+
 @dataclass(frozen=True, eq=False)
 class Link:
     """One open connection to one Houdini, and the ``hou`` it exposes.
@@ -248,7 +256,7 @@ class Link:
     port: int
     conn: Any
     hou: Any
-    plugin: InstalledPlugin | None
+    plugin: InstalledPlugin | BrokenPlugin | None
 
     @property
     def name(self) -> str:
@@ -297,45 +305,68 @@ def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) 
     which retries nothing.
 
     Raises:
-        PluginMissing: Houdini's path holds another build of the plugin.
+        PluginMissing: Houdini's path holds another build of the plugin, or one
+            Houdini fails to import.
     """
     return _of_this_build(_reach(target, host, port, sync_timeout))
 
 
-def _installed_plugin(conn: Any) -> InstalledPlugin | None:
+def _installed_plugin(conn: Any) -> InstalledPlugin | BrokenPlugin | None:
     """The plugin on Houdini's path, read through ``houdini_mcp_plugin``, the package
-    every release of it ships."""
+    every release of it ships.
+
+    [LAW:types-are-the-program] Whatever Houdini answers is a fact about its install:
+    no package by that name is no plugin, which a call that needs one is told about by
+    ``plugin_module``; any other failure Houdini raises is a broken plugin. Only the
+    link's own failures are the proof's.
+    """
     try:
         plugin = conn.modules["houdini_mcp_plugin"]
-    except ImportError:
-        # No plugin is a fact about this Houdini, not a failure to reach it: a call
-        # that needs a plugin module is told so by ``plugin_module``, with the reason.
-        return None
-    return InstalledPlugin(
-        getattr(plugin, "__version__", None),
-        getattr(plugin, "BUILD", None),
-        # its directory: a leftover one without __init__.py imports with no __file__
-        str(next(iter(plugin.__path__))),
-    )
+        return InstalledPlugin(
+            getattr(plugin, "__version__", None),
+            getattr(plugin, "BUILD", None),
+            # its directory: a leftover one without __init__.py imports with no __file__
+            str(next(iter(plugin.__path__))),
+        )
+    except Exception as e:
+        if not raised_inside_houdini(e):
+            raise
+        if isinstance(e, ModuleNotFoundError) and e.name == "houdini_mcp_plugin":
+            return None
+        return BrokenPlugin(reason(e))
 
 
 def _of_this_build(link: Link) -> Link:
     """``link``, unless Houdini's path holds another build of the plugin, which would
-    answer this server's calls in another build's shapes.
+    answer this server's calls in another build's shapes, or one it fails to import.
 
     [LAW:single-enforcer] The one check of skew between server and plugin, made once
     per link and before any plugin module is asked anything; no tool parses a plugin
     answer for it. It reads only what the proof already read, so it fails in no other way.
     """
     plugin = link.plugin
-    if plugin is None or plugin.build == BUILD:
+    if plugin is None or (isinstance(plugin, InstalledPlugin) and plugin.build == BUILD):
         return link
     link.close()
     raise PluginMissing(
-        f"Houdini at {link.name} imports the houdini_mcp plugin from {plugin.path}, "
-        f"release {plugin.release or 'unstated'}, build {plugin.build or 'unstated'}; "
-        f"this server is release {RELEASE}, build {BUILD}. {INSTALL_PLUGIN}"
+        f"Houdini at {link.name} has {_found(plugin)}; this server is release {RELEASE}, "
+        f"build {BUILD}. {INSTALL_PLUGIN}"
     )
+
+
+def _found(plugin: InstalledPlugin | BrokenPlugin | None) -> str:
+    """What the proof found of the plugin on Houdini's path, as its log line and a
+    refusal both tell it."""
+    match plugin:
+        case None:
+            return "no houdini_mcp plugin on its path"
+        case InstalledPlugin(release=release, build=build, path=path):
+            return (
+                f"houdini_mcp plugin release {release or 'unstated'}, "
+                f"build {build or 'unstated'} from {path}"
+            )
+        case BrokenPlugin(reason=why):
+            return f"a houdini_mcp plugin it fails to import ({why})"
 
 
 def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
@@ -367,13 +398,7 @@ def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> 
         raise
 
     link = Link(host, port, conn, hou, plugin)
-    if plugin is None:
-        logger.info(f"Houdini at {link.name} has no houdini_mcp plugin on its path")
-    else:
-        logger.info(
-            f"Houdini at {link.name} has houdini_mcp plugin release {plugin.release}, "
-            f"build {plugin.build} from {plugin.path}"
-        )
+    logger.info(f"Houdini at {link.name} has {_found(plugin)}")
     return link
 
 

@@ -63,8 +63,10 @@ class TestAProgramThatNeverRan:
         fake_houdini.listener.plugin = "0123456789abcdef"
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
         assert why.startswith("Houdini at 127.0.0.1:")
-        assert "/plugins/0123456789abcdef/houdini_mcp_plugin, release" in why
-        assert "build 0123456789abcdef; this server" in why
+        assert (
+            "build 0123456789abcdef from /plugins/0123456789abcdef/houdini_mcp_plugin; this server"
+            in why
+        )
         assert "Install the plugin this server was built with" in why
         assert mock_connection.undos.undoLabels() == ()
 

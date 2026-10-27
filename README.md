@@ -103,7 +103,10 @@ To run the server in Docker, on Houdini's machine or another one:
 
 **Step 1: Install the plugin and let the server reach it**
 
-Run `houdini-mcp install` on Houdini's machine, as [above](#installation). The
+On Houdini's machine, install the plugin from the commit the image is built from:
+in a clone at that commit, run `uv run houdini-mcp install`. The server refuses a
+Houdini whose plugin is another build, so a plugin from `uv tool install` works
+only when it is that same commit. The
 listener binds to `127.0.0.1`, so for a server in a container or on another host set
 `HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1` or
 `HOUDINI_RPC_TOKEN` (set the same token in the server's environment). See

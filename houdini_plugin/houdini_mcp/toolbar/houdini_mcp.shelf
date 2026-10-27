@@ -183,6 +183,7 @@ try:
     lines.append("Bound endpoints: %s" % ", ".join(report.get("bound_endpoints", []) or ["-"]))
     lines.append("Houdini version: %s" % report.get("houdini_version"))
     lines.append("Plugin version: %s" % report.get("plugin_version"))
+    lines.append("Plugin build: %s" % report.get("plugin_build"))
     lines.append("Protocol: %s" % report.get("protocol"))
 
     warnings = report.get("warnings") or []

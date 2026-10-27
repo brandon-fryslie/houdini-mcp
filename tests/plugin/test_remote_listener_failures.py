@@ -16,6 +16,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 
 import houdini_mcp_handshake as handshake
+import houdini_mcp_plugin
 import houdini_mcp_plugin.listener as listener_module
 import pytest
 from houdini_mcp_plugin.listener import (
@@ -449,6 +450,7 @@ class TestSelfTestAndStatus:
         assert report["houdini_version"] == "20.5.487"
         assert report["houdini_version_tuple"] == [20, 5, 487]
         assert report["plugin_version"] == handshake.RELEASE
+        assert report["plugin_build"] == houdini_mcp_plugin.BUILD
         assert report["protocol"]  # e.g. rpyc/hrpyc protocol descriptor
         assert "bound_endpoints" in report
 
