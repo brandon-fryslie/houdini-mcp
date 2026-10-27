@@ -61,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The server (`houdini_mcp.__version__`) and the plugin (`plugin_version` in the
   Start Remote self-test) report the distribution's version, 1.0.0, where they
-  reported 0.1.0 and 0.2.0 (houdini-laws-etg.fn3).
+  reported 0.1.0 and 0.2.0, and an MCP client is told 1.0.0 as the server's version
+  where it was told fastmcp's (houdini-laws-etg.fn3).
 
 ### Fixed
 

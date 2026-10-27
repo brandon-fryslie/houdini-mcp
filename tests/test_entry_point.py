@@ -10,12 +10,14 @@ from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any
 
+import houdini_mcp_handshake as handshake
 import pytest
 import yaml
 from fastmcp import Client, FastMCP
 from fastmcp.server.server import Transport
 from pydantic import TypeAdapter
 
+import houdini_mcp
 import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import serve
@@ -193,6 +195,16 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     async with Client(started["mcp"]) as client:
         payload: Any = (await client.call_tool("check_connection", {})).structured_content
     assert payload["target"] == "studio-box:19000"
+
+
+async def test_a_client_is_told_the_release_the_server_is(started: dict[str, Any]) -> None:
+    serve()
+
+    async with Client(started["mcp"]) as client:
+        assert client.server_info is not None
+        told = client.server_info.version
+
+    assert told == houdini_mcp.__version__ == handshake.RELEASE
 
 
 async def test_a_started_server_reads_no_setting_again(
