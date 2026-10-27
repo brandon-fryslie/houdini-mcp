@@ -50,7 +50,7 @@ The primary error handling mechanism. Wraps tool functions with a three-tier err
 
 ```python
 @tool(READ)
-def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def get_scene_info(host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port) -> dict[str, Any]:
     with using(host, port) as link:
         hou = link.hou
         # ... actual logic without try/except boilerplate
@@ -282,7 +282,9 @@ and a body that returns only success.
 
 ```python
 @tool(UNDOABLE)
-def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def delete_node(
+    node_path: str, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     with using(host, port) as link:
         hou = link.hou
 

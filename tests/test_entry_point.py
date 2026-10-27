@@ -3,18 +3,21 @@
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any
 
+import houdini_mcp_handshake as handshake
 import pytest
 import yaml
 from fastmcp import Client, FastMCP
 from fastmcp.server.server import Transport
 from pydantic import TypeAdapter
 
+import houdini_mcp
 import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
 from houdini_mcp.__main__ import serve
@@ -27,6 +30,7 @@ from houdini_mcp.settings import (
     Stdio,
     log_level,
     results_dir,
+    server_settings,
     serving,
     setting,
 )
@@ -193,6 +197,16 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     assert payload["target"] == "studio-box:19000"
 
 
+async def test_a_client_is_told_the_release_the_server_is(started: dict[str, Any]) -> None:
+    serve()
+
+    async with Client(started["mcp"]) as client:
+        assert client.server_info is not None
+        told = client.server_info.version
+
+    assert told == houdini_mcp.__version__ == handshake.RELEASE
+
+
 async def test_a_started_server_reads_no_setting_again(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any]
 ) -> None:
@@ -247,6 +261,42 @@ def test_compose_publishes_on_loopback_unless_told_otherwise() -> None:
     compose = yaml.safe_load((root / "compose.yaml").read_text())
     (published,) = compose["services"]["houdini-mcp"]["ports"]
     assert published.startswith("${MCP_HOST:-127.0.0.1}:"), published
+
+
+def test_the_deploy_files_state_the_defaults_the_server_resolves() -> None:
+    """compose.yaml, the Dockerfile and .env.example cannot import the server's defaults,
+    so each one they restate is held to what the server resolves from an empty
+    environment, and compose reaches the container where the image listens."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    served = serving({})
+    assert isinstance(served, Http)
+    listener = served.listener
+    # Every assignment .env.example shows, set or commented out, but HOUDINI_HOST: it
+    # ships empty because no default reaches Houdini from inside the container.
+    example = {
+        name: value
+        for line in (root / ".env.example").read_text().splitlines()
+        if (assignment := re.fullmatch(r"(?:# )?([A-Z_]+)=(.*)", line))
+        for name, value in [assignment.groups()]
+        if name != "HOUDINI_HOST"
+    }
+    assert {"HOUDINI_PORT", "MCP_HOST", "MCP_PORT"} <= example.keys(), example
+    image = dict(
+        pair.split("=", 1)
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if line.startswith("ENV ")
+        for pair in line.split()[1:]
+    )
+    service = yaml.safe_load((root / "compose.yaml").read_text())["services"]["houdini-mcp"]
+    (published,) = service["ports"]
+    publish = re.fullmatch(r"\$\{MCP_HOST:-(.+)\}:\$\{MCP_PORT:-(\d+)\}:(\d+)", published)
+    health = re.search(r"//localhost:(\d+)/health", " ".join(service["healthcheck"]["test"]))
+    assert publish and health, (published, service["healthcheck"])
+
+    assert (server_settings(example), serving(example)) == (server_settings({}), served)
+    assert image["MCP_PORT"] == str(listener.port)
+    assert publish.group(1, 2) == (str(listener.host), str(listener.port))
+    assert (publish.group(3), health.group(1)) == (image["MCP_PORT"], image["MCP_PORT"])
 
 
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(

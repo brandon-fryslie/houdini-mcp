@@ -7,6 +7,7 @@ including auto-layout, positioning, coloring, and network box creation.
 import logging
 from typing import Any
 
+from ..settings import DEFAULT_TARGET
 from ._common import (
     RGB,
     UNDOABLE,
@@ -31,8 +32,8 @@ def layout_children(
     node_path: str,
     horizontal_spacing: float = 2.0,
     vertical_spacing: float = 1.0,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Auto-layout child nodes in a network.
@@ -90,8 +91,8 @@ def layout_children(
 def set_node_color(
     node_path: str,
     color: RGB,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Set the display color of a node in the network editor.
@@ -128,8 +129,8 @@ def set_node_position(
     node_path: str,
     x: float,
     y: float,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Set the position of a node in the network editor.
@@ -167,8 +168,8 @@ def create_network_box(
     node_paths: list[str],
     label: str = "",
     color: RGB | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a network box around a group of nodes.

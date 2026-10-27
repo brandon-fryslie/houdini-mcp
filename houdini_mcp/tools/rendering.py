@@ -16,6 +16,7 @@ from functools import partial
 from typing import Any, Literal, cast
 
 from ..connection import Link, raised_inside_houdini, transport_failure
+from ..settings import DEFAULT_TARGET
 from ._common import (
     DEFAULT_RESOLUTION,
     READ,
@@ -573,8 +574,8 @@ def render_viewport(
     auto_frame: bool = True,
     orthographic: bool = False,
     karma_engine: KarmaEngine = "cpu",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Render the viewport and return the image as base64.
@@ -659,8 +660,8 @@ def render_quad_view(
     orthographic: bool = True,
     include_perspective: bool = True,
     karma_engine: KarmaEngine = "cpu",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
@@ -822,8 +823,8 @@ RENDER_SETTINGS_SCHEMA = {
 
 @tool(READ)
 def list_render_nodes(
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     List all render nodes (ROPs) in the /out context.
@@ -888,8 +889,8 @@ def list_render_nodes(
 @tool(READ)
 def get_render_settings(
     rop_path: str,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get current render configuration for a ROP node.
@@ -937,8 +938,8 @@ def get_render_settings(
 def set_render_settings(
     rop_path: str,
     settings: dict[str, Any],
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Modify render settings on a ROP node.
@@ -972,8 +973,8 @@ def create_render_node(
     rop_type: str,
     name: NodeName | None = None,
     settings: dict[str, Any] | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new render node (ROP) with optional settings.

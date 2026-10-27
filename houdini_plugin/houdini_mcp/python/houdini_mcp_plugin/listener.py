@@ -46,7 +46,13 @@ from typing import (
     runtime_checkable,
 )
 
-from houdini_mcp_handshake import Authenticator, peer_name, token_authenticator, token_from
+from houdini_mcp_handshake import (
+    RPC_PORT,
+    Authenticator,
+    peer_name,
+    token_authenticator,
+    token_from,
+)
 
 from .main_thread import SERVE_ROUND_SECONDS
 
@@ -77,7 +83,7 @@ __all__ = [
 ]
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 18811
+DEFAULT_PORT = RPC_PORT
 
 # Hosts that only accept connections from the local machine.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -266,8 +272,8 @@ class ListenerConfig:
         """Build a config from environment variables.
 
         Recognised variables:
-            HOUDINI_RPC_BIND_HOST       (default 127.0.0.1)
-            HOUDINI_RPC_BIND_PORT       (default 18811)
+            HOUDINI_RPC_BIND_HOST       (default DEFAULT_HOST)
+            HOUDINI_RPC_BIND_PORT       (default DEFAULT_PORT)
             HOUDINI_RPC_TRUSTED_NETWORK (default off)
             HOUDINI_RPC_TOKEN           (default unset)
 

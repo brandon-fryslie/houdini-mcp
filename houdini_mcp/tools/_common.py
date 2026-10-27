@@ -168,7 +168,7 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
 
     Example:
         @tool(READ)
-        def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
+        def get_scene_info(host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port) -> Dict[str, Any]:
             with using(host, port) as link:
                 node = node_at(link.hou, "/obj/geo1")  # raises InvalidInput when absent
                 return {"status": "success", ...}

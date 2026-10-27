@@ -5,7 +5,9 @@
 - The listener primitives they are built on (see :mod:`houdini_mcp_plugin.listener`).
 """
 
-__version__ = "0.2.0"
+from houdini_mcp_handshake import RELEASE
+
+__version__ = RELEASE
 
 from .listener import (
     DEFAULT_HOST,

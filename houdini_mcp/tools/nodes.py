@@ -18,6 +18,7 @@ from itertools import islice
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..plugin import plugin_module
+from ..settings import DEFAULT_TARGET
 from ._common import (
     FLAGS,
     READ,
@@ -64,8 +65,8 @@ def create_node(
     node_type: str,
     parent_path: str = "/obj",
     name: NodeName | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new node in the Houdini scene.
@@ -102,8 +103,8 @@ def get_node_info(
     detail: Detail = "full",
     cook_info: CookInfo = "none",
     max_params: Count = 50,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get information about a node at a chosen level of detail.
@@ -282,7 +283,9 @@ def _cook(node: Any) -> float:
 
 
 @tool(UNDOABLE)
-def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def delete_node(
+    node_path: str, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Delete a node from the scene.
 
@@ -311,8 +314,8 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 def list_node_types(
     category: str | None = None,
     name_filter: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 100,
     cursor: Cursor = 0,
@@ -397,8 +400,8 @@ def list_children(
     max_depth: Count = 10,
     max_nodes: ResultLimit = 1000,
     compact: bool = False,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 20,
     cursor: Cursor = 0,
@@ -566,8 +569,8 @@ def find_nodes(
     root_path: str = "/obj",
     pattern: str = "*",
     node_type: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 100,
     cursor: Cursor = 0,

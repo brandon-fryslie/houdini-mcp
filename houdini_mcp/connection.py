@@ -17,6 +17,8 @@ from typing import Any, NamedTuple
 import houdini_mcp_handshake as handshake
 from houdini_mcp_read import raised_inside_houdini
 
+from .settings import DEFAULT_TARGET
+
 logger = logging.getLogger("houdini_mcp.connection")
 
 # Connection configuration
@@ -504,7 +506,9 @@ def houdini() -> HoudiniConnection:
     return _houdini
 
 
-def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def get_connection_info(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Get detailed information about the current connection state.
 
@@ -515,7 +519,9 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> dict[str, Any]:
+def ping(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port, timeout: float = 5.0
+) -> dict[str, Any]:
     """
     Quick connectivity test without maintaining connection.
 

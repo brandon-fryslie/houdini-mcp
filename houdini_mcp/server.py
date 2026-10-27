@@ -12,7 +12,7 @@ from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import delivery, shorthand, tools
+from . import __version__, delivery, shorthand, tools
 from .connection import describe_target
 from .results import Results
 from .settings import Http, ServerSettings, Serving, Stdio
@@ -85,6 +85,8 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
     # would coerce them. One switch, so no parameter type has to say so itself.
     mcp = FastMCP(
         "Houdini MCP",
+        # the release a client is told it is talking to, not fastmcp's own version
+        version=__version__,
         instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
         strict_input_validation=True,
         # [LAW:one-source-of-truth] a served name is one tool: a second tool under

@@ -19,6 +19,7 @@ from typing import Any
 
 from ..connection import Link, houdini
 from ..main_thread import MainThread, MainThreadRefused
+from ..settings import DEFAULT_TARGET
 from ._common import (
     FILE_WRITE_ON_MAIN_THREAD,
     ON_MAIN_THREAD,
@@ -293,8 +294,8 @@ def capture_pane_screenshot(
     pane_type_name: str = "NetworkEditor",
     save_path: str | None = None,
     fit_contents: bool = False,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:
@@ -351,8 +352,8 @@ def _desktop_name(desktop: Any) -> str | None:
 
 @tool(READ)
 def list_visible_panes(
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     List all visible pane tabs in the current Houdini layout.
@@ -454,8 +455,8 @@ def _both(a: Fact, b: Fact) -> Fact:
 def render_node_network(
     node_path: str = "/obj",
     fit_contents: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:
@@ -539,8 +540,8 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
 def capture_multiple_panes(
     pane_types: list[str],
     save_dir: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:

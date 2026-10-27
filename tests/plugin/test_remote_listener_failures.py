@@ -448,7 +448,7 @@ class TestSelfTestAndStatus:
         assert report["reachable"] is True
         assert report["houdini_version"] == "20.5.487"
         assert report["houdini_version_tuple"] == [20, 5, 487]
-        assert report["plugin_version"]  # non-empty
+        assert report["plugin_version"] == handshake.RELEASE
         assert report["protocol"]  # e.g. rpyc/hrpyc protocol descriptor
         assert "bound_endpoints" in report
 

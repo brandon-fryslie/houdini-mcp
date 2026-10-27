@@ -1,3 +1,5 @@
 """Houdini MCP Server - Control SideFX Houdini via Model Context Protocol using hrpyc."""
 
-__version__ = "0.1.0"
+from houdini_mcp_handshake import RELEASE
+
+__version__ = RELEASE

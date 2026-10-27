@@ -3,11 +3,14 @@
 from typing import Any
 
 from ..connection import ping
+from ..settings import DEFAULT_TARGET
 from ._common import READ, tool, using
 
 
 @tool(READ)
-def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def check_connection(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Check Houdini connection status with detailed info.
 
@@ -25,7 +28,9 @@ def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, An
 
 
 @tool(READ)
-def ping_houdini(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def ping_houdini(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Quick connectivity test to Houdini.
 

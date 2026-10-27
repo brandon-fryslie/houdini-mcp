@@ -1,4 +1,5 @@
-"""The token handshake, defined once, shipped to both sides.
+"""The link between the MCP server and Houdini, defined once, shipped to both sides:
+the release both are built from, the port they meet on, and the token handshake.
 
 [LAW:one-source-of-truth] A client that holds the shared secret writes it to the
 socket, length-prefixed, before the rpyc protocol starts; the listener reads that
@@ -35,6 +36,14 @@ from contextlib import contextmanager
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp_handshake")
+
+# [LAW:one-source-of-truth] The release this distribution and the plugin it ships
+# are: the wheel's version (pyproject.toml reads it from here), houdini_mcp's and
+# houdini_mcp_plugin's __version__.
+RELEASE = "1.0.0"
+
+# The port the plugin's listener binds and the server connects to unless told otherwise.
+RPC_PORT = 18811
 
 # An rpyc authenticator: takes the accepted socket, returns ``(sock, credentials)``
 # or raises ``rpyc.utils.authenticators.AuthenticationError``.

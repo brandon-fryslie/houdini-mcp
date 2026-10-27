@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from ..plugin import plugin_module
+from ..settings import DEFAULT_TARGET
 from ._common import (
     FLAGS,
     UNDOABLE,
@@ -39,8 +40,8 @@ def connect_nodes(
     dst_path: str,
     dst_input_index: Index = 0,
     src_output_index: Index = 0,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Wire output of source node to input of destination node.
@@ -146,7 +147,10 @@ def connect_nodes(
 
 @tool(UNDOABLE)
 def disconnect_node_input(
-    node_path: str, input_index: Index = 0, host: str = "localhost", port: int = 18811
+    node_path: str,
+    input_index: Index = 0,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Break/disconnect an input connection on a node.
@@ -212,8 +216,8 @@ def set_node_flags(
     display: bool | None = None,
     render: bool | None = None,
     bypass: bool | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Set display, render, and bypass flags on a node.
@@ -301,7 +305,10 @@ def set_node_flags(
 
 @tool(UNDOABLE)
 def reorder_inputs(
-    node_path: str, new_order: list[Index], host: str = "localhost", port: int = 18811
+    node_path: str,
+    new_order: list[Index],
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Reorder inputs on a node (useful for merge nodes).
