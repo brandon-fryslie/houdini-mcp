@@ -7,6 +7,7 @@ materials and shaders in Houdini.
 import logging
 from typing import Any
 
+from ..settings import DEFAULT_TARGET
 from ._common import (
     READ,
     UNDOABLE,
@@ -31,8 +32,8 @@ def create_material(
     name: NodeName | None = None,
     parent_path: str = "/mat",
     parameters: dict[str, Any] | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new material/shader node.
@@ -88,8 +89,8 @@ def assign_material(
     geometry_path: str,
     material_path: str,
     group: str = "",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Assign a material to geometry.
@@ -199,8 +200,8 @@ def assign_material(
 @tool(READ)
 def get_material_info(
     material_path: str,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get detailed information about a material node.

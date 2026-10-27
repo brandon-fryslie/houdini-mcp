@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from ..connection import transport_failure
-from ..settings import Summarizer
+from ..settings import DEFAULT_TARGET, Summarizer
 from ._common import (
     READ,
     ResultLimit,
@@ -31,8 +31,8 @@ async def find_error_nodes(
     max_results: ResultLimit = 100,
     *,
     summarize: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     summarizer: Summarizer,
 ) -> dict[str, Any]:
     """

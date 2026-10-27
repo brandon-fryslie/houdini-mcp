@@ -3,6 +3,7 @@
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from ipaddress import ip_address
@@ -25,6 +26,7 @@ from houdini_mcp.settings import (
     InvalidSetting,
     Port,
     Stdio,
+    houdini_target,
     log_level,
     results_dir,
     serving,
@@ -247,6 +249,40 @@ def test_compose_publishes_on_loopback_unless_told_otherwise() -> None:
     compose = yaml.safe_load((root / "compose.yaml").read_text())
     (published,) = compose["services"]["houdini-mcp"]["ports"]
     assert published.startswith("${MCP_HOST:-127.0.0.1}:"), published
+
+
+def test_the_deploy_files_state_the_defaults_the_server_resolves() -> None:
+    """compose.yaml, the Dockerfile and .env.example cannot import the server's defaults,
+    so each one they restate is held to what the server resolves from an empty
+    environment, and compose reaches the container where the image listens."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    served = serving({})
+    assert isinstance(served, Http)
+    listener, target = served.listener, houdini_target({})
+    example = dict(
+        line.split("=", 1)
+        for line in (root / ".env.example").read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    image = dict(
+        pair.split("=", 1)
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if line.startswith("ENV ")
+        for pair in line.split()[1:]
+    )
+    service = yaml.safe_load((root / "compose.yaml").read_text())["services"]["houdini-mcp"]
+    (published,) = service["ports"]
+    publish = re.fullmatch(r"\$\{MCP_HOST:-(.+)\}:\$\{MCP_PORT:-(\d+)\}:(\d+)", published)
+    health = re.search(r"//localhost:(\d+)/health", " ".join(service["healthcheck"]["test"]))
+    assert publish and health, (published, service["healthcheck"])
+
+    assert (example["HOUDINI_PORT"], example["MCP_PORT"], image["MCP_PORT"]) == (
+        str(target.port),
+        str(listener.port),
+        str(listener.port),
+    )
+    assert publish.group(1, 2) == (str(listener.host), str(listener.port))
+    assert (publish.group(3), health.group(1)) == (image["MCP_PORT"], image["MCP_PORT"])
 
 
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(

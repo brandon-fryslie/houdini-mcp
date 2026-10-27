@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `houdini-mcp` refuses arguments it does not know instead of ignoring them.
 
+- The server (`houdini_mcp.__version__`) and the plugin (`plugin_version` in the
+  Start Remote self-test) report the distribution's version, 1.0.0, where they
+  reported 0.1.0 and 0.2.0 (houdini-laws-etg.fn3).
+
 ### Fixed
 
 - `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,

@@ -49,6 +49,7 @@ from typing import Any, Literal, TypedDict, assert_never
 from ..connection import Link, houdini
 from ..main_thread import BODY_SILENCE, MainThread
 from ..program import DidNotRun, Ended, Request
+from ..settings import DEFAULT_TARGET
 from ._common import (
     PROGRAM,
     READ,
@@ -419,8 +420,8 @@ def execute_code(
     max_diff_nodes: Count = DEFAULT_MAX_DIFF_NODES,
     timeout: Seconds = DEFAULT_TIMEOUT,
     allow_dangerous: bool = False,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     allow_heavy_geometry: bool = False,
     policy: Policy = DEFAULT_POLICY,
     *,

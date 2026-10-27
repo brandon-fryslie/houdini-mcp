@@ -107,6 +107,11 @@ class Target:
     port: int
 
 
+# [LAW:one-source-of-truth] The Houdini the server reaches when the environment names
+# none: every Python default reads it.
+DEFAULT_TARGET = Target(host="localhost", port=handshake.RPC_PORT)
+
+
 @dataclass(frozen=True)
 class Summarizer:
     """The OpenAI-compatible completions server a summary is asked of, and whether any is."""
@@ -140,8 +145,8 @@ class ServerSettings:
 def houdini_target(environ: Mapping[str, str]) -> Target:
     """The Houdini ``HOUDINI_HOST`` and ``HOUDINI_PORT`` name."""
     return Target(
-        host=setting(environ, "HOUDINI_HOST", TypeAdapter(Host), "localhost"),
-        port=setting(environ, "HOUDINI_PORT", TypeAdapter(Port), "18811"),
+        host=setting(environ, "HOUDINI_HOST", TypeAdapter(Host), DEFAULT_TARGET.host),
+        port=setting(environ, "HOUDINI_PORT", TypeAdapter(Port), str(DEFAULT_TARGET.port)),
     )
 
 

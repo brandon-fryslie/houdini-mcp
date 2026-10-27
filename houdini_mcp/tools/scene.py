@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from ..plugin import plugin_module
-from ..settings import Summarizer
+from ..settings import DEFAULT_TARGET, Summarizer
 from ._common import (
     CHECKPOINTED,
     FILE_WRITE,
@@ -34,7 +34,9 @@ logger = logging.getLogger("houdini_mcp.tools.scene")
 
 
 @tool(READ)
-def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def get_scene_info(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Get current Houdini scene information.
 
@@ -67,7 +69,7 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
 
 @tool(FILE_WRITE)
 def save_scene(
-    file_path: str | None = None, host: str = "localhost", port: int = 18811
+    file_path: str | None = None, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
 ) -> dict[str, Any]:
     """
     Save the current Houdini scene.
@@ -95,7 +97,9 @@ def save_scene(
 
 
 @tool(CHECKPOINTED)
-def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def load_scene(
+    file_path: str, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Load a Houdini scene file in place of the current scene.
 
@@ -121,7 +125,7 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
 
 
 @tool(CHECKPOINTED)
-def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def new_scene(host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port) -> dict[str, Any]:
     """
     Create a new empty Houdini scene in place of the current scene.
 
@@ -146,8 +150,8 @@ async def serialize_scene(
     max_depth: Count = 10,
     *,
     summarize: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     summarizer: Summarizer,
 ) -> dict[str, Any]:
     """

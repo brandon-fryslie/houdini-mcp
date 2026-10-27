@@ -24,7 +24,7 @@ Use this for:
 import hou
 
 try:
-    from houdini_mcp_plugin import start_hrpyc_server, is_hrpyc_running, get_hrpyc_status, parse_port
+    from houdini_mcp_plugin import DEFAULT_PORT, start_hrpyc_server, is_hrpyc_running, get_hrpyc_status, parse_port
 
     if is_hrpyc_running():
         hou.ui.displayMessage(
@@ -35,7 +35,7 @@ try:
         # Ask for port
         result = hou.ui.readInput(
             "Enter port for hrpyc listener:",
-            initial_contents="18811",
+            initial_contents=str(DEFAULT_PORT),
             title="Houdini MCP Remote"
         )
 

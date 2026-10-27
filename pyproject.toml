@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "houdini-mcp"
-version = "1.0.0"
+dynamic = ["version"]
 description = "MCP server for SideFX Houdini integration via rpyc"
 readme = "README.md"
 license = "MIT"
@@ -97,6 +97,10 @@ exclude = [
     "houdini_mcp_scene*",
     "houdini_mcp_wiring*",
 ]
+
+[tool.setuptools.dynamic]
+# the release is defined once, beside the link both sides of it share
+version = {attr = "houdini_mcp_handshake.RELEASE"}
 
 [tool.setuptools.package-data]
 # The whole plugin tree, whatever kinds of file it holds (tests/test_wheel.py)
