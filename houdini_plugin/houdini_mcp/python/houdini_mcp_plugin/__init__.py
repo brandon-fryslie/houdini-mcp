@@ -5,9 +5,9 @@
 - The listener primitives they are built on (see :mod:`houdini_mcp_plugin.listener`).
 """
 
-from houdini_mcp_handshake import RELEASE
+from pathlib import Path
 
-__version__ = RELEASE
+from houdini_mcp_handshake import RELEASE, build
 
 from .listener import (
     DEFAULT_HOST,
@@ -30,6 +30,12 @@ from .remote import (
     start_hrpyc_server,
     stop_hrpyc_server,
 )
+
+__version__ = RELEASE
+# The build Houdini loaded, read once at import: the server compares it with the one
+# it ships when it links (houdini_mcp/connection.py). python/houdini_mcp_plugin/ sits
+# two levels below the plugin's houdini_mcp directory.
+BUILD = build(Path(__file__).resolve().parents[2])
 
 __all__ = [
     # the hrpyc listener the MCP server connects to

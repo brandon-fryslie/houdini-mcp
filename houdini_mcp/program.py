@@ -286,7 +286,7 @@ def _run(request: Request, facts: _Facts, start: _Start) -> NoReturn:
     main_thread = MainThread(Link.close)
     try:
         # Opened inside the step's handling, so a link that fails to open, or reaches
-        # another release's plugin, is told as any failure before the program began.
+        # another build of the plugin, is told as any failure before the program began.
         link = open_link(
             remote_houdini(request.reach.token),
             request.reach.host,

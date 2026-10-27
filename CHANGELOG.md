@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server reaches Houdini without a click on the shelf or a `uiready.py` of
   your own. A listener variable it cannot use is shown in a dialog.
 
+- The server refuses to link to a Houdini whose houdini_mcp plugin is another
+  build than the one it ships (houdini-laws-etg.ape), naming the plugin
+  directory Houdini imported, both releases and both builds, and how to install
+  the matching plugin, instead of failing later on whichever call the other
+  build answers differently. A build is a digest of the plugin's Python
+  sources, so installs from two commits differ even when both state the same
+  release. A Houdini with no plugin still links.
+
 ### Changed
 
 - **BREAKING (wire)**: `execute_code` runs each program in a process of its

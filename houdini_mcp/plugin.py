@@ -2,7 +2,7 @@
 
 [LAW:single-enforcer] The one place a call imports a module of the houdini_mcp
 plugin into the Houdini a link reaches, and the one way that import fails: a
-Houdini whose path lacks the plugin is told to install it. Which release the
+Houdini whose path lacks the plugin is told to install it. Which build the
 plugin on that path is, is read and judged once, when the link is made
 (``connection.open_link``). Below ``tools``, so a program's own process imports
 through it too.
@@ -28,5 +28,5 @@ def plugin_module(link: Link, name: str) -> Any:
     except ImportError as e:
         raise PluginMissing(
             f"Houdini cannot import {name} ({reason(e)}): Houdini's path lacks this "
-            f"release's houdini_mcp plugin. {INSTALL_PLUGIN}"
+            f"server's houdini_mcp plugin. {INSTALL_PLUGIN}"
         ) from e

@@ -113,11 +113,6 @@ def houdini_pref_dir(machine: Machine) -> Path:
     return defaults.get(machine.platform, machine.home / f"houdini{HOUDINI_VERSION}")
 
 
-def plugin_tree() -> Path:
-    """The plugin's packages directory this distribution ships: the source tree, when editable."""
-    return Path(houdini_plugin.__file__).resolve().parent
-
-
 def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
     """Point Houdini's packages directory at the plugin this distribution ships.
 
@@ -130,7 +125,9 @@ def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
     pointer = packages / "houdini_mcp.json"
     try:
         packages.mkdir(parents=True, exist_ok=True)
-        pointer.write_text(json.dumps({"package_path": plugin_tree().as_posix()}, indent=4) + "\n")
+        pointer.write_text(
+            json.dumps({"package_path": houdini_plugin.PACKAGES.as_posix()}, indent=4) + "\n"
+        )
     except OSError as e:
         return Failed(str(e))
     return Installed(str(pointer))

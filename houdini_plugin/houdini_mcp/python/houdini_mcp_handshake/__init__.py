@@ -1,5 +1,6 @@
 """The link between the MCP server and Houdini, defined once, shipped to both sides:
-the release both are built from, the port they meet on, and the token handshake.
+the release both are built from and the build each side is, the port they meet on,
+and the token handshake.
 
 [LAW:one-source-of-truth] A client that holds the shared secret writes it to the
 socket, length-prefixed, before the rpyc protocol starts; the listener reads that
@@ -27,12 +28,14 @@ connection failure that names the token as a possible cause.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import struct
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("houdini_mcp_handshake")
@@ -41,6 +44,26 @@ logger = logging.getLogger("houdini_mcp_handshake")
 # are: the wheel's version (pyproject.toml reads it from here), houdini_mcp's and
 # houdini_mcp_plugin's __version__.
 RELEASE = "1.0.0"
+
+
+def build(tree: Path) -> str:
+    """The build of the plugin laid out at ``tree``, its ``houdini_mcp`` directory:
+    a digest of every Python source in it, each under its path there.
+
+    [LAW:types-are-the-program] Two plugins answer in the same shapes exactly when
+    they hold the same sources, so the build, not ``RELEASE``, is what tells a
+    server it may call a plugin: every commit between two releases states the
+    first one. Only sources count, so a stray file in a clone (``.DS_Store``,
+    ``__pycache__``) is no other build.
+    """
+    digest = hashlib.sha256()
+    for source in sorted(tree.rglob("*.py")):
+        for part in (source.relative_to(tree).as_posix().encode(), source.read_bytes()):
+            # length-prefixed, so no two trees' parts run together into one stream
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
+    return digest.hexdigest()[:16]
+
 
 # The port the plugin's listener binds and the server connects to unless told otherwise.
 RPC_PORT = 18811

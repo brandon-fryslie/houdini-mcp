@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
-from houdini_mcp_handshake import RELEASE
+from houdini_mcp_handshake import RELEASE, build
 from houdini_mcp_read import raised_inside_houdini
+
+import houdini_plugin
 
 from .settings import DEFAULT_TARGET
 
@@ -201,24 +203,32 @@ NO_HOUDINI = HoudiniTarget(
 )
 
 
-# [LAW:one-source-of-truth] the one remedy for a Houdini without this release's plugin,
+# [LAW:one-source-of-truth] The build of the plugin this distribution ships, the one
+# ``houdini-mcp install`` points Houdini at, read once at import as Houdini reads its own.
+BUILD = build(houdini_plugin.PACKAGES / "houdini_mcp")
+
+# [LAW:one-source-of-truth] the one remedy for a Houdini without this server's plugin,
 # whichever way that was found.
-INSTALL_PLUGIN = "Install the plugin from the same release, then restart Houdini."
+INSTALL_PLUGIN = (
+    "Install the plugin this server was built with (`houdini-mcp install` from the same "
+    "install or clone), then restart Houdini."
+)
 
 
 class PluginMissing(Exception):
-    """Houdini's path lacks this release's houdini_mcp plugin: none at all, found when a
-    call imports a plugin module, or another release's, found when the link is made.
-    Every call that needs the plugin meets the same until it is installed."""
+    """Houdini's path lacks the houdini_mcp plugin this server was built with: none at
+    all, found when a call imports a plugin module, or another build, found when the
+    link is made. Every call that needs the plugin meets the same until it is installed."""
 
 
 @dataclass(frozen=True)
 class InstalledPlugin:
     """The houdini_mcp plugin on the path of the Houdini a link reaches, as read when
-    the link was proven: the release it states (None: it predates stating one) and the
-    file Houdini imported it from, which names the install to replace."""
+    the link was proven: the release and build it states (None: it predates stating
+    one) and the directory Houdini imported it from, which names the install to replace."""
 
     release: str | None
+    build: str | None
     path: str
 
 
@@ -283,42 +293,48 @@ class Link:
 
 def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
     """One attempt to open a link to ``host:port`` on ``target``, proven to reach a
-    Houdini whose plugin, if any, is this release's: a program's process's, which
-    retries nothing.
+    Houdini whose plugin, if any, is this server's build: a program's process's,
+    which retries nothing.
 
     Raises:
-        PluginMissing: Houdini's path holds another release's plugin.
+        PluginMissing: Houdini's path holds another build of the plugin.
     """
-    return _of_this_release(_reach(target, host, port, sync_timeout))
+    return _of_this_build(_reach(target, host, port, sync_timeout))
 
 
 def _installed_plugin(conn: Any) -> InstalledPlugin | None:
-    """The plugin on Houdini's path, read through the leaf every release of it ships."""
+    """The plugin on Houdini's path, read through ``houdini_mcp_plugin``, the package
+    every release of it ships."""
     try:
-        stated = conn.modules["houdini_mcp_handshake"]
+        plugin = conn.modules["houdini_mcp_plugin"]
     except ImportError:
         # No plugin is a fact about this Houdini, not a failure to reach it: a call
-        # that needs a plugin module is told so by ``plugin_module``.
+        # that needs a plugin module is told so by ``plugin_module``, with the reason.
         return None
-    return InstalledPlugin(getattr(stated, "RELEASE", None), str(stated.__file__))
+    return InstalledPlugin(
+        getattr(plugin, "__version__", None),
+        getattr(plugin, "BUILD", None),
+        # its directory: a leftover one without __init__.py imports with no __file__
+        str(next(iter(plugin.__path__))),
+    )
 
 
-def _of_this_release(link: Link) -> Link:
-    """``link``, unless Houdini's path holds another release's plugin, which would
-    answer this server's calls in another release's shapes.
+def _of_this_build(link: Link) -> Link:
+    """``link``, unless Houdini's path holds another build of the plugin, which would
+    answer this server's calls in another build's shapes.
 
-    [LAW:single-enforcer] The one check of release skew, made once per link and
-    before any plugin module is asked anything; no tool parses a plugin answer for it.
-    It reads only what the proof already read, so it fails in no other way.
+    [LAW:single-enforcer] The one check of skew between server and plugin, made once
+    per link and before any plugin module is asked anything; no tool parses a plugin
+    answer for it. It reads only what the proof already read, so it fails in no other way.
     """
     plugin = link.plugin
-    if plugin is None or plugin.release == RELEASE:
+    if plugin is None or plugin.build == BUILD:
         return link
     link.close()
-    stated = "states no release" if plugin.release is None else f"is release {plugin.release}"
     raise PluginMissing(
-        f"Houdini at {link.name} imports the houdini_mcp plugin from {plugin.path}, which "
-        f"{stated}; this server is release {RELEASE}. {INSTALL_PLUGIN}"
+        f"Houdini at {link.name} imports the houdini_mcp plugin from {plugin.path}, "
+        f"release {plugin.release or 'unstated'}, build {plugin.build or 'unstated'}; "
+        f"this server is release {RELEASE}, build {BUILD}. {INSTALL_PLUGIN}"
     )
 
 
@@ -355,8 +371,8 @@ def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> 
         logger.info(f"Houdini at {link.name} has no houdini_mcp plugin on its path")
     else:
         logger.info(
-            f"Houdini at {link.name} has houdini_mcp plugin release {plugin.release} "
-            f"from {plugin.path}"
+            f"Houdini at {link.name} has houdini_mcp plugin release {plugin.release}, "
+            f"build {plugin.build} from {plugin.path}"
         )
     return link
 
@@ -407,9 +423,9 @@ def _open_link_with_retries(
                 time.sleep(delay)
                 current_delay *= 2  # Exponential backoff
         else:
-            # Judged outside the attempt: another release's plugin is a reached
+            # Judged outside the attempt: another build of the plugin is a reached
             # Houdini's answer, neither retried nor told to start a listener.
-            return _of_this_release(link)
+            return _of_this_build(link)
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {describe_target(host, port)} after {max_retries} attempts. "
@@ -616,6 +632,8 @@ def ping(
         actually reached.
 
     Raises:
+        PluginMissing: the Houdini reached holds another build of the plugin, as a
+            tool's connect would be told.
         HoudiniConnectionError: naming the target and the cause, when no Houdini
             answered there. [LAW:no-silent-failure] the cause travels with the
             failure instead of being logged and collapsed into False. What a

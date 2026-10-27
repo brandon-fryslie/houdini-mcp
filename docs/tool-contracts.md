@@ -108,7 +108,7 @@ process ends with the server's, so a server killed mid-call leaves no
 program running against Houdini.
 
 A program that never began - its process could not open its link, the
-Houdini lacks this release's plugin, Houdini's main thread refused the call,
+Houdini lacks this server's build of the plugin, Houdini's main thread refused the call,
 or the start took longer than 60 seconds - is `operation_failed` with a
 message starting `The program never ran: `. Nothing was undone, because
 nothing ran.

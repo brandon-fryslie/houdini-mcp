@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from houdini_mcp.install import plugin_tree
+import houdini_plugin
 
-_UIREADY = plugin_tree() / "houdini_mcp" / "python3.13libs" / "uiready.py"
+_UIREADY = houdini_plugin.PACKAGES / "houdini_mcp" / "python3.13libs" / "uiready.py"
 
 
 def _shown(monkeypatch: pytest.MonkeyPatch, start: Callable[[], dict]) -> list[str]:

@@ -56,15 +56,16 @@ class TestAProgramThatNeverRan:
         fake_houdini.listener.plugin = None
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
         assert why.startswith("Houdini cannot import houdini_mcp_plugin.main_thread")
-        assert "Install the plugin from the same release" in why
+        assert "Install the plugin this server was built with" in why
 
-    def test_a_houdini_with_another_releases_plugin(self, mock_connection, fake_houdini):
+    def test_a_houdini_with_another_builds_plugin(self, mock_connection, fake_houdini):
         """Its own link is judged as the server's is, and the refusal told whole."""
-        fake_houdini.listener.plugin = "0.9.0"
+        fake_houdini.listener.plugin = "0123456789abcdef"
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
         assert why.startswith("Houdini at 127.0.0.1:")
-        assert "/plugins/0.9.0/handshake.py, which is release 0.9.0" in why
-        assert "Install the plugin from the same release" in why
+        assert "/plugins/0123456789abcdef/houdini_mcp_plugin, release" in why
+        assert "build 0123456789abcdef; this server" in why
+        assert "Install the plugin this server was built with" in why
         assert mock_connection.undos.undoLabels() == ()
 
     def test_a_main_thread_that_refuses_it(self, mock_connection):
