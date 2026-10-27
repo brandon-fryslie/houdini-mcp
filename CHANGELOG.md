@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Start Remote shelf tool offers the port `HOUDINI_RPC_BIND_PORT` names, so
+  accepting it no longer starts the listener on 18811 when the environment says
+  otherwise (houdini-laws-etg.fn3).
+
 - `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
   `assign_material`'s Material SOP wiring, `delete_node`, `set_node_color`,
   `set_node_position`, `layout_children`, `create_network_box`,
