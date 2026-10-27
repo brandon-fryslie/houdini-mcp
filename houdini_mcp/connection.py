@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
+from houdini_mcp_handshake import RELEASE
 from houdini_mcp_read import raised_inside_houdini
 
 from .settings import DEFAULT_TARGET
@@ -200,6 +201,27 @@ NO_HOUDINI = HoudiniTarget(
 )
 
 
+# [LAW:one-source-of-truth] the one remedy for a Houdini without this release's plugin,
+# whichever way that was found.
+INSTALL_PLUGIN = "Install the plugin from the same release, then restart Houdini."
+
+
+class PluginMissing(Exception):
+    """Houdini's path lacks this release's houdini_mcp plugin: none at all, found when a
+    call imports a plugin module, or another release's, found when the link is made.
+    Every call that needs the plugin meets the same until it is installed."""
+
+
+@dataclass(frozen=True)
+class InstalledPlugin:
+    """The houdini_mcp plugin on the path of the Houdini a link reaches, as read when
+    the link was proven: the release it states (None: it predates stating one) and the
+    file Houdini imported it from, which names the install to replace."""
+
+    release: str | None
+    path: str
+
+
 @dataclass(frozen=True, eq=False)
 class Link:
     """One open connection to one Houdini, and the ``hou`` it exposes.
@@ -208,13 +230,15 @@ class Link:
     link proved it reaches Houdini, so no holder can see one without the other.
     ``host`` and ``port`` are what the link was opened to: a request is
     checked against the Houdini actually reached, and diagnostics name that one.
-    Identity is the instance: a reconnect is a new ``Link``.
+    Identity is the instance: a reconnect is a new ``Link``. ``plugin`` is what the
+    proof read of the plugin on Houdini's path (None: there is none).
     """
 
     host: str
     port: int
     conn: Any
     hou: Any
+    plugin: InstalledPlugin | None
 
     @property
     def name(self) -> str:
@@ -258,13 +282,55 @@ class Link:
 
 
 def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
-    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches
-    Houdini: the connect path's, and a program's process's, which retries nothing.
+    """One attempt to open a link to ``host:port`` on ``target``, proven to reach a
+    Houdini whose plugin, if any, is this release's: a program's process's, which
+    retries nothing.
 
-    The proof is ``hou`` imported across the link: a sync request, so a Houdini
-    too busy to answer fails it like one that is not there. [LAW:single-enforcer]
-    Nothing Houdini's ``hou`` answers is read here: a fault it raises is its own,
-    classified at the tool boundary like every other, never "not reached".
+    Raises:
+        PluginMissing: Houdini's path holds another release's plugin.
+    """
+    return _of_this_release(_reach(target, host, port, sync_timeout))
+
+
+def _installed_plugin(conn: Any) -> InstalledPlugin | None:
+    """The plugin on Houdini's path, read through the leaf every release of it ships."""
+    try:
+        stated = conn.modules["houdini_mcp_handshake"]
+    except ImportError:
+        # No plugin is a fact about this Houdini, not a failure to reach it: a call
+        # that needs a plugin module is told so by ``plugin_module``.
+        return None
+    return InstalledPlugin(getattr(stated, "RELEASE", None), str(stated.__file__))
+
+
+def _of_this_release(link: Link) -> Link:
+    """``link``, unless Houdini's path holds another release's plugin, which would
+    answer this server's calls in another release's shapes.
+
+    [LAW:single-enforcer] The one check of release skew, made once per link and
+    before any plugin module is asked anything; no tool parses a plugin answer for it.
+    It reads only what the proof already read, so it fails in no other way.
+    """
+    plugin = link.plugin
+    if plugin is None or plugin.release == RELEASE:
+        return link
+    link.close()
+    stated = "states no release" if plugin.release is None else f"is release {plugin.release}"
+    raise PluginMissing(
+        f"Houdini at {link.name} imports the houdini_mcp plugin from {plugin.path}, which "
+        f"{stated}; this server is release {RELEASE}. {INSTALL_PLUGIN}"
+    )
+
+
+def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches
+    Houdini, reading the plugin on its path as part of the proof.
+
+    The proof is ``hou`` imported across the link and the plugin read: sync requests,
+    so a Houdini too busy to answer fails it like one that is not there.
+    [LAW:single-enforcer] Nothing Houdini's ``hou`` answers is read here: a fault it
+    raises is its own, classified at the tool boundary like every other, never "not
+    reached".
     """
     conn = target.open(host, port, sync_timeout)
     # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
@@ -272,6 +338,7 @@ def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) 
     # attempt leaves neither an open socket nor a half-connected state behind.
     try:
         hou = conn.modules.hou
+        plugin = _installed_plugin(conn)
     except BaseException as validation_error:
         logger.warning(
             f"Closing link to {describe_target(host, port)}: failed validation: "
@@ -283,7 +350,15 @@ def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) 
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    return Link(host, port, conn, hou)
+    link = Link(host, port, conn, hou, plugin)
+    if plugin is None:
+        logger.info(f"Houdini at {link.name} has no houdini_mcp plugin on its path")
+    else:
+        logger.info(
+            f"Houdini at {link.name} has houdini_mcp plugin release {plugin.release} "
+            f"from {plugin.path}"
+        )
+    return link
 
 
 def _open_link_with_retries(
@@ -309,8 +384,7 @@ def _open_link_with_retries(
 
     for attempt in range(max_retries):
         try:
-            return open_link(target, host, port, sync_timeout)
-
+            link = _reach(target, host, port, sync_timeout)
         except Exception as e:
             if not _open_is_retryable(e):
                 raise HoudiniConnectionError(
@@ -332,6 +406,10 @@ def _open_link_with_retries(
                 logger.info(f"Retrying in {delay:.2f} seconds...")
                 time.sleep(delay)
                 current_delay *= 2  # Exponential backoff
+        else:
+            # Judged outside the attempt: another release's plugin is a reached
+            # Houdini's answer, neither retried nor told to start a listener.
+            return _of_this_release(link)
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {describe_target(host, port)} after {max_retries} attempts. "

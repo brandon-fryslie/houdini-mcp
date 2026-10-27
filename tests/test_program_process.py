@@ -53,10 +53,19 @@ class TestAProgramThatNeverRan:
         assert why.startswith("ConnectionRefusedError")
 
     def test_a_houdini_without_the_plugin(self, mock_connection, fake_houdini):
-        fake_houdini.listener.serves_plugin = False
+        fake_houdini.listener.plugin = None
         why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
         assert why.startswith("Houdini cannot import houdini_mcp_plugin.main_thread")
         assert "Install the plugin from the same release" in why
+
+    def test_a_houdini_with_another_releases_plugin(self, mock_connection, fake_houdini):
+        """Its own link is judged as the server's is, and the refusal told whole."""
+        fake_houdini.listener.plugin = "0.9.0"
+        why = self._never_ran(_run("hou.node('/obj').createNode('geo', 'never')"), mock_connection)
+        assert why.startswith("Houdini at 127.0.0.1:")
+        assert "/plugins/0.9.0/handshake.py, which is release 0.9.0" in why
+        assert "Install the plugin from the same release" in why
+        assert mock_connection.undos.undoLabels() == ()
 
     def test_a_main_thread_that_refuses_it(self, mock_connection):
         mock_connection.main_thread_behaviour.refusal = "Houdini's main thread is busy"

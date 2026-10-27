@@ -320,6 +320,13 @@ tests that run against a live Houdini.
 - Run **Remote Self-Test** in Houdini for this OS's firewall command (on macOS it allows the Houdini executable, not the port)
 - Verify HOUDINI_HOST is correct
 
+### Houdini imports the houdini_mcp plugin from another release
+- The server refuses to connect, naming the plugin file Houdini imported. Replace
+  that install with the plugin from the server's release, then restart Houdini
+- An older `houdini-mcp install` left in Houdini's preferences `packages`
+  directory loads ahead of `HOUDINI_PACKAGE_DIR`, so the file named may not be
+  the plugin you meant Houdini to load
+
 ### Tools time out while `ping_houdini` answers
 - Close any modal dialog open in Houdini and try again
 

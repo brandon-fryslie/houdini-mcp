@@ -25,11 +25,11 @@ from ..connection import (
     HoudiniConnectionError,
     HoudiniTargetMismatch,
     Link,
+    PluginMissing,
     TransportFailure,
     transport_failure,
 )
 from ..main_thread import MainThreadRefused
-from ..plugin import PluginMissing
 
 logger = logging.getLogger("houdini_mcp.tools")
 

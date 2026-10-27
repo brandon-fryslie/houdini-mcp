@@ -40,9 +40,8 @@ from typing import Any, Literal, NoReturn, assert_never
 
 from houdini_mcp_read import raised_inside_houdini, reason
 
-from .connection import Link, Reach, open_link, remote_houdini
+from .connection import Link, PluginMissing, Reach, open_link, remote_houdini
 from .main_thread import CONFIRMED, Lost, MainThread, Raised, Refused, Returned
-from .plugin import PluginMissing
 
 Step = Literal["program", "undo step"]
 """What a program's run raised in: the program itself, or the undo step around it."""
@@ -263,16 +262,7 @@ def _did_not_run(facts: _Facts, start: _Start, why: str) -> NoReturn:
 
 
 def _run(request: Request, facts: _Facts, start: _Start) -> NoReturn:
-    try:
-        link = open_link(
-            remote_houdini(request.reach.token),
-            request.reach.host,
-            request.reach.port,
-            request.sync_timeout,
-        )
-    except BaseException as error:  # noqa: BLE001
-        _did_not_run(facts, start, Fault.of("program", error).told)
-    namespace = {"hou": link.hou, "__builtins__": builtins.__dict__}
+    namespace: dict[str, Any] = {"__builtins__": builtins.__dict__}
     raised: list[tuple[BaseException, Fault]] = []
     began = False
 
@@ -295,6 +285,15 @@ def _run(request: Request, facts: _Facts, start: _Start) -> NoReturn:
     # a link that fails in use is closed here.
     main_thread = MainThread(Link.close)
     try:
+        # Opened inside the step's handling, so a link that fails to open, or reaches
+        # another release's plugin, is told as any failure before the program began.
+        link = open_link(
+            remote_houdini(request.reach.token),
+            request.reach.host,
+            request.reach.port,
+            request.sync_timeout,
+        )
+        namespace["hou"] = link.hou
         posted = main_thread.as_step(link, program, request.label, request.silence)
     # The install message is this package's own, told whole.
     except PluginMissing as missing:

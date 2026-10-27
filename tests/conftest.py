@@ -21,6 +21,7 @@ import rpyc
 import rpyc.utils.helpers
 import rpyc.utils.server
 from fastmcp import FastMCP
+from houdini_mcp_handshake import RELEASE
 from rpyc.core import vinegar
 from rpyc.core.async_ import AsyncResult
 from rpyc.utils.server import Server
@@ -1786,9 +1787,12 @@ class FakeHoudiniService(rpyc.ClassicService):  # type: ignore[misc]
         hou = self._listener.hou()
         if name == "hou":
             return hou
+        plugin = self._listener.plugin
+        if plugin is None and name.startswith("houdini_mcp"):
+            raise ImportError(f"No module named {name!r}")
+        if name == "houdini_mcp_handshake" and plugin != RELEASE:
+            return SimpleNamespace(RELEASE=plugin, __file__=f"/plugins/{plugin}/handshake.py")
         if name == "houdini_mcp_plugin.main_thread":
-            if not self._listener.serves_plugin:
-                raise ImportError(f"No module named {name!r}")
             return local_main_thread(hou.undos)
         return importlib.import_module(name)
 
@@ -1797,7 +1801,7 @@ class FakeHoudiniListener:
     """A listener for the double, speaking the token handshake as the plugin's
     does, opened when a program's process first needs it and closed with the test.
 
-    ``serves_plugin`` False serves a Houdini whose path lacks the plugin;
+    ``plugin`` is the release of the plugin on its Houdini's path (None: none);
     ``answer_delay`` makes it answer each module it serves that much later.
     """
 
@@ -1807,7 +1811,7 @@ class FakeHoudiniListener:
         import houdini_mcp_handshake as handshake
 
         self.hou = hou
-        self.serves_plugin = True
+        self.plugin: str | None = RELEASE
         # Seconds each module it serves takes to answer: a slow Houdini.
         self.answer_delay = 0.0
         self.clients: list[Any] = []
