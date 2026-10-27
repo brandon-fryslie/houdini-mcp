@@ -245,7 +245,13 @@ def test_a_json_client_that_is_not_installed_is_not_found(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize(
     "text",
-    ["{not json", "[]", '{"mcpServers": []}', '{"mcpServers": {"houdini": {"env": {"A": 1}}}}'],
+    [
+        "{not json",
+        "[]",
+        '{"mcpServers": []}',
+        '{"mcpServers": {"houdini": "npx houdini-mcp"}}',
+        '{"mcpServers": {"houdini": {"env": {"A": 1}}}}',
+    ],
 )
 def test_a_json_config_it_cannot_read_fails_and_is_left_as_it_is(tmp_path: Path, text: str) -> None:
     machine = _machine(tmp_path)

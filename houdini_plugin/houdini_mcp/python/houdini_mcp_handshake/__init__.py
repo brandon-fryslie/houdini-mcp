@@ -73,7 +73,7 @@ RPC_PORT = 18811
 Authenticator = Callable[[Any], tuple[Any, Any]]
 
 # The environment variable both sides take the shared secret from.
-TOKEN_ENV = "HOUDINI_RPC_TOKEN"
+TOKEN_ENV = "HOUDINI_RPC_TOKEN"  # nosec B105 - the variable's name, not the secret it holds
 
 # The listener's answer to a correct token.
 ACK = b"\x06"

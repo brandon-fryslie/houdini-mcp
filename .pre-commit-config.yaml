@@ -39,7 +39,7 @@ repos:
         exclude: ^tests/
       - id: bandit
         name: bandit
-        entry: uv run --locked bandit -c pyproject.toml -r houdini_mcp/
+        entry: uv run --locked bandit -c pyproject.toml -r houdini_mcp houdini_plugin scripts
         language: system
         pass_filenames: false
         types: [python]

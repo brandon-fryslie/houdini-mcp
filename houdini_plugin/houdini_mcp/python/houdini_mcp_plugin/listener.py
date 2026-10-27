@@ -88,7 +88,7 @@ DEFAULT_PORT = RPC_PORT
 # Hosts that only accept connections from the local machine.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Hosts that bind every interface (wildcard).
-IPV4_WILDCARD_HOST = "0.0.0.0"
+IPV4_WILDCARD_HOST = "0.0.0.0"  # nosec B104 - recognises a host the user chose; the default is loopback
 _WILDCARD_HOSTS = {IPV4_WILDCARD_HOST, "::"}
 T = TypeVar("T")
 P = ParamSpec("P")
