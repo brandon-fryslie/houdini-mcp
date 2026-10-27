@@ -26,9 +26,9 @@ from houdini_mcp.settings import (
     InvalidSetting,
     Port,
     Stdio,
-    houdini_target,
     log_level,
     results_dir,
+    server_settings,
     serving,
     setting,
 )
@@ -258,12 +258,17 @@ def test_the_deploy_files_state_the_defaults_the_server_resolves() -> None:
     root = pathlib.Path(__file__).resolve().parents[1]
     served = serving({})
     assert isinstance(served, Http)
-    listener, target = served.listener, houdini_target({})
-    example = dict(
-        line.split("=", 1)
+    listener = served.listener
+    # Every assignment .env.example shows, set or commented out, but HOUDINI_HOST: it
+    # ships empty because no default reaches Houdini from inside the container.
+    example = {
+        name: value
         for line in (root / ".env.example").read_text().splitlines()
-        if line and not line.startswith("#")
-    )
+        if (assignment := re.fullmatch(r"(?:# )?([A-Z_]+)=(.*)", line))
+        for name, value in [assignment.groups()]
+        if name != "HOUDINI_HOST"
+    }
+    assert {"HOUDINI_PORT", "MCP_HOST", "MCP_PORT"} <= example.keys(), example
     image = dict(
         pair.split("=", 1)
         for line in (root / "Dockerfile").read_text().splitlines()
@@ -276,11 +281,8 @@ def test_the_deploy_files_state_the_defaults_the_server_resolves() -> None:
     health = re.search(r"//localhost:(\d+)/health", " ".join(service["healthcheck"]["test"]))
     assert publish and health, (published, service["healthcheck"])
 
-    assert (example["HOUDINI_PORT"], example["MCP_PORT"], image["MCP_PORT"]) == (
-        str(target.port),
-        str(listener.port),
-        str(listener.port),
-    )
+    assert (server_settings(example), serving(example)) == (server_settings({}), served)
+    assert image["MCP_PORT"] == str(listener.port)
     assert publish.group(1, 2) == (str(listener.host), str(listener.port))
     assert (publish.group(3), health.group(1)) == (image["MCP_PORT"], image["MCP_PORT"])
 

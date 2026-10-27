@@ -69,6 +69,12 @@ dev = [
 # user installs. CI never runs the floor itself, so a lock rewritten by a newer uv
 # may need the floor raised to match (check with `uvx --from 'uv==<floor>' uv lock --check`).
 required-version = ">=0.12.15"
+# The version is read from the handshake (tool.setuptools.dynamic), so a change there,
+# not only to this file, rebuilds the installed project's metadata.
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "houdini_plugin/houdini_mcp/python/houdini_mcp_handshake/__init__.py" },
+]
 
 [project.urls]
 Homepage = "https://github.com/brandon-fryslie/houdini-mcp"

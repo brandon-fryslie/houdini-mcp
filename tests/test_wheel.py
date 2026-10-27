@@ -4,6 +4,7 @@ as the release both sides report."""
 import shutil
 import subprocess
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import houdini_mcp_handshake as handshake
@@ -15,7 +16,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(scope="module")
-def wheel(tmp_path_factory: pytest.TempPathFactory) -> zipfile.ZipFile:
+def wheel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[zipfile.ZipFile]:
     uv = shutil.which("uv")
     assert uv, "uv on PATH builds the wheel"
     out = tmp_path_factory.mktemp("dist")
@@ -29,7 +30,8 @@ def wheel(tmp_path_factory: pytest.TempPathFactory) -> zipfile.ZipFile:
     )
     assert built.returncode == 0, built.stdout + built.stderr
     (path,) = out.glob("*.whl")
-    return zipfile.ZipFile(path)
+    with zipfile.ZipFile(path) as built_wheel:
+        yield built_wheel
 
 
 def test_the_wheel_holds_the_plugin_tree_git_holds(wheel: zipfile.ZipFile) -> None:
