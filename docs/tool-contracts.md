@@ -174,6 +174,9 @@ disabled, so its camera and ROP never reach the undo stack and the artist's next
 undo is their own. A capture is the pane as its own
 window draws it, so a window in front of Houdini is never in the picture. Like
 the undoable tools, renders and captures need the plugin installed in that Houdini.
+A Houdini whose plugin is another build than the server's, or one it fails to
+import, is refused when the link is made, so every tool fails there with
+`operation_failed`, naming the plugin to replace.
 
 A call that finds the scene free has no `scene_wait`. A call cancelled while it waits (its client
 timed out or gave up) leaves the queue and never runs. A call cancelled after

@@ -54,10 +54,10 @@ def build(tree: Path) -> str:
     they hold the same sources, so the build, not ``RELEASE``, is what tells a
     server it may call a plugin: every commit between two releases states the
     first one. Only sources count, so a stray file in a clone (``.DS_Store``,
-    ``__pycache__``) is no other build.
+    ``__pycache__``, an editor's lock link ``.#listener.py``) is no other build.
     """
     digest = hashlib.sha256()
-    for source in sorted(tree.rglob("*.py")):
+    for source in sorted(path for path in tree.rglob("*.py") if path.is_file()):
         for part in (source.relative_to(tree).as_posix().encode(), source.read_bytes()):
             # length-prefixed, so no two trees' parts run together into one stream
             digest.update(len(part).to_bytes(8, "big"))

@@ -15,7 +15,6 @@ from houdini_mcp.connection import (
     BUILD,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
-    InstalledPlugin,
     PluginMissing,
     TransportFailure,
     get_connection_info,
@@ -403,7 +402,7 @@ class TestPluginBuild:
             mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), None)
             link = houdini().connect("localhost", 18811, max_retries=1)
 
-        assert link.plugin is None
+        assert houdini().link() is link
         assert "Houdini at localhost:18811 has no houdini_mcp plugin on its path" in caplog.messages
 
     def test_this_builds_plugin_links_and_is_logged_with_its_path(
@@ -417,19 +416,25 @@ class TestPluginBuild:
             mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), current)
             link = houdini().connect("localhost", 18811, max_retries=1)
 
-        assert link.plugin == InstalledPlugin(RELEASE, BUILD, STALE_PLUGIN)
+        assert houdini().link() is link
         assert (
             f"Houdini at localhost:18811 has houdini_mcp plugin release {RELEASE}, "
             f"build {BUILD} from {STALE_PLUGIN}" in caplog.messages
         )
 
-    def test_the_plugin_this_server_ships_is_its_build(self, reset_connection_state, mock_hou):
+    def test_the_plugin_this_server_ships_is_its_build(
+        self, reset_connection_state, mock_hou, caplog
+    ):
         """The real plugin package, imported from the tree the server ships, links."""
-        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
             mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
             link = houdini().connect("localhost", 18811, max_retries=1)
 
-        assert link.plugin is not None and link.plugin.build == BUILD
+        assert houdini().link() is link
+        assert any(f"build {BUILD} from " in message for message in caplog.messages)
 
     def test_a_build_read_that_times_out_is_retried_like_the_hou_import(
         self, reset_connection_state, mock_hou
@@ -441,7 +446,7 @@ class TestPluginBuild:
 
         assert mock_rpyc.connect.call_count == 2
         assert busy.closed is True
-        assert link.plugin is not None and link.plugin.build == BUILD
+        assert houdini().link() is link
 
 
 class TestBuild:
@@ -467,6 +472,13 @@ class TestBuild:
         (tmp_path / ".DS_Store").write_bytes(b"\0")
         (tmp_path / "__pycache__").mkdir()
         (tmp_path / "__pycache__" / "a.cpython-313.pyc").write_bytes(b"\0")
+        assert build(tmp_path) == before
+
+    def test_a_source_that_cannot_be_read_is_no_source(self, tmp_path):
+        """An editor's lock link names a file that is not there; it is no other build."""
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / ".#a.py").symlink_to(tmp_path / "gone")
         assert build(tmp_path) == before
 
     def test_the_plugin_states_the_build_of_the_tree_it_was_imported_from(self):

@@ -326,7 +326,8 @@ tests that run against a live Houdini.
 ### Houdini imports another build of the houdini_mcp plugin
 - The server refuses to connect, naming the plugin directory Houdini imported and
   both builds. Replace that install with the plugin the server was built with
-  (`houdini-mcp install` from the server's install), then restart Houdini. Two
+  (`houdini-mcp install` from the server's install; for a server in Docker, from a
+  clone at the commit its image was built from), then restart Houdini. Two
   installs from different commits are different builds even when both state the
   same release
 - An older `houdini-mcp install` left in Houdini's preferences `packages`

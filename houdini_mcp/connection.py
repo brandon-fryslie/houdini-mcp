@@ -248,15 +248,13 @@ class Link:
     link proved it reaches Houdini, so no holder can see one without the other.
     ``host`` and ``port`` are what the link was opened to: a request is
     checked against the Houdini actually reached, and diagnostics name that one.
-    Identity is the instance: a reconnect is a new ``Link``. ``plugin`` is what the
-    proof read of the plugin on Houdini's path (None: there is none).
+    Identity is the instance: a reconnect is a new ``Link``.
     """
 
     host: str
     port: int
     conn: Any
     hou: Any
-    plugin: InstalledPlugin | BrokenPlugin | None
 
     @property
     def name(self) -> str:
@@ -308,7 +306,7 @@ def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) 
         PluginMissing: Houdini's path holds another build of the plugin, or one
             Houdini fails to import.
     """
-    return _of_this_build(_reach(target, host, port, sync_timeout))
+    return _of_this_build(*_reach(target, host, port, sync_timeout))
 
 
 def _installed_plugin(conn: Any) -> InstalledPlugin | BrokenPlugin | None:
@@ -336,15 +334,15 @@ def _installed_plugin(conn: Any) -> InstalledPlugin | BrokenPlugin | None:
         return BrokenPlugin(reason(e))
 
 
-def _of_this_build(link: Link) -> Link:
+def _of_this_build(link: Link, plugin: InstalledPlugin | BrokenPlugin | None) -> Link:
     """``link``, unless Houdini's path holds another build of the plugin, which would
-    answer this server's calls in another build's shapes, or one it fails to import.
+    answer this server's calls in another build's shapes, or one it fails to import;
+    ``plugin`` is what the proof that opened ``link`` read of it.
 
     [LAW:single-enforcer] The one check of skew between server and plugin, made once
     per link and before any plugin module is asked anything; no tool parses a plugin
     answer for it. It reads only what the proof already read, so it fails in no other way.
     """
-    plugin = link.plugin
     if plugin is None or (isinstance(plugin, InstalledPlugin) and plugin.build == BUILD):
         return link
     link.close()
@@ -369,9 +367,12 @@ def _found(plugin: InstalledPlugin | BrokenPlugin | None) -> str:
             return f"a houdini_mcp plugin it fails to import ({why})"
 
 
-def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
+def _reach(
+    target: HoudiniTarget, host: str, port: int, sync_timeout: float
+) -> tuple[Link, InstalledPlugin | BrokenPlugin | None]:
     """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches
-    Houdini, reading the plugin on its path as part of the proof.
+    Houdini, with the plugin on its path as the proof read it, for ``_of_this_build``
+    to judge.
 
     The proof is ``hou`` imported across the link and the plugin read: sync requests,
     so a Houdini too busy to answer fails it like one that is not there.
@@ -397,9 +398,9 @@ def _reach(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> 
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    link = Link(host, port, conn, hou, plugin)
+    link = Link(host, port, conn, hou)
     logger.info(f"Houdini at {link.name} has {_found(plugin)}")
-    return link
+    return link, plugin
 
 
 def _open_link_with_retries(
@@ -425,7 +426,7 @@ def _open_link_with_retries(
 
     for attempt in range(max_retries):
         try:
-            link = _reach(target, host, port, sync_timeout)
+            reached = _reach(target, host, port, sync_timeout)
         except Exception as e:
             if not _open_is_retryable(e):
                 raise HoudiniConnectionError(
@@ -450,7 +451,7 @@ def _open_link_with_retries(
         else:
             # Judged outside the attempt: another build of the plugin is a reached
             # Houdini's answer, neither retried nor told to start a listener.
-            return _of_this_build(link)
+            return _of_this_build(*reached)
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {describe_target(host, port)} after {max_retries} attempts. "
