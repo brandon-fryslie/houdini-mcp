@@ -11,6 +11,9 @@ An MCP (Model Context Protocol) server for controlling SideFX Houdini via `hrpyc
 +-----------------+                      +------------------+                      +-------------+
 ```
 
+The server runs in your Python environment. The plugin runs inside Houdini and starts
+the hrpyc listener the server connects to.
+
 ## Architecture Decisions
 
 Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
@@ -22,58 +25,70 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 
 ## Features
 
-- **43 MCP tools** across 15 modular categories
-- **Full hou module access** - Execute any Houdini Python code remotely
-- **Scene management** - Create, load, save scenes
-- **Node operations** - Create, delete, modify nodes and parameters
-- **Rendering** - Viewport renders, quad views, Karma GPU/CPU support
-- **Pane screenshots** - Capture NetworkEditor, SceneViewer, and other panes
-- **Scene serialization** - Diff scene states before/after operations
-- **Connection management** - Auto-reconnect with exponential backoff + jitter
-- **Error handling** - Consistent error responses with recovery hints
-- **Response optimization** - Result text in a dense shorthand of its JSON, text over 16KB delivered whole as a file, AI summarization
+- **42 MCP tools** covering scene and node editing, parameters, wiring, materials,
+  renders, pane screenshots, code execution and connection checks. See
+  [Tool Categories](#tool-categories-42-tools).
+- **Full `hou` access**: `execute_code` runs Python with `hou` available, in a process
+  of its own that is killed at the program's timeout.
+- **One-command install**: `houdini-mcp install` sets up the Houdini plugin and every
+  MCP client on the machine. No clone is needed.
+- **The listener starts itself**: in a graphical Houdini the plugin starts the hrpyc
+  listener once the UI is up, with no shelf click.
+- **Renders leave undo alone**: `render_viewport` and `render_quad_view` add no steps to
+  the artist's undo history.
+- **Build check**: the server refuses a Houdini whose plugin is another build, and
+  names the plugin to install, instead of failing later on some call.
+- **Scene management**: create, load, save and clear scenes; `execute_code` can report
+  what its run changed under `/obj`.
+- **Pane screenshots**: capture NetworkEditor, SceneViewer and other panes.
+- **Consistent failures**: every failure has a `kind` and a `retry`, with recovery hints.
+- **Large results**: a result too large to return inline is written to a file, and
+  summarized when summarization is on.
 
 ## Installation
 
-You need Houdini 22 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
-macOS on Apple Silicon is the primary platform; [Windows and Linux](#windows-and-linux)
-follow the same steps. Install the server, then let it set up Houdini and your MCP
-clients:
+You need Houdini 22, Python 3.11 or newer, and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). macOS on Apple Silicon
+is the supported platform. Linux is untested, and [Windows is not supported](#windows).
 
 ```bash
 uv tool install git+https://github.com/brandon-fryslie/houdini-mcp
 houdini-mcp install
 ```
 
-Restart Houdini and your MCP client, and ask the client to build something in Houdini.
-Install with `uv tool install`, not `uvx`: the clients and Houdini run the server and
+Then restart Houdini and your MCP client, and ask the client to build something in
+Houdini.
+
+Install with `uv tool install`, not `uvx`: Houdini and the clients run the server and
 the plugin from where they are installed, and `uvx` installs them into a cache that
 `uv cache clean` removes.
 
-`houdini-mcp install` prints a line for everything it set up:
+`houdini-mcp install` prints a line for each step it took:
 
-- **Houdini**: it writes `houdini_mcp.json` into Houdini's `packages` directory
-  (`~/Library/Preferences/houdini/22.0/packages` on macOS), pointing Houdini at the
-  plugin where uv installed it. The plugin starts the listener the server reaches
-  Houdini through, on `127.0.0.1:18811`, as soon as Houdini's UI is up, and adds the
-  "Houdini MCP" shelf.
-- **MCP clients**: it registers the server with each of Claude Code (user scope),
-  Claude Desktop, Cursor and Codex that it finds on this machine. For any other
-  client, put the `houdini` entry the installer prints in its config.
+- **Houdini plugin**: it writes `houdini_mcp.json` into Houdini's `packages` directory
+  (`~/Library/Preferences/houdini/22.0/packages` on macOS). That file points Houdini at
+  the plugin where uv installed it, so upgrading the server upgrades the plugin Houdini
+  loads.
+- **MCP clients**: it registers the server over stdio with each of Claude Code (user
+  scope), Claude Desktop, Cursor and Codex that it finds on this machine. For any other
+  client, put the `houdini` entry the installer prints in that client's config.
 
-Running it again is safe, and keeps anything you added to the server's environment
-in a client, such as `HOUDINI_HOST`; an entry you pointed at a URL, as for
-[Docker](#docker-houdini-on-another-machine), is left as it is. A step that cannot finish says why, and the
-command exits non-zero. To upgrade, run `uv tool upgrade houdini-mcp`, then
-`houdini-mcp install` again. From a clone of this repository, `uv run houdini-mcp install`
-points Houdini and the clients at the clone, so your edits take effect at their next
-restart.
+A step that cannot finish says why, and the command exits 1. Running the command again
+is safe: it keeps settings you added to a client's entry, such as `HOUDINI_HOST`. An
+entry that points at a URL, as for [Docker](#docker-houdini-on-another-machine), is left
+as it is.
+
+To upgrade, run `uv tool upgrade houdini-mcp`, then `houdini-mcp install` again. From a
+clone of this repository, `uv run houdini-mcp install` points Houdini and the clients at
+the clone, so your edits take effect at their next restart.
 
 ### Starting the listener yourself
 
-The plugin's listener accepts connections on `127.0.0.1` only; to let another
-machine reach it, set the variables in [docs/remote-listener.md](docs/remote-listener.md).
-The shelf's **Start Remote** starts it on a port you choose when none is running, and
+In a graphical Houdini the plugin starts the listener on `127.0.0.1:18811`, or on the
+port `HOUDINI_RPC_BIND_PORT` names. The listener accepts connections on `127.0.0.1`
+only. To let another machine reach it, set the variables in
+[docs/remote-listener.md](docs/remote-listener.md). The shelf's **Start Remote** starts
+the listener on a port you choose when none is running, **Stop Remote** stops it, and
 **Remote Status** and **Remote Self-Test** report where it listens. A second Houdini
 finds the port taken and says so in a dialog.
 
@@ -103,11 +118,12 @@ To run the server in Docker, on Houdini's machine or another one:
 
 **Step 1: Install the plugin and let the server reach it**
 
-On Houdini's machine, install the plugin from the commit the image is built from:
-in a clone at that commit, run `uv run houdini-mcp install`. The server refuses a
-Houdini whose plugin is another build, so a plugin from `uv tool install` works
-only when it is that same commit. The
-listener binds to `127.0.0.1`, so for a server in a container or on another host set
+On Houdini's machine, install the plugin from the commit the image is built from: in a
+clone at that commit, run `uv run houdini-mcp install`. The server refuses a Houdini
+whose plugin is another build, so a plugin from `uv tool install` works only when it is
+that same commit.
+
+The listener binds to `127.0.0.1`. For a server in a container or on another host, set
 `HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1` or
 `HOUDINI_RPC_TOKEN` (set the same token in the server's environment). See
 [docs/remote-listener.md](docs/remote-listener.md); the shelf's **Remote Self-Test**
@@ -122,7 +138,7 @@ cd houdini-mcp
 
 # Copy and configure environment
 cp .env.example .env
-# Edit .env with your Houdini host IP (from Step 1)
+# Edit .env: HOUDINI_HOST is the address of the machine running Houdini
 
 # Run with Docker Compose
 docker compose up -d
@@ -143,17 +159,21 @@ The server answers only clients on this machine; to admit one on another, see
 }
 ```
 
-### Windows and Linux
+`houdini-mcp install` leaves a URL entry like this one alone.
 
-Windows is not supported.
+### Linux
 
 On Linux, `houdini-mcp install` writes to `~/houdini22.0`, or to the directory
 `HOUDINI_USER_PREF_DIR` names when it holds `__HVER__`, as Houdini requires. This has
 not been tested on Linux with Houdini 22.
 
+### Windows
+
+Windows is not supported.
+
 ## Configuration
 
-Environment variables:
+Environment variables for the server:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -163,7 +183,7 @@ Environment variables:
 | `MCP_HOST` | `127.0.0.1` | The address on this machine the HTTP server answers at: `0.0.0.0` for every interface, or one of its IP addresses; a value that is not an IP address stops the server. Under Docker Compose, the address the container's port is published at, empty meaning the default |
 | `MCP_PORT` | `3055` | MCP server HTTP port; a value that is not a port stops the server. Under Docker Compose, the port on this machine the container's port is published at |
 | `MCP_ALLOWED_HOSTS` | *(empty)* | Comma-separated names or addresses a client may call the HTTP server by, beyond `localhost`, `127.0.0.1` and `::1`, each as the client's URL spells its host: a name, an IPv4 address, or an IPv6 address in brackets, with no port. A request calling the server by a name it does not admit is refused with 421. Any other entry, such as an empty one, `*`, `box:3055` or `http://box`, stops the server |
-| `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server. `http` and `streamable-http` serve MCP at `/mcp`, `sse` at `/sse`: point the client's URL at the path the transport serves |
+| `MCP_TRANSPORT` | `http` | Transport type (http, stdio, sse, streamable-http); any other value stops the server. `http` and `streamable-http` serve MCP at `/mcp`, `sse` at `/sse`: point the client's URL at the path the transport serves. The clients `houdini-mcp install` registers run `stdio` |
 | `LOG_LEVEL` | `INFO` | Logging level: any name Python's `logging` knows (DEBUG, INFO, WARNING or WARN, ERROR, CRITICAL or FATAL, NOTSET), any case; any other value stops the server |
 | `HOUDINI_MCP_RESULTS_DIR` | `~/.cache/houdini-mcp/results` | The root under which each running server keeps results too large to return inline, in a directory of its own: its newest that fit in 64MB. A stopped server's results are removed when another starts |
 | `HOUDINI_MCP_ALLOW_BYPASS` | `false` | Whether `execute_code`'s `allow_dangerous` and `allow_heavy_geometry` can be honored at all: true/yes/on/1/t/y or false/no/off/0/f/n, in any case; any other value stops the server |
@@ -174,6 +194,17 @@ Environment variables:
 
 Every setting is read once, when the server starts; changing one takes a restart.
 Under `MCP_TRANSPORT=stdio`, `MCP_HOST`, `MCP_PORT` and `MCP_ALLOWED_HOSTS` are not read.
+
+Environment variables for the Houdini plugin's listener:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HOUDINI_RPC_BIND_HOST` | `127.0.0.1` | The address the listener binds. Another address needs `HOUDINI_RPC_TRUSTED_NETWORK=1` or `HOUDINI_RPC_TOKEN` |
+| `HOUDINI_RPC_BIND_PORT` | `18811` | The port the listener binds |
+| `HOUDINI_RPC_TRUSTED_NETWORK` | off | Opts in to binding a non-loopback address without a token |
+| `HOUDINI_RPC_TOKEN` | *(unset)* | Shared secret the listener enforces |
+
+A listener variable the plugin cannot use is shown in a dialog in Houdini.
 
 ### Admitting a client on another machine
 
@@ -196,9 +227,10 @@ MCP_ALLOWED_HOSTS=studio-box.local,192.168.1.10
 The server has no authentication. Any client that can reach that address can call
 every tool, `execute_code` included.
 
-## Tool Categories (43 Tools)
+## Tool Categories (42 Tools)
 
-The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
+The tools are grouped by module in `houdini_mcp/tools/`. Each tool's parameters and
+failure kinds are in [docs/tool-contracts.md](docs/tool-contracts.md).
 
 ### Scene & Nodes (`scene.py`, `nodes.py`)
 | Tool | Description |
@@ -213,7 +245,7 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `get_node_info` | Get node details, parameters, connections, errors |
 | `list_children` | List child nodes with connection details |
 | `find_nodes` | Find nodes by name pattern or type |
-| `list_node_types` | List available node types by category |
+| `list_node_types` | List the node types Houdini offers, by category, read on each call |
 
 ### Wiring & Layout (`wiring.py`, `layout.py`)
 | Tool | Description |
@@ -251,6 +283,9 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 | `set_render_settings` | Modify ROP settings |
 | `create_render_node` | Create new ROP with settings |
 
+A render runs on Houdini's main thread with undo disabled, so the artist's undo history
+is left as it was.
+
 ### Pane Screenshots (`pane_screenshot.py`)
 | Tool | Description |
 |------|-------------|
@@ -262,12 +297,19 @@ The server is organized into 15 modular tool categories in `houdini_mcp/tools/`:
 ### Code Execution (`code.py`)
 | Tool | Description |
 |------|-------------|
-| `execute_code` | Execute Python with `hou` available |
+| `execute_code` | Execute Python with `hou` available, in a process of its own, killed at its `timeout` |
+| `get_last_scene_diff` | The scene diff of the last `execute_code` run that asked for `capture_diff` |
 
 ### Error Handling (`errors.py`)
 | Tool | Description |
 |------|-------------|
 | `find_error_nodes` | Find all nodes with cook errors |
+
+### Connection (`link.py`)
+| Tool | Description |
+|------|-------------|
+| `check_connection` | Connect if needed, then report the Houdini reached: its version, build and hip file |
+| `ping_houdini` | Quick connectivity test over a short-lived connection |
 
 ### Help & Summarization (`help.py`, `summarization.py`)
 | Tool | Description |
@@ -319,7 +361,7 @@ tests that run against a live Houdini.
 ## Troubleshooting
 
 ### Connection refused
-- Verify Houdini is running with hrpyc server started
+- Verify Houdini is running. A graphical Houdini starts the listener once its UI is up; a Houdini without the plugin needs the listener started by hand
 - Run **Remote Self-Test** in Houdini for this OS's firewall command (on macOS it allows the Houdini executable, not the port)
 - Verify HOUDINI_HOST is correct
 
@@ -349,32 +391,19 @@ tests that run against a live Houdini.
 
 ```
 houdini_mcp/
+├── __main__.py            # The `houdini-mcp` command: serve, or `install`
+├── install.py             # `houdini-mcp install`: the plugin pointer and each MCP client
 ├── server.py              # FastMCP server: serves the tool functions in tools/
 ├── connection.py          # One owner of the RPyC link, with retry/backoff
+├── settings.py            # The environment settings, read once when the server starts
+├── delivery.py            # Results too large to return inline, written to files
 └── tools/                 # The tools: each function's signature and docstring is its MCP contract
-    ├── _common.py         # Shared utilities, error handling
-    ├── code.py            # Python execution
-    ├── errors.py          # Error node detection
-    ├── geometry.py        # Geometry introspection
-    ├── help.py            # Houdini help access
-    ├── layout.py          # Node layout tools
-    ├── link.py            # Connection probes
-    ├── materials.py       # Material creation/assignment
-    ├── nodes.py           # Node CRUD operations
-    ├── pane_screenshot.py # Pane capture tools
-    ├── parameters.py      # Parameter get/set
-    ├── rendering.py       # Viewport/Karma rendering
-    ├── scene.py           # Scene management
-    ├── snapshot.py        # Scene snapshot and diff
-    ├── summarization.py   # AI response summarization
-    └── wiring.py          # Node connection tools
 
 houdini_plugin/            # Houdini plugin, laid out as a packages directory
 ├── houdini_mcp.json       # Package descriptor
 └── houdini_mcp/
-    ├── python/            # The hrpyc remote listener, its handshake, the read vocabulary
-    │                      # both sides share, and find_nodes', get_parameter_schema's
-    │                      # and get_geo_summary's reads
+    ├── python/            # The hrpyc listener and the modules both sides share
+    ├── python3.13libs/    # uiready.py: starts the listener when Houdini's UI is up
     └── toolbar/           # Shelf tools
 
 tests/                     # pytest suite
