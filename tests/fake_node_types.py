@@ -2,11 +2,11 @@
 
 [LAW:one-source-of-truth] ``fake_node_types.json`` is the one record of the node
 types Houdini registers in each of its categories, of the types of them the fake has,
-and of what createNode does with each in a network that makes nodes. Which types it
-has, and which parameter tuples a fresh node of each carries, are the fake's choice;
+of what createNode does with each in a network that makes nodes, and of the nodes
+createNode builds inside each. Which types it has, and which parameter tuples a fresh node of each carries, are the fake's choice;
 every other fact is Houdini's answer, read by ``read_node_types``: the refresh script
 writes the file from it under hython, and a live test checks the file against it, so
-the table stays what Houdini 22.0.466 says. That a locked asset and a node that is not
+the table stays what Houdini 22.0.466 says. That a locked asset, a network inside one, and a node that is not
 a network refuse every child, whatever the name, is the fake's own rule (``_holding`` in
 tests/conftest.py), which the live name test checks.
 
@@ -152,6 +152,52 @@ class CreateNode:
 
 
 @dataclass(frozen=True)
+class Sibling:
+    """A wire's source: the sibling node of this name."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class Indirect:
+    """A wire's source: the indirect input of this name in the network the wired node is in."""
+
+    name: str
+
+
+Source = Sibling | Indirect
+
+
+@dataclass(frozen=True)
+class Wire:
+    """An input of a content node: input ``input`` is wired from output ``output`` of ``source``."""
+
+    input: int
+    source: Source
+    output: int
+
+
+@dataclass(frozen=True)
+class Content:
+    """A node Houdini's createNode builds inside another, as the reader finds it fresh.
+
+    ``type`` is the own name of a row of the category its network holds. ``flags`` is
+    the state of each flag its type has, ``parms`` the values of the tuples its type's
+    row names. A locked asset's contents are the same wherever it is made, so they are
+    its type's: ``contents`` is None for a content node of a locked type, and its type's
+    own contents are used. An unlocked node's are the instance's (the karma's lopnet
+    holds 39, a lopnet made alone none), so ``contents`` is a tuple, empty for none.
+    """
+
+    name: str
+    type: str
+    flags: Mapping[str, bool]
+    wires: tuple[Wire, ...]
+    parms: Mapping[str, tuple[Any, ...]]
+    contents: "tuple[Content, ...] | None"
+
+
+@dataclass(frozen=True)
 class NodeType:
     """One node type as Houdini gives it.
 
@@ -164,7 +210,9 @@ class NodeType:
     null, or a karma ROP. ``flags`` is the flags of FLAGS a node of it has, which
     follow its class: a SOP has all three, an object display alone, a ROP bypass
     alone, a context none. ``create_node`` is createNode's answers in a node of it, for
-    an unlocked context root; None for any other type.
+    an unlocked context root; None for any other type. ``contents`` is the nodes
+    createNode builds in a fresh one of it: its children as the reader finds them,
+    which are the nine contexts for the root.
     """
 
     category: str
@@ -176,6 +224,7 @@ class NodeType:
     flags: frozenset[str]
     parms: dict[str, ParmTuple]
     create_node: CreateNode | None
+    contents: tuple[Content, ...]
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "NodeType":
         # [LAW:one-source-of-truth] a type is the table's one record of it, so a copy
@@ -258,7 +307,54 @@ def load_table() -> Table:
 
 def categories(table: Table) -> dict[str, Category]:
     """The table as records: category -> the category."""
-    return {name: _category(name, entry) for name, entry in table.items()}
+    read = {name: _category(name, entry) for name, entry in table.items()}
+    for category in read.values():
+        for row in category.types.values():
+            _check_contents(read, row, row.contents)
+    return read
+
+
+def _check_contents(
+    read: Mapping[str, Category], parent: NodeType, contents: tuple[Content, ...]
+) -> None:
+    """[LAW:parse-dont-validate] every node ``parent`` builds is a row of the category
+    it holds, and is shaped as its type is: the flags and parm tuples it has, contents
+    of its own exactly where its type is not locked, wires from siblings it has and
+    indirect inputs ``parent`` has."""
+    where = f"{parent.category}/{parent.type}"
+    if parent.holds is None and contents:
+        raise ValueError(f"{where} holds no nodes, and builds {[c.name for c in contents]}")
+    names = [c.name for c in contents]
+    if len(set(names)) != len(names):
+        raise ValueError(f"{where} builds two nodes of one name: {names}")
+    for content in contents:
+        row = read[parent.holds].types.get(content.type)
+        if row is None:
+            raise LookupError(
+                f"{where} builds {content.name}, a {parent.holds}/{content.type} the table "
+                f"lacks: hython tests/refresh_fake_node_types.py {parent.holds}/{content.type}"
+            )
+        if (content.contents is None) != row.locked:
+            raise ValueError(
+                f"{where}/{content.name} ({row.type}) has contents {content.contents!r}, "
+                "which a locked type's alone lack, its own being its type's"
+            )
+        if set(content.flags) != row.flags:
+            raise ValueError(
+                f"{where}/{content.name} has flags {set(content.flags)}, not {row.flags}"
+            )
+        if not content.parms.keys() <= row.parms.keys():
+            raise ValueError(f"{where}/{content.name} sets tuples its type lacks: {content.parms}")
+        for wire in content.wires:
+            match wire.source:
+                case Sibling(name) if name not in names:
+                    raise ValueError(f"{where}/{content.name} is wired from {name}, not a sibling")
+                case Indirect(name) if name not in [
+                    str(n + 1) for n in range(parent.indirect_inputs or 0)
+                ]:
+                    raise ValueError(f"{where}/{content.name} is wired from indirect input {name}")
+        if content.contents is not None:
+            _check_contents(read, row, content.contents)
 
 
 def _category(name: str, entry: dict[str, Any]) -> Category:
@@ -304,7 +400,34 @@ def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
             for tuple_name, parm in facts["parms"].items()
         },
         create_node=_create_node(facts["create_node"]) if answered else None,
+        contents=tuple(_content(content) for content in facts["contents"]),
     )
+
+
+def _content(entry: dict[str, Any]) -> Content:
+    return Content(
+        name=entry["name"],
+        type=entry["type"],
+        flags=MappingProxyType(entry["flags"]),
+        wires=tuple(
+            Wire(wire["input"], _source(wire["source"]), wire["output"]) for wire in entry["wires"]
+        ),
+        parms=MappingProxyType({name: tuple(values) for name, values in entry["parms"].items()}),
+        contents=(
+            None
+            if "contents" not in entry
+            else tuple(_content(content) for content in entry["contents"])
+        ),
+    )
+
+
+def _source(source: dict[str, str]) -> Source:
+    match source:
+        case {"sibling": str(name)}:
+            return Sibling(name)
+        case {"indirect": str(name)}:
+            return Indirect(name)
+    raise ValueError(f"the fake models no wire source like {source!r}")
 
 
 def _create_node(create_node: dict[str, Any]) -> CreateNode:
@@ -406,7 +529,7 @@ class _Reader:
         if key in self._facts:
             return False
         category, own = key
-        facts = self._facts[key] = _facts(node, self._types[category][own])
+        facts = self._facts[key] = _facts(node, self._types[category][own], self._types)
         is_root = _has_answers(category, facts["holds"], facts["locked"])
         if keep and is_root:
             self.roots.append(node)
@@ -534,7 +657,7 @@ def _raised(e: BaseException) -> tuple[str, str]:
     return raised.rpartition(".")[2], message
 
 
-def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
+def _facts(node: Any, row: dict[str, Any], types: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
     held = node.childTypeCategory()
     return {
         "description": node.type().description(),
@@ -543,6 +666,48 @@ def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
         "indirect_inputs": _indirect_inputs(node),
         "flags": _flags(node),
         "parms": {name: _parm_tuple(node, name) for name in row["parms"]},
+        "contents": _contents(node, types),
+    }
+
+
+def _contents(node: Any, types: Mapping[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The nodes ``node`` holds, as the table records them: each a row of the category
+    ``node`` holds, so a type the table lacks stops the read with the command that
+    adds it. A locked asset's contents are its type's, recorded once on its row."""
+    held = node.childTypeCategory()
+    entries = []
+    for child in node.children():
+        own = child.type().name()
+        row = types[held.name()].get(own)
+        if row is None:
+            raise LookupError(
+                f"Houdini builds {child.path()}, a {held.name()}/{own} the table lacks: "
+                f"hython tests/refresh_fake_node_types.py {held.name()}/{own}"
+            )
+        entry = {
+            "name": child.name(),
+            "type": own,
+            "flags": {flag: getattr(child, FLAGS[flag].read)() for flag in _flags(child)},
+            "wires": [_wire(child, connection) for connection in child.inputConnections()],
+            "parms": {name: _parm_tuple(child, name)["values"] for name in row["parms"]},
+        }
+        if not child.isLockedHDA():
+            entry["contents"] = _contents(child, types)
+        entries.append(entry)
+    return entries
+
+
+def _wire(node: Any, connection: Any) -> dict[str, Any]:
+    """``connection`` into ``node``: from a sibling or from an indirect input, by name."""
+    item = connection.inputItem()
+    kind = item.networkItemType().name()
+    if kind not in ("Node", "SubnetIndirectInput"):
+        raise ValueError(f"{node.path()} is wired from a {kind}, which the table cannot record")
+    source = {"sibling" if kind == "Node" else "indirect": item.name()}
+    return {
+        "input": connection.inputIndex(),
+        "source": source,
+        "output": connection.inputItemOutputIndex(),
     }
 
 
