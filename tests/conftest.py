@@ -427,16 +427,22 @@ def _built_contents(
     path: str, node_type: NodeType, contents: tuple[Content, ...]
 ) -> list["MockHouNode"]:
     """The nodes ``contents`` records for the network at ``path`` of ``node_type``."""
-    held = CATEGORIES[node_type.holds].types if contents and node_type.holds else {}
+    held = _held_by(node_type, contents)
     return [
         _built_as(held[content.type], join_path(path, content.name), content.name, content)
         for content in contents
     ]
 
 
+def _held_by(node_type: NodeType, contents: tuple[Content, ...]) -> Mapping[str, NodeType]:
+    """The types a node of ``node_type`` can build ``contents`` from: those of the
+    category it holds, none when it builds nothing."""
+    return CATEGORIES[node_type.holds].types if contents and node_type.holds else {}
+
+
 def _link(tree: "MockHouNode") -> None:
     """Link each node below ``tree`` to its parent: where the nodes of a tree built by
-    hand become a scene's, the one place a parent link is made."""
+    hand become a scene's. ``attach`` links the tree's own root to its network."""
     for network in [tree, *tree.allSubChildren()]:
         for node in network._children:
             node._parent = network
@@ -624,7 +630,7 @@ class MockHouNode:
         """Place a prebuilt subtree in this network, as Houdini could have built it.
 
         [LAW:single-enforcer] the one way into the scene (createNode and add_node
-        come here) and the one place a parent link is made. The whole subtree is
+        come here). The whole subtree is
         judged before any of it is linked, so a refused one leaves the scene and
         every node's links as they were. A path, name or parent that lies is a
         fixture lying, ValueError; a type its network cannot hold is refused as
@@ -1363,7 +1369,7 @@ def _admit(
 
 def _contents_beside(node_type: NodeType) -> list[tuple[str, NodeType]]:
     """The name and type of each node Houdini builds in a node of ``node_type``."""
-    held = CATEGORIES[node_type.holds].types if node_type.contents and node_type.holds else {}
+    held = _held_by(node_type, node_type.contents)
     return [(content.name, held[content.type]) for content in node_type.contents]
 
 

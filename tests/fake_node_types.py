@@ -3,12 +3,13 @@
 [LAW:one-source-of-truth] ``fake_node_types.json`` is the one record of the node
 types Houdini registers in each of its categories, of the types of them the fake has,
 of what createNode does with each in a network that makes nodes, and of the nodes
-createNode builds inside each. Which types it has, and which parameter tuples a fresh node of each carries, are the fake's choice;
-every other fact is Houdini's answer, read by ``read_node_types``: the refresh script
-writes the file from it under hython, and a live test checks the file against it, so
-the table stays what Houdini 22.0.466 says. That a locked asset, a network inside one, and a node that is not
-a network refuse every child, whatever the name, is the fake's own rule (``_holding`` in
-tests/conftest.py), which the live name test checks.
+createNode builds inside each. Which types it has, and which parameter tuples a
+fresh node of each carries, are the fake's choice; every other fact is Houdini's
+answer, read by ``read_node_types``: the refresh script writes the file from it
+under hython, and a live test checks the file against it, so the table stays what
+Houdini 22.0.466 says. That a locked asset, a network inside one, and a node that is
+not a network refuse every child, whatever the name, is the fake's own rule
+(``_holding`` in tests/conftest.py), which the live name test checks.
 
 Imported by hython as well as by the tests, so it imports nothing beyond the
 standard library and ``houdini_mcp_read``, the plugin tree's leaf that says how a

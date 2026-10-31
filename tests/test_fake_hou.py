@@ -999,10 +999,6 @@ def test_a_types_namespace_order_and_aliases_are_houdinis_registry(
     )
 
 
-def _all_below(node: MockHouNode) -> list[MockHouNode]:
-    return node.allSubChildren()
-
-
 def test_a_created_karma_holds_the_nodes_its_definition_builds(mock_hou: MockHouModule) -> None:
     """Houdini 22.0.466: a fresh /out karma holds an unlocked lopnet of 39 nodes and a
     rop_usdrender, 41 nodes below it; one null of the lopnet displays, the
@@ -1011,7 +1007,7 @@ def test_a_created_karma_holds_the_nodes_its_definition_builds(mock_hou: MockHou
     lopnet = mock_hou.node(f"{karma.path()}/lopnet")
 
     assert [child.type().name() for child in karma.children()] == ["lopnet", "usdrender"]
-    assert (len(_all_below(karma)), len(lopnet.children())) == (41, 39)
+    assert (len(karma.allSubChildren()), len(lopnet.children())) == (41, 39)
     assert sum(child.isDisplayFlagSet() for child in lopnet.children()) == 1
     assert sum(child.isBypassed() for child in lopnet.children()) == 8
 
@@ -1028,7 +1024,7 @@ def test_a_bare_lopnet_and_subnet_hold_what_their_types_build_not_a_parents_inst
     subnet = mock_hou.node("/obj").createNode("geo").createNode("subnet")
 
     assert (lopnet.children(), subnet.children()) == ((), ())
-    assert len(_all_below(light)) == 28
+    assert len(light.allSubChildren()) == 28
 
 
 def test_a_foreach_holds_an_each_wired_from_its_indirect_input(mock_hou: MockHouModule) -> None:
@@ -1054,7 +1050,7 @@ def test_a_locked_asset_and_any_network_inside_one_refuses_a_node_made_in_it(
 ) -> None:
     karma = mock_hou.node("/out").createNode("karma")
     lopnet = mock_hou.node(f"{karma.path()}/lopnet")
-    count = len(_all_below(karma))
+    count = len(karma.allSubChildren())
 
     for network in (karma, lopnet):
         with pytest.raises(
@@ -1065,7 +1061,7 @@ def test_a_locked_asset_and_any_network_inside_one_refuses_a_node_made_in_it(
         mock_hou.add_node(
             MockHouNode(path=f"{lopnet.path()}/extra", name="extra", node_type="merge")
         )
-    assert len(_all_below(karma)) == count
+    assert len(karma.allSubChildren()) == count
 
 
 def test_a_destroyed_node_added_back_under_a_locked_network_is_refused(
@@ -1094,7 +1090,7 @@ def test_a_destroyed_karma_added_back_holds_its_contents_and_wires(
     karma.destroy()
     mock_hou.add_node(karma)
 
-    assert len(_all_below(mock_hou.node(karma.path()))) == 41
+    assert len(mock_hou.node(karma.path()).allSubChildren()) == 41
     assert (
         sorted(
             (node.path(), connection.inputIndex(), connection.inputItem().path())
