@@ -375,7 +375,8 @@ class TestPluginBuild:
             f"Houdini at localhost:18811 has {stated}; this server is release {RELEASE}, "
             f"build {BUILD}. "
             "Install the plugin this server was built with (`houdini-mcp install` from the "
-            "same install or clone), then restart Houdini."
+            "same install or clone, or `uv run houdini-mcp install --project` for a "
+            "project's own install), then restart Houdini."
         )
         assert mock_rpyc.connect.call_count == 1
         assert stale.closed is True

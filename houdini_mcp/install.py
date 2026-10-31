@@ -1,4 +1,5 @@
-"""``houdini-mcp install``: the plugin into Houdini, and this server into each MCP client here.
+"""``houdini-mcp install``: the plugin into Houdini, and this server into each MCP client
+here, or into one project's ``.mcp.json``.
 
 [LAW:effects-at-boundaries] Every place it reads or writes is reached through the
 :class:`Machine` handed in, never the process's own environment or home, so a test
@@ -16,7 +17,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import houdini_mcp_handshake
+
 import houdini_plugin
+
+from .connection import BUILD
 
 # The Houdini the plugin is built for: its preferences directory is named for it.
 HOUDINI_VERSION = "22.0"
@@ -106,11 +111,9 @@ def houdini_pref_dir(machine: Machine) -> Path:
     named = machine.environ.get("HOUDINI_USER_PREF_DIR", "")
     if "__HVER__" in named:
         return Path(named.replace("__HVER__", HOUDINI_VERSION))
-    defaults = {
-        "darwin": machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION,
-        "win32": machine.home / "Documents" / f"houdini{HOUDINI_VERSION}",
-    }
-    return defaults.get(machine.platform, machine.home / f"houdini{HOUDINI_VERSION}")
+    if machine.platform == "darwin":
+        return machine.home / "Library" / "Preferences" / "houdini" / HOUDINI_VERSION
+    return machine.home / f"houdini{HOUDINI_VERSION}"
 
 
 def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
@@ -133,11 +136,14 @@ def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
     return Installed(str(pointer))
 
 
-def _run(argv: list[str], machine: Machine) -> subprocess.CompletedProcess[str] | Failed:
+def _run(
+    argv: list[str], machine: Machine, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str] | Failed:
     try:
         # An argv list, no shell: the client's CLI as PATH finds it, and this server's command.
         return subprocess.run(  # nosec B603
             argv,
+            cwd=cwd,
             env=dict(machine.environ),
             capture_output=True,
             text=True,
@@ -211,6 +217,15 @@ def registered(path: Path, load: Callable[[str], object], table: str) -> Registe
     return Registered(config, servers, entry)
 
 
+def _claude_cli(machine: Machine) -> str | None:
+    return _cli(
+        machine,
+        "claude",
+        machine.home / ".claude" / "local" / "claude",
+        machine.home / ".local" / "bin" / "claude",
+    )
+
+
 def _claude_config(machine: Machine) -> Path:
     named = machine.environ.get("CLAUDE_CONFIG_DIR")
     return Path(named) / ".claude.json" if named else machine.home / ".claude.json"
@@ -223,12 +238,7 @@ def _codex_config(machine: Machine) -> Path:
 
 def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     """Register the server in Claude Code's user scope, replacing any earlier registration."""
-    claude = _cli(
-        machine,
-        "claude",
-        machine.home / ".claude" / "local" / "claude",
-        machine.home / ".local" / "bin" / "claude",
-    )
+    claude = _claude_cli(machine)
     if claude is None:
         return NotFound("claude on PATH, in ~/.claude/local or in ~/.local/bin")
     path = _claude_config(machine)
@@ -378,13 +388,11 @@ def codex(machine: Machine, server: ServerEntry) -> Outcome:
 class JsonConfig:
     """A client that reads its servers from ``mcpServers`` in a JSON file in its own directory."""
 
-    app_dir: Callable[[Machine], Path | NotFound]
+    app_dir: Callable[[Machine], Path]
     file: str
 
     def __call__(self, machine: Machine, server: ServerEntry) -> Outcome:
         app = self.app_dir(machine)
-        if isinstance(app, NotFound):
-            return app
         if not app.is_dir():
             return NotFound(str(app))
         path = app / self.file
@@ -426,10 +434,7 @@ def _replace(path: Path, text: str) -> None:
         staged.unlink(missing_ok=True)
 
 
-def _claude_desktop_dir(machine: Machine) -> Path | NotFound:
-    if machine.platform == "win32":
-        appdata = machine.environ.get("APPDATA")
-        return Path(appdata) / "Claude" if appdata else NotFound("APPDATA, unset")
+def _claude_desktop_dir(machine: Machine) -> Path:
     if machine.platform == "darwin":
         return machine.home / "Library" / "Application Support" / "Claude"
     return machine.home / ".config" / "Claude"
@@ -443,8 +448,9 @@ class Step:
 
 # [LAW:one-type-per-behavior] every step is attempted, and says what it did; a client
 # that is not on this machine is one outcome among the others.
+PLUGIN = Step("Houdini plugin", install_plugin)
 STEPS = (
-    Step("Houdini plugin", install_plugin),
+    PLUGIN,
     Step("Claude Code", claude_code),
     Step("Claude Desktop", JsonConfig(_claude_desktop_dir, "claude_desktop_config.json")),
     Step("Cursor", JsonConfig(lambda machine: machine.home / ".cursor", "mcp.json")),
@@ -452,9 +458,64 @@ STEPS = (
 )
 
 
-def install(machine: Machine, server: ServerEntry) -> list[tuple[str, Outcome]]:
+# What `claude mcp get` prints when a project's .mcp.json entry will not run, and what
+# the user does about it (Claude Code 2.1.299).
+_NOT_RUN = (
+    (
+        "Scope: Local config",
+        f"Claude Code runs a local-scope {SERVER_NAME!r} instead; "
+        f"run: claude mcp remove --scope local {SERVER_NAME}",
+    ),
+    ("Status: ✘ Rejected", "it was declined; run: claude mcp reset-project-choices"),
+    ("Status: ⊘ Disabled", "it is disabled here; enable it with /mcp in Claude Code"),
+)
+# An entry pending approval and a declined one print alike beside a user-scope entry.
+_USER_SCOPE = "Scope: User config"
+
+
+@dataclass(frozen=True)
+class ProjectConfig:
+    """A project's ``.mcp.json``, the file Claude Code reads a project's servers from."""
+
+    project: Path
+
+    def __call__(self, machine: Machine, server: ServerEntry) -> Outcome:
+        outcome = JsonConfig(lambda _machine: self.project, ".mcp.json")(machine, server)
+        claude = _claude_cli(machine)
+        if claude is None or isinstance(outcome, Failed | NotFound):
+            return outcome
+        # [LAW:one-source-of-truth] A local-scope entry runs over .mcp.json, and Claude Code
+        # keys it by git root, not folder: only claude can say which entry runs here.
+        running = _run([claude, "mcp", "get", SERVER_NAME], machine, self.project)
+        if isinstance(running, Failed):
+            return Failed(f"{_described(outcome)}, but claude mcp get: {running.why}")
+        if running.returncode != 0:
+            return Failed(f"{_described(outcome)}, but claude mcp get: {_said(running)}")
+        for line, remedy in _NOT_RUN:
+            if line in running.stdout:
+                return Failed(f"{_described(outcome)}, but {remedy}, in {self.project}")
+        if isinstance(outcome, Installed) and _USER_SCOPE in running.stdout:
+            return Installed(
+                f"{outcome.where} (Claude Code runs your user-scope entry until you approve "
+                "this one; if you declined it, run: claude mcp reset-project-choices)"
+            )
+        return outcome
+
+
+def in_project(project: Path) -> tuple[Step, ...]:
+    """The steps that serve one project and leave every client's own config alone.
+
+    The plugin is still Houdini's, for the whole machine: Houdini reads its packages
+    directory with no project in view, so the last install's build is the one it loads.
+    """
+    return (PLUGIN, Step("Project", ProjectConfig(project)))
+
+
+def install(
+    machine: Machine, server: ServerEntry, steps: tuple[Step, ...]
+) -> list[tuple[str, Outcome]]:
     """Run every step, in order, and say what each did."""
-    return [(step.name, step.install(machine, server)) for step in STEPS]
+    return [(step.name, step.install(machine, server)) for step in steps]
 
 
 def _described(outcome: Outcome) -> str:
@@ -473,17 +534,19 @@ def report(results: list[tuple[str, Outcome]], server: ServerEntry) -> tuple[str
     """What the install did, for a person to read, and the exit status that says it."""
     lines = [
         *(f"{name}: {_described(outcome)}" for name, outcome in results),
+        f"Version: {houdini_mcp_handshake.RELEASE}, plugin build {BUILD}",
         "",
         "Restart Houdini: the plugin starts its listener once the UI is up.",
-        "Restart each MCP client above to load the server.",
+        "Restart each MCP client to load the server.",
         f"Any other MCP client's {SERVER_NAME!r} entry: {json.dumps(server.as_json())}",
     ]
     failed = any(isinstance(outcome, Failed) for _, outcome in results)
     return "\n".join(lines), int(failed)
 
 
-def main(machine: Machine) -> int:
+def main(machine: Machine, project: Path | None) -> int:
     server = this_server()
-    text, status = report(install(machine, server), server)
+    steps = STEPS if project is None else in_project(project)
+    text, status = report(install(machine, server, steps), server)
     print(text)
     return status

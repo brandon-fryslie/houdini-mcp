@@ -211,7 +211,8 @@ BUILD = build(houdini_plugin.PACKAGES / "houdini_mcp")
 # whichever way that was found.
 INSTALL_PLUGIN = (
     "Install the plugin this server was built with (`houdini-mcp install` from the same "
-    "install or clone), then restart Houdini."
+    "install or clone, or `uv run houdini-mcp install --project` for a project's own "
+    "install), then restart Houdini."
 )
 
 

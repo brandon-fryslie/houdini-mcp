@@ -6,9 +6,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from houdini_mcp_handshake import RELEASE
 
 import houdini_plugin
 from houdini_mcp.install import (
+    STEPS,
     Failed,
     Installed,
     JsonConfig,
@@ -19,6 +21,7 @@ from houdini_mcp.install import (
     claude_code,
     codex,
     houdini_pref_dir,
+    in_project,
     install,
     install_plugin,
     report,
@@ -45,6 +48,11 @@ if sys.argv[1:3] == ["mcp", "remove"]:
     os.remove(known)
 elif sys.argv[1:3] == ["mcp", "add"]:
     open(known, "w").close()
+elif sys.argv[1:3] == ["mcp", "get"]:
+    if os.path.exists("unanswered"):
+        print("no answer", file=sys.stderr)
+        sys.exit(1)
+    print(open("answer").read() if os.path.exists("answer") else "  Scope: Project config")
 """
 
 
@@ -113,7 +121,6 @@ def test_a_second_install_points_at_the_plugin_again_in_place_of_an_earlier_one(
     ("platform", "under_home"),
     [
         ("darwin", "Library/Preferences/houdini/22.0"),
-        ("win32", "Documents/houdini22.0"),
         ("linux", "houdini22.0"),
     ],
 )
@@ -282,7 +289,7 @@ def test_the_report_says_what_each_step_did_and_fails_when_one_failed(tmp_path: 
 
 
 def test_every_step_runs_on_a_machine_with_no_clients(tmp_path: Path) -> None:
-    results = install(_machine(tmp_path), SERVER)
+    results = install(_machine(tmp_path), SERVER, STEPS)
     assert [name for name, _ in results] == [
         "Houdini plugin",
         "Claude Code",
@@ -312,6 +319,146 @@ def test_the_command_installs_this_interpreters_server(tmp_path: Path) -> None:
     assert "Claude Code: installed in its user config" in done.stdout
     assert _calls(tmp_path / "bin")[-1][-4:] == [sys.executable, "-P", "-m", "houdini_mcp"]
     assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
+
+
+def _project_install(tmp_path: Path, *project: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "houdini_mcp", "install", "--project", *project],
+        env={
+            "HOME": str(tmp_path / "home"),
+            "PATH": str(tmp_path / "bin"),
+            "HOUDINI_USER_PREF_DIR": str(tmp_path / "pref" / "houdini__HVER__"),
+        },
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_a_project_install_registers_in_the_project_and_in_no_client(tmp_path: Path) -> None:
+    claude_bin = tmp_path / "bin"
+    _cli(claude_bin, "claude")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+
+    done = _project_install(tmp_path, cwd=project)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    servers = json.loads((project / ".mcp.json").read_text())["mcpServers"]
+    assert servers["other"] == {"command": "x"}
+    assert servers["houdini"]["command"] == sys.executable
+    assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
+    assert _calls(claude_bin) == [["mcp", "get", "houdini"]]
+
+
+def test_a_project_named_from_elsewhere_is_the_one_registered(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    done = _project_install(tmp_path, str(project), cwd=tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (project / ".mcp.json").is_file()
+    assert not (tmp_path / ".mcp.json").exists()
+
+
+def test_a_local_scope_entry_that_runs_over_the_project_fails_the_step(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "answer").write_text("  Scope: Local config (private to you in this project)")
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(project)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "claude mcp remove --scope local houdini" in outcome.why
+    # The project is registered: removing the local entry is all that is left to do.
+    assert "houdini" in json.loads((project / ".mcp.json").read_text())["mcpServers"]
+
+
+def test_a_kept_project_entry_that_a_local_scope_entry_runs_over_fails_the_step(
+    tmp_path: Path,
+) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "answer").write_text("  Scope: Local config (private to you in this project)")
+    config = {"mcpServers": {"houdini": {"url": "http://docker:8000/mcp"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(config))
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "kept its entry" in outcome.why
+
+
+@pytest.mark.parametrize(
+    ("answer", "remedy"),
+    [
+        ("  Status: ✘ Rejected", "claude mcp reset-project-choices"),
+        ("  Status: ⊘ Disabled for this project", "/mcp"),
+    ],
+)
+def test_a_project_entry_claude_code_will_not_run_fails_the_step(
+    tmp_path: Path, answer: str, remedy: str
+) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "answer").write_text(answer)
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert remedy in outcome.why
+
+
+def test_a_user_scope_entry_is_named_as_what_runs_until_approval(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "answer").write_text("  Scope: User config (available in all your projects)")
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Installed)
+    assert "until you approve" in outcome.where
+
+
+def test_a_claude_code_that_cannot_say_which_entry_runs_fails_the_step(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "unanswered").write_text("")
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "no answer" in outcome.why
+
+
+def test_a_project_install_with_no_claude_code_still_registers(tmp_path: Path) -> None:
+    results = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))
+
+    assert results["Project"] == Installed(str(tmp_path / ".mcp.json"))
+
+
+def test_a_project_that_is_not_a_folder_stops_the_command(tmp_path: Path) -> None:
+    done = _project_install(tmp_path, "missing", cwd=tmp_path)
+
+    assert done.returncode == 2
+    assert "is not a folder" in done.stderr
+    assert not (tmp_path / "pref").exists()
+
+
+def test_a_projects_entry_at_a_url_is_kept(tmp_path: Path) -> None:
+    machine = _machine(tmp_path)
+    config = {"mcpServers": {"houdini": {"type": "http", "url": "http://docker:8000/mcp"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(config))
+
+    results = dict(install(machine, SERVER, in_project(tmp_path)))
+
+    assert results["Project"] == Kept("http://docker:8000/mcp")
+    assert json.loads((tmp_path / ".mcp.json").read_text()) == config
+
+
+def test_the_report_says_which_build_was_installed() -> None:
+    text, _ = report([], SERVER)
+    assert text.splitlines()[0].startswith(f"Version: {RELEASE}, plugin build ")
 
 
 def test_a_preferences_directory_named_without_hver_is_ignored_as_houdini_ignores_it(
@@ -589,19 +736,8 @@ def test_a_json_config_keeps_its_permissions_and_its_text(tmp_path: Path) -> Non
     assert sorted(path.name for path in config.parent.iterdir()) == ["mcp.json"]
 
 
-def test_houdinis_preferences_on_windows_are_not_moved_by_a_shells_home(tmp_path: Path) -> None:
-    """Git Bash sets HOME in its own shell; Houdini started from the Start menu has none."""
-    machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
-    assert houdini_pref_dir(machine) == machine.home / "Documents" / "houdini22.0"
-
-
-def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:
-    results = dict(install(_machine(tmp_path, "win32"), SERVER))
-    assert results["Claude Desktop"] == NotFound("APPDATA, unset")
-
-
 def test_the_entry_another_client_is_shown_is_one_its_config_takes() -> None:
-    server = ServerEntry((r"C:\Users\Jane Doe\python.exe", "-P", "-m", "houdini_mcp"), {})
+    server = ServerEntry(("/Users/Jane Doe/python", "-P", "-m", "houdini_mcp"), {})
     text, _ = report([], server)
     shown = text.splitlines()[-1].split(" entry: ", 1)[1]
     assert json.loads(shown) == server.as_json()
