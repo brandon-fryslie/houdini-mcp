@@ -17,14 +17,12 @@ from tests.conftest import (
     HouInvalidInput,
     HouPermissionError,
     MockHouModule,
+    PERMISSION_ERROR,
     MockHouNode,
     raised_inside_houdini,
 )
 
-LOCKED = (
-    "Failed to modify node or parameter because of a permission error.  Possible causes "
-    "include locked assets, takes, product permissions or user specified permissions"
-)
+LOCKED = PERMISSION_ERROR
 REFUSAL = f"hou.PermissionError: {LOCKED}"
 
 

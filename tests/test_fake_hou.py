@@ -1078,7 +1078,8 @@ def test_a_node_in_a_locked_asset_is_refused_each_edit_houdini_refuses(
     # the table records no parameter of a content node, so the node is given one
     inner._placed().tuples["tx"] = HeldTuple(("tx",), [0.0], ())
     first = inner.parm("tx")
-    before = (first.eval(), inner.inputs(), inner.isDisplayFlagSet())
+    nodes = lopnet.children()[:2]
+    before = [(n.inputs(), n.isDisplayFlagSet(), n.isBypassed()) for n in nodes]
     permission = (
         r"hou\.PermissionError: Failed to modify node or parameter because of a permission "
         r"error\.  Possible causes include locked assets, takes, product permissions or user "
@@ -1101,7 +1102,8 @@ def test_a_node_in_a_locked_asset_is_refused_each_edit_houdini_refuses(
     for network in (karma, lopnet):
         with pytest.raises(Exception, match=r"hou\.PermissionError: Cannot modify a locked asset"):
             network.createNetworkBox()
-    assert (first.eval(), inner.inputs(), inner.isDisplayFlagSet()) == before
+    assert first.eval() == 0.0
+    assert [(n.inputs(), n.isDisplayFlagSet(), n.isBypassed()) for n in nodes] == before
     assert inner in lopnet.children()
 
 
@@ -1112,9 +1114,11 @@ def test_a_node_in_a_locked_asset_is_allowed_what_houdini_allows_and_the_asset_i
     inner = mock_hou.node(f"{karma.path()}/lopnet").children()[0]
 
     inner.setPosition(MockVector2(1.0, 2.0))
-    inner.setColor(MockColor((1.0, 0.0, 0.0)))
+    red = MockColor((1.0, 0.0, 0.0))
+    inner.setColor(red)
     mock_hou.node(karma.path()).layoutChildren()
     assert inner.position() == (1.0, 2.0)
+    assert inner.color() is red
 
     merge = mock_hou.node("/stage").createNode("merge")
     merge._placed().tuples["tx"] = HeldTuple(("tx",), [0.0], ())

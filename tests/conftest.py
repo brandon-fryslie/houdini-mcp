@@ -466,7 +466,8 @@ def _link(tree: "MockHouNode") -> None:
 
 def _wire(network: "MockHouNode", contents: tuple[Content, ...]) -> None:
     """Wire the nodes built in ``network`` as ``contents`` records, once they are
-    linked and placed: setInput's check of a source's network needs both."""
+    linked and placed: the source's network is judged here, as setInput judges it, but
+    without setInput's refusal of a locked asset's own contents."""
     for content in contents:
         node = network.node(content.name)
         assert node is not None
@@ -475,6 +476,9 @@ def _wire(network: "MockHouNode", contents: tuple[Content, ...]) -> None:
                 network.indirectInputs()[int(wire.source.name) - 1]
                 if isinstance(wire.source, Indirect)
                 else network.node(wire.source.name)
+            )
+            assert source is not None and source.parent() is node.parent(), (
+                f"{content.name} wires from {wire.source.name}, outside its network"
             )
             node._connect(wire.input, source, wire.output)
         _wire(node, _inner(node._row(), content))
@@ -927,8 +931,8 @@ class MockHouNode:
 
     def _disconnect(self, kept: Sequence["MockHouNode"]) -> None:
         """Cut every wire into and out of this node but those inside ``kept``, the
-        subtree it leaves with, through setInput so both ends agree: a tree added
-        again holds the wires it had."""
+        subtree it leaves with, through _connect so both ends agree and a locked
+        asset's contents are not refused: a tree added again holds the wires it had."""
         within = [id(node) for node in kept]
         for index, source in enumerate(self._inputs):
             owner = source.parent() if isinstance(source, MockSubnetIndirectInput) else source
