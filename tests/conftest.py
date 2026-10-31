@@ -2,6 +2,7 @@
 
 import contextlib
 import copy
+import dataclasses
 import importlib
 import json
 import logging
@@ -34,13 +35,16 @@ from tests.fake_node_types import (
     MAKES,
     Answer,
     Answers,
+    Category,
     Made,
     Mismatched,
     NodeType,
     ParmTuple,
     Refused,
+    categories,
+    full_name,
     load_table,
-    node_types,
+    name_components,
 )
 
 # What the houdini-mcp command's tools run under when the environment names nothing.
@@ -65,18 +69,14 @@ def join_path(parent: str, name: str) -> str:
 
 
 # [LAW:one-source-of-truth] the fake's node types are the table Houdini 22.0.466
-# wrote (tests/fake_node_types.json): category -> a type's own name -> the type, and
+# wrote (tests/fake_node_types.json): each category Houdini has, with every type it
+# registers (its namespace orders and aliases), the types of it the fake has, and
 # createNode's answers in each kind of network. A node's category is the one its
 # network holds; the root and its contexts come with the scene, placed as their types.
-NODE_TYPES: dict[str, dict[str, NodeType]] = node_types(load_table())
+CATEGORIES: dict[str, Category] = categories(load_table())
 
 # what Houdini 22's createNode raises for a name that reaches no type it makes there
 INVALID_TYPE_NAME = "The attempted operation failed.\nInvalid node type name"
-
-
-def _registered(row: NodeType | None) -> "MockNodeType | None":
-    """``row`` as Houdini's registry answers it: None for a type it does not register."""
-    return None if row is None or not row.registered else MockNodeType(row)
 
 
 def _resolved(category: str, name: str) -> NodeType | None:
@@ -84,35 +84,33 @@ def _resolved(category: str, name: str) -> NodeType | None:
     its base name's namespace order whose scope, namespace and version are the ones the
     name gives, a part it leaves out matching any and a trailing ``::`` giving the
     version as empty (``mountain`` gives mountain::2.0, ``mountain::`` the older
-    mountain, ``controlextract`` apex::controlextract::2.0); None when no type is that
-    one. A type the namespace order gives that the table lacks is the table's gap, not
-    Houdini's refusal."""
-    scope, namespace, base, version = _name_components(name)
+    mountain, ``controlextract`` apex::controlextract::2.0); None when Houdini
+    registers no type that is that one. A type it registers that the table lacks is
+    the table's gap, not Houdini's refusal."""
+    scope, namespace, base, version = name_components(name)
     given = (scope or None, namespace or None, version if version or name.endswith("::") else None)
-    order = next(
-        (
-            row.namespace_order
-            for row in NODE_TYPES[category].values()
-            if _name_components(row.type)[2] == base
-        ),
-        (),
-    )
+    order = CATEGORIES[category].namespace_orders.get(base, ())
     own = next((own for own in order if _matches(given, own)), None)
-    if own is None:
-        return None
-    row = NODE_TYPES[category].get(own)
-    if row is None:
-        raise LookupError(
-            f"{name!r} names {category}/{own}, which the table lacks: "
-            f"hython tests/refresh_fake_node_types.py {category}/{own}"
-        )
-    return row
+    return None if own is None else CATEGORIES[category].held(own)
+
+
+def installed(category: Category, row: NodeType) -> Category:
+    """``category`` with ``row`` installed, as Houdini registers an asset it installs
+    under a base name no type of the category has: in a namespace order of its own."""
+    base = name_components(row.type)[2]
+    if base in category.namespace_orders:
+        raise ValueError(f"{category.name} already registers types named {base}")
+    return dataclasses.replace(
+        category,
+        namespace_orders={**category.namespace_orders, base: (row.type,)},
+        types={**category.types, row.type: row},
+    )
 
 
 def _matches(given: tuple[str | None, str | None, str | None], own: str) -> bool:
     """Whether the type named ``own`` has the scope, namespace and version ``given``,
     each None for a part the name leaves out."""
-    scope, namespace, _, version = _name_components(own)
+    scope, namespace, _, version = name_components(own)
     return all(
         part is None or part == theirs
         for part, theirs in zip(given, (scope, namespace, version), strict=True)
@@ -123,30 +121,7 @@ def _named(category: str, name: str) -> NodeType | None:
     """The type createNode gives for ``name`` in ``category``: an alias stands for its
     type's own name, which then resolves as any name does (``v_mountain``, an alias of
     the older mountain, gives mountain::2.0)."""
-    aliased = next((row.type for row in NODE_TYPES[category].values() if name in row.aliases), name)
-    return _resolved(category, aliased)
-
-
-def _name_components(name: str) -> tuple[str, str, str, str]:
-    """hou.hda.componentsFromFullNodeTypeName: ``[scope::][namespace::]name[::version]``,
-    as Houdini 22 splits it. A version is digits and dots, or empty after a trailing
-    ``::`` (``mountain::`` is mountain); a scope is a leading ``Category/type``; the
-    namespace is everything between (``a::b::c`` has namespace ``a::b``)."""
-    parts = name.split("::")
-    trailing = parts[-1]
-    version = (
-        parts.pop()
-        if len(parts) > 1 and (trailing.replace(".", "").isdigit() or not trailing)
-        else ""
-    )
-    scope = parts.pop(0) if len(parts) > 1 and "/" in parts[0] else ""
-    base = parts.pop()
-    return scope, "::".join(parts), base, version
-
-
-def _full_name(scope: str, namespace: str, name: str, version: str) -> str:
-    """hou.hda.fullNodeTypeNameFromComponents: the components joined, the empty ones left out."""
-    return "::".join(part for part in (scope, namespace, name, version) if part)
+    return _resolved(category, CATEGORIES[category].aliases.get(name, name))
 
 
 class OperationFailed(Exception):
@@ -235,9 +210,10 @@ class MockSubnetIndirectInput:
 
 
 class MockNodeType:
-    """Mock hou.NodeType: a row of the table. [LAW:one-type-per-behavior] one fake of
-    it, whether a category hands it out or a node's type() does; two of one row are
-    equal, as Houdini's two objects for one type are."""
+    """Mock hou.NodeType: a row of the table, and what its category's registry says of
+    it. [LAW:one-type-per-behavior] one fake of it, whether a category hands it out or
+    a node's type() does; two of one row are equal, as Houdini's two objects for one
+    type are."""
 
     def __init__(self, row: NodeType) -> None:
         self._row = row
@@ -261,10 +237,10 @@ class MockNodeType:
         return self._row.description
 
     def namespaceOrder(self) -> tuple[str, ...]:
-        return self._row.namespace_order
+        return CATEGORIES[self._row.category].namespace_order(self._row.type)
 
     def aliases(self) -> tuple[str, ...]:
-        return self._row.aliases
+        return CATEGORIES[self._row.category].aliases_of(self._row.type)
 
 
 class MockNodeTypeCategory:
@@ -285,14 +261,19 @@ class MockNodeTypeCategory:
         return self._name
 
     def nodeTypes(self) -> dict[str, MockNodeType]:
-        """Every type the category registers, under its own name."""
+        """Every type of the category the fake has that Houdini registers, under its own
+        name."""
+        category = CATEGORIES[self._name]
         return {
-            own: MockNodeType(row) for own, row in NODE_TYPES[self._name].items() if row.registered
+            own: MockNodeType(row)
+            for own, row in category.types.items()
+            if category.registered(own)
         }
 
     def nodeType(self, name: str) -> MockNodeType | None:
         """The registered type whose own name ``name`` is; None when no type has it."""
-        return _registered(NODE_TYPES[self._name].get(name))
+        category = CATEGORIES[self._name]
+        return MockNodeType(category.held(name)) if category.registered(name) else None
 
 
 class _SopNodeClass(type):
@@ -815,7 +796,7 @@ class MockHouNode:
         # ("v_mountain" gives mountain1, "apex::controlextract" controlextract1); a
         # name that reaches no type is refused before it names a node.
         row = _named(_holding(self._placed()), node_type)
-        base = name or (node_type if row is None else _name_components(row.type)[2])
+        base = name or (node_type if row is None else name_components(row.type)[2])
         stem = base.rstrip("0123456789")
         carried = base[len(stem) :]
         numbered = (f"{stem}{n}" for n in range(int(carried or 0) + 1, 10_000))
@@ -1269,7 +1250,7 @@ def _admit(
     answer: Answer
     if isinstance(node._placement, Placed):
         placement, answer = node._placement, Made()
-        if NODE_TYPES[held].get(placement.row.type) is not placement.row:
+        if CATEGORIES[held].types.get(placement.row.type) is not placement.row:
             raise ValueError(
                 f"{node.path()!r} keeps the {placement.row.type} it was placed as, "
                 f"which no {held} network holds"
@@ -1410,7 +1391,7 @@ class MockHouModule:
 
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
-        self._root = _built_as(NODE_TYPES["Director"]["root"], path="/", name="")
+        self._root = _built_as(CATEGORIES["Director"].types["root"], path="/", name="")
         # the scene's update mode, as hou.setUpdateMode sets it: every placed node
         # reads it off the root
         self._root._update_mode = MockUpdateMode.AutoUpdate
@@ -1418,7 +1399,7 @@ class MockHouModule:
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
 
-        for context, row in NODE_TYPES["Manager"].items():
+        for context, row in CATEGORIES["Manager"].types.items():
             self.add_node(_built_as(row, path=f"/{context}", name=context))
 
         # Mock hipFile
@@ -1434,8 +1415,8 @@ class MockHouModule:
         self.LoadWarning = LoadWarning
         self.InvalidInput = HouInvalidInput
         self.hda = SimpleNamespace(
-            componentsFromFullNodeTypeName=_name_components,
-            fullNodeTypeNameFromComponents=_full_name,
+            componentsFromFullNodeTypeName=name_components,
+            fullNodeTypeNameFromComponents=full_name,
         )
 
         # Houdini types
@@ -1522,19 +1503,20 @@ class MockHouModule:
         return next((i for i in parent._indirect_items() if i.name() == name), None)
 
     def nodeTypeCategories(self) -> dict[str, MockNodeTypeCategory]:
-        """Every category of NODE_TYPES."""
-        return {category: MockNodeTypeCategory(category) for category in NODE_TYPES}
+        """Every category Houdini has, as the table holds them."""
+        return {category: MockNodeTypeCategory(category) for category in CATEGORIES}
 
     def preferredNodeType(self, name: str) -> MockNodeType | None:
         """The registered type a name in Houdini's category-qualified form, the
         category before the type's own name (``apex::Sop/controlextract``), resolves
         to as rebuilt from its parts, which reads a trailing "::" as no version; None
         for a name no type answers. It takes no alias, and no network's answers."""
-        scope, namespace, qualified, version = _name_components(name)
+        scope, namespace, qualified, version = name_components(name)
         category, _, base = qualified.partition("/")
-        if category not in NODE_TYPES:
+        if category not in CATEGORIES:
             return None
-        return _registered(_resolved(category, _full_name(scope, namespace, base, version)))
+        row = _resolved(category, full_name(scope, namespace, base, version))
+        return None if row is None else MockNodeType(row)
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""

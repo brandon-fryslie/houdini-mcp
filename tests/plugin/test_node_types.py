@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from houdini_mcp_node_types import node_types
 
-from tests.conftest import NODE_TYPES, MockHouModule, MockNodeType
+from tests.conftest import CATEGORIES, MockHouModule, MockNodeType, installed
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def test_the_category_compares_case_insensitively(hou: MockHouModule) -> None:
     listed = answer(hou, "sop", None, slice(0, 100_000))
 
     assert {t["category"] for t in listed["node_types"]} == {"Sop"}
-    assert listed["total"] == len(NODE_TYPES["Sop"]) == len(listed["node_types"])
+    assert listed["total"] == len(CATEGORIES["Sop"].types) == len(listed["node_types"])
 
 
 def test_the_name_filter_is_a_case_insensitive_substring(hou: MockHouModule) -> None:
@@ -56,7 +56,7 @@ def test_types_are_listed_in_category_then_name_order(hou: MockHouModule) -> Non
 def test_the_categories_are_every_one_houdini_has_whatever_the_filter(
     hou: MockHouModule,
 ) -> None:
-    assert answer(hou, "Object", "geo", slice(0, 10))["categories"] == sorted(NODE_TYPES)
+    assert answer(hou, "Object", "geo", slice(0, 10))["categories"] == sorted(CATEGORIES)
 
 
 def test_a_category_houdini_does_not_have_is_refused_naming_those_it_has(
@@ -66,7 +66,7 @@ def test_a_category_houdini_does_not_have_is_refused_naming_those_it_has(
 
     assert refused == {
         "refused": "category 'Sopp' is not a node type category Houdini has",
-        "categories": sorted(NODE_TYPES),
+        "categories": sorted(CATEGORIES),
     }
 
 
@@ -117,14 +117,9 @@ def test_only_the_windows_descriptions_are_read(
 def test_a_type_houdini_has_just_installed_is_listed(
     hou: MockHouModule, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    box = NODE_TYPES["Sop"]["box"]
-    monkeypatch.setitem(
-        NODE_TYPES["Sop"],
-        "mcp_listed",
-        dataclasses.replace(
-            box, type="mcp_listed", description="MCP listed", namespace_order=("mcp_listed",)
-        ),
-    )
+    sop = CATEGORIES["Sop"]
+    listed = dataclasses.replace(sop.types["box"], type="mcp_listed", description="MCP listed")
+    monkeypatch.setitem(CATEGORIES, "Sop", installed(sop, listed))
 
     listed = answer(hou, "Sop", "mcp_listed", slice(0, 10))
 
@@ -136,7 +131,10 @@ def test_a_type_houdini_has_just_installed_is_listed(
 def test_a_category_spelt_exactly_is_the_one_listed_beside_one_differing_in_case(
     hou: MockHouModule, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(NODE_TYPES, "SOP", {"box": NODE_TYPES["Sop"]["box"]})
+    sop = CATEGORIES["Sop"]
+    monkeypatch.setitem(
+        CATEGORIES, "SOP", dataclasses.replace(sop, name="SOP", types={"box": sop.types["box"]})
+    )
 
     listed = answer(hou, "SOP", None, slice(0, 100_000))
 
@@ -147,7 +145,10 @@ def test_a_category_naming_two_that_differ_only_in_case_is_refused(
     hou: MockHouModule, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A listing is of one category, so a name that picks out two picks out none."""
-    monkeypatch.setitem(NODE_TYPES, "SOP", {"box": NODE_TYPES["Sop"]["box"]})
+    sop = CATEGORIES["Sop"]
+    monkeypatch.setitem(
+        CATEGORIES, "SOP", dataclasses.replace(sop, name="SOP", types={"box": sop.types["box"]})
+    )
 
     refused = answer(hou, "sop", None, slice(0, 10))
 
