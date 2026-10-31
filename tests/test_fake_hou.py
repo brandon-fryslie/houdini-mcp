@@ -9,8 +9,11 @@ import pytest
 from tests.conftest import (
     CATEGORIES,
     HOUDINI_TURNED_MATRIX,
+    HeldTuple,
+    MockColor,
     MockHouModule,
     MockHouNode,
+    MockVector2,
     _built_as,
 )
 from tests.fake_node_types import (
@@ -1062,6 +1065,63 @@ def test_a_locked_asset_and_any_network_inside_one_refuses_a_node_made_in_it(
             MockHouNode(path=f"{lopnet.path()}/extra", name="extra", node_type="merge")
         )
     assert len(karma.allSubChildren()) == count
+
+
+def test_a_node_in_a_locked_asset_is_refused_each_edit_houdini_refuses(
+    mock_hou: MockHouModule,
+) -> None:
+    """Houdini 22.0.466 raises hou.PermissionError for each, in a locked asset and in a
+    network inside one alike, and leaves the node as it was."""
+    karma = mock_hou.node("/out").createNode("karma")
+    lopnet = mock_hou.node(f"{karma.path()}/lopnet")
+    inner = lopnet.children()[0]
+    # the table records no parameter of a content node, so the node is given one
+    inner._placed().tuples["tx"] = HeldTuple(("tx",), [0.0], ())
+    first = inner.parm("tx")
+    before = (first.eval(), inner.inputs(), inner.isDisplayFlagSet())
+    permission = (
+        r"hou\.PermissionError: Failed to modify node or parameter because of a permission "
+        r"error\.  Possible causes include locked assets, takes, product permissions or user "
+        r"specified permissions"
+    )
+
+    for node in lopnet.children()[:2]:
+        with pytest.raises(Exception, match=r"hou\.PermissionError: Cannot delete a node inside"):
+            node.destroy()
+        with pytest.raises(Exception, match=permission):
+            node.setInput(0, None)
+        with pytest.raises(Exception, match=permission):
+            node.setDisplayFlag(True)
+        with pytest.raises(Exception, match=permission):
+            node.bypass(True)
+    with pytest.raises(Exception, match=permission):
+        inner.parm("tx").set(1.0)
+    with pytest.raises(Exception, match=permission):
+        inner.parmTuple("tx").set((1.0,))
+    for network in (karma, lopnet):
+        with pytest.raises(Exception, match=r"hou\.PermissionError: Cannot modify a locked asset"):
+            network.createNetworkBox()
+    assert (first.eval(), inner.inputs(), inner.isDisplayFlagSet()) == before
+    assert inner in lopnet.children()
+
+
+def test_a_node_in_a_locked_asset_is_allowed_what_houdini_allows_and_the_asset_is_edited_outside(
+    mock_hou: MockHouModule,
+) -> None:
+    karma = mock_hou.node("/out").createNode("karma")
+    inner = mock_hou.node(f"{karma.path()}/lopnet").children()[0]
+
+    inner.setPosition(MockVector2(1.0, 2.0))
+    inner.setColor(MockColor((1.0, 0.0, 0.0)))
+    mock_hou.node(karma.path()).layoutChildren()
+    assert inner.position() == (1.0, 2.0)
+
+    merge = mock_hou.node("/stage").createNode("merge")
+    merge._placed().tuples["tx"] = HeldTuple(("tx",), [0.0], ())
+    merge.parm("tx").set(1.0)
+    merge.setInput(0, None)
+    karma.destroy()
+    assert mock_hou.node(karma.path()) is None
 
 
 def test_a_destroyed_node_added_back_under_a_locked_network_is_refused(

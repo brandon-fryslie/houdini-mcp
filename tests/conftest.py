@@ -141,6 +141,22 @@ HouPermissionError.__name__ = HouPermissionError.__qualname__ = "PermissionError
 HouPermissionError.__module__ = "hou"
 
 
+# What Houdini 22.0.466 says of an edit in a locked asset or a network inside one
+CANNOT_MODIFY_LOCKED = "Cannot modify a locked asset"
+CANNOT_DELETE_IN_LOCKED = "Cannot delete a node inside a locked asset"
+CANNOT_CREATE_IN_LOCKED = "Cannot create a node inside a locked asset"
+PERMISSION_ERROR = (
+    "Failed to modify node or parameter because of a permission error.  Possible causes "
+    "include locked assets, takes, product permissions or user specified permissions"
+)
+
+
+def _locked_network(chain: "Chain") -> bool:
+    """[LAW:single-enforcer] whether the network ``chain`` begins with is protected: a
+    locked asset, or inside one. The one rule every refused edit asks."""
+    return any(outer.locked for _, _, outer in chain)
+
+
 class HouInvalidNodeType(Exception):
     """hou.InvalidNodeType, which Houdini 22 raises for indirectInputs() on a node that
     is not a subnetwork."""
@@ -460,7 +476,7 @@ def _wire(network: "MockHouNode", contents: tuple[Content, ...]) -> None:
                 if isinstance(wire.source, Indirect)
                 else network.node(wire.source.name)
             )
-            node.setInput(wire.input, source, wire.output)
+            node._connect(wire.input, source, wire.output)
         _wire(node, _inner(node._row(), content))
 
 
@@ -843,12 +859,20 @@ class MockHouNode:
             )
         return value
 
+    def _refuse_edit_in_locked(self, message: str = PERMISSION_ERROR) -> None:
+        """Refuse an edit to this node, which its network, a locked asset or one inside
+        one, protects; the asset itself is edited in the network that holds it."""
+        if self._parent is not None and _locked_network(self._parent._chain()):
+            raise raised_inside_houdini(HouPermissionError(message))
+
     def _store(self, tuple_name: str, index: int, value: Any) -> None:
+        self._refuse_edit_in_locked()
         held = self._parms()[tuple_name]
         held.values[index] = _held_value(held.menu, value)
 
     def _set_tuple(self, name: str, value: Any) -> None:
         """Set every component or, refused, none."""
+        self._refuse_edit_in_locked()
         held = self._parms()[name]
         given = list(value) if isinstance(value, (list, tuple)) else [value]
         if len(given) != len(held.values):
@@ -886,6 +910,7 @@ class MockHouNode:
         """
         if self._parent is None:
             raise RuntimeError(f"{self.path()!r} is not in a scene")
+        self._refuse_edit_in_locked(CANNOT_DELETE_IN_LOCKED)
         with self.root()._undos.edit("Delete Node"):
             self._leave()
 
@@ -908,13 +933,13 @@ class MockHouNode:
         for index, source in enumerate(self._inputs):
             owner = source.parent() if isinstance(source, MockSubnetIndirectInput) else source
             if source is not None and id(owner) not in within:
-                self.setInput(index, None)
+                self._connect(index, None)
         for sink in list(self._outputs):
             if id(sink) in within:
                 continue
             for index, source in enumerate(sink._inputs):
                 if source is self:
-                    sink.setInput(index, None)
+                    sink._connect(index, None)
 
     def worldTransform(self) -> "MockMatrix4":
         """The node's world transform, as hou.ObjNode.worldTransform: its own rotate,
@@ -950,6 +975,7 @@ class MockHouNode:
             return node._placed().flags[flag]
 
         def write(node: MockHouNode, on: bool) -> None:
+            node._refuse_edit_in_locked()
             node._placed().flags[flag] = on
 
         # a bound method, as Houdini's is, which rpyc carries as it carries Houdini's
@@ -964,8 +990,19 @@ class MockHouNode:
         """Set input connection from a node or a subnet indirect input. As Houdini 22's,
         it refuses a source outside this node's own network, a subnet's indirect input
         included, and leaves the inputs as they were."""
+        self._refuse_edit_in_locked()
         if source_node is not None and source_node.parent() is not self.parent():
             raise raised_inside_houdini(OperationFailed("The attempted operation failed."))
+        self._connect(input_index, source_node, output_index)
+
+    def _connect(
+        self,
+        input_index: int,
+        source_node: "MockHouNode | MockSubnetIndirectInput | None",
+        output_index: int = 0,
+    ) -> None:
+        """Wire the input, judged by no one: setInput's refusals are Houdini's to a
+        caller, and the fake wires a locked asset's own contents through here."""
         # Extend inputs list if needed
         while len(self._inputs) <= input_index:
             self._inputs.append(None)
@@ -1107,6 +1144,8 @@ class MockHouNode:
 
     def createNetworkBox(self, name: str | None = None) -> "MockNetworkBox":
         """Create a network box in this node's network."""
+        if _locked_network(self._chain()):
+            raise raised_inside_houdini(HouPermissionError(CANNOT_MODIFY_LOCKED))
         self._network_box_counter += 1
         box_name = name if name else f"netbox{self._network_box_counter}"
         netbox = MockNetworkBox(box_name)
@@ -1298,10 +1337,8 @@ def _holding(chain: Chain, carried: bool = False) -> str:
         raise raised_inside_houdini(
             OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
         )
-    if not carried and any(outer.locked for _, _, outer in chain):
-        raise raised_inside_houdini(
-            HouPermissionError("Cannot create a node inside a locked asset")
-        )
+    if not carried and _locked_network(chain):
+        raise raised_inside_houdini(HouPermissionError(CANNOT_CREATE_IN_LOCKED))
     return placed.row.holds
 
 

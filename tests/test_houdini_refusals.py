@@ -2,7 +2,8 @@
 
 Houdini 22 refuses every write to a node inside a locked asset with the same
 hou.PermissionError (checked in hython for setInput, setFirstInput and each flag);
-the fake does not lock assets, so each test refuses the write it names.
+the fake refuses them in a locked asset (tests/test_fake_hou.py), but these tests'
+nodes are in none, so each refuses the write it names.
 """
 
 from __future__ import annotations
