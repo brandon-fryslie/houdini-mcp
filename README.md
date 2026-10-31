@@ -31,7 +31,8 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 - **Full `hou` access**: `execute_code` runs Python with `hou` available, in a process
   of its own that is killed at the program's timeout.
 - **One-command install**: `houdini-mcp install` sets up the Houdini plugin and every
-  MCP client on the machine. No clone is needed.
+  MCP client on the machine, or `houdini-mcp install --project` one project. No clone
+  is needed.
 - **The listener starts itself**: in a graphical Houdini the plugin starts the hrpyc
   listener once the UI is up, with no shelf click.
 - **Renders leave undo alone**: `render_viewport` and `render_quad_view` add no steps to
@@ -78,9 +79,37 @@ is safe: it keeps settings you added to a client's entry, such as `HOUDINI_HOST`
 entry that points at a URL, as for [Docker](#docker-houdini-on-another-machine), is left
 as it is.
 
-To upgrade, run `uv tool upgrade houdini-mcp`, then `houdini-mcp install` again. From a
-clone of this repository, `uv run houdini-mcp install` points Houdini and the clients at
-the clone, so your edits take effect at their next restart.
+To upgrade, run `uv tool upgrade houdini-mcp`, then `houdini-mcp install` again. To
+stay on one version, add a tag or commit to the URL:
+`uv tool install git+https://github.com/brandon-fryslie/houdini-mcp@<tag-or-commit>`.
+The installer prints the version and plugin build it set up. From a clone of this
+repository, `uv run houdini-mcp install` points Houdini and the clients at the clone, so
+your edits take effect at their next restart.
+
+### Installing into one project
+
+To give one project its own locked version, and leave every client's own config alone,
+add the server to the project and register it there:
+
+```bash
+cd your-project
+uv add --dev git+https://github.com/brandon-fryslie/houdini-mcp
+uv run houdini-mcp install --project
+```
+
+`uv.lock` holds the commit. The installer adds a `houdini` entry to the project's
+`.mcp.json`, keeping the entries already there, and that entry runs the project's
+`.venv` by its absolute path, so run the command again on each machine and after moving
+the project. Claude Code asks you to approve a new `.mcp.json` server the first time it
+opens the project.
+
+Houdini has no notion of a project, so the plugin step still applies to the whole
+machine: Houdini loads the build of the last install, and a project on another build is
+[refused](#houdini-imports-another-build-of-the-houdini_mcp-plugin) until you run its
+install again.
+
+To upgrade the project, run `uv lock --upgrade-package houdini-mcp`, then `uv sync`,
+then `uv run houdini-mcp install --project` again.
 
 ### Starting the listener yourself
 

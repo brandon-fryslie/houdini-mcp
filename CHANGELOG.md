@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load in its place. Each step prints what it did; any that failed makes
   the command exit 1.
 
+- `houdini-mcp install --project [DIR]` registers the server in that folder's
+  `.mcp.json` instead of each client's own config, so a project can hold its own
+  locked version. The install report states the version and plugin build.
+
 - The plugin starts its hrpyc listener when a graphical Houdini's UI is up, so
   the server reaches Houdini without a click on the shelf or a `uiready.py` of
   your own. A listener variable it cannot use is shown in a dialog.

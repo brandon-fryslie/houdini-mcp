@@ -19,16 +19,33 @@ from .settings import (
 )
 
 
+def _project(path: str) -> Path:
+    """The folder ``--project`` names, as the absolute path a client's config is read under."""
+    project = Path(path).resolve()
+    if not project.is_dir():
+        raise argparse.ArgumentTypeError(f"{project} is not a folder")
+    return project
+
+
 def main() -> None:
     """Serve, or with ``install``, install the plugin and register this server."""
     parser = argparse.ArgumentParser(prog="houdini-mcp", description=__doc__)
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser(
+    installing = commands.add_parser(
         "install",
         help="install the plugin into Houdini and register this server with each MCP client",
     )
-    if parser.parse_args().command == "install":
-        raise SystemExit(install.main(install.Machine(os.environ, Path.home(), sys.platform)))
+    installing.add_argument(
+        "--project",
+        nargs="?",
+        const=".",
+        type=_project,
+        help="register in this folder's .mcp.json (default: here), not in any client's own config",
+    )
+    args = parser.parse_args()
+    if args.command == "install":
+        machine = install.Machine(os.environ, Path.home(), sys.platform)
+        raise SystemExit(install.main(machine, args.project))
     serve()
 
 

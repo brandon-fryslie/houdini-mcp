@@ -165,6 +165,28 @@ def create_node(
 - Provide minimal reproduction steps
 - Include full error traceback
 
+## Releasing
+
+Releases are cut from this fork; `upstream` is read-only here. A pushed `vX.Y.Z` tag is
+the whole trigger, and there is no PyPI package: users install from the git URL.
+
+1. In a pull request, set `RELEASE` in
+   `houdini_plugin/houdini_mcp/python/houdini_mcp_handshake/__init__.py` to `X.Y.Z` (the
+   wheel's version is read from it) and move `CHANGELOG.md`'s Unreleased entries under
+   `X.Y.Z`. Follow semantic versioning: an entry marked **BREAKING** is a major release.
+2. Merge it, then tag that commit on `main`:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+3. `.github/workflows/release.yml` builds the wheel and sdist and attaches them to a
+   GitHub Release with generated notes. `.github/workflows/publish-ghcr.yml` pushes the
+   image to `ghcr.io/brandon-fryslie/houdini-mcp` as `X.Y.Z` and `latest`.
+
+Nothing checks that the tag matches `RELEASE`, so check it before pushing.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.

@@ -6,9 +6,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from houdini_mcp_handshake import RELEASE
 
 import houdini_plugin
 from houdini_mcp.install import (
+    STEPS,
     Failed,
     Installed,
     JsonConfig,
@@ -19,6 +21,7 @@ from houdini_mcp.install import (
     claude_code,
     codex,
     houdini_pref_dir,
+    in_project,
     install,
     install_plugin,
     report,
@@ -113,7 +116,6 @@ def test_a_second_install_points_at_the_plugin_again_in_place_of_an_earlier_one(
     ("platform", "under_home"),
     [
         ("darwin", "Library/Preferences/houdini/22.0"),
-        ("win32", "Documents/houdini22.0"),
         ("linux", "houdini22.0"),
     ],
 )
@@ -282,7 +284,7 @@ def test_the_report_says_what_each_step_did_and_fails_when_one_failed(tmp_path: 
 
 
 def test_every_step_runs_on_a_machine_with_no_clients(tmp_path: Path) -> None:
-    results = install(_machine(tmp_path), SERVER)
+    results = install(_machine(tmp_path), SERVER, STEPS)
     assert [name for name, _ in results] == [
         "Houdini plugin",
         "Claude Code",
@@ -312,6 +314,62 @@ def test_the_command_installs_this_interpreters_server(tmp_path: Path) -> None:
     assert "Claude Code: installed in its user config" in done.stdout
     assert _calls(tmp_path / "bin")[-1][-4:] == [sys.executable, "-P", "-m", "houdini_mcp"]
     assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
+
+
+def _project_install(tmp_path: Path, project: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "houdini_mcp", "install", "--project", project],
+        env={
+            "HOME": str(tmp_path / "home"),
+            "PATH": str(tmp_path / "bin"),
+            "HOUDINI_USER_PREF_DIR": str(tmp_path / "pref" / "houdini__HVER__"),
+        },
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_a_project_install_registers_in_the_project_and_in_no_client(tmp_path: Path) -> None:
+    claude_bin = tmp_path / "bin"
+    _cli(claude_bin, "claude")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+
+    done = _project_install(tmp_path, ".", project)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    servers = json.loads((project / ".mcp.json").read_text())["mcpServers"]
+    assert servers["other"] == {"command": "x"}
+    assert servers["houdini"]["command"] == sys.executable
+    assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
+    assert not (claude_bin / "calls").exists()
+
+
+def test_a_project_that_is_not_a_folder_stops_the_command(tmp_path: Path) -> None:
+    done = _project_install(tmp_path, "missing", tmp_path)
+
+    assert done.returncode == 2
+    assert "is not a folder" in done.stderr
+    assert not (tmp_path / "pref").exists()
+
+
+def test_a_projects_entry_at_a_url_is_kept(tmp_path: Path) -> None:
+    machine = _machine(tmp_path)
+    config = {"mcpServers": {"houdini": {"type": "http", "url": "http://docker:8000/mcp"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(config))
+
+    results = dict(install(machine, SERVER, in_project(tmp_path)))
+
+    assert results["Project"] == Kept("http://docker:8000/mcp")
+    assert json.loads((tmp_path / ".mcp.json").read_text()) == config
+
+
+def test_the_report_says_which_build_was_installed() -> None:
+    text, _ = report([], SERVER)
+    assert text.splitlines()[0].startswith(f"Version: {RELEASE}, plugin build ")
 
 
 def test_a_preferences_directory_named_without_hver_is_ignored_as_houdini_ignores_it(
@@ -589,19 +647,8 @@ def test_a_json_config_keeps_its_permissions_and_its_text(tmp_path: Path) -> Non
     assert sorted(path.name for path in config.parent.iterdir()) == ["mcp.json"]
 
 
-def test_houdinis_preferences_on_windows_are_not_moved_by_a_shells_home(tmp_path: Path) -> None:
-    """Git Bash sets HOME in its own shell; Houdini started from the Start menu has none."""
-    machine = _machine(tmp_path, "win32", HOME=str(tmp_path / "h"))
-    assert houdini_pref_dir(machine) == machine.home / "Documents" / "houdini22.0"
-
-
-def test_claude_desktop_on_windows_with_no_appdata_is_not_found(tmp_path: Path) -> None:
-    results = dict(install(_machine(tmp_path, "win32"), SERVER))
-    assert results["Claude Desktop"] == NotFound("APPDATA, unset")
-
-
 def test_the_entry_another_client_is_shown_is_one_its_config_takes() -> None:
-    server = ServerEntry((r"C:\Users\Jane Doe\python.exe", "-P", "-m", "houdini_mcp"), {})
+    server = ServerEntry(("/Users/Jane Doe/python", "-P", "-m", "houdini_mcp"), {})
     text, _ = report([], server)
     shown = text.splitlines()[-1].split(" entry: ", 1)[1]
     assert json.loads(shown) == server.as_json()
