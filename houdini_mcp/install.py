@@ -136,11 +136,14 @@ def install_plugin(machine: Machine, _server: ServerEntry) -> Outcome:
     return Installed(str(pointer))
 
 
-def _run(argv: list[str], machine: Machine) -> subprocess.CompletedProcess[str] | Failed:
+def _run(
+    argv: list[str], machine: Machine, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str] | Failed:
     try:
         # An argv list, no shell: the client's CLI as PATH finds it, and this server's command.
         return subprocess.run(  # nosec B603
             argv,
+            cwd=cwd,
             env=dict(machine.environ),
             capture_output=True,
             text=True,
@@ -214,6 +217,15 @@ def registered(path: Path, load: Callable[[str], object], table: str) -> Registe
     return Registered(config, servers, entry)
 
 
+def _claude_cli(machine: Machine) -> str | None:
+    return _cli(
+        machine,
+        "claude",
+        machine.home / ".claude" / "local" / "claude",
+        machine.home / ".local" / "bin" / "claude",
+    )
+
+
 def _claude_config(machine: Machine) -> Path:
     named = machine.environ.get("CLAUDE_CONFIG_DIR")
     return Path(named) / ".claude.json" if named else machine.home / ".claude.json"
@@ -226,12 +238,7 @@ def _codex_config(machine: Machine) -> Path:
 
 def claude_code(machine: Machine, server: ServerEntry) -> Outcome:
     """Register the server in Claude Code's user scope, replacing any earlier registration."""
-    claude = _cli(
-        machine,
-        "claude",
-        machine.home / ".claude" / "local" / "claude",
-        machine.home / ".local" / "bin" / "claude",
-    )
+    claude = _claude_cli(machine)
     if claude is None:
         return NotFound("claude on PATH, in ~/.claude/local or in ~/.local/bin")
     path = _claude_config(machine)
@@ -451,6 +458,10 @@ STEPS = (
 )
 
 
+# How `claude mcp get` names a project's local scope (Claude Code 2.1.299).
+_LOCAL_SCOPE = "Scope: Local config"
+
+
 @dataclass(frozen=True)
 class ProjectConfig:
     """A project's ``.mcp.json``, the file Claude Code reads a project's servers from."""
@@ -459,22 +470,20 @@ class ProjectConfig:
 
     def __call__(self, machine: Machine, server: ServerEntry) -> Outcome:
         outcome = JsonConfig(lambda _machine: self.project, ".mcp.json")(machine, server)
-        path = _claude_config(machine)
-        earlier = registered(path, json.loads, "mcpServers")
-        if isinstance(earlier, Failed):
-            return earlier
-        projects = _projects(earlier.config, path)
-        if isinstance(projects, Failed):
-            return projects
-        # A local-scope entry runs over .mcp.json, so this project would keep running it.
-        if isinstance(outcome, Installed) and str(self.project) in {
-            *projects.local,
-            *projects.at_url,
-        }:
+        claude = _claude_cli(machine)
+        if claude is None or isinstance(outcome, Failed | NotFound):
+            return outcome
+        # [LAW:one-source-of-truth] A local-scope entry runs over .mcp.json, and Claude Code
+        # keys it by git root, not folder: only claude can say which entry runs here.
+        running = _run([claude, "mcp", "get", SERVER_NAME], machine, self.project)
+        if isinstance(running, Failed):
+            return Failed(f"{_described(outcome)}, but claude mcp get: {running.why}")
+        if running.returncode != 0:
+            return Failed(f"{_described(outcome)}, but claude mcp get: {_said(running)}")
+        if _LOCAL_SCOPE in running.stdout:
             return Failed(
-                f"registered in {outcome.where}, but Claude Code runs this project's own "
-                f"local-scope {SERVER_NAME!r} instead. In {self.project}, run: "
-                f"claude mcp remove --scope local {SERVER_NAME}"
+                f"{_described(outcome)}, but Claude Code runs a local-scope {SERVER_NAME!r} "
+                f"instead. In {self.project}, run: claude mcp remove --scope local {SERVER_NAME}"
             )
         return outcome
 

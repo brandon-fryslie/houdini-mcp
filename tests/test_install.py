@@ -48,6 +48,12 @@ if sys.argv[1:3] == ["mcp", "remove"]:
     os.remove(known)
 elif sys.argv[1:3] == ["mcp", "add"]:
     open(known, "w").close()
+elif sys.argv[1:3] == ["mcp", "get"]:
+    if os.path.exists("unanswered"):
+        print("no answer", file=sys.stderr)
+        sys.exit(1)
+    local = os.path.exists("local-scope")
+    print("  Scope: " + ("Local config (private)" if local else "Project config (shared)"))
 """
 
 
@@ -345,7 +351,7 @@ def test_a_project_install_registers_in_the_project_and_in_no_client(tmp_path: P
     assert servers["other"] == {"command": "x"}
     assert servers["houdini"]["command"] == sys.executable
     assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
-    assert not (claude_bin / "calls").exists()
+    assert _calls(claude_bin) == [["mcp", "get", "houdini"]]
 
 
 def test_a_project_named_from_elsewhere_is_the_one_registered(tmp_path: Path) -> None:
@@ -360,16 +366,47 @@ def test_a_project_named_from_elsewhere_is_the_one_registered(tmp_path: Path) ->
 
 
 def test_a_local_scope_entry_that_runs_over_the_project_fails_the_step(tmp_path: Path) -> None:
-    local = {"mcpServers": {"houdini": {"command": "old", "args": []}}}
-    machine = _claude_json(tmp_path, {"projects": {"/project": local}})
+    _cli(tmp_path / "bin", "claude")
     project = tmp_path / "project"
+    project.mkdir()
+    (project / "local-scope").write_text("")
 
-    outcome = dict(install(machine, SERVER, in_project(project)))["Project"]
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(project)))["Project"]
 
     assert isinstance(outcome, Failed)
     assert "claude mcp remove --scope local houdini" in outcome.why
     # The project is registered: removing the local entry is all that is left to do.
     assert "houdini" in json.loads((project / ".mcp.json").read_text())["mcpServers"]
+
+
+def test_a_kept_project_entry_that_a_local_scope_entry_runs_over_fails_the_step(
+    tmp_path: Path,
+) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "local-scope").write_text("")
+    config = {"mcpServers": {"houdini": {"url": "http://docker:8000/mcp"}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(config))
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "kept its entry" in outcome.why
+
+
+def test_a_claude_code_that_cannot_say_which_entry_runs_fails_the_step(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "unanswered").write_text("")
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "no answer" in outcome.why
+
+
+def test_a_project_install_with_no_claude_code_still_registers(tmp_path: Path) -> None:
+    results = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))
+
+    assert results["Project"] == Installed(str(tmp_path / ".mcp.json"))
 
 
 def test_a_project_that_is_not_a_folder_stops_the_command(tmp_path: Path) -> None:
