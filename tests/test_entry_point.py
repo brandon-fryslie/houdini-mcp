@@ -3,21 +3,24 @@
 import logging
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any
 
+import houdini_mcp_handshake as handshake
 import pytest
 import yaml
 from fastmcp import Client, FastMCP
 from fastmcp.server.server import Transport
 from pydantic import TypeAdapter
 
+import houdini_mcp
 import houdini_mcp.__main__ as entry_point
 import houdini_mcp.connection as conn_module
-from houdini_mcp.__main__ import main
+from houdini_mcp.__main__ import serve
 from houdini_mcp.settings import (
     ALLOWED_HOST_PATTERN,
     Http,
@@ -27,6 +30,7 @@ from houdini_mcp.settings import (
     Stdio,
     log_level,
     results_dir,
+    server_settings,
     serving,
     setting,
 )
@@ -123,7 +127,7 @@ def test_a_user_with_no_home_and_no_results_directory_stops_the_server_from_star
     with pytest.raises(
         SystemExit, match="HOUDINI_MCP_RESULTS_DIR: Could not determine home directory"
     ):
-        main()
+        serve()
 
 
 def test_a_results_root_that_cannot_hold_the_servers_results_stops_it_from_starting(
@@ -135,7 +139,7 @@ def test_a_results_root_that_cannot_hold_the_servers_results_stops_it_from_start
     with pytest.raises(
         SystemExit, match="HOUDINI_MCP_RESULTS_DIR: cannot hold this server's results: "
     ):
-        main()
+        serve()
 
 
 def test_importing_the_server_module_builds_and_reads_nothing() -> None:
@@ -164,8 +168,8 @@ assert root.handlers == [] and root.level == logging.WARNING, (root.handlers, ro
 
 @pytest.fixture
 def started(monkeypatch: pytest.MonkeyPatch, reset_connection_state: None) -> dict[str, Any]:
-    """What ``main()`` hands its process and transport, with no developer environment;
-    the test sets the environment it starts with. The Houdini ``main()`` installs is
+    """What ``serve()`` hands its process and transport, with no developer environment;
+    the test sets the environment it starts with. The Houdini ``serve()`` installs is
     uninstalled afterwards."""
     seen: dict[str, Any] = {}
     monkeypatch.setattr(FastMCP, "run", lambda mcp, **run: seen.update(mcp=mcp, run=run))
@@ -186,11 +190,21 @@ async def test_a_server_started_after_the_environment_changed_reaches_the_new_ta
     monkeypatch.setenv("HOUDINI_PORT", "19000")
     monkeypatch.setenv("MCP_TRANSPORT", "stdio")
 
-    main()
+    serve()
 
     async with Client(started["mcp"]) as client:
         payload: Any = (await client.call_tool("check_connection", {})).structured_content
     assert payload["target"] == "studio-box:19000"
+
+
+async def test_a_client_is_told_the_release_the_server_is(started: dict[str, Any]) -> None:
+    serve()
+
+    async with Client(started["mcp"]) as client:
+        assert client.server_info is not None
+        told = client.server_info.version
+
+    assert told == houdini_mcp.__version__ == handshake.RELEASE
 
 
 async def test_a_started_server_reads_no_setting_again(
@@ -198,7 +212,7 @@ async def test_a_started_server_reads_no_setting_again(
 ) -> None:
     """[LAW:effects-at-boundaries] read once, at start: a tool call reads none, so a
     setting changed while the server runs changes nothing until it restarts."""
-    main()
+    serve()
     environ = Recording(os.environ)
     monkeypatch.setattr(os, "environ", environ)
     environ.update(HOUDINI_MCP_ALLOW_BYPASS="true", SUMMARIZATION_ENABLED="false")
@@ -224,7 +238,7 @@ def test_compose_hands_its_container_every_setting_a_server_reads_at_start(
     environ = Recording(os.environ)
     monkeypatch.setattr(entry_point, "os", SimpleNamespace(environ=environ))
 
-    main()
+    serve()
 
     root = pathlib.Path(__file__).resolve().parents[1]
     compose = yaml.safe_load((root / "compose.yaml").read_text())
@@ -249,6 +263,42 @@ def test_compose_publishes_on_loopback_unless_told_otherwise() -> None:
     assert published.startswith("${MCP_HOST:-127.0.0.1}:"), published
 
 
+def test_the_deploy_files_state_the_defaults_the_server_resolves() -> None:
+    """compose.yaml, the Dockerfile and .env.example cannot import the server's defaults,
+    so each one they restate is held to what the server resolves from an empty
+    environment, and compose reaches the container where the image listens."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    served = serving({})
+    assert isinstance(served, Http)
+    listener = served.listener
+    # Every assignment .env.example shows, set or commented out, but HOUDINI_HOST: it
+    # ships empty because no default reaches Houdini from inside the container.
+    example = {
+        name: value
+        for line in (root / ".env.example").read_text().splitlines()
+        if (assignment := re.fullmatch(r"(?:# )?([A-Z_]+)=(.*)", line))
+        for name, value in [assignment.groups()]
+        if name != "HOUDINI_HOST"
+    }
+    assert {"HOUDINI_PORT", "MCP_HOST", "MCP_PORT"} <= example.keys(), example
+    image = dict(
+        pair.split("=", 1)
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if line.startswith("ENV ")
+        for pair in line.split()[1:]
+    )
+    service = yaml.safe_load((root / "compose.yaml").read_text())["services"]["houdini-mcp"]
+    (published,) = service["ports"]
+    publish = re.fullmatch(r"\$\{MCP_HOST:-(.+)\}:\$\{MCP_PORT:-(\d+)\}:(\d+)", published)
+    health = re.search(r"//localhost:(\d+)/health", " ".join(service["healthcheck"]["test"]))
+    assert publish and health, (published, service["healthcheck"])
+
+    assert (server_settings(example), serving(example)) == (server_settings({}), served)
+    assert image["MCP_PORT"] == str(listener.port)
+    assert publish.group(1, 2) == (str(listener.host), str(listener.port))
+    assert (publish.group(3), health.group(1)) == (image["MCP_PORT"], image["MCP_PORT"])
+
+
 async def test_every_connection_the_server_opens_presents_the_token_it_started_with(
     monkeypatch: pytest.MonkeyPatch, started: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -260,7 +310,7 @@ async def test_every_connection_the_server_opens_presents_the_token_it_started_w
 
     monkeypatch.setattr(conn_module.handshake, "connect", rejected)
     monkeypatch.setenv("HOUDINI_RPC_TOKEN", "hunter2")
-    main()
+    serve()
     monkeypatch.setenv("HOUDINI_RPC_TOKEN", "changed-since")
 
     with caplog.at_level(logging.INFO, logger="houdini_mcp.connection"):
@@ -284,7 +334,7 @@ def test_starting_applies_and_logs_what_it_resolved(
 
     # the stubbed basicConfig applies nothing, so caplog admits what DEBUG would
     with caplog.at_level(logging.DEBUG, logger="houdini_mcp.server"):
-        main()
+        serve()
 
     assert started["config"]["level"] == logging.DEBUG
     assert started["run"] == {

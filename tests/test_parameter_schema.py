@@ -886,7 +886,7 @@ class TestTheReadRunsInsideHoudini:
         assert (
             "Houdini cannot import houdini_mcp_schema (ModuleNotFoundError: " in result["message"]
         )
-        assert "Install the plugin from the same release" in result["message"]
+        assert "Install the plugin this server was built with" in result["message"]
 
     def test_a_read_houdini_refused_is_an_event_on_the_server(self, connected_to, caplog):
         from houdini_mcp.tools import get_parameter_schema

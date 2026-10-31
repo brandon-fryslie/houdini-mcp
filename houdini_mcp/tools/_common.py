@@ -10,7 +10,7 @@ This module contains common utilities used across all tool modules:
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Generic, NamedTuple, TypeVar, cast
+from typing import Annotated, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as parsed_dataclass
@@ -23,12 +23,13 @@ from ..connection import (
     houdini,
     is_connected,
     raised_inside_houdini,
+    transport_failure,
 )
 from .failure import (
     FAILURE,
     InvalidInput,
     OperationFailed,
-    ProgramStillRunning,
+    ProgramTimedOut,
     TimedOut,
     ToolError,
     ToolFailure,
@@ -83,7 +84,7 @@ __all__ = [
     "InvalidInput",
     "OperationFailed",
     "TimedOut",
-    "ProgramStillRunning",
+    "ProgramTimedOut",
     "Undone",
     "batch_status",
     "node_at",
@@ -112,6 +113,7 @@ __all__ = [
     "Vec3",
     "Count",
     "ResultLimit",
+    "Index",
     "NodeName",
     "SampleCount",
     "Seconds",
@@ -166,7 +168,7 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
 
     Example:
         @tool(READ)
-        def get_scene_info(host: str = "localhost", port: int = 18811) -> Dict[str, Any]:
+        def get_scene_info(host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port) -> Dict[str, Any]:
             with using(host, port) as link:
                 node = node_at(link.hou, "/obj/geo1")  # raises InvalidInput when absent
                 return {"status": "success", ...}
@@ -257,13 +259,14 @@ def tool(policy: ToolPolicy) -> Callable[[ToolFn], ToolFn]:
         except InvalidInput as e:
             raise TypeError(f"{operation_name} default is not its parameter's type: {e}") from None
 
-        # [LAW:types-are-the-program] A scene writer's recovery wraps its whole
-        # body, off the event loop, in the Houdini its host and port name.
-        if policy.writes_scene and (
+        # [LAW:types-are-the-program] A scene changer's recovery wraps its whole
+        # body, off the event loop, in the Houdini its host and port name: a render
+        # that skipped it would leave its temporary nodes on the undo stack.
+        if policy.changes_scene and (
             inspect.iscoroutinefunction(func) or not {"host", "port"} <= signature.parameters.keys()
         ):
             raise TypeError(
-                f"{operation_name} writes the scene, so it is sync and takes host and port"
+                f"{operation_name} changes the scene, so it is sync and takes host and port"
             )
 
         # A served tool that finishes its result asynchronously (summarizing it,
@@ -350,26 +353,36 @@ class FlagMethods(NamedTuple):
     write: str
 
 
+Flag = Literal["display", "render", "bypass"]
+
 # [LAW:one-source-of-truth] Houdini's flag API, named once. Which flags a node has
 # follows its class: a SOP has all three, a ROP only bypass, an object only display.
-FLAGS = {
+FLAGS: dict[Flag, FlagMethods] = {
     "display": FlagMethods("isDisplayFlagSet", "setDisplayFlag"),
     "render": FlagMethods("isRenderFlagSet", "setRenderFlag"),
     "bypass": FlagMethods("isBypassed", "bypass"),
 }
 
 
-def node_flag(node: Any, method: str) -> bool | None:
-    """The flag ``method`` reads, or None when the node's class has no such flag.
+def flag_read(node: Any, flag: Flag) -> Callable[[], Any] | None:
+    """The method reading ``node``'s ``flag``, or None when its class has no such flag.
 
     Which flags a node has follows its class: on Houdini 22, for example, a SOP has
     a display and a render flag, an object only a display flag, and a network such
-    as /obj neither.
+    as /obj neither. Houdini gives a flag's read and write together, so the read
+    alone decides.
     """
+    # [LAW:single-enforcer] the one rule for whether a node has a flag
+    read: Callable[[], Any] | None = getattr(node, FLAGS[flag].read, None)
+    return read
+
+
+def node_flag(node: Any, flag: Flag) -> bool | None:
+    """``node``'s ``flag``, or None when its class has no such flag."""
     # [LAW:no-silent-failure] looked up, then called: an AttributeError Houdini raises
     # while reading the flag is a refused read, not a flag the node lacks
-    getter = getattr(node, method, None)
-    return None if getter is None else bool(getter())
+    read = flag_read(node, flag)
+    return None if read is None else bool(read())
 
 
 def node_at(hou: Any, path: str, what: str = "Node") -> Any:
@@ -419,6 +432,9 @@ RGB = tuple[float, float, float]
 """A color as the wire carries it: three finite numbers, clamped to 0-1 where applied."""
 Count = Annotated[int, Field(ge=0)]
 """How many items or levels a caller asks for; a negative count has no meaning, so the wire refuses it."""
+Index = Annotated[int, Field(ge=0)]
+"""A position among a node's inputs or outputs, numbered from 0; Houdini refuses a
+negative one, so the wire does, and how far one may reach is the node's, so Houdini's."""
 SampleCount = Annotated[Count, Field(le=1000)]
 """How many points a geometry read samples. Each carries every point attribute, and
 the read holds Houdini's serving thread for all of them: a thousand is past what a
@@ -432,25 +448,49 @@ NodeName = Annotated[str, Field(min_length=1)]
 a node Houdini is to name is given None, its one spelling."""
 
 
+def houdini_refusal(request: str, e: BaseException, **context: Any) -> OperationFailed:
+    """``operation_failed`` reading ``Houdini did not <request>: <Houdini's own words>``,
+    carrying ``context``, for ``e`` that Houdini raised. ``request`` is what the tool
+    asked of Houdini, as a verb phrase ("frame SceneViewer").
+
+    [LAW:single-enforcer] The one shape of a call Houdini refused.
+    """
+    return OperationFailed(f"Houdini did not {request}: {reason(e)}", **context)
+
+
+@contextmanager
+def refused_by_houdini(request: str, **context: Any) -> Iterator[None]:
+    """A call Houdini refuses, inside the block, becomes its :func:`houdini_refusal`.
+
+    Every write a tool makes to the user's scene runs inside one, and so may a read
+    the tool cannot answer without. The render's own temporary rig does not: a
+    value this server set on a node it made is this server's to get right. A link that fails inside the block is classified as the link's
+    failure, keeping ``context`` and noting what was asked, never whether it landed:
+    a write cut off mid-call may have.
+    """
+    try:
+        yield
+    except Exception as e:
+        if raised_inside_houdini(e):
+            raise houdini_refusal(request, e, **context) from e
+        if transport_failure(e) is not None:
+            raise OperationFailed(
+                f"The link failed while asking Houdini to {request}: {reason(e)}", **context
+            ) from e
+        # [LAW:no-silent-failure] a bug in this process is neither Houdini's answer
+        # nor the link's; it goes on raw, to be classified as the bug it is
+        raise
+
+
 def created_in(network: Any, node_type: str, name: NodeName | None) -> Any:
     """A new ``node_type`` node in ``network``, named ``name``, or by Houdini when None.
 
     [LAW:one-source-of-truth] Every node a tool makes for the scene to keep is
     created here, so Houdini's refusal (a locked asset, a type the network does not
-    offer, a name it will not take) reaches each tool as the same
-    ``operation_failed`` in Houdini's own words, as a parameter set Houdini refused
-    does (parms.write_all).
+    offer, a name it will not take) reaches each tool as the same ``operation_failed``.
     """
-    try:
+    with refused_by_houdini(f"create a {node_type!r} node", node_type=node_type):
         return network.createNode(node_type, name)
-    except Exception as e:
-        # [LAW:no-silent-failure] a lost link or a bug in this process is not a
-        # refusal; it goes on raw, to be classified as what it is
-        if not raised_inside_houdini(e):
-            raise
-        raise OperationFailed(
-            f"Houdini did not create a {node_type!r} node: {reason(e)}", node_type=node_type
-        ) from e
 
 
 class ExecutionTimeoutError(Exception):
@@ -466,25 +506,23 @@ class ExecutionTimeoutError(Exception):
 
 import anyio
 
-from .workers import WORKERS
+from .scene_hold import SCENE_HOLD
 
 
 async def on_the_scene(
     tool: Callable[..., Any], work: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
 ) -> dict[str, Any]:
-    """Run ``tool``'s blocking Houdini work off the event loop, once the ledger
-    admits it as its policy says.
+    """Run ``tool``'s blocking Houdini work off the event loop, once the scene
+    hold admits it as its policy says.
 
-    [LAW:single-enforcer] The one place a call meets the worker ledger: a sync
+    [LAW:single-enforcer] The one place a call meets the scene hold: a sync
     tool's whole body comes through here (``server.held``), an async tool's
     Houdini read does, and whatever it finishes afterwards (a summary) runs
     with Houdini released. A call waits on the event loop while one it must
     not run beside holds Houdini, so a waiting call costs no thread and one
-    its client cancels never runs; one that needs the scene to itself is
-    refused with :class:`WorkerStillRunning` while a program still runs
-    against Houdini. The result tells the wait in ``scene_wait``.
+    its client cancels never runs. The result tells the wait in ``scene_wait``.
     """
-    async with WORKERS.hold(tool.__name__, policy_of(tool).access) as wait:
+    async with SCENE_HOLD.hold(tool.__name__, policy_of(tool).access) as wait:
         result: dict[str, Any] = await run_in_executor(work, *args, **kwargs)
     return {**result, **wait.response_fields()}
 

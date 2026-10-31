@@ -43,7 +43,7 @@ class FakeThreadedServer:
         *,
         hostname: str = "127.0.0.1",
         ipv6: bool = False,
-        port: int = 18811,
+        port: int = 0,
         reuse_addr: bool = True,
         auto_register: bool = False,
         authenticator: Any = None,

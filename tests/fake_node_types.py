@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 
 from houdini_mcp_read import reason
 
@@ -59,6 +59,24 @@ def name_components(name: str) -> tuple[str, str, str, str]:
 def full_name(scope: str, namespace: str, name: str, version: str) -> str:
     """hou.hda.fullNodeTypeNameFromComponents: the components joined, the empty ones left out."""
     return "::".join(part for part in (scope, namespace, name, version) if part)
+
+
+class FlagMethods(NamedTuple):
+    """The methods a node flag is read and written through."""
+
+    read: str
+    write: str
+
+
+# [LAW:one-source-of-truth] Houdini 22's flag methods as the fake models them, which
+# the reader asks a node for and the fake's nodes answer. A copy of the server's
+# houdini_mcp.tools._common.FLAGS on purpose: the fake is checked against Houdini,
+# never built from the code it tests, so a wrong name there fails a test here.
+FLAGS = {
+    "display": FlagMethods("isDisplayFlagSet", "setDisplayFlag"),
+    "render": FlagMethods("isRenderFlagSet", "setRenderFlag"),
+    "bypass": FlagMethods("isBypassed", "bypass"),
+}
 
 
 @dataclass(frozen=True)
@@ -137,20 +155,25 @@ class CreateNode:
 class NodeType:
     """One node type as Houdini gives it.
 
-    ``type`` is its own name, the table's key. ``holds`` is the category of the
+    ``category`` is the category Houdini lists it in. ``type`` is its own name, the
+    table's key. ``holds`` is the category of the
     nodes it holds, None for a node that is not a network. A ``locked`` asset holds a
     category and refuses every child at once. ``indirect_inputs`` is how many indirect
     inputs, named "1" on, a node of it has; None for a node Houdini says is not a
     subnetwork, whose indirectInputs() raises. A node that is neither has none: a Sop
-    null, or a karma ROP. ``create_node`` is createNode's answers in a node of it, for
+    null, or a karma ROP. ``flags`` is the flags of FLAGS a node of it has, which
+    follow its class: a SOP has all three, an object display alone, a ROP bypass
+    alone, a context none. ``create_node`` is createNode's answers in a node of it, for
     an unlocked context root; None for any other type.
     """
 
+    category: str
     type: str
     description: str
     holds: str | None
     locked: bool
     indirect_inputs: int | None
+    flags: frozenset[str]
     parms: dict[str, ParmTuple]
     create_node: CreateNode | None
 
@@ -267,11 +290,13 @@ def _node_type(category: str, own: str, facts: dict[str, Any]) -> NodeType:
             "which the table holds for an unlocked context root alone"
         )
     return NodeType(
+        category=category,
         type=own,
         description=facts["description"],
         holds=facts["holds"],
         locked=facts["locked"],
         indirect_inputs=facts["indirect_inputs"],
+        flags=frozenset(facts["flags"]),
         parms={
             tuple_name: ParmTuple(
                 tuple(parm["components"]), tuple(parm["values"]), tuple(parm["menu"])
@@ -506,6 +531,7 @@ def _facts(node: Any, row: dict[str, Any]) -> dict[str, Any]:
         "holds": None if held is None else held.name(),
         "locked": node.isLockedHDA(),
         "indirect_inputs": _indirect_inputs(node),
+        "flags": _flags(node),
         "parms": {name: _parm_tuple(node, name) for name in row["parms"]},
     }
 
@@ -521,11 +547,25 @@ def _indirect_inputs(node: Any) -> int | None:
         if raised != "InvalidNodeType" or "Node is not a subnetwork" not in message:
             raise
         return None
-    names = [item.name() for item in indirect]
-    if names != [str(n) for n in range(1, len(names) + 1)]:
-        # the fake names them by number, so a count holds them only when Houdini does
-        raise ValueError(f"{node.path()}'s indirect inputs are named {names}")
-    return len(names)
+    numbered = [(item.number(), item.name()) for item in indirect]
+    if numbered != [(n, str(n + 1)) for n in range(len(numbered))]:
+        # the fake numbers them from 0 and names each its number + 1, so a count
+        # holds them only when Houdini does
+        raise ValueError(f"{node.path()}'s indirect inputs are (number, name) {numbered}")
+    return len(numbered)
+
+
+def _flags(node: Any) -> list[str]:
+    """The flags ``node``'s class has: those whose read and write it both has."""
+    flags = []
+    for flag, methods in FLAGS.items():
+        has = [hasattr(node, method) for method in methods]
+        if any(has) and not all(has):
+            # the fake holds a flag as both its methods, so one alone it cannot hold
+            raise ValueError(f"{node.path()} has {flag}'s {methods} as {has}")
+        if all(has):
+            flags.append(flag)
+    return flags
 
 
 def _parm_tuple(node: Any, name: str) -> dict[str, Any]:

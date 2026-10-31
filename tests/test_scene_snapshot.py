@@ -361,9 +361,24 @@ class TestADiffIsItsOwnRunsAlone:
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         assert mock_connection.node("/obj/from_b") is None
         assert get_last_scene_diff()["status"] == "warning"
-        assert any(
-            "did not run: the scene before it could not be read" in m for m in caplog.messages
+        assert result["message"].endswith(
+            "The program never ran: the scene before it could not be read."
         )
+
+    def test_a_run_killed_at_its_timeout_has_no_diff_and_its_changes_are_undone(
+        self, mock_connection: MockHouModule
+    ) -> None:
+        result = execute_code(
+            "hou.node('/obj').createNode('geo', 'late')\nwhile True: pass",
+            capture_diff=True,
+            timeout=1,
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+        assert (result["kind"], result["cut_off"]) == ("timeout", "program")
+        assert get_last_scene_diff()["status"] == "warning"
+        assert mock_connection.node("/obj/late") is None
 
     @pytest.mark.parametrize("raised", ["SystemExit(0)", "KeyboardInterrupt"])
     def test_a_program_that_exits_failed_and_has_no_diff(
@@ -411,7 +426,7 @@ class TestADiffIsItsOwnRunsAlone:
             return read(*args)
 
         monkeypatch.setattr(code_module, "scene_snapshot", after_read_outlasts_the_timeout)
-        # The program is instant; the wait expires while the worker reads after it.
+        # The program is instant; the scene read after it outlasts its timeout.
         result = execute_code(
             "hou.node('/obj').createNode('geo', 'quick')",
             capture_diff=True,

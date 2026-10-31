@@ -12,7 +12,6 @@ from houdini_mcp.tools.summarization import Excerpt
 from tests.conftest import (
     SUMMARIZER,
     MockHouNode,
-    MockNodeLacking,
     link_failure,
     raised_inside_houdini,
 )
@@ -316,7 +315,7 @@ class TestGetNodeInfoWithErrors:
     @staticmethod
     def _type_refusing_description(node: MockHouNode, exc: BaseException) -> None:
         node_type = node.type()
-        node_type.description.side_effect = exc
+        node_type.description = MagicMock(side_effect=exc)  # type: ignore[method-assign]
         node.type = MagicMock(return_value=node_type)  # type: ignore[method-assign]
 
     def test_a_type_description_houdini_will_not_read_is_unread_beside_the_node_info(
@@ -325,10 +324,10 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
+        mock_connection.add_node(geo1)
         self._type_refusing_description(
             geo1, raised_inside_houdini(RuntimeError("bad HDA definition"))
         )
-        mock_connection.add_node(geo1)
 
         for detail in ("standard", "full"):
             caplog.clear()
@@ -347,8 +346,8 @@ class TestGetNodeInfoWithErrors:
         from houdini_mcp.tools import get_node_info
 
         geo1 = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
-        self._type_refusing_description(geo1, link_failure(EOFError("stream has been closed")))
         mock_connection.add_node(geo1)
+        self._type_refusing_description(geo1, link_failure(EOFError("stream has been closed")))
 
         result = get_node_info("/obj/geo1", detail="standard")
 
@@ -415,11 +414,8 @@ class TestGetNodeInfoWithErrors:
     def test_a_node_with_no_render_flag_reads_null_for_it(self, mock_connection):
         from houdini_mcp.tools import get_node_info
 
-        geo1 = MockNodeLacking(
-            path="/obj/geo1", name="geo1", node_type="geo", lacks=("isRenderFlagSet",)
-        )
-        geo1.setDisplayFlag(True)
-        mock_connection.add_node(geo1)
+        # an object has a display flag and no render flag
+        mock_connection.node("/obj").createNode("geo", "geo1")
 
         result = get_node_info("/obj/geo1", detail="standard")
 
@@ -767,7 +763,9 @@ class TestFindErrorNodesUninspected:
         )
 
         assert result.kind == "operation_failed"
-        assert result.message.startswith("Could not list the nodes under /obj: locked HDA")
+        assert result.message.startswith(
+            "Houdini did not list the nodes under /obj: RuntimeError: locked HDA"
+        )
         assert houdini().link() is link and not link.conn.closed
 
     async def test_a_link_lost_reading_a_node_is_connection_loss(self, mock_connection):

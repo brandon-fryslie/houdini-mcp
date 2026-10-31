@@ -64,6 +64,20 @@ def call_on_main(conn: Any, fn: Callable[[], None], silence: float = 60.0) -> An
     return rpyc.async_(conn.modules["houdini_mcp_plugin.main_thread"].call)(fn, silence).value
 
 
+def recording_prevented(events: list[str]) -> Callable[[str], Any]:
+    """An ``app_nap.prevented`` that records its hold in ``events``."""
+
+    @contextmanager
+    def prevented(reason: str) -> Iterator[None]:
+        events.append("held")
+        try:
+            yield
+        finally:
+            events.append("ended")
+
+    return prevented
+
+
 def serving_main_thread(*clients: Callable[[], None]) -> list[BaseException]:
     """Serve on this, the main thread, while each of ``clients`` runs on a thread
     of its own once serving has begun; stop once they have all ended. What
@@ -297,6 +311,57 @@ class TestHeadless:
         assert "the client's own failure" in str(raised)
         assert seen == [("open", "the call", "MainThread"), ("close", "the call", "MainThread")]
 
+    def test_a_call_holds_off_app_nap_for_exactly_its_wait(self, houdini, monkeypatch):
+        """Held from before the hand-over until the call returns, ran or refused."""
+        events: list[str] = []
+        monkeypatch.setattr(main_thread.app_nap, "prevented", recording_prevented(events))
+        with houdini() as conn:
+            assert (
+                serving_main_thread(lambda: call_on_main(conn, lambda: events.append("ran"))) == []
+            )
+            assert events == ["held", "ran", "ended"]
+            refusal = call_on_main(conn, lambda: events.append("ran late"))
+        assert "houdini_mcp_plugin.main_thread.serve()" in refusal
+        assert events == ["held", "ran", "ended", "held", "ended"]
+
+    def test_a_call_app_nap_cannot_be_held_off_for_is_never_posted(self, houdini, monkeypatch):
+        @contextmanager
+        def prevented(reason: str) -> Iterator[None]:
+            raise OSError("no activity")
+            yield
+
+        monkeypatch.setattr(main_thread.app_nap, "prevented", prevented)
+        ran: list[bool] = []
+        with houdini() as conn:
+            (raised,) = serving_main_thread(lambda: call_on_main(conn, lambda: ran.append(True)))
+        assert "no activity" in str(raised)
+        assert ran == []
+
+    def test_a_call_without_undo_holds_its_disabler_on_the_main_thread(self, houdini, monkeypatch):
+        """Houdini closes the disabler itself, there, even when the call fails."""
+        seen: list[tuple[str, str]] = []
+
+        @contextmanager
+        def disabler() -> Iterator[None]:
+            seen.append(("open", threading.current_thread().name))
+            try:
+                yield
+            finally:
+                seen.append(("close", threading.current_thread().name))
+
+        monkeypatch.setattr(
+            sys.modules["hou"], "undos", SimpleNamespace(disabler=disabler), raising=False
+        )
+        with houdini() as conn:
+
+            def fn() -> None:
+                raise ValueError("the client's own failure")
+
+            entry = conn.modules["houdini_mcp_plugin.main_thread"].call_without_undo
+            (raised,) = serving_main_thread(lambda: rpyc.async_(entry)(fn, 60.0).value)
+        assert "the client's own failure" in str(raised)
+        assert seen == [("open", "MainThread"), ("close", "MainThread")]
+
     def test_serve_refuses_a_thread_that_is_not_main(self):
         failures: list[BaseException] = []
 
@@ -314,10 +379,14 @@ class TestHeadless:
 
 
 def test_a_graphical_houdini_hands_the_call_to_its_event_loop(monkeypatch, houdini):
-    """hdefereval runs the call on the event loop's thread; here a thread of its own."""
+    """hdefereval runs the call on the event loop's thread; here a thread of its own.
+    The hand-over and the wait are inside the App Nap hold."""
     posted: list[Callable[[], None]] = []
+    events: list[str] = []
+    monkeypatch.setattr(main_thread.app_nap, "prevented", recording_prevented(events))
 
     def execute_deferred(run: Callable[[], None]) -> None:
+        events.append("posted")
         posted.append(run)
         threading.Thread(target=run).start()
 
@@ -330,3 +399,4 @@ def test_a_graphical_houdini_hands_the_call_to_its_event_loop(monkeypatch, houdi
         call_on_main(conn, lambda: ran.append(True))
     assert len(posted) == 1
     assert ran == [True]
+    assert events == ["held", "posted", "ended"]

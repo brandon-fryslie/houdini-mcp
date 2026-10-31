@@ -40,6 +40,7 @@ from pydantic import ValidationError
 from houdini_mcp import tools
 from houdini_mcp.connection import HoudiniConnectionError
 from houdini_mcp.results import Results
+from houdini_mcp.settings import DEFAULT_TARGET
 from houdini_mcp.tools import summarization
 from houdini_mcp.tools._common import FAILURE, PAGE_LIMIT_MAX, Vec3
 from houdini_mcp.tools.code import Policy
@@ -219,11 +220,13 @@ class TestServedSchemas:
         no Houdini answers an async tool's read. The names a body builds are
         test_a_tool_names_no_other_tool's."""
 
+        from houdini_mcp.connection import HoudiniTarget, use_houdini
+
         def broken(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("injected")
 
         monkeypatch.setattr("houdini_mcp.tools._common.recovering", broken)
-        monkeypatch.setattr("houdini_mcp.connection.handshake.connect", broken)
+        use_houdini(HoudiniTarget(broken, "Nothing answers here.", broken))
         for name, served_tool in served.items():
             arguments = {
                 parameter: REQUIRED_ARGUMENTS[parameter]
@@ -540,6 +543,23 @@ class TestServedSchemas:
         for (name, limit), base in calls.items():
             assert await accepts(client, served, name, {**base, limit: 0}), (name, limit)
             assert not await accepts(client, served, name, {**base, limit: -1}), (name, limit)
+
+    async def test_an_index_is_never_negative(
+        self, client: Client[Any], served: dict[str, Tool]
+    ) -> None:
+        """Houdini numbers inputs and outputs from 0 and refuses a negative one."""
+        wire = {"src_path": "/obj/geo1/box1", "dst_path": "/obj/geo1/null1"}
+        calls = {
+            ("connect_nodes", "dst_input_index"): wire,
+            ("connect_nodes", "src_output_index"): wire,
+            ("disconnect_node_input", "input_index"): {"node_path": "/obj/geo1/null1"},
+        }
+        for (name, index), base in calls.items():
+            assert await accepts(client, served, name, {**base, index: 0}), (name, index)
+            assert not await accepts(client, served, name, {**base, index: -1}), (name, index)
+        merge = {"node_path": "/obj/geo1/merge1"}
+        assert await accepts(client, served, "reorder_inputs", {**merge, "new_order": [1, 0]})
+        assert not await accepts(client, served, "reorder_inputs", {**merge, "new_order": [-1, 0]})
 
     async def test_a_listing_limit_lists_at_least_one(
         self, client: Client[Any], served: dict[str, Tool]
@@ -1014,3 +1034,21 @@ class TestServedSummaries:
         assert reply.structured_content["kind"] == "operation_failed"
         assert "result_file" in reply.structured_content
         assert wire.sent == []
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [tool for tool in tools.SERVED_TOOLS if "host" in inspect.signature(tool).parameters],
+    ids=lambda tool: tool.__name__,
+)
+def test_a_tool_called_directly_reaches_the_houdini_the_server_reaches_by_default(
+    tool: Any,
+) -> None:
+    """Served, the server binds a tool's target; called from Python, a tool takes the
+    server's own default, never one of its own."""
+    parameters = inspect.signature(tool).parameters
+
+    assert (parameters["host"].default, parameters["port"].default) == (
+        DEFAULT_TARGET.host,
+        DEFAULT_TARGET.port,
+    )

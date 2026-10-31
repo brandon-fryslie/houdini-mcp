@@ -3,8 +3,7 @@
 [LAW:types-are-the-program] Every tool returns either its own success record or
 one arm of ``ToolFailure``: a closed union discriminated on ``kind``. Each arm
 declares what retrying takes, so a client decides mechanically whether to start
-Houdini, call again, check the scene first, fix its input, wait for a worker, or
-give up. A failure of one kind cannot be spelled as another, and none can be
+Houdini, call again, check the scene first, fix its input, or give up. A failure of one kind cannot be spelled as another, and none can be
 spelled as success: ``status`` is the literal ``"error"`` on every arm.
 
 [LAW:single-enforcer] ``failure_response`` is the one place an exception becomes
@@ -26,10 +25,11 @@ from ..connection import (
     HoudiniConnectionError,
     HoudiniTargetMismatch,
     Link,
+    PluginMissing,
     TransportFailure,
     transport_failure,
 )
-from .workers import WorkerStillRunning
+from ..main_thread import MainThreadRefused
 
 logger = logging.getLogger("houdini_mcp.tools")
 
@@ -47,12 +47,12 @@ __all__ = [
     "TimeoutFailure",
     "InvalidInputFailure",
     "OperationFailure",
-    "WorkerBusyFailure",
     "ToolError",
     "InvalidInput",
     "OperationFailed",
     "TimedOut",
-    "ProgramStillRunning",
+    "ProgramTimedOut",
+    "CutOff",
     "add_note",
     "failure_for",
     "failure_response",
@@ -72,13 +72,10 @@ FailureKind = Literal[
     "timeout",
     "invalid_input",
     "operation_failed",
-    "worker_still_running",
 ]
 """The closed set of ways a tool call fails."""
 
-Retry = Literal[
-    "start_houdini", "call_again", "check_scene", "fix_input", "wait_for_worker", "none"
-]
+Retry = Literal["start_houdini", "call_again", "check_scene", "fix_input", "none"]
 """What a client does next. Each kind fixes its own, below, except a link that
 failed mid-call: its retry is ``check_scene`` when the call may have changed the
 scene, since calling again could repeat a change that already landed."""
@@ -138,24 +135,34 @@ class ConnectionLostFailure(_Failure):
     exception: str
 
 
-class TimeoutFailure(_Failure):
-    """The operation exceeded its bound.
+CutOff = Literal["request", "link", "program"]
+"""What a timeout cut off, one value per fact:
 
-    ``connection_reset`` separates a link that never answered (torn down, the next
-    call reconnects) from a request that timed out on an intact link, where
-    nothing of it still runs and only calling again is the remedy.
-    """
+- ``request``: a request exceeded its bound on an intact link. Nothing of it
+  still runs; calling again is the remedy.
+- ``link``: the server's link to Houdini never answered and was torn down; the
+  next call reconnects.
+- ``program``: execute_code's program was killed with its process. The server's
+  link is intact; a killed program may have changed what its undo cannot reach.
+"""
+
+
+class TimeoutFailure(_Failure):
+    """The operation exceeded its bound, and ``cut_off`` says what that ended."""
 
     kind: Literal["timeout"] = "timeout"
     retry: LinkRetry
-    connection_reset: bool
+    cut_off: CutOff
 
     @model_validator(mode="after")
-    def _checked_only_after_a_reset(self) -> TimeoutFailure:
+    def _retry_follows_what_was_cut_off(self) -> TimeoutFailure:
         # [LAW:types-are-the-program] a request that timed out on an intact link
-        # left nothing running, so it has no change to check for.
-        if self.retry == "check_scene" and not self.connection_reset:
-            raise ValueError("check_scene is the retry of a reset link only")
+        # left nothing running, so it has no change to check for; a killed
+        # program may have left one, so it is always checked for.
+        if self.retry == "check_scene" and self.cut_off == "request":
+            raise ValueError("check_scene is the retry of a reset link or a killed program only")
+        if self.cut_off == "program" and self.retry != "check_scene":
+            raise ValueError("a killed program's retry is check_scene")
         return self
 
 
@@ -174,22 +181,13 @@ class OperationFailure(_Failure):
     retry: Literal["none"] = "none"
 
 
-class WorkerBusyFailure(_Failure):
-    """Refused because a program launched earlier still holds the scene."""
-
-    kind: Literal["worker_still_running"] = "worker_still_running"
-    retry: Literal["wait_for_worker"] = "wait_for_worker"
-    worker: dict[str, Any]
-
-
 ToolFailure = Annotated[
     ConnectionUnavailableFailure
     | ConnectionMismatchFailure
     | ConnectionLostFailure
     | TimeoutFailure
     | InvalidInputFailure
-    | OperationFailure
-    | WorkerBusyFailure,
+    | OperationFailure,
     Field(discriminator="kind"),
 ]
 
@@ -313,16 +311,26 @@ class TimedOut(ToolError):
             operation=operation,
             message=self.message,
             retry="call_again",
-            connection_reset=False,
+            cut_off="request",
             **self.fields,
         )
 
 
-class ProgramStillRunning(ToolError):
-    """The program this call launched exceeded its bound and still holds the
-    scene: the same arm as a refusal, since the remedy is to wait for that worker."""
+class ProgramTimedOut(ToolError):
+    """execute_code's program was killed with its process, the server's link
+    intact: what it changed that undo does not reach may remain, so the scene is
+    checked before calling again."""
 
-    arm = WorkerBusyFailure
+    arm = TimeoutFailure
+
+    def failure(self, operation: str) -> _Failure:
+        return TimeoutFailure(
+            operation=operation,
+            message=self.message,
+            retry="check_scene",
+            cut_off="program",
+            **self.fields,
+        )
 
 
 # =============================================================================
@@ -358,13 +366,27 @@ class LinkLost(Exception):
     def reported_by(self, e: BaseException) -> LinkLost:
         """This loss as ``e`` reported it: what this loss carries, then a tool
         failure's fields and its message as a note, then ``e``'s notes."""
-        fields, told = (e.fields, [e.message]) if isinstance(e, ToolError) else ({}, [])
-        found = LinkLost(self.link, self.lost, {**self.fields, **fields})
+        told = [e.message] if isinstance(e, ToolError) else []
+        found = LinkLost(self.link, self.lost, {**self.fields, **payload_of(e)})
         found.__notes__ = [*getattr(self, "__notes__", ()), *told, *getattr(e, "__notes__", ())]
+        return found
+
+    def stopped_undo_of(self, operation: str, failure: BaseException) -> LinkLost:
+        """This loss, which stopped the undo after ``operation`` failed with
+        ``failure``: ``failure``'s fields ride beside this loss's (a program's
+        output, its audit), and what it was is told as a note."""
+        found = LinkLost(self.link, self.lost, {**self.fields, **payload_of(failure)})
+        found.__notes__ = [*getattr(self, "__notes__", ()), f"{operation} had failed: {failure}"]
         return found
 
 
 Failed = TypeVar("Failed", bound=BaseException)
+
+
+def payload_of(e: BaseException) -> dict[str, Any]:
+    """[LAW:one-source-of-truth] The fields ``e`` carries to the arm it becomes,
+    whatever arm that is: a tool failure's own, and none for any other exception."""
+    return e.fields if isinstance(e, ToolError) else {}
 
 
 def _cause(e: BaseException) -> BaseException:
@@ -457,7 +479,7 @@ def _classify(e: Exception, operation: str, changes_scene: bool) -> _Failure:
     cause = _cause(e)
     if isinstance(cause, HoudiniConnectionError):
         return ConnectionUnavailableFailure(
-            operation=operation, message=str(cause), target=cause.target
+            operation=operation, message=str(cause), target=cause.target, **payload_of(e)
         )
     if isinstance(cause, HoudiniTargetMismatch):
         return ConnectionMismatchFailure(
@@ -466,13 +488,9 @@ def _classify(e: Exception, operation: str, changes_scene: bool) -> _Failure:
             target=cause.requested,
             connected=cause.connected,
         )
-    if isinstance(cause, WorkerStillRunning):
-        return WorkerBusyFailure(
-            operation=operation,
-            message=str(cause),
-            worker=cause.worker.describe(),
-            **cause.wait.response_fields(),
-        )
+    if isinstance(cause, PluginMissing | MainThreadRefused):
+        # Houdini's state, told in its words or the install's: not the call's bug.
+        return OperationFailure(operation=operation, message=str(cause))
     if isinstance(cause, LinkLost):
         lost = cause.lost
         # [LAW:one-source-of-truth] the retry and the sentence that explains it are
@@ -491,7 +509,7 @@ def _classify(e: Exception, operation: str, changes_scene: bool) -> _Failure:
                     "computation. The connection has been reset - subsequent calls will "
                     f"reconnect automatically.{unknown}"
                 ),
-                connection_reset=True,
+                cut_off="link",
                 **exception,
             )
         return ConnectionLostFailure(

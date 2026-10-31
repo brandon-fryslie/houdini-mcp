@@ -1,12 +1,14 @@
-"""The plugin, installed as the README installs it, loads in a fresh Houdini."""
+"""The plugin, installed by `houdini-mcp install`, loads in a fresh Houdini."""
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-from tests.live_houdini import PLUGIN_PACKAGES, hython_executable
+import houdini_plugin
+from houdini_mcp.install import Installed, Machine, install_plugin, this_server
+from tests.live_houdini import hython_executable
 
 # What Houdini made of the installed package, written as JSON to the file argv[1] names,
 # where nothing hython prints can mix into it.
@@ -25,6 +27,7 @@ open(sys.argv[1], "w").write(json.dumps({
             "houdini_mcp_scene",
             "houdini_mcp_schema",
             "houdini_mcp_search",
+            "houdini_mcp_wiring",
         )
     },
     "shelves": {name: shelf.filePath() for name, shelf in hou.shelves.shelves().items()},
@@ -36,23 +39,21 @@ open(sys.argv[1], "w").write(json.dumps({
 _OTHER_SOURCES = {"PYTHONPATH", "HSITE"}
 
 
-def test_the_documented_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -> None:
-    packages = tmp_path / "packages"
-    # The README's `cp -R houdini_plugin/. <packages>/`.
-    shutil.copytree(PLUGIN_PACKAGES, packages)
-    plugin = packages / "houdini_mcp"
+def test_houdini_mcp_install_puts_the_plugin_on_houdinis_paths(tmp_path: Path) -> None:
+    pref = tmp_path / "pref" / "houdini__HVER__"
     # Packages are read only at startup, so this needs a Houdini of its own. It reads
-    # packages from here alone: not the user's preferences, whose packages directory
-    # may hold a real install, and none of the other places a plugin could load from.
+    # packages from the preferences this test installs into alone: not the user's,
+    # whose packages directory may hold a real install, and none of the other places a
+    # plugin could load from.
     environ = {
         name: value
         for name, value in os.environ.items()
         if name not in _OTHER_SOURCES and not name.startswith("HOUDINI_")
     }
-    environ |= {
-        "HOUDINI_PACKAGE_DIR": str(packages),
-        "HOUDINI_USER_PREF_DIR": str(tmp_path / "pref" / "houdini__HVER__"),
-    }
+    environ |= {"HOUDINI_USER_PREF_DIR": str(pref)}
+    machine = Machine(environ, tmp_path / "home", sys.platform)
+    assert isinstance(install_plugin(machine, this_server()), Installed)
+    plugin = houdini_plugin.PACKAGES / "houdini_mcp"
     report = tmp_path / "loaded.json"
     probe = subprocess.run(
         [str(hython_executable(os.environ)), "-c", _PROBE, str(report)],

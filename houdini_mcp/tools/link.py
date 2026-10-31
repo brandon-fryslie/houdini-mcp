@@ -3,11 +3,14 @@
 from typing import Any
 
 from ..connection import ping
+from ..settings import DEFAULT_TARGET
 from ._common import READ, tool, using
 
 
 @tool(READ)
-def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def check_connection(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Check Houdini connection status with detailed info.
 
@@ -25,7 +28,9 @@ def check_connection(host: str = "localhost", port: int = 18811) -> dict[str, An
 
 
 @tool(READ)
-def ping_houdini(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def ping_houdini(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Quick connectivity test to Houdini.
 
@@ -33,6 +38,7 @@ def ping_houdini(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     the server's own connection is left as it was. The record is the one
     ``check_connection`` reports, naming the target the probe used. An
     unreachable Houdini is the ``connection_unavailable`` failure, naming the
-    target and the cause.
+    target and the cause; a Houdini reached whose plugin is another build fails
+    as any call would, naming the plugin to replace.
     """
     return {"status": "success", **ping(host, port)}

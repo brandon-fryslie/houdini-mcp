@@ -21,9 +21,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # (non-editable) install into the same .venv.
 COPY README.md ./
 COPY houdini_mcp/ ./houdini_mcp/
-# The modules both sides share are defined once, in the plugin tree; pyproject's
-# package find is the one list of which of them ship.
-COPY houdini_plugin/houdini_mcp/python/ ./houdini_plugin/houdini_mcp/python/
+# The modules both sides share are defined once, in the plugin tree, and the
+# distribution ships the whole tree; pyproject's package find is the one list of what ships.
+COPY houdini_plugin/ ./houdini_plugin/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 

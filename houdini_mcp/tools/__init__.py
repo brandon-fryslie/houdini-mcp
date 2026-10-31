@@ -23,7 +23,8 @@ from .code_policy import (
     _detect_dangerous_code,
     _detect_heavy_geometry_code,
     _detect_non_inspection_code,
-    parse_code,
+    compile_program,
+    parse_program,
 )
 from .errors import find_error_nodes as find_error_nodes
 from .geometry import get_geo_summary as get_geo_summary
@@ -70,6 +71,7 @@ from .scene import (
     save_scene as save_scene,
     serialize_scene as serialize_scene,
 )
+from .scene_hold import SCENE_HOLD, SceneHold
 from .summarization import (
     get_summarization_status as get_summarization_status,
 )
@@ -86,7 +88,6 @@ from .wiring import (
     reorder_inputs as reorder_inputs,
     set_node_flags as set_node_flags,
 )
-from .workers import WORKERS, RunningWorker, WorkerLedger, WorkerStillRunning
 
 # [LAW:one-source-of-truth] Being served is being a tool: the served set is every
 # function a module here put behind the tool boundary, so a tool cannot be defined
@@ -101,11 +102,9 @@ SERVED_TOOLS: tuple[Callable[..., Any], ...] = tuple(
 
 __all__ = [
     "SERVED_TOOLS",
-    # Running execute_code worker
-    "WORKERS",
-    "RunningWorker",
-    "WorkerLedger",
-    "WorkerStillRunning",
+    # Who holds this Houdini's scene
+    "SCENE_HOLD",
+    "SceneHold",
     # What a tool leaves behind, and how a call recovers from it
     "policy_of",
     "ToolPolicy",
@@ -114,7 +113,8 @@ __all__ = [
     # Code execution
     "_detect_heavy_geometry_code",
     "_detect_non_inspection_code",
-    "parse_code",
+    "compile_program",
+    "parse_program",
     # Shared utilities (re-exported from _common for tests / backward compatibility)
     "_detect_dangerous_code",
     "using",

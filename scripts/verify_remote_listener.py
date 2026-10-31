@@ -19,8 +19,8 @@ Usage:
 
 Environment (read as the MCP server reads it, through houdini_mcp.settings):
     RUN_LIVE_REMOTE_CHECK   must be on (1/true/yes/on/t/y, any case) to run (safety gate)
-    HOUDINI_HOST            listener host (default localhost)
-    HOUDINI_PORT            listener port (default 18811)
+    HOUDINI_HOST            listener host (default DEFAULT_TARGET.host in houdini_mcp.settings)
+    HOUDINI_PORT            listener port (default DEFAULT_TARGET.port in houdini_mcp.settings)
     HOUDINI_RPC_TOKEN       optional shared secret (presented before the rpyc stream)
 
 Exit codes:

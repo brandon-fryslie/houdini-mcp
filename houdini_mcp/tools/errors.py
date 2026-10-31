@@ -8,16 +8,17 @@ import logging
 from typing import Any
 
 from ..connection import transport_failure
-from ..settings import Summarizer
+from ..settings import DEFAULT_TARGET, Summarizer
 from ._common import (
     READ,
     ResultLimit,
     node_at,
     on_the_scene,
+    refused_by_houdini,
     tool,
     using,
 )
-from .failure import OperationFailed, Undone, batch_status
+from .failure import Undone, batch_status
 from .summarization import ERRORS_BRIEF, summarized
 
 logger = logging.getLogger("houdini_mcp.tools.errors")
@@ -30,8 +31,8 @@ async def find_error_nodes(
     max_results: ResultLimit = 100,
     *,
     summarize: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     summarizer: Summarizer,
 ) -> dict[str, Any]:
     """
@@ -91,12 +92,9 @@ def _scan_error_nodes(
         hou = link.hou
 
         root = node_at(hou, root_path, "Root node")
-        try:
+        # [LAW:no-silent-failure] no node list, no scan
+        with refused_by_houdini(f"list the nodes under {root_path}", root_path=root_path):
             descendants = root.allSubChildren()
-        except Exception as e:
-            # [LAW:no-silent-failure] no node list, no scan. Chained so a lost link
-            # is classified as the loss it is, not as this tool's failure.
-            raise OperationFailed(f"Could not list the nodes under {root_path}: {e}") from e
 
         error_nodes: list[dict[str, Any]] = []
         warning_nodes: list[dict[str, Any]] = []

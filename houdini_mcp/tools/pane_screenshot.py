@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ..connection import Link, houdini
+from ..main_thread import MainThread, MainThreadRefused
+from ..settings import DEFAULT_TARGET
 from ._common import (
     FILE_WRITE_ON_MAIN_THREAD,
     ON_MAIN_THREAD,
@@ -30,12 +32,12 @@ from ._common import (
     failed_on,
     failure_for,
     network_at,
+    refused_by_houdini,
     tool,
     using,
 )
 from .failure import LinkLost
-from .reads import Unread, is_unread, read, reason
-from .transactions import MainThread, MainThreadRefused
+from .reads import Unread, is_unread, read
 
 logger = logging.getLogger("houdini_mcp.tools.pane_screenshot")
 
@@ -50,11 +52,9 @@ def _qt_core(link: Link) -> Any:
     # and hutil.PySide is where Houdini states it; a binding named here is a copy
     # that goes stale the release SideFX moves to another one. Its submodules are
     # attributes of the package, which serves the ones it loads lazily the same way.
-    try:
+    with refused_by_houdini("import its Qt, hutil.PySide"):
         QtCore = conn.modules["hutil.PySide"].QtCore
-    except (ImportError, AttributeError) as e:
-        raise OperationFailed(f"Failed to access Houdini's Qt (hutil.PySide): {e}") from e
-    logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
+        logger.info("Capturing through %s, Qt %s", QtCore.__name__, QtCore.qVersion())
     return QtCore
 
 
@@ -225,27 +225,21 @@ def _capture_pane_to_bytes(
 
     def framed() -> dict[str, Any]:
         shown = navigate(pane)
-        try:
+        with refused_by_houdini(f"frame {pane_type_name}", pane_type=pane_type_name):
             frame(pane)
-        except ToolError:
-            raise
-        except Exception as e:
-            raise OperationFailed(
-                f"Failed to frame {pane_type_name}: {reason(e)}", pane_type=pane_type_name
-            ) from e
         return shown
 
     # Navigated and framed only once the input and the pane are known good, so a
     # capture refused for either leaves the user's view as it was; one that fails
     # navigating, framing or grabbing leaves the view as far as it got.
-    shown = main_thread.call(link, framed)
+    shown = main_thread.call(link, framed).result()
     # [LAW:no-ambient-temporal-coupling] exception: a grab shows the frame Houdini
     # last drew, and Houdini draws a pane's change only once its main thread is
     # back in its event loop; it offers no signal that it has (no viewer or
     # viewport event says so, and no draw call makes a grab in the same call
     # current). So the grab is the next main-thread call, which Houdini begins
     # only when its event loop is idle again, after that drawing.
-    image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name))
+    image = main_thread.call(link, lambda: _drawn(pane, geometry, QtCore, pane_type_name)).result()
     # Encoded here, off the main thread, so Houdini's UI is held only for the grab.
     raw_bytes = png_bytes(image, QtCore, pane_type_name)
     logger.info("Grabbed %s from its window: %d PNG bytes", pane_type_name, len(raw_bytes))
@@ -300,8 +294,8 @@ def capture_pane_screenshot(
     pane_type_name: str = "NetworkEditor",
     save_path: str | None = None,
     fit_contents: bool = False,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:
@@ -358,8 +352,8 @@ def _desktop_name(desktop: Any) -> str | None:
 
 @tool(READ)
 def list_visible_panes(
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     List all visible pane tabs in the current Houdini layout.
@@ -382,7 +376,7 @@ def list_visible_panes(
         hou = link.hou
 
         current_desktop_name = read("current desktop", lambda: _desktop_name(hou.ui.curDesktop()))
-        try:
+        with refused_by_houdini("list its desktops' panes"):
             desktops = [
                 (read("desktop name", desktop.name), desktop.paneTabs())
                 for desktop in hou.ui.desktops()
@@ -392,8 +386,6 @@ def list_visible_panes(
                 for name, pane_tabs in desktops
                 for index, pane_tab in enumerate(pane_tabs)
             ]
-        except Exception as e:
-            raise OperationFailed(f"Failed to enumerate panes: {e}") from e
 
         # Capturable first, then by type name
         panes_info.sort(key=lambda p: (p["capturable"] is not True, str(p["type"])))
@@ -463,8 +455,8 @@ def _both(a: Fact, b: Fact) -> Fact:
 def render_node_network(
     node_path: str = "/obj",
     fit_contents: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:
@@ -507,15 +499,11 @@ def render_node_network(
         # is entered where it now is, and one deleted since fails the capture, so
         # no other node is ever entered.
         def into_network(pane: Any) -> dict[str, Any]:
-            try:
+            with refused_by_houdini(f"take the pane into {node_path}", path=node_path):
                 # [LAW:one-source-of-truth] the network's own path, which a
                 # caller's spelling of it ("/obj/geo1/") is not.
                 path = network.path()
                 pane.cd(path)
-            except Exception as e:
-                raise OperationFailed(
-                    f"Failed to navigate to {node_path}: {reason(e)}", path=node_path
-                ) from e
             child_count = read(f"children of {path}", lambda: len(network.children()))
             logger.info("Took %s into %s, child_count=%s", pane.name(), path, child_count)
             return {"node_path": path, "child_count": child_count}
@@ -552,8 +540,8 @@ def _delivered(raw_bytes: bytes, pane_type_name: str, save_dir: str | None) -> d
 def capture_multiple_panes(
     pane_types: list[str],
     save_dir: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     main_thread: MainThread,
 ) -> dict[str, Any]:

@@ -17,6 +17,8 @@ from functools import partial
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Literal
 
+from ..plugin import plugin_module
+from ..settings import DEFAULT_TARGET
 from ._common import (
     FLAGS,
     READ,
@@ -35,13 +37,13 @@ from ._common import (
     page_from,
     paginate,
     paging_fields,
+    refused_by_houdini,
     tool,
     using,
 )
 from .connections import input_connections, input_paths
 from .failure import InvalidInput, Undone, batch_status
 from .parms import evaluated
-from .plugin import plugin_module
 from .reads import UNREAD, is_unread, log_refused, read
 
 if TYPE_CHECKING:
@@ -63,8 +65,8 @@ def create_node(
     node_type: str,
     parent_path: str = "/obj",
     name: NodeName | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new node in the Houdini scene.
@@ -101,8 +103,8 @@ def get_node_info(
     detail: Detail = "full",
     cook_info: CookInfo = "none",
     max_params: Count = 50,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get information about a node at a chosen level of detail.
@@ -173,13 +175,14 @@ def get_node_info(
 
 def _compact_record(node: Any) -> dict[str, Any]:
     """Path, type and the non-zero child/input/output counts."""
+    path = node.path()
     info: dict[str, Any] = {
         "status": "success",
-        "path": node.path(),
+        "path": path,
         "type": node.type().name(),
     }
     children_count = len(node.children())
-    inputs_count = len(input_connections(node))
+    inputs_count = len(input_connections(node, path))
     outputs_count = len(node.outputs())
     if children_count:
         info["children_count"] = children_count
@@ -194,8 +197,8 @@ def _standard_record(node: Any) -> dict[str, Any]:
     """Identity, flags, children, inputs, outputs and per-input connection details."""
     # [LAW:one-source-of-truth] "inputs" and "input_connections" describe the same
     # wires, so both come from one read of the connection records.
-    connections = input_connections(node)
     path = node.path()
+    connections = input_connections(node, path)
     node_type = node.type()
     type_name = node_type.name()
     info: dict[str, Any] = {
@@ -211,10 +214,8 @@ def _standard_record(node: Any) -> dict[str, Any]:
         "children": [child.name() for child in node.children()],
         "inputs": input_paths(connections),
         "outputs": [out.path() for out in node.outputs()],
-        "is_displayed": read(
-            f"display flag of {path}", partial(node_flag, node, "isDisplayFlagSet")
-        ),
-        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "isRenderFlagSet")),
+        "is_displayed": read(f"display flag of {path}", partial(node_flag, node, "display")),
+        "is_rendered": read(f"render flag of {path}", partial(node_flag, node, "render")),
     }
 
     info["input_connections"] = [conn.as_record() for conn in connections]
@@ -282,7 +283,9 @@ def _cook(node: Any) -> float:
 
 
 @tool(UNDOABLE)
-def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def delete_node(
+    node_path: str, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Delete a node from the scene.
 
@@ -297,7 +300,8 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
         node = node_at(hou, node_path)
 
         node_name = node.name()
-        node.destroy()
+        with refused_by_houdini(f"delete {node_path}", node_path=node_path):
+            node.destroy()
 
         return {
             "status": "success",
@@ -310,8 +314,8 @@ def delete_node(node_path: str, host: str = "localhost", port: int = 18811) -> d
 def list_node_types(
     category: str | None = None,
     name_filter: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 100,
     cursor: Cursor = 0,
@@ -396,8 +400,8 @@ def list_children(
     max_depth: Count = 10,
     max_nodes: ResultLimit = 1000,
     compact: bool = False,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 20,
     cursor: Cursor = 0,
@@ -454,7 +458,7 @@ def list_children(
         def compact_flags(node: Any) -> str:
             # Three-character bitset: display/render/bypassed. `-` means the node
             # class does not expose that flag API.
-            flags = (node_flag(node, FLAGS[f].read) for f in ("display", "render", "bypass"))
+            flags = (node_flag(node, flag) for flag in FLAGS)
             return "".join("-" if f is None else "1" if f else "0" for f in flags)
 
         def record(child: Any, child_path: str) -> dict[str, Any]:
@@ -473,7 +477,7 @@ def list_children(
                 "path": child_path,
                 "name": child.name(),
                 "type": child.type().name(),
-                "inputs": [conn.as_record() for conn in input_connections(child)],
+                "inputs": [conn.as_record() for conn in input_connections(child, child_path)],
                 "outputs": [out.path() for out in child.outputs()],
             }
 
@@ -565,8 +569,8 @@ def find_nodes(
     root_path: str = "/obj",
     pattern: str = "*",
     node_type: str | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     *,
     limit: PageLimit = 100,
     cursor: Cursor = 0,

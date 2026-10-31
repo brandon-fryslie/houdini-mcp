@@ -12,24 +12,26 @@ import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 import rpyc
+import rpyc.utils.helpers
 import rpyc.utils.server
 from fastmcp import FastMCP
 from rpyc.core import vinegar
 from rpyc.core.async_ import AsyncResult
 from rpyc.utils.server import Server
 
-from houdini_mcp.connection import TransportException
+from houdini_mcp.connection import BUILD, RELEASE, TransportException
 from houdini_mcp.results import Results
 from houdini_mcp.server import build_server
 from houdini_mcp.settings import Summarizer, server_settings
 from tests.fake_node_types import (
+    FLAGS,
     MAKES,
     Answer,
     Answers,
@@ -123,7 +125,7 @@ def _named(category: str, name: str) -> NodeType | None:
 
 
 class OperationFailed(Exception):
-    """hou.OperationFailed, which Houdini 22 raises for a cook that fails."""
+    """hou.OperationFailed, which Houdini 22 raises for an operation it refuses or that fails."""
 
 
 OperationFailed.__module__ = "hou"
@@ -161,6 +163,15 @@ class MatchDefinitionError(Exception):
 MatchDefinitionError.__module__ = "hou"
 
 
+class HouInvalidInput(Exception):
+    """hou.InvalidInput, which Houdini 22's setInput raises for an input or output index
+    the nodes do not have."""
+
+
+HouInvalidInput.__name__ = HouInvalidInput.__qualname__ = "InvalidInput"
+HouInvalidInput.__module__ = "hou"
+
+
 class LoadWarning(Exception):
     """hou.LoadWarning, which Houdini 22's hipFile.load raises once the file has loaded
     with warnings, such as a node whose asset definition is missing."""
@@ -173,7 +184,8 @@ class MockSubnetIndirectInput:
     """hou.SubnetIndirectInput: the item inside a subnet that stands for one of its inputs.
 
     Not a node, but a valid ``setInput`` source and a ``NetworkMovableItem`` with a
-    ``path()``. Houdini names them 1, 2, ... under the subnet.
+    ``path()``. Houdini 22 numbers them from 0, as the subnet's inputs are, and names
+    them from 1: the one named "1" under the subnet is number 0.
     """
 
     def __init__(self, subnet: "MockHouNode", number: int):
@@ -185,10 +197,10 @@ class MockSubnetIndirectInput:
         return self._number
 
     def name(self) -> str:
-        return str(self._number)
+        return str(self._number + 1)
 
     def path(self) -> str:
-        return f"{self._subnet.path()}/{self._number}"
+        return f"{self._subnet.path()}/{self.name()}"
 
     def parent(self) -> "MockHouNode":
         return self._subnet
@@ -198,32 +210,52 @@ class MockSubnetIndirectInput:
 
 
 class MockNodeType:
-    """Mock hou.NodeType as its category holds it: a row of the table, and what the
-    category's registry says of it."""
+    """Mock hou.NodeType: a row of the table, and what its category's registry says of
+    it. [LAW:one-type-per-behavior] one fake of it, whether a category hands it out or
+    a node's type() does; two of one row are equal, as Houdini's two objects for one
+    type are."""
 
-    def __init__(self, category: Category, row: NodeType) -> None:
-        self._category = category
+    def __init__(self, row: NodeType) -> None:
         self._row = row
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeType) and other._row is self._row
+
+    def __hash__(self) -> int:
+        return hash((self._row.category, self._row.type))
 
     def name(self) -> str:
         return self._row.type
+
+    def category(self) -> "MockNodeTypeCategory":
+        return MockNodeTypeCategory(self._row.category)
+
+    def nameWithCategory(self) -> str:
+        return f"{self._row.category}/{self._row.type}"
 
     def description(self) -> str:
         return self._row.description
 
     def namespaceOrder(self) -> tuple[str, ...]:
-        return self._category.namespace_order(self._row.type)
+        return CATEGORIES[self._row.category].namespace_order(self._row.type)
 
     def aliases(self) -> tuple[str, ...]:
-        return self._category.aliases_of(self._row.type)
+        return CATEGORIES[self._row.category].aliases_of(self._row.type)
 
 
 class MockNodeTypeCategory:
     """Mock hou.NodeTypeCategory: one class whose name is a method, as Houdini's is,
-    so rpyc reads it as it reads Houdini's."""
+    so rpyc reads it as it reads Houdini's; two of one name are equal, as Houdini's
+    two objects for one category are."""
 
     def __init__(self, name: str) -> None:
         self._name = name
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MockNodeTypeCategory) and other._name == self._name
+
+    def __hash__(self) -> int:
+        return hash(self._name)
 
     def name(self) -> str:
         return self._name
@@ -233,7 +265,7 @@ class MockNodeTypeCategory:
         name."""
         category = CATEGORIES[self._name]
         return {
-            own: MockNodeType(category, row)
+            own: MockNodeType(row)
             for own, row in category.types.items()
             if category.registered(own)
         }
@@ -241,12 +273,12 @@ class MockNodeTypeCategory:
     def nodeType(self, name: str) -> MockNodeType | None:
         """The registered type whose own name ``name`` is; None when no type has it."""
         category = CATEGORIES[self._name]
-        return MockNodeType(category, category.held(name)) if category.registered(name) else None
+        return MockNodeType(category.held(name)) if category.registered(name) else None
 
 
 class _SopNodeClass(type):
     def __instancecheck__(cls, node: object) -> bool:
-        return isinstance(node, MockHouNode) and node._category() == "Sop"
+        return isinstance(node, MockHouNode) and node._row().category == "Sop"
 
 
 class MockSopNode(metaclass=_SopNodeClass):
@@ -314,7 +346,7 @@ class HeldTuple:
 @dataclass(frozen=True)
 class Placed:
     """What a placed node holds because of its type: its parameter tuples, its indirect
-    inputs, its lock, and the type that gave them.
+    inputs, its lock, the state of each flag its type has, and the type that gave them.
 
     ``indirect`` is None for a node that is not a subnetwork, whose indirectInputs()
     raises instead; the items it lists are made once, as each holds its own wires.
@@ -326,6 +358,16 @@ class Placed:
     tuples: dict[str, HeldTuple]
     indirect: tuple[MockSubnetIndirectInput, ...] | None
     locked: bool
+    flags: dict[str, bool]
+
+
+# a fresh node's flags, of those its type has
+FRESH_FLAGS = {"display": True, "render": True, "bypass": False}
+
+# a flag method's name -> its flag, and whether it writes
+FLAG_METHODS = {
+    method: (flag, method == methods.write) for flag, methods in FLAGS.items() for method in methods
+}
 
 
 @dataclass(frozen=True)
@@ -347,10 +389,9 @@ def _place(
         _placed_parms(node_type, given),
         None
         if node_type.indirect_inputs is None
-        else tuple(
-            MockSubnetIndirectInput(node, n) for n in range(1, node_type.indirect_inputs + 1)
-        ),
+        else tuple(MockSubnetIndirectInput(node, n) for n in range(node_type.indirect_inputs)),
         node_type.locked and not isinstance(answer, Mismatched),
+        {flag: FRESH_FLAGS[flag] for flag in node_type.flags},
     )
 
 
@@ -426,8 +467,20 @@ def _own_components(node_type: NodeType, name: str, values: tuple[Any, ...]) -> 
     return (name,) * len(values)
 
 
+class _NoUndoStack:
+    """The undo stack of a tree built by hand, outside any Houdini: it records nothing."""
+
+    @contextlib.contextmanager
+    def edit(self, label: str) -> Generator[None, None, None]:
+        yield
+
+
 class MockHouNode:
     """Mock Houdini node object."""
+
+    # The undo stack this node's edits reach, read off the root: a MockHouModule's
+    # scene has Houdini's, a hand-built tree none.
+    _undos: "MockUndos | _NoUndoStack" = _NoUndoStack()
 
     def __init__(
         self,
@@ -458,9 +511,6 @@ class MockHouNode:
         # the same default as setInput().
         self._input_output_indexes: dict[int, int] = {}
         self._outputs: list[Any] = []
-        self._display_flag = True
-        self._render_flag = True
-        self._bypass = False
         # Cook state, as Houdini 22 reads it: how many cooks were attempted,
         # whether the node needs another, and the last cook's messages. A fake
         # node has cooked once, successfully, and is current.
@@ -505,7 +555,7 @@ class MockHouNode:
                 for index, source in enumerate(self._inputs)
                 if source is not None
             ),
-            (self._display_flag, self._render_flag, self._bypass),
+            tuple(sorted(self._placed().flags.items())),
             self._position,
             repr(self._color),
             tuple(
@@ -543,7 +593,7 @@ class MockHouNode:
         chain = []
         network: MockHouNode | None = self
         while network is not None:
-            chain.append((network, network._category(), network._placed()))
+            chain.append((network, network._row().category, network._placed()))
             network = network._parent
         return tuple(chain)
 
@@ -566,33 +616,8 @@ class MockHouNode:
     def name(self) -> str:
         return self._name
 
-    def type(self) -> MagicMock:
-        mock_type = MagicMock()
-        # Read when asked, not when type() is: a node's type is its network's to
-        # give, which a node built by hand has only once it is placed.
-        mock_type.name = MagicMock(side_effect=lambda: self._row().type)
-        mock_type.description = MagicMock(side_effect=lambda: self._row().description)
-        mock_type.category = lambda: MockNodeTypeCategory(self._category())
-        mock_type.nameWithCategory = lambda: f"{self._category()}/{self._row().type}"
-        mock_type.namespaceOrder = lambda: CATEGORIES[self._category()].namespace_order(
-            self._row().type
-        )
-        mock_type.aliases = lambda: CATEGORIES[self._category()].aliases_of(self._row().type)
-        return mock_type
-
-    def _category(self) -> str:
-        """The category this node's network holds, as Houdini's node takes it.
-
-        The root is the one node with no network, and it is the Director. Any other
-        parentless node is not in a scene, and Houdini has no such node.
-        """
-        if self._parent is not None:
-            held = self._parent._held()
-            assert held is not None, "attach places no child in a node that is not a network"
-            return held
-        if self._row() is not CATEGORIES["Director"].types["root"]:
-            raise RuntimeError(f"{self.path()!r} is not in a scene, so it has no category")
-        return "Director"
+    def type(self) -> MockNodeType:
+        return MockNodeType(self._row())
 
     def _row(self) -> NodeType:
         """This node's type, which its placement stamped."""
@@ -780,7 +805,9 @@ class MockHouNode:
         new_path = join_path(self._path, new_name)
 
         new_node = MockHouNode(path=new_path, name=new_name, node_type=node_type)
-        if isinstance(answer := self.attach(new_node), Mismatched):
+        with self.root()._undos.edit("hou.Node.createNode"):
+            answer = self.attach(new_node)
+        if isinstance(answer, Mismatched):
             # the node is made, its contents not matching its definition here
             raise raised_inside_houdini(MatchDefinitionError(answer.message))
         return new_node
@@ -793,6 +820,11 @@ class MockHouNode:
         """
         if self._parent is None:
             raise RuntimeError(f"{self.path()!r} is not in a scene")
+        with self.root()._undos.edit("Delete Node"):
+            self._leave()
+
+    def _leave(self) -> None:
+        assert self._parent is not None
         subtree = [self, *self.allSubChildren()]
         for node in subtree:
             node._disconnect()
@@ -811,9 +843,6 @@ class MockHouNode:
             for index, source in enumerate(sink._inputs):
                 if source is self:
                     sink.setInput(index, None)
-
-    def isDisplayFlagSet(self) -> bool:
-        return self._display_flag
 
     def worldTransform(self) -> "MockMatrix4":
         """The node's world transform, as hou.ObjNode.worldTransform: its own rotate,
@@ -835,20 +864,24 @@ class MockHouNode:
             )
         )
 
-    def isRenderFlagSet(self) -> bool:
-        return self._render_flag
+    def __getattr__(self, name: str) -> Any:
+        """A flag's read or write, which a node has when its type has the flag; any
+        other name it lacks, as Houdini's node class does: AttributeError."""
+        if name not in FLAG_METHODS:
+            raise AttributeError(name)
+        flag, writes = FLAG_METHODS[name]
+        flags = self._placed().flags
+        if flag not in flags:
+            raise AttributeError(f"{self._row().type} has no {flag} flag, so no {name}")
 
-    def setDisplayFlag(self, value: bool) -> None:
-        self._display_flag = value
+        def read(node: MockHouNode) -> bool:
+            return node._placed().flags[flag]
 
-    def setRenderFlag(self, value: bool) -> None:
-        self._render_flag = value
+        def write(node: MockHouNode, on: bool) -> None:
+            node._placed().flags[flag] = on
 
-    def bypass(self, on: bool) -> None:
-        self._bypass = on
-
-    def isBypassed(self) -> bool:
-        return self._bypass
+        # a bound method, as Houdini's is, which rpyc carries as it carries Houdini's
+        return MethodType(write if writes else read, self)
 
     def setInput(
         self,
@@ -856,7 +889,11 @@ class MockHouNode:
         source_node: "MockHouNode | MockSubnetIndirectInput | None",
         output_index: int = 0,
     ) -> None:
-        """Set input connection from a node or a subnet indirect input."""
+        """Set input connection from a node or a subnet indirect input. As Houdini 22's,
+        it refuses a source outside this node's own network, a subnet's indirect input
+        included, and leaves the inputs as they were."""
+        if source_node is not None and source_node.parent() is not self.parent():
+            raise raised_inside_houdini(OperationFailed("The attempted operation failed."))
         # Extend inputs list if needed
         while len(self._inputs) <= input_index:
             self._inputs.append(None)
@@ -967,7 +1004,7 @@ class MockHouNode:
         if contained is None or contained.name() != "Sop":
             return None
         for child in self._children:
-            if child._display_flag:
+            if child.isDisplayFlagSet():
                 return child
         if self._children:
             return self._children[-1]
@@ -1018,9 +1055,12 @@ class MockHouNode:
 # closes with the link, and a call is out only while its link is open: the main
 # thread serves the call's connection until the call returns or it closes.
 _MAIN_THREAD = """
+import contextlib
+import time
+
 import rpyc
 
-from tests.conftest import FAKE_MAIN_THREAD, local_undos
+from tests.conftest import FAKE_MAIN_THREAD, local_behaviour, local_undos
 
 
 def _heard(fn):
@@ -1031,35 +1071,78 @@ def _heard(fn):
     return reply.value
 
 
+def _posted(undos, behaviour, fn, around):
+    # How the main thread takes a call, as its behaviour says: refused, never
+    # taken (its client's requests still served, until it is gone), or run, its
+    # reply then held back.
+    if behaviour.refusal is not None:
+        return behaviour.refusal
+    if not behaviour.takes_calls:
+        conn = object.__getattribute__(fn, "____conn__")
+        with contextlib.suppress(EOFError):
+            while not conn.closed:
+                if behaviour.asks_while_waiting:
+                    # A request to the client, which it serves while it waits.
+                    fn.__name__
+                conn.serve(0.05)
+        raise EOFError("the client went away before the main thread took its call")
+    with FAKE_MAIN_THREAD:
+        undos.enter_main_thread()
+        try:
+            with around():
+                _heard(fn)
+        finally:
+            undos.leave_main_thread()
+    time.sleep(behaviour.reply_hold)
+    return None
+
+
 def main_thread_of(key):
     # Houdini's own undo stack, not one reached over the link the call came on.
+    # Each entry records on it how long the client asked Houdini to wait on it
+    # while it says nothing.
     undos = local_undos(key)
+    behaviour = local_behaviour(key)
 
     class main_thread:
-        PICKUP_TIMEOUT = 30.0
+        PICKUP_TIMEOUT = behaviour.pickup_timeout
 
         @staticmethod
         def call(fn, silence):
-            with FAKE_MAIN_THREAD:
-                undos.enter_main_thread()
-                try:
-                    _heard(fn)
-                finally:
-                    undos.leave_main_thread()
+            undos.silence = silence
+            return _posted(undos, behaviour, fn, contextlib.nullcontext)
+
+        @staticmethod
+        def call_without_undo(fn, silence):
+            undos.silence = silence
+            return _posted(undos, behaviour, fn, undos.disabler)
 
         @staticmethod
         def call_as_step(fn, label, silence):
-            # How long the client asked Houdini to wait on it while it says nothing.
             undos.silence = silence
-            with FAKE_MAIN_THREAD:
-                undos.enter_main_thread()
-                try:
-                    with undos.group(label):
-                        _heard(fn)
-                finally:
-                    undos.leave_main_thread()
+            if behaviour.step_failure is not None:
+                raise RuntimeError(behaviour.step_failure)
+            return _posted(undos, behaviour, fn, lambda: undos.group(label))
     return main_thread
 """
+
+
+@dataclass
+class MainThreadBehaviour:
+    """How the double's Houdini main thread takes a call: by default it takes each
+    at once and replies as soon as it ends. ``refusal`` refuses every call in those
+    words; ``takes_calls`` False neither takes nor refuses one, asking its client
+    something all the while if ``asks_while_waiting``; ``reply_hold`` holds the
+    reply that many seconds after the call ends; ``step_failure`` fails each step
+    in those words before its call begins."""
+
+    refusal: str | None = None
+    step_failure: str | None = None
+    takes_calls: bool = True
+    asks_while_waiting: bool = False
+    reply_hold: float = 0.0
+    pickup_timeout: float = 30.0
+
 
 # Re-entrant: a call's own requests run inside it, on its connection's thread.
 FAKE_MAIN_THREAD = threading.RLock()
@@ -1071,6 +1154,14 @@ _undos_by_key: dict[int, "MockUndos"] = {}
 
 def local_undos(key: int) -> "MockUndos":
     return _undos_by_key[key]
+
+
+# How each Houdini's main thread takes calls, keyed as its undo stack is.
+_behaviour_by_key: dict[int, "MainThreadBehaviour"] = {}
+
+
+def local_behaviour(key: int) -> "MainThreadBehaviour":
+    return _behaviour_by_key.setdefault(key, MainThreadBehaviour())
 
 
 # [LAW:no-shared-mutable-globals] The session's one main_thread server, opened by
@@ -1223,20 +1314,6 @@ def _answers_in(chain: Chain) -> dict[str, Answers]:
     return answers
 
 
-class MockNodeLacking(MockHouNode):
-    """A node whose class lacks the methods ``lacks`` names, as an object has no
-    render flag on Houdini 22: looking one up raises AttributeError."""
-
-    def __init__(self, *args: Any, lacks: tuple[str, ...], **kwargs: Any):
-        object.__setattr__(self, "_lacks", frozenset(lacks))
-        super().__init__(*args, **kwargs)
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in object.__getattribute__(self, "_lacks"):
-            raise AttributeError(name)
-        return object.__getattribute__(self, name)
-
-
 class MockModuleNamespace:
     """``conn.modules`` for a Houdini that is this interpreter with ``hou`` faked.
 
@@ -1307,6 +1384,11 @@ class MockRpycConnection:
 class MockHouModule:
     """Mock hou module for testing."""
 
+    @property
+    def main_thread_behaviour(self) -> MainThreadBehaviour:
+        """How this Houdini's main thread takes calls (:class:`MainThreadBehaviour`)."""
+        return local_behaviour(id(self.undos))
+
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
         self._root = _built_as(CATEGORIES["Director"].types["root"], path="/", name="")
@@ -1331,6 +1413,7 @@ class MockHouModule:
         self.hipFile.load = MagicMock()
         self.hipFile.clear = MagicMock()
         self.LoadWarning = LoadWarning
+        self.InvalidInput = HouInvalidInput
         self.hda = SimpleNamespace(
             componentsFromFullNodeTypeName=name_components,
             fullNodeTypeNameFromComponents=full_name,
@@ -1347,6 +1430,9 @@ class MockHouModule:
         self.updateMode = MockUpdateMode
 
         self.undos = MockUndos(self)
+        self._root._undos = self.undos
+        # A headless hython unless a test makes it graphical.
+        self.ui_available = False
 
         self.EnumValue = MockEnumValue
         self.paneTabType = MockPaneTabType
@@ -1354,6 +1440,9 @@ class MockHouModule:
 
     def applicationVersionString(self) -> str:
         return self._version
+
+    def isUIAvailable(self) -> bool:
+        return self.ui_available
 
     def setUpdateMode(self, mode: "MockEnumValue") -> None:
         self._root._update_mode = mode
@@ -1402,7 +1491,8 @@ class MockHouModule:
         return "", f"Unknown command: {verb}\n"
 
     def item(self, path: str) -> MockHouNode | MockSubnetIndirectInput | None:
-        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<n>``."""
+        """hou.item: a node, or a subnet indirect input by its path ``<subnet>/<name>``,
+        whose name is its number + 1."""
         node = self.node(path)
         if node is not None:
             return node
@@ -1426,7 +1516,7 @@ class MockHouModule:
         if category not in CATEGORIES:
             return None
         row = _resolved(category, full_name(scope, namespace, base, version))
-        return None if row is None else MockNodeType(CATEGORIES[category], row)
+        return None if row is None else MockNodeType(row)
 
     def add_node(self, node: MockHouNode) -> None:
         """Place a prebuilt node in the scene under the parent its path names."""
@@ -1653,41 +1743,162 @@ def reset_connection_state() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def mock_rpyc_with_reset(
-    mock_hou: MockHouModule, reset_connection_state: None
-) -> Generator[MockHouModule, None, None]:
-    """Patch the handshake connect seam to hand out a connection to ``mock_hou``."""
-    mock_conn = MockRpycConnection(mock_hou)
+def mock_rpyc_with_reset(mock_hou: MockHouModule, fake_houdini: "FakeHoudini") -> MockHouModule:
+    """The installed Houdini reaches ``mock_hou``; nothing is connected yet."""
+    fake_houdini.reaches(mock_hou)
+    return mock_hou
 
-    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-        mock_rpyc_module.connect.return_value = mock_conn
-        yield mock_hou
+
+class FakeHoudiniService(rpyc.ClassicService):  # type: ignore[misc]
+    """The double as a program's own process reaches it: over a real link, its
+    ``hou`` the double itself and its plugin's main thread the one the server's
+    calls reach, so the program's edits and its step land on the same scene."""
+
+    def __init__(self, listener: "FakeHoudiniListener") -> None:
+        super().__init__()
+        self._listener = listener
+
+    def on_connect(self, conn: Any) -> None:
+        super().on_connect(conn)
+        self._listener.clients.append(conn)
+
+    def getmodule(self, name: Any) -> Any:
+        name = ".".join(name) if isinstance(name, tuple) else name
+        time.sleep(self._listener.answer_delay)
+        hou = self._listener.hou()
+        if name == "hou":
+            return hou
+        plugin = self._listener.plugin
+        if plugin is None and name.startswith("houdini_mcp"):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        if name == "houdini_mcp_plugin" and plugin != BUILD:
+            return SimpleNamespace(
+                __version__=RELEASE,
+                BUILD=plugin,
+                __path__=[f"/plugins/{plugin}/houdini_mcp_plugin"],
+            )
+        if name == "houdini_mcp_plugin.main_thread":
+            return local_main_thread(hou.undos)
+        return importlib.import_module(name)
+
+
+class FakeHoudiniListener:
+    """A listener for the double, speaking the token handshake as the plugin's
+    does, opened when a program's process first needs it and closed with the test.
+
+    ``plugin`` is the build of the plugin on its Houdini's path (None: none);
+    ``answer_delay`` makes it answer each module it serves that much later.
+    """
+
+    def __init__(self, hou: Callable[[], Any]) -> None:
+        import secrets
+
+        import houdini_mcp_handshake as handshake
+
+        self.hou = hou
+        self.plugin: str | None = BUILD
+        # Seconds each module it serves takes to answer: a slow Houdini.
+        self.answer_delay = 0.0
+        self.clients: list[Any] = []
+        self._token = secrets.token_hex(16)
+        self._authenticator = handshake.token_authenticator(self._token)
+        self._server: rpyc.utils.server.ThreadedServer | None = None
+        self._lock = threading.Lock()
+
+    def reach(self, host: str, port: int) -> Any:
+        from houdini_mcp.connection import Reach
+
+        with self._lock:
+            if self._server is None:
+                self._server = rpyc.utils.server.ThreadedServer(
+                    rpyc.utils.helpers.classpartial(FakeHoudiniService, self),
+                    hostname="127.0.0.1",
+                    port=0,
+                    authenticator=self._authenticator,
+                    logger=logging.getLogger("fake_houdini_listener"),
+                    protocol_config={"sync_request_timeout": 30.0},
+                )
+                self._server._start_in_thread()
+            return Reach("127.0.0.1", self._server.port, self._token)
+
+    def drop_clients(self) -> None:
+        """Close every program's link from Houdini's side, as a listener that drops them does."""
+        for conn in self.clients:
+            conn.close()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._server is not None:
+                await_clients_served(self._server)
+                self._server.close()
+                self._server = None
+
+
+_local_main_thread: dict[str, Any] = {}
+
+
+def local_main_thread(undos: "MockUndos") -> Any:
+    """``houdini_mcp_plugin.main_thread`` as the double's own Houdini runs it, in this
+    process: the same definition the server's links reach on the served one."""
+    if not _local_main_thread:
+        exec(_MAIN_THREAD, _local_main_thread)
+    _undos_by_key[id(undos)] = undos
+    return _local_main_thread["main_thread_of"](id(undos))
+
+
+class FakeHoudini:
+    """The Houdini this process's connections reach: whichever double it was last
+    told to (:meth:`reaches`). The server's links reach it through the installed
+    target's opener; a program's own process reaches the same double over a real
+    listener (:class:`FakeHoudiniListener`)."""
+
+    def __init__(self) -> None:
+        self._reached: list[Any] = []
+        self.listener = FakeHoudiniListener(lambda: self._reached[-1])
+
+    def reaches(self, hou: Any) -> None:
+        self._reached.append(hou)
+
+    def target(self) -> Any:
+        from houdini_mcp.connection import HoudiniTarget
+
+        return HoudiniTarget(
+            lambda *_args: MockRpycConnection(self._reached[-1]),
+            "Start the test's double.",
+            self.listener.reach,
+        )
 
 
 @pytest.fixture
-def connected_to(reset_connection_state: None) -> Generator[Callable[[Any], Any], None, None]:
+def fake_houdini(reset_connection_state: None) -> Generator[FakeHoudini, None, None]:
+    """A :class:`FakeHoudini` installed through the connection module's own API."""
+    from houdini_mcp.connection import use_houdini
+
+    fake = FakeHoudini()
+    use_houdini(fake.target())
+    try:
+        yield fake
+    finally:
+        fake.listener.close()
+
+
+@pytest.fixture
+def connected_to(fake_houdini: FakeHoudini) -> Callable[[Any], Any]:
     """Connect to any ``hou`` double through the connection module's own API.
 
-    The handshake seam hands out a connection to the double and ``connect`` installs
-    it, replacing whatever link stood: the ``hou`` returned is the one installed, in
-    a test that connects twice as in one that connects once. The double outlives
-    its link, as Houdini does: once a link is dropped, the next connect reaches the
-    same double on a new one.
+    ``connect`` installs a link to the double, replacing whatever link stood: the
+    ``hou`` returned is the one installed, in a test that connects twice as in one
+    that connects once. The double outlives its link, as Houdini does: once a link
+    is dropped, the next connect reaches the same double on a new one.
     """
     from houdini_mcp.connection import houdini
 
-    reached: list[Any] = []
-    with patch("houdini_mcp.connection.handshake") as mock_rpyc_module:
-        mock_rpyc_module.connect.side_effect = lambda *_args, **_kwargs: MockRpycConnection(
-            reached[-1]
-        )
+    def _connect(hou: Any) -> Any:
+        fake_houdini.reaches(hou)
+        houdini().connect("localhost", 18811)
+        return hou
 
-        def _connect(hou: Any) -> Any:
-            reached.append(hou)
-            houdini().connect("localhost", 18811)
-            return hou
-
-        yield _connect
+    return _connect
 
 
 @pytest.fixture
@@ -1919,6 +2130,12 @@ class MockUndos:
     False and no group is a step, as for a Houdini with undo turned off (set
     ``enabled`` False). A call is on the main thread while the plugin's
     ``main_thread.call`` double runs it.
+
+    A node created or destroyed outside any group is a step of its own, labelled
+    as Houdini labels it, wherever Houdini records it: on the main thread, and
+    in a graphical Houdini off it too, though there ``areEnabled()`` is False.
+    A ``disabler()`` opened on the main thread records nothing inside it; one
+    opened off it disables nothing (houdini-laws-etg.bci, measured on 22.0.466).
     """
 
     def __init__(self, hou: "MockHouModule") -> None:
@@ -1926,7 +2143,12 @@ class MockUndos:
         self._steps: list[tuple[str, MockHouNode]] = []
         self._depth = 0
         self._main_thread_calls = 0
+        self._disablers = 0
         self.enabled = True
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "MockUndos":
+        # An undo step copies the scene, never Houdini's stack its root reaches.
+        return self
 
     @property
     def on_main_thread(self) -> bool:
@@ -1943,14 +2165,46 @@ class MockUndos:
 
     @contextlib.contextmanager
     def group(self, label: str) -> Generator[None, None, None]:
-        found = copy.deepcopy(self._hou._root) if self._depth == 0 else None
-        self._depth += 1
+        # Houdini ignores a group opened off its main thread: the edits in it are
+        # recorded, or not, as edits outside any group.
+        held = int(self.on_main_thread)
+        found = copy.deepcopy(self._hou._root) if held and self._depth == 0 else None
+        self._depth += held
         try:
             yield
         finally:
-            self._depth -= 1
+            self._depth -= held
             if found is not None and self.areEnabled() and found.state() != self._hou._root.state():
                 self._steps.append((label, found))
+
+    @contextlib.contextmanager
+    def edit(self, label: str) -> Generator[None, None, None]:
+        """One node edit: its own step when Houdini records it outside any group."""
+        found = (
+            copy.deepcopy(self._hou._root) if self._depth == 0 and self._records_edits() else None
+        )
+        try:
+            yield
+        finally:
+            # A step records what changed, as group's does, whether or not the edit raised.
+            if found is not None and found.state() != self._hou._root.state():
+                self._steps.append((label, found))
+
+    def _records_edits(self) -> bool:
+        return (
+            self.enabled
+            and self._disablers == 0
+            and (self.on_main_thread or self._hou.isUIAvailable())
+        )
+
+    @contextlib.contextmanager
+    def disabler(self) -> Generator[None, None, None]:
+        held = int(self.on_main_thread)
+        self._disablers += held
+        try:
+            yield
+        finally:
+            self._disablers -= held
 
     def undoLabels(self) -> tuple[str, ...]:
         return tuple(label for label, _ in reversed(self._steps))
@@ -1960,7 +2214,7 @@ class MockUndos:
         self._hou._root = found
 
     def areEnabled(self) -> bool:
-        return self.enabled and self._main_thread_calls > 0
+        return self.enabled and self._main_thread_calls > 0 and self._disablers == 0
 
 
 class MockColor:
@@ -2313,31 +2567,8 @@ def raised_inside_houdini(exc: BaseException) -> BaseException:
     )
 
 
-@pytest.fixture
-def stalled_program(mock_connection: MockHouModule) -> Generator[str, None, None]:
-    """A program that runs until this fixture releases it.
-
-    execute_code cannot kill a timed-out program, so a test that times one out
-    must hand it a way to end: the program waits on a gate hung off the fake
-    hou, and teardown opens the gate and waits for the worker to leave the
-    ledger. A program that loops forever would stall every later writing test.
-    """
-    import threading
-
-    from houdini_mcp.tools.workers import WORKERS
-
-    gate = threading.Event()
-    mock_connection.stall_gate = gate
-    yield "hou.stall_gate.wait()"
-    gate.set()
-    worker = WORKERS.running()
-    if worker is not None:
-        worker.thread.join(5)
-    assert WORKERS.running() is None, "stalled program did not release its worker"
-
-
 class _Heard(logging.Handler):
-    """Sets an event the moment the ledger logs a message containing ``text``."""
+    """Sets an event the moment the scene hold logs a message containing ``text``."""
 
     def __init__(self, text: str) -> None:
         super().__init__()
@@ -2351,8 +2582,8 @@ class _Heard(logging.Handler):
 
 @pytest.fixture
 def heard() -> Generator[Callable[[str], threading.Event], None, None]:
-    """``heard(text)`` is set once the ledger has logged ``text``."""
-    logger = logging.getLogger("houdini_mcp.tools.workers")
+    """``heard(text)`` is set once the scene hold has logged ``text``."""
+    logger = logging.getLogger("houdini_mcp.tools.scene_hold")
     handlers: list[_Heard] = []
     level = logger.level
     logger.setLevel(logging.INFO)

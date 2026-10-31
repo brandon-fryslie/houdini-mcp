@@ -66,8 +66,8 @@ class TestWiringIntegration:
             "/obj/geo1/noise1", display=True, render=True, bypass=None, host="localhost", port=18811
         )
         assert result["status"] == "success"
-        assert noise._display_flag is True
-        assert noise._render_flag is True
+        assert noise.isDisplayFlagSet() is True
+        assert noise.isRenderFlagSet() is True
 
         # Verify final network structure
         assert len(grid._inputs) == 0  # Grid has no inputs (source)
@@ -198,8 +198,8 @@ class TestWiringIntegration:
             port=18811,
         )
         assert result["status"] == "success"
-        assert merge._display_flag is True
-        assert merge._bypass is False
+        assert merge.isDisplayFlagSet() is True
+        assert merge.isBypassed() is False
 
     def test_bypass_flag_workflow(self, mock_connection):
         """Test bypassing nodes in a chain."""
@@ -229,7 +229,7 @@ class TestWiringIntegration:
 
         assert result["status"] == "success"
         assert result["flags_set"]["bypass"] is True
-        assert mountain._bypass is True
+        assert mountain.isBypassed() is True
 
         # The connection still exists, but mountain is bypassed
         assert mountain._inputs[0] == grid

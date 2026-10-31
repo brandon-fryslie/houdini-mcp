@@ -12,13 +12,11 @@ from fastmcp.tools.tool_transform import ArgTransform
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from . import delivery, shorthand, tools
+from . import __version__, delivery, shorthand, tools
 from .connection import describe_target
 from .results import Results
 from .settings import Http, ServerSettings, Serving, Stdio
 from .tools._common import on_the_scene, run_in_executor
-from .tools.failure import failure_response
-from .tools.workers import WorkerStillRunning
 
 logger = logging.getLogger("houdini_mcp.server")
 
@@ -41,10 +39,7 @@ def held(tool: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(tool)
     async def call(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        try:
-            return await on_the_scene(tool, tool, *args, **kwargs)
-        except WorkerStillRunning as refused:
-            return failure_response(refused, tool.__name__)
+        return await on_the_scene(tool, tool, *args, **kwargs)
 
     return call
 
@@ -90,6 +85,8 @@ def build_server(settings: ServerSettings, results: Results) -> FastMCP:
     # would coerce them. One switch, so no parameter type has to say so itself.
     mcp = FastMCP(
         "Houdini MCP",
+        # the release a client is told it is talking to, not fastmcp's own version
+        version=__version__,
         instructions=f"{delivery.CALLER_GUIDE}\n\n{shorthand.KEY}",
         strict_input_validation=True,
         # [LAW:one-source-of-truth] a served name is one tool: a second tool under

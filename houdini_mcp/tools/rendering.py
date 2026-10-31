@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, cast
 
-from ..connection import Link, transport_failure
+from ..connection import Link, raised_inside_houdini, transport_failure
+from ..settings import DEFAULT_TARGET
 from ._common import (
     DEFAULT_RESOLUTION,
-    FLAGS,
     READ,
     RENDER,
     UNDOABLE,
@@ -30,6 +30,7 @@ from ._common import (
     Vec3,
     batch_status,
     created_in,
+    houdini_refusal,
     node_at,
     node_category,
     node_flag,
@@ -322,11 +323,12 @@ def _object_shapes(obj: Any) -> list[_Shape]:
 
 
 def _displayed_shapes(network: Any) -> list[_Shape]:
-    """The shapes of the objects a network of objects shows: display flag on."""
+    """The shapes of the objects a network of objects shows: display flag on. An
+    object with no display flag, as a ropnet or a chopnet, shows nothing."""
     return [
         shape
         for child in network.children()
-        if child.isDisplayFlagSet()
+        if node_flag(child, "display")
         for shape in _object_shapes(child)
     ]
 
@@ -521,12 +523,12 @@ def _render_picture(rop: Any, prepared: _Prepared, output_format: ImageFormat) -
             with remote_os.fdopen(remote_os.open(output_path, remote_os.O_RDONLY), "rb") as f:
                 image = f.read()
         except Exception as e:
-            # [LAW:no-silent-failure] a dead link stays itself, so cleanup knows
-            # to send nothing more; anything else is Houdini's machine not
-            # producing the picture
-            if transport_failure(e):
+            # [LAW:no-silent-failure] only what Houdini raised is its machine not
+            # producing the picture; a dead link stays itself, so cleanup knows to
+            # send nothing more, and a bug here is the call's
+            if not raised_inside_houdini(e):
                 raise
-            raise OperationFailed(f"Render failed: {e}", exception=type(e).__name__) from e
+            raise houdini_refusal("render the picture", e, exception=type(e).__name__) from e
     except BaseException as e:
         # A link that failed is sent nothing more: the file is Houdini's to keep.
         if transport_failure(e) is None:
@@ -572,8 +574,8 @@ def render_viewport(
     auto_frame: bool = True,
     orthographic: bool = False,
     karma_engine: KarmaEngine = "cpu",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Render the viewport and return the image as base64.
@@ -581,7 +583,8 @@ def render_viewport(
     Creates a temporary camera, positions it to frame the scene geometry,
     renders the scene, and returns the rendered image encoded as base64.
     The camera and render node are removed again before returning, whatever
-    the outcome: the scene is as it was before the call.
+    the outcome: the scene, and Houdini's undo history, are as they were before
+    the call.
 
     Args:
         camera_position: [x, y, z] world position of the camera (default: where
@@ -657,15 +660,15 @@ def render_quad_view(
     orthographic: bool = True,
     include_perspective: bool = True,
     karma_engine: KarmaEngine = "cpu",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Render 4 canonical views (Front, Left, Top, Perspective) in one call.
 
     Creates a camera and renders standardized views for spatial understanding.
     The camera and render node are removed again before returning, whatever the
-    outcome: the scene is as it was before the call.
+    outcome: the scene, and Houdini's undo history, are as they were before the call.
     Returns all 4 images as base64-encoded strings. This is more efficient than
     calling render_viewport 4 times as it reuses the camera and calculates
     the bounding box only once.
@@ -820,8 +823,8 @@ RENDER_SETTINGS_SCHEMA = {
 
 @tool(READ)
 def list_render_nodes(
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     List all render nodes (ROPs) in the /out context.
@@ -858,9 +861,7 @@ def list_render_nodes(
                 "path": path,
                 "name": node.name(),
                 "type": node.type().name(),
-                "bypassed": read(
-                    f"bypass flag of {path}", partial(node_flag, node, FLAGS["bypass"].read)
-                ),
+                "bypassed": read(f"bypass flag of {path}", partial(node_flag, node, "bypass")),
             }
 
             # Output path lives under a different name per ROP type
@@ -888,8 +889,8 @@ def list_render_nodes(
 @tool(READ)
 def get_render_settings(
     rop_path: str,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get current render configuration for a ROP node.
@@ -937,8 +938,8 @@ def get_render_settings(
 def set_render_settings(
     rop_path: str,
     settings: dict[str, Any],
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Modify render settings on a ROP node.
@@ -972,8 +973,8 @@ def create_render_node(
     rop_type: str,
     name: NodeName | None = None,
     settings: dict[str, Any] | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new render node (ROP) with optional settings.

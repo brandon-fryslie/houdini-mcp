@@ -19,7 +19,7 @@ from houdini_mcp.tools.parms import (
     write,
     write_all,
 )
-from tests.conftest import MockHouModule, MockHouNode, link_failure
+from tests.conftest import MockHouModule, MockHouNode, link_failure, raised_inside_houdini
 
 
 def node_with(**params):
@@ -121,7 +121,9 @@ class TestEvaluated:
 class TestWriteAll:
     def test_each_write_is_reported_by_name(self, caplog):
         node = node_with(radx=2.5, t=[0.0, 0.0, 0.0], bad=1.0)
-        node.parm("bad").set = MagicMock(side_effect=RuntimeError("read only"))
+        node.parm("bad").set = MagicMock(
+            side_effect=raised_inside_houdini(RuntimeError("read only"))
+        )
 
         with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.parms"):
             writes = write_all(node, {"radx": 3.0, "t": 1.0, "nope": 1, "bad": 2})
@@ -136,7 +138,7 @@ class TestWriteAll:
         assert [f["name"] for f in writes.failed] == ["t", "nope", "bad"]
         assert writes.failed[0]["reason"] == "Parameter t is a tuple, provide a list/tuple value"
         assert writes.failed[1]["reason"] == "Parameter not found: nope on /obj/n"
-        assert writes.failed[2]["reason"] == "read only"
+        assert writes.failed[2]["reason"] == "RuntimeError: read only"
         # A missing name or a wrong-shaped value is the caller's; a set Houdini
         # refused is Houdini's.
         assert [f["kind"] for f in writes.failed] == [
@@ -149,7 +151,10 @@ class TestWriteAll:
             "updated=['radx'] failed=[{'name': 't', 'kind': 'invalid_input', 'reason': "
             in caplog.text
         )
-        assert "{'name': 'bad', 'kind': 'operation_failed', 'reason': 'read only'}" in caplog.text
+        assert (
+            "{'name': 'bad', 'kind': 'operation_failed', 'reason': 'RuntimeError: read only'}"
+            in caplog.text
+        )
 
     def test_nothing_failed_is_success(self):
         writes = write_all(node_with(radx=2.5), {"radx": 1.0})
@@ -167,6 +172,13 @@ class TestWriteAll:
         )
         with pytest.raises(EOFError):
             write_all(node, {"radx": 1.0})
+
+    def test_an_error_raised_in_this_process_is_no_failed_parm(self):
+        """Only what Houdini raised is its refusal of a set; a bug here fails the call."""
+        node = node_with(radx=2.5, rady=2.5)
+        node.parm("radx").set = MagicMock(side_effect=TypeError("'NoneType' is not callable"))
+        with pytest.raises(TypeError):
+            write_all(node, {"radx": 1.0, "rady": 1.0})
 
 
 class TestToolsShareTheOwner:

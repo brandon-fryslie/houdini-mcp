@@ -27,6 +27,7 @@ from tests.conftest import (
     MockPaneTabType,
     OperationFailed as HouOperationFailed,
     link_failure,
+    raised_inside_houdini,
     served_namespace,
 )
 
@@ -74,10 +75,33 @@ def test_qt_is_the_one_the_connected_houdini_names(
 def test_a_houdini_whose_pyside_lacks_a_qt_module_has_its_qt_refused_naming_hutil_pyside(
     monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
 ) -> None:
-    """hutil.PySide skips a submodule its binding cannot import; the capture is refused naming hutil.PySide."""
+    """hutil.PySide skips a submodule its binding cannot import; the capture is refused
+    in Houdini's words, naming hutil.PySide.QtCore."""
+
+    class WithoutQtCore:
+        # rpyc delivers a remote module's missing attribute as Houdini's raise
+        def __getattr__(self, name: str) -> object:
+            raise raised_inside_houdini(
+                AttributeError(f"module 'hutil.PySide' has no attribute {name!r}")
+            )
+
+    monkeypatch.setitem(sys.modules, "hutil.PySide", WithoutQtCore())
+
+    with pytest.raises(OperationFailed) as refused:
+        _qt_core(houdini().link())
+    assert str(refused.value) == (
+        "Houdini did not import its Qt, hutil.PySide: "
+        "AttributeError: module 'hutil.PySide' has no attribute 'QtCore'"
+    )
+
+
+def test_a_qt_lookup_that_fails_in_this_process_is_no_refusal_by_houdini(
+    monkeypatch: pytest.MonkeyPatch, mock_connection: MockHouModule
+) -> None:
+    """Only what Houdini raised is its refusal; an error raised here is the bug it is."""
     monkeypatch.setitem(sys.modules, "hutil.PySide", SimpleNamespace(QtWidgets=object()))
 
-    with pytest.raises(OperationFailed, match=r"Houdini's Qt \(hutil\.PySide\).*QtCore"):
+    with pytest.raises(AttributeError):
         _qt_core(houdini().link())
 
 
@@ -581,7 +605,7 @@ def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
     editor = _network_editor(mock_connection)
 
     def refuse(path: str) -> None:
-        raise HouOperationFailed("The attempted operation failed.")
+        raise raised_inside_houdini(HouOperationFailed("The attempted operation failed."))
 
     editor.cd = refuse  # type: ignore[method-assign]
 
@@ -590,7 +614,7 @@ def test_render_node_network_whose_editor_refuses_the_network_fails_by_its_path(
 
     assert result["kind"] == "operation_failed", result
     assert result["message"] == (
-        "Failed to navigate to /obj/geo1: hou.OperationFailed: The attempted operation failed."
+        "Houdini did not take the pane into /obj/geo1: hou.OperationFailed: The attempted operation failed."
     )
     assert result["path"] == "/obj/geo1"
     assert (editor.network_path, editor.view) == ("/obj", "as left")
@@ -669,7 +693,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
     viewer = MockPaneTab("panetab1", MockPaneTabType.SceneViewer, 800, 600)
 
     def refuse() -> None:
-        raise RuntimeError("viewport is gone")
+        raise raised_inside_houdini(RuntimeError("viewport is gone"))
 
     viewport = _viewport(events, "persp", viewer)
     viewport.frameAll = refuse
@@ -681,7 +705,7 @@ def test_a_fit_that_failed_fails_the_capture(mock_connection: MockHouModule) -> 
         result = capture_pane_screenshot("SceneViewer", fit_contents=True)
 
     assert result["kind"] == "operation_failed", result
-    assert result["message"] == "Failed to frame SceneViewer: RuntimeError: viewport is gone"
+    assert result["message"] == "Houdini did not frame SceneViewer: RuntimeError: viewport is gone"
     assert "traceback" not in result
     assert events == []
 

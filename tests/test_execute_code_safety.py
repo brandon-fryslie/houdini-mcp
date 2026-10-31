@@ -46,9 +46,9 @@ class TestNetworkPatternDetection:
         ],
     )
     def test_network_and_eval_flagged(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_program(code)), f"expected detection for: {code!r}"
 
 
 class TestCommentAndStringEvasion:
@@ -64,9 +64,9 @@ class TestCommentAndStringEvasion:
         ],
     )
     def test_whitespace_variants_detected(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_program(code)), f"expected detection for: {code!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +81,10 @@ class TestEvasionProperties:
         mid=st.text(alphabet=" \t", max_size=4),
     )
     def test_hou_exit_survives_inner_whitespace(self, pre, mid):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = f"hou{pre}.{mid}exit()"
-        assert _detect_dangerous_code(parse_code(code))
+        assert _detect_dangerous_code(parse_program(code))
 
     @settings(max_examples=75, deadline=None)
     @given(
@@ -92,10 +92,10 @@ class TestEvasionProperties:
         mid=st.text(alphabet=" \t", max_size=4),
     )
     def test_subprocess_survives_inner_whitespace(self, pre, mid):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = f"subprocess{pre}.{mid}run(['x'])"
-        assert _detect_dangerous_code(parse_code(code))
+        assert _detect_dangerous_code(parse_program(code))
 
     @settings(max_examples=75, deadline=None)
     @given(
@@ -104,11 +104,11 @@ class TestEvasionProperties:
         )
     )
     def test_safe_identifiers_not_flagged(self, name):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         # A variable the program binds and reads back is never dangerous,
         # whatever module or builtin shares its spelling.
-        assert _detect_dangerous_code(parse_code(f"{name} = 1\nprint({name})")) == []
+        assert _detect_dangerous_code(parse_program(f"{name} = 1\nprint({name})")) == []
 
 
 # ---------------------------------------------------------------------------
@@ -167,13 +167,14 @@ class TestPolicyProfiles:
         )
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "read_only_non_inspection"
-        assert result["audit"]["woke_early"] is None
 
     def test_normal_allows_houdini_parm_eval_read(self, mock_connection):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code("hou.node('/obj/geo1').parm('tx').eval()")) == []
-        assert _detect_dangerous_code(parse_code("eval('1 + 1')"))
+        assert (
+            _detect_dangerous_code(parse_program("hou.node('/obj/geo1').parm('tx').eval()")) == []
+        )
+        assert _detect_dangerous_code(parse_program("eval('1 + 1')"))
 
     def test_read_only_ignores_bypass_flags(self, mock_connection):
         """read-only is the strictest profile: bypass flags cannot escalate it."""
@@ -653,7 +654,6 @@ class TestAuditFields:
         assert audit["dangerous_patterns"] == []
         assert audit["heavy_geometry_patterns"] == []
         assert audit["timed_out"] is False
-        assert audit["woke_early"] == 0
         assert "code_sha256" in audit
         assert "code_length" in audit
         # The permission decision is one value, and the audit reports it.
@@ -768,16 +768,31 @@ class TestAuditFields:
 # ---------------------------------------------------------------------------
 
 
+def _pid_of(caplog: pytest.LogCaptureFixture, code_sha256: str) -> int:
+    """The pid the run's record names for the program with ``code_sha256``."""
+    import re
+
+    (record,) = [
+        r.getMessage()
+        for r in caplog.records
+        if " program ended " in r.getMessage() and code_sha256 in r.getMessage()
+    ]
+    match = re.search(r" pid=(\d+) ", record)
+    assert match is not None, record
+    return int(match.group(1))
+
+
 class TestTimeoutRollback:
-    def test_a_timeout_cuts_the_program_off_and_undoes_its_step(
-        self, mock_connection, stalled_program, caplog
-    ):
-        """At its timeout the program's link is cut off, so Houdini's main thread gives
-        its call up and closes its step, which is undone; the artist's step before
-        it stays. The program's thread closes the link once it next uses it."""
+    def test_a_timeout_kills_the_program_and_undoes_its_step(self, mock_connection, caplog):
+        """At its timeout the program's process is killed and its step undone from the
+        server's link; the artist's step before it stays, nothing of the program runs
+        once the call has returned, and the next program and create_node succeed."""
+        import os
+        import signal
+        import threading
+
         from houdini_mcp.connection import houdini
-        from houdini_mcp.tools import execute_code
-        from houdini_mcp.tools.workers import WORKERS
+        from houdini_mcp.tools import create_node, execute_code
 
         undos = mock_connection.undos
         undos.enter_main_thread()
@@ -785,42 +800,56 @@ class TestTimeoutRollback:
             mock_connection.node("/obj").createNode("null", "artist_null")
         undos.leave_main_thread()
         link = houdini().link()
-        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools.code"):
+        threads_before = set(threading.enumerate())
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools.code"):
             result = execute_code(
-                f"hou.node('/obj').createNode('geo', 'half')\n{stalled_program}",
+                "print('so far')\nhou.node('/obj').createNode('geo', 'half')\nwhile True: pass",
                 timeout=1,
                 host="localhost",
                 port=18811,
                 bypass_config_enabled=False,
             )
 
-        (cut,) = [r.getMessage() for r in caplog.records if "cut off worker" in r.getMessage()]
-        assert result["audit"]["code_sha256"] in cut
-        assert cut.endswith("('Its changes to the scene were undone.',)")
-        assert result["status"] == "error"
-        assert result.get("timeout") == 1
-        assert result["audit"]["timed_out"] is True
+        assert (result["kind"], result["retry"], result["cut_off"]) == (
+            "timeout",
+            "check_scene",
+            "program",
+        ), result
+        assert result["message"].startswith(
+            "Execution timeout: code did not complete within 1 seconds"
+        )
         assert result["message"].endswith("\nIts changes to the scene were undone.")
+        assert (result["timeout"], result["stdout"]) == (1, "so far\n")
+        assert result["audit"]["timed_out"] is True
         assert undos.undoLabels() == ("artist's edit",)
         assert mock_connection.node("/obj/half") is None
         assert mock_connection.node("/obj/artist_null") is not None
-        assert "rollback" not in result
-        assert "rollback_attempted" not in result["audit"]
-        assert houdini().link() is not link
-        with pytest.raises(EOFError):
-            link.conn.main_thread().ping()
-        mock_connection.stall_gate.set()
-        WORKERS.running().thread.join(5)
-        assert link.conn.closed
+        assert houdini().link() is link and link.alive
+        pid = _pid_of(caplog, result["audit"]["code_sha256"])
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, signal.SIG_DFL)
+        with pytest.raises(ProcessLookupError):
+            os.killpg(pid, signal.SIG_DFL)
+        # The fake Houdini's listener serves in this process; in Houdini's, its threads
+        # would be Houdini's own, not the server's.
+        servers = {t for t in threading.enumerate() if t.name.startswith("RpycSpawnThread")}
+        assert set(threading.enumerate()) - servers <= threads_before
 
-    def test_a_timeout_in_a_houdini_with_undo_off_says_the_changes_stay(
-        self, mock_connection, stalled_program
-    ):
+        after = execute_code(
+            "hou.node('/obj').createNode('geo', 'after')",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+        assert after["status"] == "success", after
+        assert create_node("geo", "/obj", "made")["status"] == "success"
+
+    def test_a_timeout_in_a_houdini_with_undo_off_says_the_changes_stay(self, mock_connection):
         from houdini_mcp.tools import execute_code
 
         mock_connection.undos.enabled = False
         result = execute_code(
-            f"hou.node('/obj').createNode('geo', 'half')\n{stalled_program}",
+            "hou.node('/obj').createNode('geo', 'half')\nwhile True: pass",
             timeout=1,
             host="localhost",
             port=18811,
@@ -835,28 +864,22 @@ class TestTimeoutRollback:
     def test_undo_context_error_does_not_execute_code_twice(self, mock_connection, monkeypatch):
         from contextlib import contextmanager
 
-        import houdini_mcp.tools.code as code_mod
+        from houdini_mcp.tools import execute_code
 
-        calls = []
-        real_exec = code_mod.exec
-
-        def counting_exec(source, globals_dict):
-            calls.append(source)
-            return real_exec(source, globals_dict)
+        mock_connection.runs = []
 
         @contextmanager
         def broken_group(_label):
             yield
             raise RuntimeError("undo exit failed")
 
-        monkeypatch.setattr(code_mod, "exec", counting_exec)
         monkeypatch.setattr(mock_connection.undos, "group", broken_group)
 
-        result = code_mod.execute_code(
-            "print('once')", host="localhost", port=18811, bypass_config_enabled=False
+        result = execute_code(
+            "hou.runs.append('ran')", host="localhost", port=18811, bypass_config_enabled=False
         )
         assert result["status"] == "error"
-        assert len(calls) == 1
+        assert mock_connection.runs == ["ran"]
         assert "undo exit failed" in result["message"]
 
     def test_undo_group_opened_around_execution(self, mock_connection, monkeypatch):
@@ -890,7 +913,7 @@ class TestCapBoundaries:
         [
             lambda _: "",
             lambda _: "raise ValueError('boom')",
-            lambda request: request.getfixturevalue("stalled_program"),
+            lambda _: "while True: pass",
         ],
         ids=["success", "exception", "timeout"],
     )
@@ -928,7 +951,7 @@ class TestCapBoundaries:
         [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
         assert event.getMessage() == (
             f"execute_code output stdout={written} stderr={written} characters "
-            f"truncated={['stdout', 'stderr'] if cut else []} closed=[]"
+            f"truncated={['stdout', 'stderr'] if cut else []}"
         )
 
     @pytest.mark.parametrize(
@@ -939,17 +962,14 @@ class TestCapBoundaries:
                 lambda _: "raise ValueError('mine')",
                 {"status": "error", "kind": "operation_failed", "message": "ValueError: mine"},
             ),
-            (
-                lambda request: request.getfixturevalue("stalled_program"),
-                {"status": "error", "kind": "worker_still_running"},
-            ),
+            (lambda _: "while True: pass", {"status": "error", "kind": "timeout"}),
         ],
         ids=["success", "exception", "timeout"],
     )
     def test_a_program_that_closes_its_stdout_reports_how_it_ended(
         self, mock_connection, request, caplog, ending, outcome
     ):
-        """Closing sys.stdout ends the program's writes, not the call's read of them."""
+        """Closing its stdout ends the program's writes, not the call's read of them."""
         import logging
 
         from houdini_mcp.tools import execute_code
@@ -968,8 +988,6 @@ class TestCapBoundaries:
             "stdout": "hi\n",
             "stdout_truncated": False,
         }
-        [event] = [r for r in caplog.records if r.getMessage().startswith("execute_code output")]
-        assert event.getMessage().endswith("closed=['stdout']")
 
     def test_the_bound_counts_characters_not_bytes(self, mock_connection):
         from houdini_mcp.tools import execute_code
@@ -1157,9 +1175,9 @@ class TestReadOnlyIsAnAllowlist:
         ],
     )
     def test_inspection_programs_are_admitted(self, mock_connection, code):
-        from houdini_mcp.tools import _detect_non_inspection_code, parse_code
+        from houdini_mcp.tools import _detect_non_inspection_code, parse_program
 
-        assert _detect_non_inspection_code(parse_code(code)) == []
+        assert _detect_non_inspection_code(parse_program(code)) == []
 
     def test_read_only_names_the_refused_symbol(self, mock_connection):
         from houdini_mcp.tools import execute_code
@@ -1220,9 +1238,9 @@ class TestNormalPolicyModuleRails:
         ],
     )
     def test_file_and_import_operations_are_dangerous(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code(code)), f"expected detection for: {code!r}"
+        assert _detect_dangerous_code(parse_program(code)), f"expected detection for: {code!r}"
 
     @pytest.mark.parametrize(
         "code",
@@ -1249,9 +1267,9 @@ class TestNormalPolicyModuleRails:
         ],
     )
     def test_read_side_of_railed_modules_is_admitted(self, code):
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code(code)) == []
+        assert _detect_dangerous_code(parse_program(code)) == []
 
 
 class TestHeavyGeometryRail:
@@ -1265,14 +1283,14 @@ class TestHeavyGeometryRail:
         ],
     )
     def test_geometry_access_is_judged_by_attribute(self, code):
-        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_program
 
-        assert _detect_heavy_geometry_code(parse_code(code))
+        assert _detect_heavy_geometry_code(parse_program(code))
 
     def test_assigning_a_record_field_of_the_same_name_is_not_a_cook(self):
-        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_code
+        from houdini_mcp.tools import _detect_heavy_geometry_code, parse_program
 
-        assert _detect_heavy_geometry_code(parse_code("rec.points = 3")) == []
+        assert _detect_heavy_geometry_code(parse_program("rec.points = 3")) == []
 
 
 class TestSyntaxGate:
@@ -1318,8 +1336,9 @@ class TestSyntaxGate:
         ids=["recursion-error", "memory-error"],
     )
     def test_program_too_deep_to_parse_is_a_syntax_refusal(self, mock_connection, code):
-        """The parser gives up with RecursionError or MemoryError on these; the
-        gate reports them as a program it cannot read, never as a raised exception."""
+        """The parser or, on 3.14, the compiler gives up with RecursionError or
+        MemoryError on these; the gate reports them as a program it cannot read,
+        never as a raised exception."""
         from houdini_mcp.tools import execute_code
 
         result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
@@ -1336,3 +1355,90 @@ class TestSyntaxGate:
         assert result["status"] == "error"
         assert result["audit"]["blocked_reason"] == "syntax_error"
         assert "None" not in result["message"]
+
+    @pytest.mark.parametrize(
+        ("code", "compiler_says"),
+        [("return 1", "'return' outside function"), ("break", "'break' outside loop")],
+    )
+    def test_code_that_parses_but_does_not_compile_is_refused_before_any_rail(
+        self, mock_connection, caplog, code, compiler_says
+    ):
+        """The parser accepts these; the compiler does not. The gate's verdict is the
+        compiler's, so they are refused here, before any process is started."""
+        from houdini_mcp.tools import code as code_mod
+
+        # Recorded, not raised: the tool boundary would turn a raise into a failure
+        # response, and the test would fail on its fields, not on the process.
+        started: list[object] = []
+
+        with (
+            patch.object(code_mod, "run_program", lambda *a, **_k: started.append(a)),
+            caplog.at_level("WARNING", logger="houdini_mcp.tools.code"),
+        ):
+            result = code_mod.execute_code(
+                code, host="localhost", port=18811, bypass_config_enabled=False
+            )
+        assert started == [], "no process may start for code that does not compile"
+        assert result["status"] == "error"
+        assert result["audit"]["blocked_reason"] == "syntax_error"
+        assert result["message"] == f"Code does not compile: {compiler_says} (line 1)"
+        assert "SyntaxError" in result["traceback"]
+        assert any("syntax_error" in r.getMessage() for r in caplog.records)
+
+    def test_the_program_compiles_without_the_gate_modules_future_flags(self, mock_connection):
+        """code_policy has ``from __future__ import annotations``; the program does not,
+        so its annotations are evaluated, as exec of the source evaluated them."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "def f(a: int): pass\nprint(f.__annotations__['a'] is int)",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+        assert result["status"] == "success"
+        assert result["stdout"] == "True\n"
+
+    def test_the_program_is_compiled_once(self, mock_connection, monkeypatch):
+        """The program's process runs the code object the gate compiled and never
+        compiles the source again, so the compiler's SyntaxWarning is given once."""
+        import warnings
+
+        from houdini_mcp.tools import execute_code
+
+        # The program's process inherits the environment; a filter there would
+        # hide the warning a second compile writes to its stderr.
+        monkeypatch.delenv("PYTHONWARNINGS", raising=False)
+        with warnings.catch_warnings(record=True) as given:
+            warnings.simplefilter("always", SyntaxWarning)
+            result = execute_code(
+                "x = 1\nprint(x is 1)", host="localhost", port=18811, bypass_config_enabled=False
+            )
+        assert result["status"] == "success"
+        assert result["stdout"] == "True\n"
+        assert [w.category for w in given] == [SyntaxWarning]
+        # The program's process writes a compile's warnings to its own stderr.
+        assert "SyntaxWarning" not in result["stderr"]
+
+    def test_code_that_parses_but_does_not_compile_is_audited_in_full(self, mock_connection):
+        """The gates read the tree the parser gave, so the audit names what the program
+        holds even when the compiler refuses it."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(
+            "import shutil\nshutil.rmtree('/tmp/x')\nreturn 1",
+            host="localhost",
+            port=18811,
+            bypass_config_enabled=False,
+        )
+        assert result["audit"]["blocked_reason"] == "syntax_error"
+        assert result["audit"]["dangerous_patterns"]
+
+    @pytest.mark.parametrize("code", ["x = (", "return 1"])
+    def test_a_refusals_traceback_names_the_file_exec_would(self, mock_connection, code):
+        """The parser and the compiler refuse with the same filename, the one exec gives a
+        source string."""
+        from houdini_mcp.tools import execute_code
+
+        result = execute_code(code, host="localhost", port=18811, bypass_config_enabled=False)
+        assert result["traceback"].startswith('  File "<string>", line 1')

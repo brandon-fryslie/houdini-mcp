@@ -16,7 +16,6 @@ from tests.conftest import (
     HouPermissionError,
     LoadWarning,
     MockHouNode,
-    MockNodeLacking,
     installed,
     link_failure,
     raised_inside_houdini,
@@ -791,29 +790,29 @@ class TestDangerousPatternDetection:
 
     def test_detect_empty_code(self):
         """Test detection on empty code."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        result = _detect_dangerous_code(parse_code(""))
+        result = _detect_dangerous_code(parse_program(""))
         assert result == []
 
     def test_detect_safe_code(self):
         """Test detection on safe code."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        result = _detect_dangerous_code(parse_code("print('hello world')"))
+        result = _detect_dangerous_code(parse_program("print('hello world')"))
         assert result == []
 
     def test_detect_single_pattern(self):
         """Test detection of single dangerous pattern."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        result = _detect_dangerous_code(parse_code("hou.exit()"))
+        result = _detect_dangerous_code(parse_program("hou.exit()"))
         assert len(result) == 1
         assert "hou.exit()" in result[0]
 
     def test_detect_multiple_patterns(self):
         """Test detection of multiple dangerous patterns."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
         code = """
 import os
@@ -821,20 +820,20 @@ import subprocess
 os.remove('/file')
 subprocess.call(['cmd'])
         """
-        result = _detect_dangerous_code(parse_code(code))
+        result = _detect_dangerous_code(parse_program(code))
         assert len(result) >= 2
 
     def test_pattern_in_comment_is_not_code(self):
         """A comment cannot execute; the gate reads the AST exec will compile."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code("# hou.exit()")) == []
+        assert _detect_dangerous_code(parse_program("# hou.exit()")) == []
 
     def test_pattern_in_string_is_not_code(self):
         """A string literal cannot execute; the gate reads the AST exec will compile."""
-        from houdini_mcp.tools import _detect_dangerous_code, parse_code
+        from houdini_mcp.tools import _detect_dangerous_code, parse_program
 
-        assert _detect_dangerous_code(parse_code("x = 'hou.exit()'")) == []
+        assert _detect_dangerous_code(parse_program("x = 'hou.exit()'")) == []
 
 
 class TestSetParameter:
@@ -1781,12 +1780,7 @@ class TestListChildren:
         from houdini_mcp.tools import list_children
 
         # a DopNode has a display flag and no render flag, in Houdini 22
-        child = MockNodeLacking(
-            path="/obj/dopnet1/solver",
-            name="solver",
-            node_type="subnet",
-            lacks=("isRenderFlagSet",),
-        )
+        child = MockHouNode(path="/obj/dopnet1/solver", name="solver", node_type="subnet")
         mock_connection.add_node(
             MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet", children=[child])
         )
@@ -2141,7 +2135,7 @@ class TestFindNodes:
     def test_find_nodes_names_the_plugin_when_houdini_lacks_the_search(
         self, mock_connection, monkeypatch
     ):
-        """A Houdini without this release's plugin fails the search with the fix."""
+        """A Houdini without this server's plugin fails the search with the fix."""
         from houdini_mcp.tools import find_nodes
 
         monkeypatch.setitem(sys.modules, "houdini_mcp_search", None)
@@ -2151,7 +2145,7 @@ class TestFindNodes:
         assert (result["status"], result["kind"]) == ("error", "operation_failed")
         message = result["message"]
         assert "Houdini cannot import houdini_mcp_search (ModuleNotFoundError: " in message
-        assert "Install the plugin from the same release" in message
+        assert "Install the plugin this server was built with" in message
 
 
 class TestFindErrorNodes:
@@ -2363,6 +2357,72 @@ class TestConnectNodes:
         assert "Sop" in result["message"]
         assert "Dop" in result["message"]
 
+    def test_a_source_outside_the_destinations_network_is_houdinis_refusal(
+        self, mock_connection, caplog
+    ):
+        """Houdini 22 refuses a wire from a node in another network, saying no more than
+        that the operation failed; the tool says so in Houdini's words, as an operation
+        Houdini refused, and the scene is as it was."""
+        from houdini_mcp.tools import connect_nodes
+
+        obj = mock_connection.node("/obj")
+        obj.createNode("geo", "geo1").createNode("null", "null1")
+        obj.createNode("geo", "geo2").createNode("box", "box1")
+        before = mock_connection.node("/").state()
+
+        with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):
+            result = connect_nodes("/obj/geo2/box1", "/obj/geo1/null1")
+
+        assert (result["kind"], result["src_path"], result["dst_path"]) == (
+            "operation_failed",
+            "/obj/geo2/box1",
+            "/obj/geo1/null1",
+        )
+        assert result["message"].startswith(
+            "Houdini did not connect /obj/geo2/box1 to /obj/geo1/null1[0]: "
+            "hou.OperationFailed: The attempted operation failed."
+        )
+        assert "Remote Traceback" not in result["message"]
+        assert mock_connection.node("/").state() == before
+        # the audit every failure gets, and not the alarm only a bug raises
+        assert [(r.levelname, r.getMessage()[:40]) for r in caplog.records] == [
+            ("WARNING", "connect_nodes failed (operation_failed, ")
+        ]
+
+    def test_a_replaced_wire_is_logged_only_once_houdini_holds_the_new_one(
+        self, mock_connection, caplog
+    ):
+        """The wire a connect replaces is logged after Houdini takes the new one; a
+        refused connect leaves the old wire, and logs no replacement."""
+        from houdini_mcp.tools import connect_nodes
+
+        obj = mock_connection.node("/obj")
+        geo1 = obj.createNode("geo", "geo1")
+        geo1.createNode("box", "box1")
+        geo1.createNode("sphere", "sphere1")
+        geo1.createNode("null", "null1")
+        obj.createNode("geo", "geo2").createNode("box", "box2")
+        assert connect_nodes("/obj/geo1/box1", "/obj/geo1/null1")["status"] == "success"
+
+        def replaced() -> list[str]:
+            return [r.getMessage() for r in caplog.records if "Replaced" in r.getMessage()]
+
+        with caplog.at_level(logging.INFO, logger="houdini_mcp.tools"):
+            assert connect_nodes("/obj/geo2/box2", "/obj/geo1/null1")["status"] == "error"
+            assert replaced() == []
+            assert connect_nodes("/obj/geo1/sphere1", "/obj/geo1/null1")["status"] == "success"
+            assert replaced() == ["Replaced connection from /obj/geo1/box1 to /obj/geo1/null1[0]"]
+
+    def test_a_fault_in_this_process_inside_a_refusal_scope_goes_on_raw(self):
+        """Only Houdini's answer and the link's failure are labeled; a bug here is
+        neither, and reaches the boundary as itself."""
+        from houdini_mcp.tools._common import refused_by_houdini
+
+        bug = KeyError("pane_type")
+        with pytest.raises(KeyError) as raised, refused_by_houdini("frame SceneViewer"):
+            raise bug
+        assert raised.value is bug
+
     def test_connect_nodes_source_not_found(self, mock_connection):
         """Test error when source node not found."""
         from houdini_mcp.tools import connect_nodes
@@ -2545,8 +2605,8 @@ class TestSetNodeFlags:
         assert result["flags_set"]["display"] is True
         assert result["flags_set"]["render"] is True
         assert "bypass" not in result["flags_set"]
-        assert sphere._display_flag is True
-        assert sphere._render_flag is True
+        assert sphere.isDisplayFlagSet() is True
+        assert sphere.isRenderFlagSet() is True
 
     def test_set_node_flags_bypass_only(self, mock_connection):
         """Test setting bypass flag only."""
@@ -2585,9 +2645,7 @@ class TestSetNodeFlags:
         flag is set."""
         from houdini_mcp.tools import set_node_flags
 
-        geo = MockNodeLacking(
-            path="/obj/geo1", name="geo1", node_type="geo", lacks=("bypass", "isBypassed")
-        )
+        geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         mock_connection.add_node(geo)
 
         result = set_node_flags("/obj/geo1", display=False, bypass=True)
@@ -2604,9 +2662,9 @@ class TestSetNodeFlags:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         box = MockHouNode(path="/obj/geo1/box1", name="box1", node_type="box")
-        box._display_flag = False
         box.setRenderFlag = lambda _on: None  # type: ignore[method-assign]
         mock_connection.add_node(box)
+        box.setDisplayFlag(False)
 
         result = set_node_flags("/obj/geo1/box1", display=True, render=False)
 
@@ -2660,9 +2718,9 @@ class TestSetNodeFlags:
 
         mock_connection.node("/obj").createNode("geo", "geo1")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        sphere._display_flag = False
-        sphere._render_flag = False
         mock_connection.add_node(sphere)
+        sphere.setDisplayFlag(False)
+        sphere.setRenderFlag(False)
 
         result = set_node_flags(
             "/obj/geo1/sphere1",
@@ -2677,21 +2735,6 @@ class TestSetNodeFlags:
         assert result["flags_set"] == {"display": True}
         assert sphere.isDisplayFlagSet() is True
         assert sphere.isRenderFlagSet() is False  # Unchanged
-
-    def test_set_node_flags_a_flag_it_cannot_read_back_is_refused(self, mock_connection):
-        """A flag is the node's only when its class can both write and read it."""
-        from houdini_mcp.tools import set_node_flags
-
-        mock_connection.node("/obj").createNode("geo", "geo1")
-        noise = MockNodeLacking(
-            path="/obj/geo1/noise1", name="noise1", node_type="attribnoise", lacks=("isBypassed",)
-        )
-        mock_connection.add_node(noise)
-
-        result = set_node_flags("/obj/geo1/noise1", bypass=True)
-
-        assert (result["kind"], result["flags"]) == ("invalid_input", ["bypass"]), result
-        assert noise._bypass is False
 
 
 class TestReorderInputs:
@@ -3263,7 +3306,6 @@ class TestMaterialTools:
         # Create geometry node with a child SOP (required for material assignment)
         geo = MockHouNode(path="/obj/geo1", name="geo1", node_type="geo")
         sphere = MockHouNode(path="/obj/geo1/sphere1", name="sphere1", node_type="sphere")
-        sphere._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(sphere)
 
@@ -3307,7 +3349,6 @@ class TestMaterialTools:
             node_type="material",
             params={"num_materials": 0},
         )
-        mat_sop._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(mat_sop)
         mock_connection.add_node(
@@ -3339,7 +3380,6 @@ class TestMaterialTools:
             node_type="material",
             params={"shop_materialpath1": ""},
         )
-        mat_sop._display_flag = True
         mock_connection.add_node(geo)
         mock_connection.add_node(mat_sop)
         mock_connection.add_node(
@@ -3662,7 +3702,7 @@ class TestConnectionErrorHandling:
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
-        assert result["connection_reset"] is True
+        assert result["cut_off"] == "link"
         assert result["retry"] == "call_again"
         assert result["exception"] == "TimeoutError"
         assert "timed out" in result["message"]
@@ -3734,7 +3774,7 @@ class TestConnectionErrorHandling:
 
         assert result["status"] == "error"
         assert result["kind"] == "timeout"
-        assert result["connection_reset"] is True
+        assert result["cut_off"] == "link"
         assert "timed out" in result["message"]
         # A read changes nothing, so calling it again is the remedy.
         assert result["retry"] == "call_again"

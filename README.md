@@ -33,128 +33,85 @@ Architecture Decision Records (ADRs) live in [`docs/adr/`](docs/adr/):
 - **Error handling** - Consistent error responses with recovery hints
 - **Response optimization** - Result text in a dense shorthand of its JSON, text over 16KB delivered whole as a file, AI summarization
 
-## Prerequisites
-
-1. **Houdini 22** - macOS on Apple Silicon is the primary platform;
-   the [Windows and Linux](#windows-and-linux) section gives those platforms' paths.
-
-2. **Houdini with RPC enabled** - Start Houdini's RPC server:
-   - In Houdini: `Windows > Python Shell`, then run:
-     ```python
-     import hrpyc
-
-     hrpyc.start_server(port=18811)
-     ```
-     It listens on every interface with no authentication, so anyone who can
-     reach the port can run Python in your Houdini. The tools that edit the
-     scene as one undo step (`create_node`, `delete_node`, `set_parameter`, the
-     Wiring & Layout tools, `create_material`, `assign_material`,
-     `set_render_settings`, `create_render_node`), the pane captures
-     (`capture_pane_screenshot`, `capture_multiple_panes`, `render_node_network`),
-     `find_nodes` and `get_parameter_schema` also need the [plugin](#houdini-plugin)
-     installed; the other tools need only the listener.
-   - Or, with the [plugin](#houdini-plugin) installed, start its listener from
-     `~/Library/Preferences/houdini/22.0/python3.13libs/uiready.py`, which Houdini
-     runs in every graphical session once its UI is up:
-     ```python
-     import hou
-     from houdini_mcp_plugin import start_hrpyc_server
-
-     result = start_hrpyc_server()
-     if result["status"] == "error":
-         hou.ui.displayMessage(result["message"], severity=hou.severityType.Error)
-     ```
-     It listens on `127.0.0.1` only, unless you set the variables in
-     [docs/remote-listener.md](docs/remote-listener.md). A listener that cannot
-     start, such as a second Houdini finding the port taken, says why in a dialog.
-
-3. **Network access** - The MCP server must be able to reach Houdini's RPC port (default: 18811)
-
 ## Installation
 
-### Option 1: stdio
+You need Houdini 22 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+macOS on Apple Silicon is the primary platform; [Windows and Linux](#windows-and-linux)
+follow the same steps. Install the server, then let it set up Houdini and your MCP
+clients:
 
-Your MCP client starts the server from a clone of this repository and talks to it
-over stdio, and the server reaches Houdini over hrpyc. Any Houdini that runs the
-listener will do, a graphical session or a headless `hython`. A `hython` script,
-after starting the listener, runs this on its main thread so the editing tools
-can work; it blocks until `main_thread.stop()` is called from another thread:
+```bash
+uv tool install git+https://github.com/brandon-fryslie/houdini-mcp
+houdini-mcp install
+```
+
+Restart Houdini and your MCP client, and ask the client to build something in Houdini.
+Install with `uv tool install`, not `uvx`: the clients and Houdini run the server and
+the plugin from where they are installed, and `uvx` installs them into a cache that
+`uv cache clean` removes.
+
+`houdini-mcp install` prints a line for everything it set up:
+
+- **Houdini**: it writes `houdini_mcp.json` into Houdini's `packages` directory
+  (`~/Library/Preferences/houdini/22.0/packages` on macOS), pointing Houdini at the
+  plugin where uv installed it. The plugin starts the listener the server reaches
+  Houdini through, on `127.0.0.1:18811`, as soon as Houdini's UI is up, and adds the
+  "Houdini MCP" shelf.
+- **MCP clients**: it registers the server with each of Claude Code (user scope),
+  Claude Desktop, Cursor and Codex that it finds on this machine. For any other
+  client, put the `houdini` entry the installer prints in its config.
+
+Running it again is safe, and keeps anything you added to the server's environment
+in a client, such as `HOUDINI_HOST`; an entry you pointed at a URL, as for
+[Docker](#docker-houdini-on-another-machine), is left as it is. A step that cannot finish says why, and the
+command exits non-zero. To upgrade, run `uv tool upgrade houdini-mcp`, then
+`houdini-mcp install` again. From a clone of this repository, `uv run houdini-mcp install`
+points Houdini and the clients at the clone, so your edits take effect at their next
+restart.
+
+### Starting the listener yourself
+
+The plugin's listener accepts connections on `127.0.0.1` only; to let another
+machine reach it, set the variables in [docs/remote-listener.md](docs/remote-listener.md).
+The shelf's **Start Remote** starts it on a port you choose when none is running, and
+**Remote Status** and **Remote Self-Test** report where it listens. A second Houdini
+finds the port taken and says so in a dialog.
+
+A headless `hython` runs no UI, so it starts the listener itself, then takes the
+editing tools' and renders' calls on its main thread until `main_thread.stop()` is
+called from another thread:
 
 ```python
-from houdini_mcp_plugin import main_thread
+from houdini_mcp_plugin import main_thread, start_hrpyc_server
 
+start_hrpyc_server()
 main_thread.serve()
 ```
 
-**Step 1: Start the listener in Houdini**
+A Houdini without the plugin can run `import hrpyc; hrpyc.start_server(port=18811)` in
+its Python Shell. That listener accepts anyone who can reach the port, from any
+interface, and serves only the tools that need nothing inside Houdini: not the ones
+that edit the scene as one undo step (`create_node`, `delete_node`, `set_parameter`,
+the Wiring & Layout tools, `create_material`, `assign_material`, `set_render_settings`,
+`create_render_node`), the pane captures (`capture_pane_screenshot`,
+`capture_multiple_panes`, `render_node_network`), the renders (`render_viewport`,
+`render_quad_view`), `find_nodes` or `get_parameter_schema`.
 
-Click **"Start Remote"** on the Houdini MCP shelf, which the
-[plugin](#houdini-plugin) adds, or run `import hrpyc; hrpyc.start_server(port=18811)`
-in Houdini's Python Shell, as in [Prerequisites](#prerequisites). `find_nodes`,
-`get_parameter_schema`, the pane captures and the editing tools listed there need the plugin installed
-either way.
+### Docker (Houdini on another machine)
 
-**Step 2: Configure your MCP client**
+To run the server in Docker, on Houdini's machine or another one:
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and clone
-this repository with `git clone https://github.com/brandon-fryslie/houdini-mcp.git`.
-The client runs the server with `uv`; replace `/path/to/houdini-mcp` with the
-path to your clone:
+**Step 1: Install the plugin and let the server reach it**
 
-```json
-{
-  "mcpServers": {
-    "houdini": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/houdini-mcp", "houdini-mcp"],
-      "env": {"MCP_TRANSPORT": "stdio"}
-    }
-  }
-}
-```
-
-Codex takes the same server in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.houdini]
-command = "uv"
-args = ["run", "--directory", "/path/to/houdini-mcp", "houdini-mcp"]
-env = { MCP_TRANSPORT = "stdio" }
-```
-
-A GUI client such as Claude Desktop may start with a `PATH` that lacks `uv`; if
-so, set `command` to the absolute path that `which uv` prints.
-
-To reach a listener on another host or port, or one that enforces a token, add
-`HOUDINI_HOST`, `HOUDINI_PORT` or `HOUDINI_RPC_TOKEN` to `env`, as described under
-[Configuration](#configuration).
-
-### Option 2: Docker (Remote mode)
-
-For production use or when Houdini runs on a different machine, use the Docker-based remote mode. This connects to Houdini via hrpyc/RPyC.
-
-**Step 1: Start hrpyc in Houdini**
-
-If you have the Houdini MCP plugin installed:
-- Click **"Start Remote"** on the Houdini MCP shelf
-- Use **"Remote Status"** / **"Remote Self-Test"** to confirm the actual bound
-  endpoint, reachability, and firewall guidance
-- By default the listener binds to `127.0.0.1` (loopback-only). To let a
-  remote client (e.g. the Docker gateway on another host) connect, set
-  `HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1`
-  or `HOUDINI_RPC_TOKEN` (set the same token in the MCP server's environment).
-  See [docs/remote-listener.md](docs/remote-listener.md).
-
-Or manually in Houdini's Python Shell. `find_nodes`, `get_parameter_schema`, the
-pane captures and the
-editing tools listed under [Prerequisites](#prerequisites) also need the plugin
-[installed](#houdini-plugin): its package JSON puts its modules on Houdini's path
-when Houdini starts. The other tools need only the listener:
-```python
-import hrpyc
-
-hrpyc.start_server(port=18811)
-```
+On Houdini's machine, install the plugin from the commit the image is built from:
+in a clone at that commit, run `uv run houdini-mcp install`. The server refuses a
+Houdini whose plugin is another build, so a plugin from `uv tool install` works
+only when it is that same commit. The
+listener binds to `127.0.0.1`, so for a server in a container or on another host set
+`HOUDINI_RPC_BIND_HOST` **and** opt in with `HOUDINI_RPC_TRUSTED_NETWORK=1` or
+`HOUDINI_RPC_TOKEN` (set the same token in the server's environment). See
+[docs/remote-listener.md](docs/remote-listener.md); the shelf's **Remote Self-Test**
+reports the bound endpoint, reachability and firewall guidance.
 
 **Step 2: Run the Docker MCP server**
 
@@ -186,43 +143,13 @@ The server answers only clients on this machine; to admit one on another, see
 }
 ```
 
-**Benefits of Remote Mode:**
-- Houdini can run on a different machine (e.g., render farm)
-- MCP server runs in Docker for easy deployment
-- Full tool set with advanced features
-- Server-side processing capabilities
-
-### Houdini Plugin
-
-The plugin adds the "Houdini MCP" shelf, whose tools start, stop and check the
-hrpyc listener, and it holds the search `find_nodes` runs inside Houdini.
-
-From your clone of this repository:
-
-1. Copy the contents of `houdini_plugin`, which is laid out as a packages
-   directory, into your Houdini packages directory, replacing any earlier
-   install of the plugin:
-   ```bash
-   mkdir -p ~/Library/Preferences/houdini/22.0/packages
-   rm -rf ~/Library/Preferences/houdini/22.0/packages/houdini_mcp
-   cp -R houdini_plugin/. ~/Library/Preferences/houdini/22.0/packages/
-   ```
-   This puts `houdini_mcp.json` in `packages/` and the plugin beside it in
-   `packages/houdini_mcp/`.
-
-2. Restart Houdini and find the "Houdini MCP" shelf
-
 ### Windows and Linux
 
-The steps above work on Windows and Linux with your platform's paths; on
-Windows, copy the plugin with your shell's own commands in place of `mkdir -p`,
-`rm -rf` and `cp`.
-Houdini's preferences directory, which holds `packages` and `python3.13libs`, is
-`%USERPROFILE%\Documents\houdini22.0` on Windows and `~/houdini22.0` on Linux,
-in place of macOS's `~/Library/Preferences/houdini/22.0`. On Windows the client
-config takes the clone's Windows path, and Codex reads
-`%USERPROFILE%\.codex\config.toml`. None of this has been tested on Windows or
-Linux with Houdini 22.
+Windows is not supported.
+
+On Linux, `houdini-mcp install` writes to `~/houdini22.0`, or to the directory
+`HOUDINI_USER_PREF_DIR` names when it holds `__HVER__`, as Houdini requires. This has
+not been tested on Linux with Houdini 22.
 
 ## Configuration
 
@@ -361,20 +288,6 @@ first 8KB of the file's text and is told that is part of the result, and
 
 ## Usage Examples
 
-### With Claude/Cursor
-
-Add to your MCP client configuration:
-
-```json
-{
-  "mcpServers": {
-    "houdini": {
-      "url": "http://localhost:3055/mcp"
-    }
-  }
-}
-```
-
 ### Example Prompts
 
 - "Create a sphere → transform → color → OUT network"
@@ -409,6 +322,17 @@ tests that run against a live Houdini.
 - Verify Houdini is running with hrpyc server started
 - Run **Remote Self-Test** in Houdini for this OS's firewall command (on macOS it allows the Houdini executable, not the port)
 - Verify HOUDINI_HOST is correct
+
+### Houdini imports another build of the houdini_mcp plugin
+- The server refuses to connect, naming the plugin directory Houdini imported and
+  both builds. Replace that install with the plugin the server was built with
+  (`houdini-mcp install` from the server's install; for a server in Docker, from a
+  clone at the commit its image was built from), then restart Houdini. Two
+  installs from different commits are different builds even when both state the
+  same release
+- An older `houdini-mcp install` left in Houdini's preferences `packages`
+  directory loads ahead of `HOUDINI_PACKAGE_DIR`, so the directory named may not be
+  the plugin you meant Houdini to load
 
 ### Tools time out while `ping_houdini` answers
 - Close any modal dialog open in Houdini and try again

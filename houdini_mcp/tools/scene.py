@@ -11,7 +11,8 @@ This module provides tools for managing Houdini scenes:
 import logging
 from typing import Any
 
-from ..settings import Summarizer
+from ..plugin import plugin_module
+from ..settings import DEFAULT_TARGET, Summarizer
 from ._common import (
     CHECKPOINTED,
     FILE_WRITE,
@@ -20,11 +21,12 @@ from ._common import (
     OperationFailed,
     node_at,
     on_the_scene,
+    refused_by_houdini,
     tool,
     using,
 )
 from .parms import evaluated
-from .plugin import plugin_module
+from .reads import read
 from .snapshot import scene_snapshot
 from .summarization import SCENE_BRIEF, summarized
 
@@ -32,7 +34,9 @@ logger = logging.getLogger("houdini_mcp.tools.scene")
 
 
 @tool(READ)
-def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def get_scene_info(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Get current Houdini scene information.
 
@@ -65,7 +69,7 @@ def get_scene_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]
 
 @tool(FILE_WRITE)
 def save_scene(
-    file_path: str | None = None, host: str = "localhost", port: int = 18811
+    file_path: str | None = None, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
 ) -> dict[str, Any]:
     """
     Save the current Houdini scene.
@@ -80,18 +84,22 @@ def save_scene(
     with using(host, port) as link:
         hou = link.hou
 
-        if file_path:
-            hou.hipFile.save(file_path)
-            saved_path = file_path
-        else:
-            hou.hipFile.save()
-            saved_path = hou.hipFile.path()
+        with refused_by_houdini(f"save the scene to {file_path or 'its file'}"):
+            if file_path:
+                hou.hipFile.save(file_path)
+            else:
+                hou.hipFile.save()
+        # a save is not undone, so a path Houdini will not give after it is that
+        # field's absence, not the save's failure
+        saved_path = file_path or read("saved scene path", hou.hipFile.path)
 
         return {"status": "success", "message": "Scene saved", "file_path": saved_path}
 
 
 @tool(CHECKPOINTED)
-def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def load_scene(
+    file_path: str, host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Load a Houdini scene file in place of the current scene.
 
@@ -117,7 +125,7 @@ def load_scene(file_path: str, host: str = "localhost", port: int = 18811) -> di
 
 
 @tool(CHECKPOINTED)
-def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def new_scene(host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port) -> dict[str, Any]:
     """
     Create a new empty Houdini scene in place of the current scene.
 
@@ -127,9 +135,9 @@ def new_scene(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
     been saved cannot be backed up, so one holding any node is refused: save it
     with save_scene(file_path) first.
     """
-    with using(host, port) as link:
-        # [LAW:single-enforcer] As in houdini_mcp_scene.load: the backup, not the prompt, keeps
-        # the unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+    # [LAW:single-enforcer] As in houdini_mcp_scene.load: the backup, not the prompt, keeps
+    # the unsaved work, and a prompt cancelled would leave clear() a scene it never cleared.
+    with using(host, port) as link, refused_by_houdini("clear the scene"):
         link.hou.hipFile.clear(suppress_save_prompt=True)
 
     return {"status": "success", "message": "New scene created"}
@@ -142,8 +150,8 @@ async def serialize_scene(
     max_depth: Count = 10,
     *,
     summarize: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     summarizer: Summarizer,
 ) -> dict[str, Any]:
     """

@@ -46,7 +46,13 @@ from typing import (
     runtime_checkable,
 )
 
-from houdini_mcp_handshake import Authenticator, peer_name, token_authenticator, token_from
+from houdini_mcp_handshake import (
+    RPC_PORT,
+    Authenticator,
+    peer_name,
+    token_authenticator,
+    token_from,
+)
 
 from .main_thread import SERVE_ROUND_SECONDS
 
@@ -77,7 +83,7 @@ __all__ = [
 ]
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 18811
+DEFAULT_PORT = RPC_PORT
 
 # Hosts that only accept connections from the local machine.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -266,8 +272,8 @@ class ListenerConfig:
         """Build a config from environment variables.
 
         Recognised variables:
-            HOUDINI_RPC_BIND_HOST       (default 127.0.0.1)
-            HOUDINI_RPC_BIND_PORT       (default 18811)
+            HOUDINI_RPC_BIND_HOST       (default DEFAULT_HOST)
+            HOUDINI_RPC_BIND_PORT       (default DEFAULT_PORT)
             HOUDINI_RPC_TRUSTED_NETWORK (default off)
             HOUDINI_RPC_TOKEN           (default unset)
 
@@ -1040,7 +1046,7 @@ class RemoteListener:
         - loopback-only warning + firewall guidance,
         - the actual bound endpoints.
         """
-        from . import __version__ as plugin_version
+        from . import BUILD as plugin_build, __version__ as plugin_version
 
         held = self._running
         if held is None:
@@ -1113,6 +1119,7 @@ class RemoteListener:
             "houdini_version": houdini_version,
             "houdini_version_tuple": houdini_version_tuple,
             "plugin_version": plugin_version,
+            "plugin_build": plugin_build,
             "protocol": "rpyc/hrpyc SlaveService (classic)",
             "warnings": warnings,
             "executable": executable,

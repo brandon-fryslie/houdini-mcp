@@ -8,7 +8,6 @@ Note: We use rpyc.classic directly instead of hrpyc because:
 
 import logging
 import random
-import socket
 import threading
 import time
 from collections.abc import Callable
@@ -16,7 +15,12 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import houdini_mcp_handshake as handshake
-from houdini_mcp_read import raised_inside_houdini
+from houdini_mcp_handshake import RELEASE, build
+from houdini_mcp_read import raised_inside_houdini, reason
+
+import houdini_plugin
+
+from .settings import DEFAULT_TARGET
 
 logger = logging.getLogger("houdini_mcp.connection")
 
@@ -136,16 +140,28 @@ def describe_target(host: str, port: int) -> str:
     return f"{host}:{port}"
 
 
-class HoudiniTarget(NamedTuple):
-    """The Houdini connections reach: how to open a connection to it, and the
-    remedy for failing to.
+class Reach(NamedTuple):
+    """What another process opens its own link to a Houdini from: where it
+    listens, and the token it takes (None: none). Data, so it can cross to a
+    child process on a pipe; never argv or the environment, which others can read."""
 
-    [LAW:one-source-of-truth] the opener and its remedy travel together, so an
-    error never prescribes a listener the connection was not opened to.
+    host: str
+    port: int
+    token: str | None
+
+
+class HoudiniTarget(NamedTuple):
+    """The Houdini connections reach: how to open a connection to it, the remedy
+    for failing to, and how another process reaches the same Houdini.
+
+    [LAW:one-source-of-truth] the opener, its remedy and its reach travel
+    together, so an error never prescribes a listener the connection was not
+    opened to, and a program's process reaches the Houdini the server does.
     """
 
     open: Callable[[str, int, float], Any]
     remedy: str
+    reach: Callable[[str, int], Reach]
 
 
 def remote_houdini(token: str | None) -> HoudiniTarget:
@@ -155,16 +171,24 @@ def remote_houdini(token: str | None) -> HoudiniTarget:
     def open_presenting_token(host: str, port: int, sync_timeout: float) -> Any:
         return _open_rpyc(token, host, port, sync_timeout)
 
+    def reached_presenting_token(host: str, port: int) -> Reach:
+        return Reach(host, port, token)
+
     return HoudiniTarget(
         open_presenting_token,
         "Make sure Houdini is running with RPC server enabled "
         "(run 'import hrpyc; hrpyc.start_server()' in Houdini's Python shell), and that "
         "if the listener enforces a token, HOUDINI_RPC_TOKEN is set here to the same value "
         "(a listener that rejects this client's stream looks like one that is not running).",
+        reached_presenting_token,
     )
 
 
 def _open_uninstalled(host: str, port: int, sync_timeout: float) -> Any:
+    raise LookupError("no Houdini is installed for connections to reach")
+
+
+def _reach_uninstalled(host: str, port: int) -> Reach:
     raise LookupError("no Houdini is installed for connections to reach")
 
 
@@ -175,7 +199,45 @@ NO_HOUDINI = HoudiniTarget(
     _open_uninstalled,
     "The entry point that serves installs the Houdini its connections reach with "
     "use_houdini(remote_houdini(token)).",
+    _reach_uninstalled,
 )
+
+
+# [LAW:one-source-of-truth] The build of the plugin this distribution ships, the one
+# ``houdini-mcp install`` points Houdini at, read once at import as Houdini reads its own.
+BUILD = build(houdini_plugin.PACKAGES / "houdini_mcp")
+
+# [LAW:one-source-of-truth] the one remedy for a Houdini without this server's plugin,
+# whichever way that was found.
+INSTALL_PLUGIN = (
+    "Install the plugin this server was built with (`houdini-mcp install` from the same "
+    "install or clone), then restart Houdini."
+)
+
+
+class PluginMissing(Exception):
+    """Houdini's path lacks the houdini_mcp plugin this server was built with: none at
+    all, found when a call imports a plugin module, or another build, found when the
+    link is made. Every call that needs the plugin meets the same until it is installed."""
+
+
+@dataclass(frozen=True)
+class InstalledPlugin:
+    """The houdini_mcp plugin on the path of the Houdini a link reaches, as read when
+    the link was proven: the release and build it states (None: it predates stating
+    one) and the directory Houdini imported it from, which names the install to replace."""
+
+    release: str | None
+    build: str | None
+    path: str
+
+
+@dataclass(frozen=True)
+class BrokenPlugin:
+    """A houdini_mcp plugin on the path of the Houdini a link reaches that Houdini fails
+    to import, and the reason it gave: its modules cannot be trusted to be any build."""
+
+    reason: str
 
 
 @dataclass(frozen=True, eq=False)
@@ -214,24 +276,6 @@ class Link:
         except Exception as e:
             logger.warning(f"Error disconnecting from {self.name}: {e}")
 
-    def cut_off(self) -> None:
-        """End the link under a thread that may be waiting on it, which then closes it.
-
-        [LAW:no-ambient-temporal-coupling] Only the thread serving a socket closes it:
-        on macOS a socket closed under a thread polling it leaves that poll asleep
-        until its request's timeout (0 of 40 polls woke in a bare-socket repro). Shut
-        down, it reads as ended at once (40 of 40): a waiting request fails and rpyc
-        closes the link from that thread, a thread not waiting fails at its next
-        request, and Houdini reads the end as it reads a close.
-        """
-        try:
-            # A dup is shut down and closed here; the socket being polled is left open.
-            # socket.dup duplicates a Windows socket handle too, which os.dup cannot.
-            with socket.socket(fileno=socket.dup(self.conn.fileno())) as sock:
-                sock.shutdown(socket.SHUT_RDWR)
-        except Exception as e:
-            logger.warning(f"Error cutting off {self.name}: {e}")
-
     def info(self) -> dict[str, Any]:
         """The Houdini this link reaches: where, version, build and current hip file.
 
@@ -253,13 +297,88 @@ class Link:
         }
 
 
-def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
-    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches Houdini.
+def open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float) -> Link:
+    """One attempt to open a link to ``host:port`` on ``target``, proven to reach a
+    Houdini whose plugin, if any, is this server's build: a program's process's,
+    which retries nothing.
 
-    The proof is ``hou`` imported across the link: a sync request, so a Houdini
-    too busy to answer fails it like one that is not there. [LAW:single-enforcer]
-    Nothing Houdini's ``hou`` answers is read here: a fault it raises is its own,
-    classified at the tool boundary like every other, never "not reached".
+    Raises:
+        PluginMissing: Houdini's path holds another build of the plugin, or one
+            Houdini fails to import.
+    """
+    return _of_this_build(*_reach(target, host, port, sync_timeout))
+
+
+def _installed_plugin(conn: Any) -> InstalledPlugin | BrokenPlugin | None:
+    """The plugin on Houdini's path, read through ``houdini_mcp_plugin``, the package
+    every release of it ships.
+
+    [LAW:types-are-the-program] Whatever Houdini answers is a fact about its install:
+    no package by that name is no plugin, which a call that needs one is told about by
+    ``plugin_module``; any other failure Houdini raises is a broken plugin. Only the
+    link's own failures are the proof's.
+    """
+    try:
+        plugin = conn.modules["houdini_mcp_plugin"]
+        return InstalledPlugin(
+            getattr(plugin, "__version__", None),
+            getattr(plugin, "BUILD", None),
+            # its directory: a leftover one without __init__.py imports with no __file__
+            str(next(iter(plugin.__path__))),
+        )
+    except Exception as e:
+        if not raised_inside_houdini(e):
+            raise
+        if isinstance(e, ModuleNotFoundError) and e.name == "houdini_mcp_plugin":
+            return None
+        return BrokenPlugin(reason(e))
+
+
+def _of_this_build(link: Link, plugin: InstalledPlugin | BrokenPlugin | None) -> Link:
+    """``link``, unless Houdini's path holds another build of the plugin, which would
+    answer this server's calls in another build's shapes, or one it fails to import;
+    ``plugin`` is what the proof that opened ``link`` read of it.
+
+    [LAW:single-enforcer] The one check of skew between server and plugin, made once
+    per link and before any plugin module is asked anything; no tool parses a plugin
+    answer for it. It reads only what the proof already read, so it fails in no other way.
+    """
+    if plugin is None or (isinstance(plugin, InstalledPlugin) and plugin.build == BUILD):
+        return link
+    link.close()
+    raise PluginMissing(
+        f"Houdini at {link.name} has {_found(plugin)}; this server is release {RELEASE}, "
+        f"build {BUILD}. {INSTALL_PLUGIN}"
+    )
+
+
+def _found(plugin: InstalledPlugin | BrokenPlugin | None) -> str:
+    """What the proof found of the plugin on Houdini's path, as its log line and a
+    refusal both tell it."""
+    match plugin:
+        case None:
+            return "no houdini_mcp plugin on its path"
+        case InstalledPlugin(release=release, build=build, path=path):
+            return (
+                f"houdini_mcp plugin release {release or 'unstated'}, "
+                f"build {build or 'unstated'} from {path}"
+            )
+        case BrokenPlugin(reason=why):
+            return f"a houdini_mcp plugin it fails to import ({why})"
+
+
+def _reach(
+    target: HoudiniTarget, host: str, port: int, sync_timeout: float
+) -> tuple[Link, InstalledPlugin | BrokenPlugin | None]:
+    """One attempt to open a link to ``host:port`` on ``target`` and prove it reaches
+    Houdini, with the plugin on its path as the proof read it, for ``_of_this_build``
+    to judge.
+
+    The proof is ``hou`` imported across the link and the plugin read: sync requests,
+    so a Houdini too busy to answer fails it like one that is not there.
+    [LAW:single-enforcer] Nothing Houdini's ``hou`` answers is read here: a fault it
+    raises is its own, classified at the tool boundary like every other, never "not
+    reached".
     """
     conn = target.open(host, port, sync_timeout)
     # [LAW:no-ambient-temporal-coupling] Nothing is installed until the link has
@@ -267,6 +386,7 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
     # attempt leaves neither an open socket nor a half-connected state behind.
     try:
         hou = conn.modules.hou
+        plugin = _installed_plugin(conn)
     except BaseException as validation_error:
         logger.warning(
             f"Closing link to {describe_target(host, port)}: failed validation: "
@@ -278,7 +398,9 @@ def _open_link(target: HoudiniTarget, host: str, port: int, sync_timeout: float)
             logger.debug(f"Closing the unvalidated link also failed: {close_error}")
         raise
 
-    return Link(host, port, conn, hou)
+    link = Link(host, port, conn, hou)
+    logger.info(f"Houdini at {link.name} has {_found(plugin)}")
+    return link, plugin
 
 
 def _open_link_with_retries(
@@ -304,8 +426,7 @@ def _open_link_with_retries(
 
     for attempt in range(max_retries):
         try:
-            return _open_link(target, host, port, sync_timeout)
-
+            reached = _reach(target, host, port, sync_timeout)
         except Exception as e:
             if not _open_is_retryable(e):
                 raise HoudiniConnectionError(
@@ -327,6 +448,10 @@ def _open_link_with_retries(
                 logger.info(f"Retrying in {delay:.2f} seconds...")
                 time.sleep(delay)
                 current_delay *= 2  # Exponential backoff
+        else:
+            # Judged outside the attempt: another build of the plugin is a reached
+            # Houdini's answer, neither retried nor told to start a listener.
+            return _of_this_build(*reached)
 
     raise HoudiniConnectionError(
         f"Failed to connect to Houdini at {describe_target(host, port)} after {max_retries} attempts. "
@@ -453,18 +578,6 @@ class HoudiniConnection:
                 f"({'was installed' if installed else 'not installed'})"
             )
 
-    def cut_off(self, link: Link) -> None:
-        """End ``link`` under the thread using it (:meth:`Link.cut_off`), and uninstall
-        it if it is still the installed one, so the next call opens a fresh link: a link
-        cut off reads as open until its user has closed it."""
-        with self._lock:
-            installed = self._uninstall(link)
-            link.cut_off()
-            logger.info(
-                f"Cut off link to Houdini at {link.name} "
-                f"({'was installed' if installed else 'not installed'})"
-            )
-
     def _uninstall(self, link: Link) -> bool:
         """Uninstall ``link`` if it is the installed one, saying whether it was; the
         caller holds the lock."""
@@ -513,7 +626,9 @@ def houdini() -> HoudiniConnection:
     return _houdini
 
 
-def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str, Any]:
+def get_connection_info(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port
+) -> dict[str, Any]:
     """
     Get detailed information about the current connection state.
 
@@ -524,7 +639,9 @@ def get_connection_info(host: str = "localhost", port: int = 18811) -> dict[str,
     return _houdini.info(host, port)
 
 
-def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> dict[str, Any]:
+def ping(
+    host: str = DEFAULT_TARGET.host, port: int = DEFAULT_TARGET.port, timeout: float = 5.0
+) -> dict[str, Any]:
     """
     Quick connectivity test without maintaining connection.
 
@@ -541,6 +658,8 @@ def ping(host: str = "localhost", port: int = 18811, timeout: float = 5.0) -> di
         actually reached.
 
     Raises:
+        PluginMissing: the Houdini reached holds another build of the plugin, as a
+            tool's connect would be told.
         HoudiniConnectionError: naming the target and the cause, when no Houdini
             answered there. [LAW:no-silent-failure] the cause travels with the
             failure instead of being logged and collapsed into False. What a

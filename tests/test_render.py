@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import MockHouNode, MockNodeLacking, raised_inside_houdini
+from houdini_mcp.tools.transactions import BODY_SILENCE
+from tests.conftest import MockHouNode, raised_inside_houdini
 
 
 class TestRenderViewportValidation:
@@ -405,12 +406,11 @@ class TestListRenderNodes:
         caplog.set_level(logging.DEBUG, logger="houdini_mcp.tools.rendering")
 
         rop = MockHouNode(path="/out/opengl1", name="opengl1", node_type="opengl")
-        rop.bypass(True)
         mock_connection.add_node(rop)
+        rop.bypass(True)
+        # a sopnet in /out is an ObjNode holding SOPs: a display flag, and no bypass flag
         mock_connection.add_node(
-            MockNodeLacking(
-                path="/out/sopnet1", name="sopnet1", node_type="sopnet", lacks=("isBypassed",)
-            )
+            MockHouNode(path="/out/sopnet1", name="sopnet1", node_type="sopnet")
         )
 
         listed = list_render_nodes()["render_nodes"]
@@ -859,7 +859,7 @@ class TestRenderLeavesSceneUnchanged:
         from tests.conftest import MockHouNode
 
         def render(self: Any) -> None:
-            raise RuntimeError("OpenGL ROP: no display")
+            raise raised_inside_houdini(RuntimeError("OpenGL ROP: no display"))
 
         monkeypatch.setattr(MockHouNode, "render", render, raising=False)
         return rendering_scene
@@ -890,6 +890,40 @@ class TestRenderLeavesSceneUnchanged:
         # for it is houdini-laws-etg.tmx's.
         assert "OpenGL ROP: no display" in str(result), result
         assert self._scene(render_raises) == before
+
+    @staticmethod
+    def _artist_step(hou: Any) -> tuple[str, ...]:
+        """A graphical Houdini whose artist's last change is on top of the undo stack."""
+        hou.ui_available = True
+        hou.undos.enter_main_thread()
+        try:
+            with hou.undos.group("artist step"):
+                hou.node("/obj").createNode("null", "artist_null")
+        finally:
+            hou.undos.leave_main_thread()
+        return hou.undos.undoLabels()
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    @pytest.mark.parametrize("outcome", ["rendering_scene", "render_raises"])
+    def test_the_undo_history_is_as_it_was(
+        self,
+        request: pytest.FixtureRequest,
+        caplog: pytest.LogCaptureFixture,
+        tool: str,
+        outcome: str,
+    ) -> None:
+        """The artist's next Ctrl+Z undoes their own change, not the render's rig."""
+        import houdini_mcp.tools as tools
+
+        hou = request.getfixturevalue(outcome)
+        before = self._artist_step(hou)
+
+        with caplog.at_level(logging.INFO, "houdini_mcp.tools.transactions"):
+            getattr(tools, tool)(host="localhost", port=18811)
+
+        assert hou.undos.undoLabels() == before == ("artist step",)
+        assert hou.undos.silence == BODY_SILENCE
+        assert f"{tool} runs on Houdini's main thread with undo disabled" in caplog.text
 
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_link_that_fails_under_a_destroy_is_sent_nothing_more(
@@ -1093,7 +1127,7 @@ class TestRenderLeavesSceneUnchanged:
 
         assert (result["kind"], result["exception"]) == ("operation_failed", "RuntimeError")
         assert result["message"] == (
-            "Render failed: OpenGL ROP: no display\n"
+            "Houdini did not render the picture: RuntimeError: OpenGL ROP: no display\n"
             "also failed to destroy temporary render node /obj/_mcp_render_cam: "
             "RuntimeError('camera is locked')"
         ), result
@@ -1647,7 +1681,7 @@ class TestRenderFraming:
         def render_all_but_the_second(node: Any) -> None:
             calls.append(1)
             if len(calls) == 2:
-                raise RuntimeError("karma ran out of memory")
+                raise raised_inside_houdini(RuntimeError("karma ran out of memory"))
             real_render(node)
 
         monkeypatch.setattr(MockHouNode, "render", render_all_but_the_second)
@@ -1660,14 +1694,17 @@ class TestRenderFraming:
         failure = FAILURE.validate_python(left)
         assert isinstance(failure, OperationFailure), left
         assert (left["name"], left["exception"]) == ("left", "RuntimeError")
-        assert failure.message == "Render failed: karma ran out of memory"
+        assert failure.message == (
+            "Houdini did not render the picture: RuntimeError: karma ran out of memory"
+        )
         assert "traceback" not in left
         assert [v["status"] for v in (front, top, perspective)] == ["success"] * 3
         assert all("image_base64" in v for v in (front, top, perspective))
         assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
             (
                 "WARNING",
-                "Quad view left not rendered: Render failed: karma ran out of memory",
+                "Quad view left not rendered: "
+                "Houdini did not render the picture: RuntimeError: karma ran out of memory",
             ),
         ]
 
@@ -1681,7 +1718,7 @@ class TestRenderFraming:
         def open_all_but_the_third(path: str, flags: int) -> int:
             opened.append(path)
             if len(opened) == 3:
-                raise PermissionError(f"locked: {path}")
+                raise raised_inside_houdini(PermissionError(f"locked: {path}"))
             return os.open(path, flags)
 
         monkeypatch.setattr(
@@ -1717,6 +1754,24 @@ class TestRenderFraming:
         assert "views" not in result
         assert "AttributeError" in result["traceback"]
 
+    def test_a_render_that_fails_in_this_process_is_the_calls_failure(
+        self, frames: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An error the render raises here, not in Houdini, is no view's: it fails the call."""
+        from houdini_mcp.tools import render_quad_view
+        from tests.conftest import MockHouNode
+
+        def broken_render(node: Any) -> None:
+            raise TypeError("'NoneType' object is not callable")
+
+        monkeypatch.setattr(MockHouNode, "render", broken_render)
+
+        result = render_quad_view(host="localhost", port=18811)
+
+        assert (result["kind"], result["exception"]) == ("operation_failed", "TypeError")
+        assert "views" not in result
+        assert "TypeError" in result["traceback"]
+
     @pytest.mark.parametrize("tool", TOOLS)
     def test_a_displayed_object_subnet_is_framed_by_what_it_displays(
         self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
@@ -1743,6 +1798,22 @@ class TestRenderFraming:
         obj = framed_scene.node("/obj")
         for node_type in ("null", "light", "cam"):
             obj.createNode(node_type, f"user_{node_type}").parm("tx").set(1000.0)
+
+        result = getattr(tools, tool)(host="localhost", port=18811)
+
+        assert result["status"] == "success", result
+        assert result["bounding_box"] == self.BOX
+
+    @pytest.mark.parametrize("tool", TOOLS)
+    def test_objects_with_no_display_flag_are_not_framed(
+        self, frames: list[dict[str, Any]], framed_scene: Any, tool: str
+    ) -> None:
+        """A ropnet has only a bypass flag and a chopnet none, in Houdini 22: neither shows."""
+        import houdini_mcp.tools as tools
+
+        obj = framed_scene.node("/obj")
+        for node_type in ("ropnet", "chopnet"):
+            obj.createNode(node_type, f"user_{node_type}")
 
         result = getattr(tools, tool)(host="localhost", port=18811)
 

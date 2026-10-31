@@ -1,6 +1,7 @@
 """The fake hou keeps one scene graph: what createNode and destroy do is what hou.node sees."""
 
 import dataclasses
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,9 @@ from tests.conftest import (
     _built_as,
 )
 from tests.fake_node_types import (
+    FLAGS,
     ParmTuple,
+    _indirect_inputs,
     categories,
     load_table,
     name_components,
@@ -140,12 +143,48 @@ def test_a_node_has_the_indirect_inputs_its_type_gives(
     mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], count: int
 ) -> None:
     """What hython reads from indirectInputs() on each, created in a fresh Houdini
-    22.0.466 scene; each one resolves by its path."""
+    22.0.466 scene: named from 1, numbered from 0; each one resolves by its path."""
     node = _created(mock_hou.node(context), *node_types)
     names = [str(n) for n in range(1, count + 1)]
 
     assert [i.name() for i in node.indirectInputs()] == names
+    assert [i.number() for i in node.indirectInputs()] == list(range(count))
     assert [mock_hou.item(f"{node.path()}/{name}") for name in names] == list(node.indirectInputs())
+
+
+class _Numbered:
+    """An indirect input as some Houdini might give it: a number and a name."""
+
+    def __init__(self, number: int, name: str):
+        self._number, self._name = number, name
+
+    def number(self) -> int:
+        return self._number
+
+    def name(self) -> str:
+        return self._name
+
+
+class _Subnet:
+    def __init__(self, *indirect: _Numbered):
+        self._indirect = indirect
+
+    def path(self) -> str:
+        return "/obj/subnet1"
+
+    def indirectInputs(self) -> tuple[_Numbered, ...]:
+        return self._indirect
+
+
+def test_the_reader_counts_indirect_inputs_numbered_and_named_as_houdinis_are() -> None:
+    """Houdini 22 numbers them from 0 and names them from 1, as the fake does."""
+    assert _indirect_inputs(_Subnet(_Numbered(0, "1"), _Numbered(1, "2"))) == 2
+
+
+def test_the_reader_refuses_indirect_inputs_numbered_unlike_the_fakes() -> None:
+    """A Houdini numbering them from 1 would leave a count the fake builds wrong."""
+    with pytest.raises(ValueError, match=r"\(number, name\) \[\(1, '1'\), \(2, '2'\)\]"):
+        _indirect_inputs(_Subnet(_Numbered(1, "1"), _Numbered(2, "2")))
 
 
 @pytest.mark.parametrize("node_types", [("geo",), ("geo", "attribvop")])
@@ -160,6 +199,90 @@ def test_a_network_that_is_not_a_subnetwork_has_no_indirect_inputs(
         node.indirectInputs()
     assert mock_hou.item(f"{node.path()}/1") is None
     assert mock_hou.item("/1") is None
+
+
+def _wiring_probe(mock_hou: MockHouModule) -> dict[str, Any]:
+    """The items the cross-network wiring probe used in Houdini 22.0.466, by name."""
+    obj = mock_hou.node("/obj")
+    geo1, geo2 = obj.createNode("geo", "geo1"), obj.createNode("geo", "geo2")
+    subnet = geo1.createNode("subnet")
+    return {
+        "box2": geo2.createNode("box"),
+        "null": geo1.createNode("null"),
+        "box1": geo1.createNode("box"),
+        "wrangle's indirect input": geo1.createNode("attribwrangle").indirectInputs()[0],
+        "subnet's indirect input": subnet.indirectInputs()[0],
+        "inner": subnet.createNode("null"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("destination", "wired", "refused"),
+    [
+        ("null", "box1", "box2"),
+        ("null", "box1", "wrangle's indirect input"),
+        ("null", "box1", "subnet's indirect input"),
+        ("inner", "subnet's indirect input", "box1"),
+        ("null", "box1", "inner"),
+    ],
+)
+def test_a_source_outside_the_destinations_network_is_refused(
+    mock_hou: MockHouModule, destination: str, wired: str, refused: str
+) -> None:
+    """What hython's setInput does with each: raises, and the wire already there stays."""
+    items = _wiring_probe(mock_hou)
+    items[destination].setInput(0, items[wired])
+
+    with pytest.raises(Exception, match=r"hou\.OperationFailed: The attempted operation failed\."):
+        items[destination].setInput(0, items[refused])
+
+    assert [c.inputItem() for c in items[destination].inputConnections()] == [items[wired]]
+
+
+@pytest.mark.parametrize(
+    ("destination", "source"), [("null", "box1"), ("inner", "subnet's indirect input")]
+)
+def test_a_source_in_the_destinations_network_is_wired(
+    mock_hou: MockHouModule, destination: str, source: str
+) -> None:
+    """What hython's setInput wires: a node beside the destination, and inside a subnet
+    one of that subnet's own indirect inputs."""
+    items = _wiring_probe(mock_hou)
+
+    items[destination].setInput(0, items[source])
+
+    assert [c.inputItem() for c in items[destination].inputConnections()] == [items[source]]
+
+
+@pytest.mark.parametrize(
+    ("context", "node_types", "flags"),
+    [
+        ("/obj", ("geo", "box"), ("display", "render", "bypass")),
+        ("/obj", ("geo",), ("display",)),
+        ("/obj", ("dopnet", "subnet"), ("display", "bypass")),
+        ("/out", ("opengl",), ("bypass",)),
+        ("/obj", (), ()),
+    ],
+)
+def test_a_node_has_the_flags_its_class_gives(
+    mock_hou: MockHouModule, context: str, node_types: tuple[str, ...], flags: tuple[str, ...]
+) -> None:
+    """What hython finds on each, created in a fresh Houdini 22.0.466 scene: a flag's
+    read and write, which turn it and read it back, for each flag its class has, and
+    neither method for one it lacks."""
+    node = _created(mock_hou.node(context), *node_types)
+
+    for flag in flags:
+        read, write = (getattr(node, method) for method in FLAGS[flag])
+        was = read()
+        write(not was)
+        assert read() is not was, flag
+    assert {
+        method
+        for flag in set(FLAGS) - set(flags)
+        for method in FLAGS[flag]
+        if hasattr(node, method)
+    } == set()
 
 
 def test_destroyed_node_leaves_its_network_box(mock_hou: MockHouModule) -> None:
@@ -338,9 +461,9 @@ def test_a_nested_duplicate_name_is_refused(mock_hou: MockHouModule) -> None:
         mock_hou.add_node(MockHouNode(path="/obj/geo1", name="geo1", children=twins))
 
 
-def test_a_node_outside_any_scene_has_no_category() -> None:
-    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene"):
-        MockHouNode(path="/obj/geo1", name="geo1").type().category()
+def test_a_node_outside_any_scene_has_no_type() -> None:
+    with pytest.raises(RuntimeError, match="'/obj/geo1' is not in a scene, so it has no type"):
+        MockHouNode(path="/obj/geo1", name="geo1").type()
 
 
 def test_the_fake_answers_the_table_as_houdini_does(mock_hou: MockHouModule) -> None:
@@ -506,6 +629,20 @@ def test_the_root_and_the_contexts_are_no_registered_types(mock_hou: MockHouModu
     assert [categories[c].nodeTypes() for c in ("Director", "Manager")] == [{}, {}]
     assert categories["Manager"].nodeType("obj") is None
     assert mock_hou.preferredNodeType("Manager/obj") is None
+
+
+def test_a_node_and_its_category_answer_one_type(mock_hou: MockHouModule) -> None:
+    """node.type() and the category's nodeType() give equal hou.NodeTypes in equal
+    categories, as Houdini 22's two objects for one type or category are."""
+    mountain = mock_hou.node("/obj").createNode("geo").createNode("mountain")
+    sop = mock_hou.nodeTypeCategories()["Sop"]
+    by_category = sop.nodeType("mountain::2.0")
+
+    assert mountain.type() == by_category
+    assert mountain.type().category() == sop
+    assert len({mountain.type().category(), sop}) == 1
+    assert len({mountain.type(), by_category}) == 1
+    assert mountain.type().nameWithCategory() == "Sop/mountain::2.0"
 
 
 def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModule) -> None:

@@ -8,7 +8,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..settings import Summarizer
+from ..plugin import plugin_module
+from ..settings import DEFAULT_TARGET, Summarizer
 from ._common import (
     READ,
     InvalidInput,
@@ -20,7 +21,6 @@ from ._common import (
     using,
 )
 from .bounds import box_center, box_of_bounds, box_sides
-from .plugin import plugin_module
 from .reads import is_unread, log_refused
 from .summarization import GEOMETRY_BRIEF, summarized
 
@@ -40,8 +40,8 @@ async def get_geo_summary(
     include_groups: bool = True,
     *,
     summarize: bool = True,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
     summarizer: Summarizer,
 ) -> dict[str, Any]:
     """

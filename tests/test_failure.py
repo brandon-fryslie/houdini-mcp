@@ -13,7 +13,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from houdini_mcp.connection import HoudiniConnectionError, HoudiniTargetMismatch, houdini
+from houdini_mcp.connection import (
+    HoudiniConnectionError,
+    HoudiniTargetMismatch,
+    PluginMissing,
+    houdini,
+)
+from houdini_mcp.main_thread import MainThreadRefused
 from houdini_mcp.tools._common import (
     CHECKPOINTED,
     FAILURE,
@@ -24,7 +30,7 @@ from houdini_mcp.tools._common import (
     UNDOABLE,
     InvalidInput,
     OperationFailed,
-    ProgramStillRunning,
+    ProgramTimedOut,
     TimedOut,
     node_at,
     tool,
@@ -41,7 +47,6 @@ KINDS = {
     "timeout",
     "invalid_input",
     "operation_failed",
-    "worker_still_running",
 }
 
 
@@ -92,11 +97,9 @@ class TestEveryFailureIsOneArm:
             (InvalidInput("Node not found: /obj/x", path="/obj/x"), "invalid_input", "fix_input"),
             (OperationFailed("cook failed"), "operation_failed", "none"),
             (TimedOut("request timed out", url="https://x"), "timeout", "call_again"),
-            (
-                ProgramStillRunning("still running", worker={"code_sha256": "abc"}),
-                "worker_still_running",
-                "wait_for_worker",
-            ),
+            (ProgramTimedOut("killed at its timeout", timeout=30), "timeout", "check_scene"),
+            (PluginMissing("Houdini cannot import houdini_mcp_scene"), "operation_failed", "none"),
+            (MainThreadRefused("Houdini's main thread is busy"), "operation_failed", "none"),
             (ValueError("nobody classified this"), "operation_failed", "none"),
             (raised_inside_houdini(TimeoutError("cook timed out")), "operation_failed", "none"),
         ],
@@ -222,7 +225,7 @@ class TestEveryFailureIsOneArm:
         link = houdini().link()
         result = arm(body())
 
-        assert result.connection_reset is True
+        assert result.cut_off == "link"
         assert result.exception == "TimeoutError"
         assert link.conn.closed and houdini().link() is None
 
@@ -235,25 +238,24 @@ class TestEveryFailureIsOneArm:
         result = arm(body())
 
         assert (result.kind, result.retry) == ("timeout", "call_again")
-        assert result.connection_reset is False
+        assert result.cut_off == "request"
         assert houdini().link() is link and not link.conn.closed
 
-    def test_a_program_that_outlives_its_bound_is_the_worker_to_wait_for(self) -> None:
-        """The program still holds the scene, so "call again" would only be
-        refused: the arm is the worker's, naming it, with the link standing."""
+    def test_a_program_killed_at_its_bound_is_checked_for_with_the_link_standing(self) -> None:
+        """Its process is gone, so nothing of it runs on; what it changed that its
+        undo cannot reach may remain, so the scene is checked before calling again."""
 
         @tool(PROGRAM)
         def body(
             host: str = "localhost", port: int = 18811, *, main_thread: MainThread
         ) -> dict[str, Any]:
-            raise ProgramStillRunning("still running", timeout=30, worker={"code_sha256": "abc"})
+            raise ProgramTimedOut("killed at its timeout", timeout=30)
 
         link = houdini().link()
         result = arm(body())
 
-        assert (result.kind, result.retry) == ("worker_still_running", "wait_for_worker")
+        assert (result.kind, result.retry, result.cut_off) == ("timeout", "check_scene", "program")
         assert result.timeout == 30
-        assert result.worker == {"code_sha256": "abc"}
         assert houdini().link() is link and not link.conn.closed
 
     def test_a_tool_payload_rides_beside_the_declared_fields(self) -> None:
@@ -354,11 +356,35 @@ class TestAfterTheLinkFailsMidCall:
         failure = failure_for(lost.value, "probe")
         assert (failure.kind, failure.retry) == (kind, "check_scene")
 
-    def test_a_timeout_on_an_intact_link_has_no_change_to_check_for(self) -> None:
-        with pytest.raises(ValidationError, match="retry of a reset link only"):
-            TimeoutFailure(
-                operation="probe", message="m", retry="check_scene", connection_reset=False
-            )
+    @pytest.mark.parametrize(
+        ("cut_off", "retry"),
+        [
+            ("request", "call_again"),
+            ("link", "call_again"),
+            ("link", "check_scene"),
+            ("program", "check_scene"),
+        ],
+    )
+    def test_each_cut_off_admits_its_retries(self, cut_off: str, retry: str) -> None:
+        failure = TimeoutFailure(operation="probe", message="m", retry=retry, cut_off=cut_off)
+        assert (failure.cut_off, failure.retry) == (cut_off, retry)
+
+    @pytest.mark.parametrize(
+        ("cut_off", "retry", "refused"),
+        [
+            (
+                "request",
+                "check_scene",
+                "check_scene is the retry of a reset link or a killed program only",
+            ),
+            ("program", "call_again", "a killed program's retry is check_scene"),
+        ],
+    )
+    def test_the_pairs_a_timeout_cannot_have_are_refused(
+        self, cut_off: str, retry: str, refused: str
+    ) -> None:
+        with pytest.raises(ValidationError, match=refused):
+            TimeoutFailure(operation="probe", message="m", retry=retry, cut_off=cut_off)
 
     def test_the_audit_line_carries_the_retry(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger="houdini_mcp.tools"):

@@ -7,7 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `houdini-mcp install` sets up Houdini and the MCP clients on this machine
+  (houdini-install-aby.fes), so installing is `uv tool install
+  git+https://github.com/brandon-fryslie/houdini-mcp` and `houdini-mcp install`,
+  with no clone. It points Houdini 22's packages directory at the plugin the
+  distribution ships, which now includes the whole plugin, and registers the
+  server over stdio with Claude Code, Claude Desktop, Cursor and Codex where
+  they are installed, keeping the environment and the other settings an earlier
+  entry set; an entry pointed at a URL (a server in Docker) is left as it is.
+  The server it registers runs with `-P`, so a project's own modules do not
+  load in its place. Each step prints what it did; any that failed makes
+  the command exit 1.
+
+- The plugin starts its hrpyc listener when a graphical Houdini's UI is up, so
+  the server reaches Houdini without a click on the shelf or a `uiready.py` of
+  your own. A listener variable it cannot use is shown in a dialog.
+
+- The server refuses to link to a Houdini whose houdini_mcp plugin is another
+  build than the one it ships (houdini-laws-etg.ape), naming the plugin
+  directory Houdini imported, both releases and both builds, and how to install
+  the matching plugin, instead of failing later on whichever call the other
+  build answers differently. A build is a digest of the plugin's Python
+  sources, so installs from two commits differ even when both state the same
+  release. A Houdini with no plugin still links.
+
+### Changed
+
+- **BREAKING (wire)**: `execute_code` runs each program in a process of its
+  own, with its own link to Houdini and its own stdout and stderr, and kills
+  that process at the program's `timeout` (houdini-execute-code-kwc.28w). A
+  timed-out program used to run on as a thread nothing could stop, and every
+  scene-writing call was refused until it ended; now its process is gone once
+  the call returns, and no call is refused for it. A request it had in
+  flight in Houdini (a long cook) still finishes there first, as any long
+  cook does. On the wire:
+  - The timeout is the `timeout` arm with `cut_off: "program"` and
+    `retry: "check_scene"`, carrying the output up to the kill. The
+    `worker_still_running` kind, the `wait_for_worker` retry and the `worker`
+    block are gone.
+  - The `timeout` arm's `connection_reset` is replaced by `cut_off`:
+    `"request"` where it was `false`, `"link"` where it was `true`.
+  - A program whose own link to Houdini fails is `operation_failed`, the
+    link's exception in its `traceback`, and no longer `connection_lost` or a
+    reset timeout: the server's link was not involved.
+  - A program that never began (its link would not open, the plugin is
+    missing, Houdini's main thread refused it, or its start passed 60
+    seconds) is `operation_failed` with a message starting
+    `The program never ran: `, and nothing is undone.
+  - A program's swap of `sys.stdout` or `sys.stderr` changes only its own
+    output, and its threads' output is in its `stdout` and `stderr`.
+  - A program's process ends with the server's, so a server killed mid-call
+    leaves no program running against Houdini.
+  - A link lost, or a Houdini that cannot be reached again, while undoing a
+    failed call's step is that arm, and it carries the failure's fields: a
+    program's output, `timeout` and `audit`.
+  - `audit.woke_early` is gone.
+
+- `houdini-mcp` refuses arguments it does not know instead of ignoring them.
+
+- The server (`houdini_mcp.__version__`) and the plugin (`plugin_version` in the
+  Start Remote self-test) report the distribution's version, 1.0.0, where they
+  reported 0.1.0 and 0.2.0, and an MCP client is told 1.0.0 as the server's version
+  where it was told fastmcp's (houdini-laws-etg.fn3).
+
 ### Fixed
+
+- The Start Remote shelf tool offers the port `HOUDINI_RPC_BIND_PORT` names, so
+  accepting it no longer starts the listener on 18811 when the environment says
+  otherwise (houdini-laws-etg.fn3).
+
+- `disconnect_node_input`, `reorder_inputs`, `set_node_flags`,
+  `assign_material`'s Material SOP wiring, `delete_node`, `set_node_color`,
+  `set_node_position`, `layout_children`, `create_network_box`,
+  `save_scene` and `new_scene`, refused by Houdini (as inside a locked asset), answer
+  `operation_failed` in Houdini's words, naming what was asked, where they
+  answered with an unclassified error and a traceback
+  (houdini-laws-etg.ulw). So does a node's input connections or
+  `find_error_nodes`' node list that Houdini will not give. A parameter Houdini will not set, a render Houdini
+  fails, and a pane list or Qt lookup Houdini refuses carry Houdini's reason
+  without rpyc's remote traceback; an error in the server there is reported as
+  the server's fault, not as Houdini's refusal.
+
+- `connect_nodes` from a source outside the destination's network
+  (houdini-laws-etg.z7i), which Houdini refuses, answers `operation_failed`
+  in Houdini's words, naming both paths, where it answered with an
+  unclassified error and a traceback. A pane capture that Houdini refuses to
+  frame or to take into a network is the same `operation_failed`; a fault in
+  the server there is now reported as one, not as Houdini's refusal. A link
+  lost during any of these steps is `connection_lost` carrying the step's
+  fields and naming what was asked of Houdini, not claiming it was undone.
+
+- On macOS, a call waiting for Houdini's main thread holds off App Nap
+  (houdini-install-aby.80r): a graphical Houdini whose window was covered
+  refused `create_node` and every other edit after 30 s while reads answered.
+  The plugin's log says, at the first such call, that calls hold off App Nap;
+  if macOS gives no activity, the call fails with an `OSError` before it is
+  posted, and the log says why. Not yet confirmed in a graphical Houdini.
 
 - `list_node_types` lists the types Houdini offers when it is called
   (houdini-laws-etg.tva). It answered from a cache that only `load_scene` and
@@ -25,6 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accidents in the code an agent ordinarily writes, not a sandbox. The gate
   module called `read-only` a guarantee, and the tool contract said it blocks
   every mutation; it admits only recognized inspection.
+
+- `render_viewport` and `render_quad_view` leave Houdini's undo history as they
+  found it (houdini-laws-etg.bci). In graphical Houdini each node they created
+  and destroyed for the render was a step of its own on the artist's undo
+  stack, so the next Ctrl+Z stepped through the render and could bring its
+  camera and ROP back. They now run on Houdini's main thread with undo
+  disabled, the one place Houdini honours a disabler, so a graphical Houdini's
+  interface waits for the render as it does for one started from its Render
+  menu. Needs this release's plugin.
 
 - `execute_code` refuses the calls that run HScript as it refuses `eval`
   (houdini-laws-etg.dl2): `hou.hscript()`, the `hou.hscript*Expression()` evaluators, and string
@@ -84,6 +190,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (houdini-laws-etg.2e6). It answered with the whole tuple (`rad`, type
   `vector`, `tuple_size` 3). A tuple's name (`rad`, `t`) still answers the
   vector. Needs this release's plugin.
+
+- `connect_nodes` answers an input the destination does not have, or an output
+  the source does not, as `invalid_input` (retry `fix_input`) in Houdini's
+  words, where it answered `operation_failed` (houdini-laws-etg.859). The
+  served schemas of `connect_nodes` and `disconnect_node_input` refuse a
+  negative index, and `reorder_inputs`' a negative position in `new_order`. Needs this release's plugin, which adds `houdini_mcp_wiring`.
 
 - `load_scene` of a file Houdini loads with warnings, such as a node whose
   asset definition is missing, reports the load as a success carrying
@@ -272,6 +384,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (wire)**: `execute_code` refuses a program that parses but does
+  not compile, before any rail, as `invalid_input` with `blocked_reason`
+  `syntax_error` (houdini-laws-etg.r9q). The gate only parsed the program, and
+  the source was compiled again to run it, so `return 1` or `break` at module
+  level, or, on Python 3.14, an expression nested deep enough to overflow the
+  compiler's stack, got past the gate and came back as `operation_failed` with
+  the program's traceback. The refusal reads "Code does not compile: ...",
+  where it read "Code does not parse: ...", and its traceback names the file
+  `<string>`, where a parse refusal's named `<unknown>`. The program's process
+  runs the code object the gate compiled, so the parser's and the compiler's
+  SyntaxWarnings (`invalid escape sequence`, `"is" with 'int' literal`) go to
+  the server's stderr, once, and a program's `stderr` no longer starts with
+  them.
+
 - **BREAKING (wire)**: `list_node_types` refuses a `category` Houdini does not
   have as `invalid_input`, whose `categories_available` lists those it has,
   where a misspelt category answered success with no types and `category=""`
@@ -362,6 +488,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused as `invalid_input` (houdini-laws-etg.dyr). Before, they were clamped into range and the call
   reported success: a `limit` of 0 or less listed one item per page, one over
   500 listed 500, and a negative `cursor` started at 0.
+
+- **BREAKING (deployment)**: `render_viewport` and `render_quad_view` need the
+  houdini_mcp plugin installed in the Houdini they reach, as the pane captures
+  and editing tools do (houdini-laws-etg.bci); without it they fail saying to
+  install the plugin. A headless `hython` must run `main_thread.serve()`.
+
+- **BREAKING (wire)**: a call that arrives while `render_viewport` or
+  `render_quad_view` runs waits for it, reads included, and reports the wait in
+  `scene_wait` (houdini-laws-etg.bci): the render holds Houdini's main thread.
 
 - **BREAKING (deployment)**: `capture_pane_screenshot`, `capture_multiple_panes`
   and `render_node_network` need the houdini_mcp plugin installed in the

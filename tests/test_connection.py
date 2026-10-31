@@ -4,15 +4,18 @@ import logging
 import socket
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
+from houdini_mcp_handshake import RELEASE, build
 
 from houdini_mcp.connection import (
+    BUILD,
     HoudiniConnectionError,
     HoudiniTargetMismatch,
-    Link,
+    PluginMissing,
     TransportFailure,
     get_connection_info,
     houdini,
@@ -26,7 +29,6 @@ from tests.conftest import (
     MockRpycConnection,
     link_failure,
     raised_inside_houdini,
-    served_connection,
 )
 
 
@@ -57,13 +59,13 @@ class TestConnect:
         assert installed_conn() is second.conn
 
     def test_a_failed_connect_leaves_the_installed_link_standing(
-        self, mock_rpyc_with_reset, mock_hou
+        self, reset_connection_state, mock_hou
     ):
         """The old link is closed only once the new one is proven, so a reconnect that
         fails costs nothing a concurrent caller was using."""
-        first = houdini().connect("localhost", 18811)
-
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            first = houdini().connect("localhost", 18811)
             mock_rpyc.connect.side_effect = ConnectionError("Connection refused")
             with pytest.raises(HoudiniConnectionError):
                 houdini().connect("localhost", 18811, max_retries=1, retry_delay=0.01)
@@ -207,7 +209,6 @@ class TestConnect:
 
     def test_connect_exponential_backoff(self, reset_connection_state, mock_hou):
         """Test that retry delay doubles each attempt (exponential backoff)."""
-        import time
 
         mock_conn = MockRpycConnection(mock_hou)
         call_times = []
@@ -230,7 +231,6 @@ class TestConnect:
 
     def test_connect_with_jitter(self, reset_connection_state, mock_hou):
         """Test that jitter adds randomness to retry delays."""
-        import time
 
         mock_conn = MockRpycConnection(mock_hou)
         delays = []
@@ -268,6 +268,223 @@ class TestConnect:
             assert mock_rpyc.connect.call_args.args == ("192.168.1.100", 19999)
         assert (link.host, link.port) == ("192.168.1.100", 19999)
         assert link.name == "192.168.1.100:19999"
+
+
+STALE_PLUGIN = "/prefs/houdini22.0/houdini_mcp/python/houdini_mcp_plugin"
+
+
+def stale_plugin(**stated: Any) -> SimpleNamespace:
+    """A ``houdini_mcp_plugin`` package as Houdini imports it from ``STALE_PLUGIN``,
+    stating what ``stated`` holds."""
+    return SimpleNamespace(__path__=[STALE_PLUGIN], **stated)
+
+
+class _BuildReadTimesOut:
+    __path__ = [STALE_PLUGIN]
+    __version__ = RELEASE
+
+    @property
+    def BUILD(self) -> str:  # noqa: N802 - the attribute the plugin states
+        raise TimeoutError("sync request")
+
+
+def raised_in_houdini(exc: Exception) -> Exception:
+    """``exc`` as rpyc raises it here when Houdini raised it: tagged with its traceback."""
+    exc._remote_tb = (
+        'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n'
+        f"{type(exc).__name__}: {exc}\n"
+    )  # type: ignore[attr-defined]
+    return exc
+
+
+def with_plugin(conn: MockRpycConnection, plugin: Any) -> MockRpycConnection:
+    """``conn`` with Houdini's ``houdini_mcp_plugin`` answered by ``plugin``: Houdini
+    raises it when it is an exception, and finds none when it is None."""
+    modules = conn.modules
+
+    class Path:
+        def __getitem__(self, name: str) -> Any:
+            if name != "houdini_mcp_plugin":
+                return modules[name]
+            if plugin is None:
+                raise raised_in_houdini(
+                    ModuleNotFoundError("No module named 'houdini_mcp_plugin'", name=name)
+                )
+            if isinstance(plugin, Exception):
+                raise plugin
+            return plugin
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(modules, name)
+
+    conn.modules = Path()
+    return conn
+
+
+class TestPluginBuild:
+    """A link is made only to a Houdini whose plugin, if it has one, is this server's build."""
+
+    @pytest.mark.parametrize(
+        ("plugin", "stated"),
+        [
+            (
+                stale_plugin(__version__=RELEASE, BUILD="0123456789abcdef"),
+                f"houdini_mcp plugin release {RELEASE}, build 0123456789abcdef from {STALE_PLUGIN}",
+            ),
+            (
+                stale_plugin(__version__="0.1.0"),
+                f"houdini_mcp plugin release 0.1.0, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                stale_plugin(),
+                f"houdini_mcp plugin release unstated, build unstated from {STALE_PLUGIN}",
+            ),
+            (
+                raised_in_houdini(ImportError("cannot import name 'build'")),
+                "a houdini_mcp plugin it fails to import (ImportError: cannot import name 'build')",
+            ),
+            (
+                raised_in_houdini(
+                    ModuleNotFoundError(
+                        "No module named 'houdini_mcp_handshake'", name="houdini_mcp_handshake"
+                    )
+                ),
+                "a houdini_mcp plugin it fails to import "
+                "(ModuleNotFoundError: No module named 'houdini_mcp_handshake')",
+            ),
+        ],
+        ids=[
+            "another commit of this release",
+            "a release before builds",
+            "a leftover directory",
+            "a plugin that fails to import",
+            "a plugin missing a module of its own",
+        ],
+    )
+    def test_another_builds_plugin_refuses_the_link_once(
+        self, reset_connection_state, mock_hou, plugin, stated
+    ):
+        stale = with_plugin(MockRpycConnection(mock_hou), plugin)
+
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = stale
+            with pytest.raises(PluginMissing) as exc_info:
+                houdini().connect("localhost", 18811, max_retries=3, retry_delay=0.01)
+
+        assert str(exc_info.value) == (
+            f"Houdini at localhost:18811 has {stated}; this server is release {RELEASE}, "
+            f"build {BUILD}. "
+            "Install the plugin this server was built with (`houdini-mcp install` from the "
+            "same install or clone), then restart Houdini."
+        )
+        assert mock_rpyc.connect.call_count == 1
+        assert stale.closed is True
+        assert installed_conn() is None
+
+    def test_ping_refuses_another_builds_plugin_the_same_way(self, mock_hou):
+        stale = with_plugin(
+            MockRpycConnection(mock_hou), stale_plugin(__version__=RELEASE, BUILD="0" * 16)
+        )
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.return_value = stale
+            with pytest.raises(PluginMissing, match=f"build {'0' * 16} from "):
+                ping("localhost", 18811)
+        assert stale.closed is True
+
+    def test_a_houdini_without_the_plugin_still_links(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        """Reads that need no plugin module still work; one that needs it is told then."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), None)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert "Houdini at localhost:18811 has no houdini_mcp plugin on its path" in caplog.messages
+
+    def test_this_builds_plugin_links_and_is_logged_with_its_path(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        current = stale_plugin(__version__=RELEASE, BUILD=BUILD)
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = with_plugin(MockRpycConnection(mock_hou), current)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert (
+            f"Houdini at localhost:18811 has houdini_mcp plugin release {RELEASE}, "
+            f"build {BUILD} from {STALE_PLUGIN}" in caplog.messages
+        )
+
+    def test_the_plugin_this_server_ships_is_its_build(
+        self, reset_connection_state, mock_hou, caplog
+    ):
+        """The real plugin package, imported from the tree the server ships, links."""
+        with (
+            patch("houdini_mcp.connection.handshake") as mock_rpyc,
+            caplog.at_level(logging.INFO, logger="houdini_mcp.connection"),
+        ):
+            mock_rpyc.connect.return_value = MockRpycConnection(mock_hou)
+            link = houdini().connect("localhost", 18811, max_retries=1)
+
+        assert houdini().link() is link
+        assert any(f"build {BUILD} from " in message for message in caplog.messages)
+
+    def test_a_build_read_that_times_out_is_retried_like_the_hou_import(
+        self, reset_connection_state, mock_hou
+    ):
+        busy = with_plugin(MockRpycConnection(mock_hou), _BuildReadTimesOut())
+        with patch("houdini_mcp.connection.handshake") as mock_rpyc:
+            mock_rpyc.connect.side_effect = [busy, MockRpycConnection(mock_hou)]
+            link = houdini().connect("localhost", 18811, max_retries=2, retry_delay=0.01)
+
+        assert mock_rpyc.connect.call_count == 2
+        assert busy.closed is True
+        assert houdini().link() is link
+
+
+class TestBuild:
+    """A plugin's build is the digest of its Python sources, and of nothing else."""
+
+    def test_a_changed_source_is_another_build(self, tmp_path):
+        source = tmp_path / "python" / "houdini_mcp_scene" / "__init__.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("ANSWER = 1\n")
+        before = build(tmp_path)
+        source.write_text("ANSWER = 2\n")
+        assert build(tmp_path) != before
+
+    def test_a_moved_source_is_another_build(self, tmp_path):
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / "a.py").rename(tmp_path / "b.py")
+        assert build(tmp_path) != before
+
+    def test_files_that_are_not_sources_are_the_same_build(self, tmp_path):
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / ".DS_Store").write_bytes(b"\0")
+        (tmp_path / "__pycache__").mkdir()
+        (tmp_path / "__pycache__" / "a.cpython-313.pyc").write_bytes(b"\0")
+        assert build(tmp_path) == before
+
+    def test_a_source_that_cannot_be_read_is_no_source(self, tmp_path):
+        """An editor's lock link names a file that is not there; it is no other build."""
+        (tmp_path / "a.py").write_text("X = 1\n")
+        before = build(tmp_path)
+        (tmp_path / ".#a.py").symlink_to(tmp_path / "gone")
+        assert build(tmp_path) == before
+
+    def test_the_plugin_states_the_build_of_the_tree_it_was_imported_from(self):
+        import houdini_mcp_plugin
+
+        assert houdini_mcp_plugin.BUILD == BUILD
 
 
 class TestNoHoudiniInstalled:
@@ -359,45 +576,6 @@ class TestClose:
         assert installed_conn() is None
 
 
-class TestCutOff:
-    """A link ended under a request waiting on it, as execute_code's timeout ends its
-    program's."""
-
-    def test_a_request_waiting_on_a_link_cut_off_fails_at_once(self, reset_connection_state):
-        """Closed under it, the waiting request slept until its 30s sync timeout on
-        macOS. The pause lets the request reach its wait; sent after the cut-off, it
-        fails at once too."""
-        with served_connection("import time") as conn:
-            link = Link("127.0.0.1", 0, conn, hou=None)
-            failed: list[BaseException] = []
-
-            def waits() -> None:
-                try:
-                    conn.modules.time.sleep(4)
-                except BaseException as e:  # noqa: BLE001
-                    failed.append(e)
-
-            waiting = threading.Thread(target=waits)
-            waiting.start()
-            time.sleep(0.5)
-
-            houdini().cut_off(link)
-            waiting.join(3)
-
-            assert not waiting.is_alive()
-            assert [type(e) for e in failed] == [EOFError]
-            # rpyc closed it, from the thread that was waiting
-            assert conn.closed
-
-    def test_a_cut_off_link_is_uninstalled(self, mock_connection):
-        """It reads as open until its user closes it, so the next call opens another."""
-        link = houdini().link()
-
-        houdini().cut_off(link)
-
-        assert houdini().link() is None
-
-
 class TestEnsure:
     """Tests for the owner's ensure: the link a call's scope holds."""
 
@@ -434,18 +612,17 @@ class TestEnsure:
         assert is_connected() is True
         assert houdini().ensure("localhost", 18811).hou is mock_connection
 
-    def test_ensure_reconnects_after_the_link_closed(self, mock_rpyc_with_reset):
+    def test_ensure_reconnects_after_the_link_closed(self, reset_connection_state, mock_hou):
         """A link found closed is replaced, once, and the new hou is handed out."""
-        houdini().ensure("localhost", 18811)
-        first = installed_conn()
-        first.close()
-
         with patch("houdini_mcp.connection.handshake") as mock_rpyc:
-            mock_rpyc.connect.return_value = MockRpycConnection(mock_rpyc_with_reset)
+            mock_rpyc.connect.side_effect = lambda *_a, **_k: MockRpycConnection(mock_hou)
+            houdini().ensure("localhost", 18811)
+            first = installed_conn()
+            first.close()
             hou = houdini().ensure("localhost", 18811).hou
 
-        assert hou is mock_rpyc_with_reset
-        assert mock_rpyc.connect.call_count == 1
+        assert hou is mock_hou
+        assert mock_rpyc.connect.call_count == 2
         assert installed_conn() is not first
         assert is_connected() is True
 
@@ -775,7 +952,10 @@ def _owner() -> Any:
     def open_fresh(host: str, port: int, sync_timeout: float) -> MockRpycConnection:
         return MockRpycConnection(MockHouModule())
 
-    return HoudiniConnection(HoudiniTarget(open_fresh, "start a fresh double"))
+    def reach_none(host: str, port: int) -> Any:
+        raise LookupError("a fresh double serves no program's process")
+
+    return HoudiniConnection(HoudiniTarget(open_fresh, "start a fresh double", reach_none))
 
 
 class TestATeardownDropsTheLinkThatFailed:
@@ -842,21 +1022,26 @@ class TestATeardownDropsTheLinkThatFailed:
             "\nThe scene's unsaved work is backed up at /tmp/backup.hip."
         )
 
-    def test_a_tool_failure_around_a_lost_link_keeps_its_payload(self):
-        """``raise OperationFailed(..., path=...) from <the link's failure>`` reads as the
-        link's failure, carrying the tool's fields and, as a note, its message."""
-        from houdini_mcp.tools._common import held_link
-        from houdini_mcp.tools.failure import OperationFailed, failure_for
+    def test_a_link_lost_inside_a_refusal_scope_keeps_its_payload(self):
+        """A link that fails inside ``refused_by_houdini`` reads as the link's failure,
+        carrying the scope's fields and, as a note, the step it failed in."""
+        from houdini_mcp.tools._common import held_link, refused_by_houdini
+        from houdini_mcp.tools.failure import failure_for
 
         owner = _owner()
-        with pytest.raises(Exception) as lost, held_link(owner, "localhost", 18811):
-            raise OperationFailed(
-                "Failed to navigate to /obj/geo1", path="/obj/geo1"
-            ) from link_failure(EOFError("stream closed"))
+        with (
+            pytest.raises(Exception) as lost,
+            held_link(owner, "localhost", 18811),
+            refused_by_houdini("take the pane into /obj/geo1", path="/obj/geo1"),
+        ):
+            raise link_failure(EOFError("stream closed"))
 
         failure = failure_for(lost.value, "capture_pane_screenshot")
         assert (failure.kind, failure.path) == ("connection_lost", "/obj/geo1")
-        assert failure.message.endswith("\nFailed to navigate to /obj/geo1")
+        assert failure.message.endswith(
+            "\nThe link failed while asking Houdini to take the pane into /obj/geo1: "
+            "EOFError: stream closed"
+        )
 
     def test_a_lost_link_judged_again_by_an_outer_scope_is_told_once(self):
         """A scope inside another (a checkpointed tool's body) already judged the loss;
@@ -880,8 +1065,8 @@ class TestATeardownDropsTheLinkThatFailed:
         assert told.message.count("backed up at /tmp/backup.hip") == 1
 
     def test_a_tool_failure_raised_from_a_judged_loss_adds_its_payload(self):
-        """execute_code's worker judges its program's failure on the link; the call
-        then raises its own failure, with what the program left, from that loss."""
+        """A body that judged a failure the link's raises its own failure, with its
+        payload, from that loss: the loss is the arm, and it carries the payload."""
         from houdini_mcp.tools._common import held_link
         from houdini_mcp.tools.failure import OperationFailed, failure_for, link_lost
 
@@ -892,7 +1077,7 @@ class TestATeardownDropsTheLinkThatFailed:
             raise OperationFailed("TimeoutError: result expired", stdout="before\n") from judged
 
         failure = failure_for(lost.value, "execute_code")
-        assert (failure.kind, failure.connection_reset) == ("timeout", True)
+        assert (failure.kind, failure.cut_off) == ("timeout", "link")
         assert failure.stdout == "before\n"
         assert failure.message.count("TimeoutError: result expired") == 1
 

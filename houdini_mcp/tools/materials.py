@@ -7,6 +7,7 @@ materials and shaders in Houdini.
 import logging
 from typing import Any
 
+from ..settings import DEFAULT_TARGET
 from ._common import (
     READ,
     UNDOABLE,
@@ -16,6 +17,7 @@ from ._common import (
     network_at,
     node_at,
     node_category,
+    refused_by_houdini,
     tool,
     using,
 )
@@ -30,8 +32,8 @@ def create_material(
     name: NodeName | None = None,
     parent_path: str = "/mat",
     parameters: dict[str, Any] | None = None,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Create a new material/shader node.
@@ -87,8 +89,8 @@ def assign_material(
     geometry_path: str,
     material_path: str,
     group: str = "",
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Assign a material to geometry.
@@ -172,9 +174,16 @@ def assign_material(
         else:
             # Create new Material SOP
             mat_sop = created_in(geo_node, "material", "material1")
-            mat_sop.setFirstInput(display_node)
-            mat_sop.setDisplayFlag(True)
-            mat_sop.setRenderFlag(True)
+            mat_sop_path = mat_sop.path()
+            # one block per write, so a refusal names the step that did not land
+            with refused_by_houdini(
+                f"wire {display_node.path()} into {mat_sop_path}", material_sop_path=mat_sop_path
+            ):
+                mat_sop.setFirstInput(display_node)
+            with refused_by_houdini(f"display {mat_sop_path}", material_sop_path=mat_sop_path):
+                mat_sop.setDisplayFlag(True)
+            with refused_by_houdini(f"render {mat_sop_path}", material_sop_path=mat_sop_path):
+                mat_sop.setRenderFlag(True)
 
         values = {"shop_materialpath1": material_path}
         if group:
@@ -191,8 +200,8 @@ def assign_material(
 @tool(READ)
 def get_material_info(
     material_path: str,
-    host: str = "localhost",
-    port: int = 18811,
+    host: str = DEFAULT_TARGET.host,
+    port: int = DEFAULT_TARGET.port,
 ) -> dict[str, Any]:
     """
     Get detailed information about a material node.
