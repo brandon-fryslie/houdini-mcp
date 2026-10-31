@@ -175,7 +175,7 @@ class TestExecuteCodeDiff:
         _scene(mock_connection)
         result = execute_code(
             "hou.node('/obj/geo1').destroy()\n"
-            "for i in range(3): hou.node('/obj').createNode('null', f'n{i}')",
+            "for i in range(3): hou.node('/obj').createNode('geo', f'n{i}')",
             capture_diff=True,
             max_diff_nodes=2,
             host="localhost",
@@ -491,7 +491,15 @@ class TestSerializeScene:
                         ("/obj/geo1/sub1", "subnet", [("/obj/geo1/sub1/ball", "sphere", [])]),
                     ],
                 ),
-                ("/obj/cam1", "cam", []),
+                (
+                    "/obj/cam1",
+                    "cam",
+                    [
+                        ("/obj/cam1/camOrigin", "add", []),
+                        ("/obj/cam1/file1", "file", []),
+                        ("/obj/cam1/xform1", "xform", []),
+                    ],
+                ),
             ],
         )
 

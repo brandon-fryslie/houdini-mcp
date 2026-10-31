@@ -462,7 +462,8 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -1660,7 +1661,8 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -2199,7 +2201,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -3473,6 +3476,80 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [
+          {
+            "name": "obj",
+            "type": "obj",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "out",
+            "type": "out",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "ch",
+            "type": "ch",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "shop",
+            "type": "shop",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "img",
+            "type": "img",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "vex",
+            "type": "vex",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "mat",
+            "type": "mat",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "stage",
+            "type": "stage",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "tasks",
+            "type": "tasks",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -4970,7 +5047,8 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "subnet": {
         "description": "Subnetwork",
@@ -4981,7 +5059,8 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "null": {
         "description": "Null",
@@ -4992,7 +5071,20 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
+      },
+      "output": {
+        "description": "ROP Output",
+        "holds": "Dop",
+        "locked": true,
+        "indirect_inputs": 1,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -5323,7 +5415,8 @@
               "on"
             ]
           }
-        }
+        },
+        "contents": []
       },
       "karma": {
         "description": "Karma",
@@ -5386,7 +5479,694 @@
               "stage"
             ]
           }
-        }
+        },
+        "contents": [
+          {
+            "name": "lopnet",
+            "type": "lopnet",
+            "flags": {},
+            "wires": [],
+            "parms": {},
+            "contents": [
+              {
+                "name": "camera_forced_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "objects_forced_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge_base",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge3"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "merge2"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 2,
+                    "source": {
+                      "sibling": "switch1"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "lights_forced_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "matte_objects_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge_matte",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge_base"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "rendergeometrysettings_matte"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge_phantom",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge_matte"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "rendergeometrysettings_phantom"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "phantom_objects_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "rendergeometrysettings_phantom",
+                "type": "rendergeometrysettings",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "edit_visibility3"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "objects_forced"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility2",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "matte_objects"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility3",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "phantom_objects"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "lights_canditate_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "switch1",
+                "type": "switch",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge1"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "edit_visibility5"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge1",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "edit_visibility4"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "lights_canditate"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility4",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "sceneimportlights1"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "lights_solo_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility5",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "lights_solo"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge2",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "edit_visibility"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "objects_candidate"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "objects_candidate_old",
+                "type": "sceneimport",
+                "flags": {
+                  "display": false,
+                  "bypass": true
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "lights_canditate",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "sceneimportlights1",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "objects_forced",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "objects_candidate",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "camera_forced",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge3",
+                "type": "merge",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "edit_visibility6"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "switch2"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "lights_solo",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility6",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "camera_forced"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "matte_objects",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "phantom_objects",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "rendergeometrysettings_matte",
+                "type": "rendergeometrysettings",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "edit_visibility2"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "cache1",
+                "type": "cache",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge_phantom"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "switch_motionblur",
+                "type": "switch",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "merge_phantom"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "cache1"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "karma",
+                "type": "karmarendersettings",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "switch_motionblur"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {}
+              },
+              {
+                "name": "OUT",
+                "type": "null",
+                "flags": {
+                  "display": true,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "karma"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "dicing_camera_forced",
+                "type": "sceneimport::2.0",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "edit_visibility7",
+                "type": "editproperties",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "dicing_camera_forced"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "switch2",
+                "type": "switch",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "null1"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "edit_visibility7"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "null1",
+                "type": "null",
+                "flags": {
+                  "display": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              }
+            ]
+          },
+          {
+            "name": "rop_usdrender",
+            "type": "usdrender",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ]
       },
       "subnet": {
         "description": "Subnetwork",
@@ -5396,7 +6176,8 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "sopnet": {
         "description": "SOP Network",
@@ -5407,6 +6188,7 @@
           "display"
         ],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -5423,7 +6205,62 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": [
+          {
+            "name": "null",
+            "type": "merge",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "indirect": "1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          }
+        ]
+      },
+      "lopnet": {
+        "description": "LOP Network",
+        "holds": "Lop",
+        "locked": false,
+        "indirect_inputs": null,
+        "flags": [],
+        "parms": {},
+        "contents": [],
+        "create_node": {
+          "network": {},
+          "subnetworks": {}
+        }
+      },
+      "usdrender": {
+        "description": "USD Render",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "merge": {
+        "description": "Merge",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -6093,6 +6930,7 @@
           "display"
         ],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -6110,7 +6948,8 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "filecache": {
         "description": "File Cache",
@@ -6121,7 +6960,104 @@
           "display",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
+      },
+      "sceneimport": {
+        "description": "Scene Import",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "merge": {
+        "description": "Merge",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "rendergeometrysettings": {
+        "description": "Render Geometry Settings",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "editproperties": {
+        "description": "Edit Properties",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "switch": {
+        "description": "Switch",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "sceneimport::2.0": {
+        "description": "Scene Import",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "cache": {
+        "description": "Cache",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "karmarendersettings": {
+        "description": "Karma Render Settings",
+        "holds": "Lop",
+        "locked": true,
+        "indirect_inputs": 2,
+        "flags": [
+          "display",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -6136,6 +7072,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -6150,6 +7087,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -6164,6 +7102,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6176,6 +7115,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6188,6 +7128,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6200,6 +7141,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6212,6 +7154,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {
             "geometryvopglobal::2.0": {
@@ -6292,6 +7235,13 @@
                     "Error in child VOP 'N'."
                   ]
                 }
+              },
+              "suboutput": {
+                "with_none": "made",
+                "with_one": {
+                  "raises": "OperationFailed",
+                  "message": "The attempted operation failed.\nInvalid node type name"
+                }
               }
             }
           }
@@ -6304,6 +7254,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6316,6 +7267,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -6929,6 +7881,7 @@
             "menu": []
           }
         },
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -6973,6 +7926,32 @@
             "menu": []
           }
         },
+        "contents": [
+          {
+            "name": "control1",
+            "type": "control",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "point1",
+            "type": "add",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7017,6 +7996,562 @@
             "menu": []
           }
         },
+        "contents": [
+          {
+            "name": "point_cone_switch",
+            "type": "switch",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "switch1"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "cone_light"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "final_light",
+            "type": "merge",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "point_cone_switch"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "areasize2"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "areashape_switch",
+            "type": "switch",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "null1"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "line1"
+                },
+                "output": 0
+              },
+              {
+                "input": 2,
+                "source": {
+                  "sibling": "grid1"
+                },
+                "output": 0
+              },
+              {
+                "input": 3,
+                "source": {
+                  "sibling": "circle1"
+                },
+                "output": 0
+              },
+              {
+                "input": 4,
+                "source": {
+                  "sibling": "sphere1"
+                },
+                "output": 0
+              },
+              {
+                "input": 5,
+                "source": {
+                  "sibling": "tube1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "null1",
+            "type": "null",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "line1",
+            "type": "line",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "grid1",
+            "type": "grid",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "circle1",
+            "type": "circle",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "sphere1",
+            "type": "sphere",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "tube1",
+            "type": "tube",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "areasize2",
+            "type": "xform",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "areashape_switch"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "areasize1",
+            "type": "xform",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "merge2"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "cone_light",
+            "type": "subnet",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": [
+              {
+                "name": "tube1",
+                "type": "tube",
+                "flags": {
+                  "display": false,
+                  "render": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "grid1",
+                "type": "grid",
+                "flags": {
+                  "display": false,
+                  "render": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "merge1",
+                "type": "merge",
+                "flags": {
+                  "display": true,
+                  "render": true,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "grid1"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 1,
+                    "source": {
+                      "sibling": "tube1"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 2,
+                    "source": {
+                      "sibling": "circle1"
+                    },
+                    "output": 0
+                  },
+                  {
+                    "input": 3,
+                    "source": {
+                      "sibling": "xform1"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "circle1",
+                "type": "circle",
+                "flags": {
+                  "display": false,
+                  "render": false,
+                  "bypass": false
+                },
+                "wires": [],
+                "parms": {},
+                "contents": []
+              },
+              {
+                "name": "xform1",
+                "type": "xform",
+                "flags": {
+                  "display": false,
+                  "render": false,
+                  "bypass": false
+                },
+                "wires": [
+                  {
+                    "input": 0,
+                    "source": {
+                      "sibling": "circle1"
+                    },
+                    "output": 0
+                  }
+                ],
+                "parms": {},
+                "contents": []
+              }
+            ]
+          },
+          {
+            "name": "point_light",
+            "type": "file",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "switch1",
+            "type": "switch",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "point_light"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "areasize1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "line2",
+            "type": "line",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "duplicate1",
+            "type": "duplicate",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "line2"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "line3",
+            "type": "line",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "duplicate2",
+            "type": "duplicate",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "line3"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "merge1",
+            "type": "merge",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "duplicate1"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "duplicate2"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "merge2",
+            "type": "merge",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "point_light"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "switch2"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "null2",
+            "type": "null",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "switch2",
+            "type": "switch",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "null2"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "merge1"
+                },
+                "output": 0
+              },
+              {
+                "input": 2,
+                "source": {
+                  "sibling": "xform1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "xform1",
+            "type": "xform",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "merge1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7034,6 +8569,20 @@
           "display"
         ],
         "parms": {},
+        "contents": [
+          {
+            "name": "add",
+            "type": "add",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7078,6 +8627,32 @@
             "menu": []
           }
         },
+        "contents": [
+          {
+            "name": "sphere1",
+            "type": "sphere",
+            "flags": {
+              "display": true,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "point1",
+            "type": "add",
+            "flags": {
+              "display": false,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7121,7 +8696,8 @@
             ],
             "menu": []
           }
-        }
+        },
+        "contents": []
       },
       "dopnet": {
         "description": "DOP Network",
@@ -7159,6 +8735,18 @@
             "menu": []
           }
         },
+        "contents": [
+          {
+            "name": "file_output",
+            "type": "output",
+            "flags": {
+              "display": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {}
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7269,6 +8857,52 @@
             "menu": []
           }
         },
+        "contents": [
+          {
+            "name": "camOrigin",
+            "type": "add",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "file1",
+            "type": "file",
+            "flags": {
+              "display": false,
+              "render": false,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "xform1",
+            "type": "xform",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "file1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7286,6 +8920,7 @@
           "bypass"
         ],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -7300,6 +8935,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -7312,6 +8948,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -7324,6 +8961,7 @@
         "indirect_inputs": null,
         "flags": [],
         "parms": {},
+        "contents": [],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -7340,6 +8978,20 @@
           "bypass"
         ],
         "parms": {},
+        "contents": [
+          {
+            "name": "localscheduler",
+            "type": "localscheduler",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {}
@@ -12738,7 +14390,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "box": {
         "description": "Box",
@@ -12750,7 +14403,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "grid": {
         "description": "Grid",
@@ -12762,7 +14416,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "tube": {
         "description": "Tube",
@@ -12774,7 +14429,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "torus": {
         "description": "Torus",
@@ -12786,7 +14442,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "circle": {
         "description": "Circle",
@@ -12798,7 +14455,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "line": {
         "description": "Line",
@@ -12810,7 +14468,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "curve::2.0": {
         "description": "Curve",
@@ -12822,7 +14481,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "mountain::2.0": {
         "description": "Mountain",
@@ -12834,7 +14494,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "mountain": {
         "description": "Mountain",
@@ -12846,7 +14507,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "apex::controlextract::2.0": {
         "description": "APEX Control Extract",
@@ -12858,7 +14520,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribnoise::2.0": {
         "description": "Attribute Noise",
@@ -12870,7 +14533,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "cloudnoise": {
         "description": "Cloud Noise",
@@ -12882,7 +14546,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "heightfield_noise": {
         "description": "HeightField Noise",
@@ -12894,7 +14559,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "xform": {
         "description": "Transform",
@@ -12906,7 +14572,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "blast": {
         "description": "Blast",
@@ -12918,7 +14585,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "delete": {
         "description": "Delete",
@@ -12930,7 +14598,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "dissolve::2.0": {
         "description": "Dissolve",
@@ -12942,7 +14611,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "fuse::2.0": {
         "description": "Fuse",
@@ -12954,7 +14624,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "clean": {
         "description": "Clean",
@@ -12966,7 +14637,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "merge": {
         "description": "Merge",
@@ -12978,7 +14650,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "switch": {
         "description": "Switch",
@@ -12990,7 +14663,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "copy": {
         "description": "Copy with Stamp",
@@ -13002,7 +14676,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "scatter::2.0": {
         "description": "Scatter",
@@ -13014,7 +14689,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "copytopoints::2.0": {
         "description": "Copy to Points",
@@ -13026,7 +14702,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "foreach": {
         "description": "For-Each Subnetwork",
@@ -13038,7 +14715,29 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": [
+          {
+            "name": "each1",
+            "type": "each",
+            "flags": {
+              "display": true,
+              "render": true,
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "indirect": "1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          }
+        ]
       },
       "vex": {
         "description": "VEX",
@@ -13050,7 +14749,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribwrangle": {
         "description": "Attribute Wrangle",
@@ -13062,7 +14762,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "pointwrangle": {
         "description": "Point Wrangle",
@@ -13074,7 +14775,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "volumewrangle": {
         "description": "Volume Wrangle",
@@ -13086,7 +14788,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "vdb": {
         "description": "VDB",
@@ -13098,7 +14801,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "vdbfromparticles": {
         "description": "VDB from Particles",
@@ -13110,7 +14814,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "vdbsmooth": {
         "description": "VDB Smooth",
@@ -13122,7 +14827,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "vdbcombine": {
         "description": "VDB Combine",
@@ -13134,7 +14840,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "file": {
         "description": "File",
@@ -13146,7 +14853,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "alembic": {
         "description": "Alembic",
@@ -13158,7 +14866,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "filecache::2.0": {
         "description": "File Cache",
@@ -13170,7 +14879,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "cache": {
         "description": "Cache",
@@ -13182,7 +14892,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "stash": {
         "description": "Stash",
@@ -13194,7 +14905,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "group": {
         "description": "Group",
@@ -13206,7 +14918,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "groupcreate": {
         "description": "Group Create",
@@ -13218,7 +14931,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "groupcombine": {
         "description": "Group Combine",
@@ -13230,7 +14944,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "groupexpression": {
         "description": "Group Expression",
@@ -13242,7 +14957,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "subdivide": {
         "description": "Subdivide",
@@ -13254,7 +14970,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "polyextrude::2.0": {
         "description": "PolyExtrude",
@@ -13266,7 +14983,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "polybevel::3.0": {
         "description": "PolyBevel",
@@ -13278,7 +14996,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "polyreduce::2.0": {
         "description": "PolyReduce",
@@ -13290,7 +15009,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "polyfill": {
         "description": "PolyFill",
@@ -13302,7 +15022,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "null": {
         "description": "Null",
@@ -13314,7 +15035,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "output": {
         "description": "Output",
@@ -13326,7 +15048,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "object_merge": {
         "description": "Object Merge",
@@ -13338,7 +15061,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "timeshift": {
         "description": "Time Shift",
@@ -13350,7 +15074,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "trail": {
         "description": "Trail",
@@ -13362,7 +15087,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "material": {
         "description": "Material",
@@ -13393,7 +15119,8 @@
             ],
             "menu": []
           }
-        }
+        },
+        "contents": []
       },
       "attribcreate::2.0": {
         "description": "Attribute Create",
@@ -13405,7 +15132,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "split": {
         "description": "Split",
@@ -13417,7 +15145,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "add": {
         "description": "Add",
@@ -13429,7 +15158,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "align": {
         "description": "Spline Align",
@@ -13441,7 +15171,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribblur": {
         "description": "Attribute Blur",
@@ -13453,7 +15184,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribcast": {
         "description": "Attribute Cast",
@@ -13465,7 +15197,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribcopy": {
         "description": "Attribute Copy",
@@ -13477,7 +15210,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribdelete": {
         "description": "Attribute Delete",
@@ -13489,7 +15223,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribexpression": {
         "description": "Attribute Expression",
@@ -13501,7 +15236,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribfade": {
         "description": "Attribute Fade",
@@ -13513,7 +15249,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribpromote": {
         "description": "Attribute Promote",
@@ -13525,7 +15262,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribrandomize": {
         "description": "Attribute Randomize",
@@ -13537,7 +15275,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribremap": {
         "description": "Attribute Remap",
@@ -13549,7 +15288,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribtransfer": {
         "description": "Attribute Transfer",
@@ -13561,7 +15301,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "attribvop": {
         "description": "Attribute VOP",
@@ -13574,6 +15315,26 @@
           "bypass"
         ],
         "parms": {},
+        "contents": [
+          {
+            "name": "geometryvopglobal1",
+            "type": "geometryvopglobal::2.0",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {}
+          },
+          {
+            "name": "geometryvopoutput1",
+            "type": "geometryvopoutput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {}
+          }
+        ],
         "create_node": {
           "network": {
             "subinput": {
@@ -13589,10 +15350,25 @@
                 "raises": "OperationFailed",
                 "message": "The attempted operation failed.\nInvalid node type name"
               }
+            },
+            "suboutput": {
+              "with_none": {
+                "raises": "OperationFailed",
+                "message": "The attempted operation failed.\nInvalid node type name"
+              },
+              "with_one": null
             }
           },
           "subnetworks": {
-            "subnet": {}
+            "subnet": {
+              "suboutput": {
+                "with_none": "made",
+                "with_one": {
+                  "raises": "OperationFailed",
+                  "message": "The attempted operation failed.\nInvalid node type name"
+                }
+              }
+            }
           }
         }
       },
@@ -13606,7 +15382,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "blastbyattribute": {
         "description": "Blast by Attribute",
@@ -13618,7 +15395,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "bound": {
         "description": "Bound",
@@ -13630,7 +15408,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "bridge": {
         "description": "Spline Bridge",
@@ -13642,7 +15421,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "bulge": {
         "description": "Bulge",
@@ -13654,7 +15434,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "cap": {
         "description": "Spline Cap",
@@ -13666,7 +15447,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "carve": {
         "description": "Carve",
@@ -13678,7 +15460,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "chain": {
         "description": "Chain",
@@ -13690,7 +15473,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "circlefromedges": {
         "description": "Circle from Edges",
@@ -13702,7 +15486,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "clip::2.0": {
         "description": "Clip",
@@ -13714,7 +15499,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "cluster": {
         "description": "Cluster",
@@ -13726,7 +15512,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "color": {
         "description": "Color",
@@ -13738,7 +15525,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "comb": {
         "description": "Comb",
@@ -13750,7 +15538,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "connectivity": {
         "description": "Connectivity",
@@ -13762,7 +15551,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "convert": {
         "description": "Convert",
@@ -13774,7 +15564,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "convertline": {
         "description": "Convert Line",
@@ -13786,7 +15577,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "convertvdb": {
         "description": "Convert VDB",
@@ -13798,7 +15590,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "cookie": {
         "description": "Cookie",
@@ -13810,7 +15603,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "copyxform": {
         "description": "Copy and Transform",
@@ -13822,7 +15616,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "crease": {
         "description": "Crease",
@@ -13834,7 +15629,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "creep": {
         "description": "Creep",
@@ -13846,7 +15642,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "deform": {
         "description": "Deform",
@@ -13858,7 +15655,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "deltamush::2.0": {
         "description": "Delta Mush",
@@ -13870,7 +15668,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "subnet": {
         "description": "Subnetwork",
@@ -13882,7 +15681,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "dopnet": {
         "description": "DOP Network",
@@ -13895,6 +15695,18 @@
           "bypass"
         ],
         "parms": {},
+        "contents": [
+          {
+            "name": "file_output",
+            "type": "output",
+            "flags": {
+              "display": true,
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {}
+          }
+        ],
         "create_node": {
           "network": {},
           "subnetworks": {
@@ -13912,7 +15724,8 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "filecache": {
         "description": "File Cache",
@@ -13924,7 +15737,47 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
+      },
+      "control": {
+        "description": "Control",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "render",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "duplicate": {
+        "description": "Duplicate",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "render",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "each": {
+        "description": "Each",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "render",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -14484,7 +16337,21 @@
           "render",
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
+      },
+      "localscheduler": {
+        "description": "Local Scheduler",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "display",
+          "render",
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },
@@ -18337,7 +20204,8 @@
             ],
             "menu": []
           }
-        }
+        },
+        "contents": []
       },
       "subnet": {
         "description": "Subnetwork",
@@ -18347,7 +20215,29 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": [
+          {
+            "name": "suboutput1",
+            "type": "suboutput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "subinput1",
+            "type": "subinput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ]
       },
       "subinput": {
         "description": "Subnet Inputs",
@@ -18357,7 +20247,8 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "geometryvopglobal::2.0": {
         "description": "Geometry VOP Global Parameters",
@@ -18367,7 +20258,404 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": [
+          {
+            "name": "P",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "v",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "ptnum",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "vtxnum",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "primnum",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "id",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "numpt",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "numvtx",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "numprim",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "Time",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "Timeinc",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "Frame",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "force",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "life",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "age",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "suboutput1",
+            "type": "suboutput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "P"
+                },
+                "output": 0
+              },
+              {
+                "input": 1,
+                "source": {
+                  "sibling": "v"
+                },
+                "output": 0
+              },
+              {
+                "input": 2,
+                "source": {
+                  "sibling": "force"
+                },
+                "output": 0
+              },
+              {
+                "input": 3,
+                "source": {
+                  "sibling": "age"
+                },
+                "output": 0
+              },
+              {
+                "input": 4,
+                "source": {
+                  "sibling": "life"
+                },
+                "output": 0
+              },
+              {
+                "input": 5,
+                "source": {
+                  "sibling": "id"
+                },
+                "output": 0
+              },
+              {
+                "input": 6,
+                "source": {
+                  "sibling": "Cd"
+                },
+                "output": 0
+              },
+              {
+                "input": 7,
+                "source": {
+                  "sibling": "uv"
+                },
+                "output": 0
+              },
+              {
+                "input": 8,
+                "source": {
+                  "sibling": "N"
+                },
+                "output": 0
+              },
+              {
+                "input": 9,
+                "source": {
+                  "sibling": "Time"
+                },
+                "output": 0
+              },
+              {
+                "input": 10,
+                "source": {
+                  "sibling": "Timeinc"
+                },
+                "output": 0
+              },
+              {
+                "input": 11,
+                "source": {
+                  "sibling": "Frame"
+                },
+                "output": 0
+              },
+              {
+                "input": 12,
+                "source": {
+                  "sibling": "ptnum"
+                },
+                "output": 0
+              },
+              {
+                "input": 13,
+                "source": {
+                  "sibling": "primnum"
+                },
+                "output": 0
+              },
+              {
+                "input": 14,
+                "source": {
+                  "sibling": "vtxnum"
+                },
+                "output": 0
+              },
+              {
+                "input": 15,
+                "source": {
+                  "sibling": "numpt"
+                },
+                "output": 0
+              },
+              {
+                "input": 16,
+                "source": {
+                  "sibling": "numprim"
+                },
+                "output": 0
+              },
+              {
+                "input": 17,
+                "source": {
+                  "sibling": "numvtx"
+                },
+                "output": 0
+              },
+              {
+                "input": 18,
+                "source": {
+                  "sibling": "opinput1"
+                },
+                "output": 0
+              },
+              {
+                "input": 19,
+                "source": {
+                  "sibling": "opinput2"
+                },
+                "output": 0
+              },
+              {
+                "input": 20,
+                "source": {
+                  "sibling": "opinput3"
+                },
+                "output": 0
+              },
+              {
+                "input": 21,
+                "source": {
+                  "sibling": "opinput4"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "subinput1",
+            "type": "subinput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "Cd",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "N",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "opinput2",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "opinput3",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "opinput4",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "opinput1",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "uv",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          }
+        ]
       },
       "geometryvopoutput": {
         "description": "Geometry VOP Output",
@@ -18377,7 +20665,119 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": [
+          {
+            "name": "suboutput1",
+            "type": "suboutput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "subinput1",
+            "type": "subinput",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "P",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "subinput1"
+                },
+                "output": 0
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "v",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "subinput1"
+                },
+                "output": 1
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "force",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "subinput1"
+                },
+                "output": 2
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "Cd",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "subinput1"
+                },
+                "output": 3
+              }
+            ],
+            "parms": {},
+            "contents": []
+          },
+          {
+            "name": "N",
+            "type": "parameter",
+            "flags": {
+              "bypass": false
+            },
+            "wires": [
+              {
+                "input": 0,
+                "source": {
+                  "sibling": "subinput1"
+                },
+                "output": 4
+              }
+            ],
+            "parms": {},
+            "contents": []
+          }
+        ]
       },
       "collect": {
         "description": "Collect",
@@ -18387,7 +20787,8 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
       },
       "null": {
         "description": "Null",
@@ -18397,7 +20798,30 @@
         "flags": [
           "bypass"
         ],
-        "parms": {}
+        "parms": {},
+        "contents": []
+      },
+      "suboutput": {
+        "description": "Subnet Outputs",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
+      },
+      "parameter": {
+        "description": "Parameter",
+        "holds": null,
+        "locked": false,
+        "indirect_inputs": 0,
+        "flags": [
+          "bypass"
+        ],
+        "parms": {},
+        "contents": []
       }
     }
   },

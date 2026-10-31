@@ -36,6 +36,8 @@ from tests.fake_node_types import (
     Answer,
     Answers,
     Category,
+    Content,
+    Indirect,
     Made,
     Mismatched,
     NodeType,
@@ -395,13 +397,71 @@ def _place(
     )
 
 
-def _built_as(node_type: NodeType, path: str, name: str) -> "MockHouNode":
+def _built_as(
+    node_type: NodeType, path: str, name: str, content: Content | None = None
+) -> "MockHouNode":
     """A node Houdini builds as its type, with no name resolved: the root and the
     contexts of a fresh scene, which no name reaches, and a node Houdini builds
-    inside another where createNode may refuse it (an attribvop's subinput1)."""
+    inside another where createNode may refuse it (an attribvop's subinput1). Built
+    as ``content`` records it, it holds the flags and parameter values Houdini gives
+    it, and the nodes its own contents are; not yet linked to its parent or wired.
+    """
     node = MockHouNode(path=path, name=name, node_type=node_type.type)
-    node._placement = _place(node, node_type, None, Made())
+    placed = _place(node, node_type, None, Made())
+    if content is not None:
+        for tuple_name, values in content.parms.items():
+            placed.tuples[tuple_name].values[:] = values
+        placed.flags.update(content.flags)
+    node._placement = placed
+    node._children = _built_contents(path, node_type, _inner(node_type, content))
     return node
+
+
+def _inner(node_type: NodeType, content: Content | None) -> tuple[Content, ...]:
+    """The nodes a node of ``node_type`` holds when Houdini builds it: its type's, but
+    for an unlocked content node, whose own are the instance's."""
+    return node_type.contents if content is None or content.contents is None else content.contents
+
+
+def _built_contents(
+    path: str, node_type: NodeType, contents: tuple[Content, ...]
+) -> list["MockHouNode"]:
+    """The nodes ``contents`` records for the network at ``path`` of ``node_type``."""
+    held = _held_by(node_type, contents)
+    return [
+        _built_as(held[content.type], join_path(path, content.name), content.name, content)
+        for content in contents
+    ]
+
+
+def _held_by(node_type: NodeType, contents: tuple[Content, ...]) -> Mapping[str, NodeType]:
+    """The types a node of ``node_type`` can build ``contents`` from: those of the
+    category it holds, none when it builds nothing."""
+    return CATEGORIES[node_type.holds].types if contents and node_type.holds else {}
+
+
+def _link(tree: "MockHouNode") -> None:
+    """Link each node below ``tree`` to its parent: where the nodes of a tree built by
+    hand become a scene's. ``attach`` links the tree's own root to its network."""
+    for network in [tree, *tree.allSubChildren()]:
+        for node in network._children:
+            node._parent = network
+
+
+def _wire(network: "MockHouNode", contents: tuple[Content, ...]) -> None:
+    """Wire the nodes built in ``network`` as ``contents`` records, once they are
+    linked and placed: setInput's check of a source's network needs both."""
+    for content in contents:
+        node = network.node(content.name)
+        assert node is not None
+        for wire in content.wires:
+            source = (
+                network.indirectInputs()[int(wire.source.name) - 1]
+                if isinstance(wire.source, Indirect)
+                else network.node(wire.source.name)
+            )
+            node.setInput(wire.input, source, wire.output)
+        _wire(node, _inner(node._row(), content))
 
 
 def _placed_parms(node_type: NodeType, given: Mapping[str, Any] | None) -> dict[str, HeldTuple]:
@@ -570,22 +630,28 @@ class MockHouNode:
         """Place a prebuilt subtree in this network, as Houdini could have built it.
 
         [LAW:single-enforcer] the one way into the scene (createNode and add_node
-        come here) and the one place a parent link is made. The whole subtree is
+        come here). The whole subtree is
         judged before any of it is linked, so a refused one leaves the scene and
         every node's links as they were. A path, name or parent that lies is a
         fixture lying, ValueError; a type its network cannot hold is refused as
         Houdini's createNode refuses it. Returns createNode's answer for ``child``.
         """
         admitted = _admit(self._chain(), child, [(c.name(), c._row()) for c in self._children])
-        for network in [child, *child.allSubChildren()]:
-            for node in network._children:
-                node._parent = network
-        child._parent = self
-        self._children.append(child)
+        # a node of no placement yet is made now, and Houdini builds its contents with it
+        made = [node for node, _, _ in admitted if isinstance(node._placement, Unplaced)]
         for node, placement, answer in admitted:
             node._placement = placement
             if isinstance(answer, Mismatched):
                 node._made_unmatched(answer.errors)
+            if node in made:
+                node._children[:0] = _built_contents(
+                    node.path(), placement.row, placement.row.contents
+                )
+        child._parent = self
+        self._children.append(child)
+        _link(child)
+        for node in made:
+            _wire(node, node._row().contents)
         return admitted[0][2]
 
     def _chain(self) -> "Chain":
@@ -795,7 +861,7 @@ class MockHouNode:
         # The name a type gives is its own, without namespace or version
         # ("v_mountain" gives mountain1, "apex::controlextract" controlextract1); a
         # name that reaches no type is refused before it names a node.
-        row = _named(_holding(self._placed()), node_type)
+        row = _named(_holding(self._chain()), node_type)
         base = name or (node_type if row is None else name_components(row.type)[2])
         stem = base.rstrip("0123456789")
         carried = base[len(stem) :]
@@ -827,19 +893,25 @@ class MockHouNode:
         assert self._parent is not None
         subtree = [self, *self.allSubChildren()]
         for node in subtree:
-            node._disconnect()
+            node._disconnect(subtree)
         for box in self._parent._network_boxes:
             box._nodes = [n for n in box._nodes if n is not self]
         self._parent._children.remove(self)
         for node in subtree:
             node._parent = None
 
-    def _disconnect(self) -> None:
-        """Cut every wire into and out of this node, through setInput so both ends agree."""
+    def _disconnect(self, kept: Sequence["MockHouNode"]) -> None:
+        """Cut every wire into and out of this node but those inside ``kept``, the
+        subtree it leaves with, through setInput so both ends agree: a tree added
+        again holds the wires it had."""
+        within = [id(node) for node in kept]
         for index, source in enumerate(self._inputs):
-            if source is not None:
+            owner = source.parent() if isinstance(source, MockSubnetIndirectInput) else source
+            if source is not None and id(owner) not in within:
                 self.setInput(index, None)
         for sink in list(self._outputs):
+            if id(sink) in within:
+                continue
             for index, source in enumerate(sink._inputs):
                 if source is self:
                     sink.setInput(index, None)
@@ -1214,15 +1286,19 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 Chain = tuple[tuple[MockHouNode, str, Placed], ...]
 
 
-def _holding(placed: Placed) -> str:
-    """[LAW:single-enforcer] the category a network placed as ``placed`` holds, which
+def _holding(chain: Chain, carried: bool = False) -> str:
+    """[LAW:single-enforcer] the category the network ``chain`` begins with holds, which
     names in it resolve in; Houdini refuses every child, whatever its name, of a node
-    that is not a network and of a locked asset, before it reads the name."""
+    that is not a network, and of a network that is a locked asset or inside one,
+    before it reads the name. A ``carried`` node is one of a tree that was in a scene
+    already, whose contents are its own.
+    """
+    placed = chain[0][2]
     if placed.row.holds is None:
         raise raised_inside_houdini(
             OperationFailed("The attempted operation failed.\nThis node cannot contain other nodes")
         )
-    if placed.locked:
+    if not carried and any(outer.locked for _, _, outer in chain):
         raise raised_inside_houdini(
             HouPermissionError("Cannot create a node inside a locked asset")
         )
@@ -1230,7 +1306,10 @@ def _holding(placed: Placed) -> str:
 
 
 def _admit(
-    chain: Chain, node: MockHouNode, siblings: Sequence[tuple[str, NodeType]]
+    chain: Chain,
+    node: MockHouNode,
+    siblings: Sequence[tuple[str, NodeType]],
+    within: bool = False,
 ) -> list[tuple[MockHouNode, Placed, Answer]]:
     """Refuse ``node`` and its subtree as a child of the network ``chain`` begins with,
     beside ``siblings`` (each one's name and type), unless Houdini could have built
@@ -1246,7 +1325,12 @@ def _admit(
     network, _, placed = chain[0]
     if node._parent is not None:
         raise ValueError(f"{node.path()!r} is already in {node._parent.path()!r}")
-    held = _holding(placed)
+    # [LAW:single-enforcer] a node below the one added is carried, its tree having been
+    # in a scene, only when it and its network were both placed before
+    carried = (
+        within and isinstance(node._placement, Placed) and isinstance(network._placement, Placed)
+    )
+    held = _holding(chain, carried)
     answer: Answer
     if isinstance(node._placement, Placed):
         placement, answer = node._placement, Made()
@@ -1272,12 +1356,21 @@ def _admit(
         raise ValueError(f"{network.path()!r} already has a child named {name!r}")
     admitted = [(node, placement, answer)]
     inner: Chain = ((node, held, placement), *chain)
-    built: list[tuple[str, NodeType]] = []
+    # the contents Houdini builds in it, which no node beside them may share a name with
+    built: list[tuple[str, NodeType]] = (
+        [] if isinstance(node._placement, Placed) else _contents_beside(placement.row)
+    )
     for child in node._children:
-        child_admitted = _admit(inner, child, built)
+        child_admitted = _admit(inner, child, built, within=True)
         admitted += child_admitted
         built.append((child.name(), child_admitted[0][1].row))
     return admitted
+
+
+def _contents_beside(node_type: NodeType) -> list[tuple[str, NodeType]]:
+    """The name and type of each node Houdini builds in a node of ``node_type``."""
+    held = _held_by(node_type, node_type.contents)
+    return [(content.name, held[content.type]) for content in node_type.contents]
 
 
 def _judged(
@@ -1392,15 +1485,14 @@ class MockHouModule:
     def __init__(self) -> None:
         # [LAW:one-source-of-truth] the whole scene hangs off one root node.
         self._root = _built_as(CATEGORIES["Director"].types["root"], path="/", name="")
+        _link(self._root)
+        _wire(self._root, self._root._row().contents)
         # the scene's update mode, as hou.setUpdateMode sets it: every placed node
         # reads it off the root
         self._root._update_mode = MockUpdateMode.AutoUpdate
         self._hip_file = "/path/to/test.hip"
         self._version = "22.0.466"
         self._version_tuple = (22, 0, 466)
-
-        for context, row in CATEGORIES["Manager"].types.items():
-            self.add_node(_built_as(row, path=f"/{context}", name=context))
 
         # Mock hipFile
         self.hipFile = MagicMock()

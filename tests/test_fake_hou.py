@@ -1,6 +1,7 @@
 """The fake hou keeps one scene graph: what createNode and destroy do is what hou.node sees."""
 
 import dataclasses
+import re
 from typing import Any
 
 import pytest
@@ -44,7 +45,7 @@ def test_destroyed_subtree_no_longer_resolves(mock_hou: MockHouModule) -> None:
     assert mock_hou.node("/obj").children() == ()
 
 
-def test_destroy_cuts_every_wire_to_the_subtree(mock_hou: MockHouModule) -> None:
+def test_destroy_cuts_the_wires_across_the_edge_of_the_subtree(mock_hou: MockHouModule) -> None:
     geo = mock_hou.node("/obj").createNode("geo", "geo1")
     box = geo.createNode("box", "box1")
     grid = geo.createNode("grid", "grid1")
@@ -56,7 +57,20 @@ def test_destroy_cuts_every_wire_to_the_subtree(mock_hou: MockHouModule) -> None
 
     assert outside.inputs() == [None]
     assert outside.inputConnections() == ()
-    assert box.outputs() == []
+    # the wire inside the subtree stays, so the tree added again holds it
+    assert grid.inputs() == [box]
+
+
+def test_a_destroyed_tree_added_again_holds_its_wires(mock_hou: MockHouModule) -> None:
+    geo = mock_hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    grid = geo.createNode("grid", "grid1")
+    grid.setInput(0, box)
+
+    geo.destroy()
+    mock_hou.add_node(geo)
+
+    assert mock_hou.node("/obj/geo1/grid1").inputs() == [mock_hou.node("/obj/geo1/box1")]
 
 
 def test_create_node_uniquifies_a_taken_or_omitted_name(mock_hou: MockHouModule) -> None:
@@ -661,6 +675,7 @@ def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModu
     mat = mock_hou.node("/mat")
     nested = mat.createNode("subnet").createNode("subnet")
     attribvop = mock_hou.node("/obj").createNode("geo").createNode("attribvop")
+    built = attribvop.children()
 
     made = [network.createNode("subinput").type().name() for network in (mat, nested)]
     collect = attribvop.createNode("collect")
@@ -670,7 +685,7 @@ def test_create_node_answers_as_the_network_it_is_asked_in(mock_hou: MockHouModu
     for refused in ("subinput", "collect"):
         with pytest.raises(Exception, match=INVALID_TYPE):
             attribvop.createNode(refused)
-    assert attribvop.children() == (collect,)
+    assert attribvop.children() == (*built, collect)
 
 
 def test_an_undone_scene_is_judged_as_the_scene_it_puts_back(mock_hou: MockHouModule) -> None:
@@ -741,7 +756,11 @@ def test_a_node_built_as_its_type_is_not_judged_as_create_node_judges_a_name(
 
     mock_hou.add_node(_built_as(subinput, path=f"{attribvop.path()}/subinput1", name="subinput1"))
 
-    assert [child.type().name() for child in attribvop.children()] == ["subinput"]
+    assert [child.type().name() for child in attribvop.children()] == [
+        "geometryvopglobal::2.0",
+        "geometryvopoutput",
+        "subinput",
+    ]
 
 
 def test_a_locked_asset_holds_a_category_and_refuses_every_child(
@@ -927,16 +946,25 @@ def test_a_type_name_splits_as_houdini_splits_it(
 def test_a_type_houdini_registers_and_the_table_lacks_names_its_refresh(
     mock_hou: MockHouModule,
 ) -> None:
-    """Houdini 22 makes a Vop suboutput in /mat; the fake names the refresh that adds
-    it, through every way a name reaches a type, where it would otherwise refuse it."""
-    refresh = r"Houdini registers Vop/suboutput, which the table lacks: hython tests/refresh_fake_node_types.py Vop/suboutput"
+    """Houdini 22 makes a Sop it registers that the table lacks; the fake names the
+    refresh that adds it, through every way a name reaches a type, where it would
+    otherwise refuse it."""
+    sop = CATEGORIES["Sop"]
+    own = next(order[0] for order in sop.namespace_orders.values() if order[0] not in sop.types)
+    refresh = re.escape(
+        f"Houdini registers Sop/{own}, which the table lacks: "
+        f"hython tests/refresh_fake_node_types.py Sop/{own}"
+    )
+    geo = mock_hou.node("/obj").createNode("geo")
+    # the base name reaches the first type of its namespace order, which is own
+    base = name_components(own)[2]
 
     with pytest.raises(LookupError, match=refresh):
-        mock_hou.node("/mat").createNode("suboutput")
+        geo.createNode(base)
     with pytest.raises(LookupError, match=refresh):
-        mock_hou.preferredNodeType("Vop/suboutput")
+        mock_hou.preferredNodeType(f"Sop/{base}")
     with pytest.raises(LookupError, match=refresh):
-        mock_hou.nodeTypeCategories()["Vop"].nodeType("suboutput")
+        mock_hou.nodeTypeCategories()["Sop"].nodeType(own)
 
 
 def test_an_alias_of_a_type_the_table_lacks_names_its_refresh(mock_hou: MockHouModule) -> None:
@@ -969,3 +997,123 @@ def test_a_types_namespace_order_and_aliases_are_houdinis_registry(
         ("v_mountain",),
         (),
     )
+
+
+def test_a_created_karma_holds_the_nodes_its_definition_builds(mock_hou: MockHouModule) -> None:
+    """Houdini 22.0.466: a fresh /out karma holds an unlocked lopnet of 39 nodes and a
+    rop_usdrender, 41 nodes below it; one null of the lopnet displays, the
+    eight old sceneimports are bypassed."""
+    karma = mock_hou.node("/out").createNode("karma")
+    lopnet = mock_hou.node(f"{karma.path()}/lopnet")
+
+    assert [child.type().name() for child in karma.children()] == ["lopnet", "usdrender"]
+    assert (len(karma.allSubChildren()), len(lopnet.children())) == (41, 39)
+    assert sum(child.isDisplayFlagSet() for child in lopnet.children()) == 1
+    assert sum(child.isBypassed() for child in lopnet.children()) == 8
+
+
+def test_a_bare_lopnet_and_subnet_hold_what_their_types_build_not_a_parents_instance(
+    mock_hou: MockHouModule,
+) -> None:
+    """The karma's lopnet holds 39 nodes and a light's cone_light subnet 5, where a
+    lopnet or Sop subnet made alone holds none."""
+    mock_hou.node("/out").createNode("karma")
+    light = mock_hou.node("/obj").createNode("light")
+
+    lopnet = mock_hou.node("/out").createNode("lopnet")
+    subnet = mock_hou.node("/obj").createNode("geo").createNode("subnet")
+
+    assert (lopnet.children(), subnet.children()) == ((), ())
+    assert len(light.allSubChildren()) == 28
+
+
+def test_a_foreach_holds_an_each_wired_from_its_indirect_input(mock_hou: MockHouModule) -> None:
+    foreach = mock_hou.node("/obj").createNode("geo").createNode("foreach")
+    (each,) = foreach.children()
+
+    (connection,) = each.inputConnections()
+
+    assert each.type().name() == "each"
+    assert connection.inputItem() is foreach.indirectInputs()[0]
+    assert (connection.inputIndex(), connection.inputItemOutputIndex()) == (0, 0)
+
+
+def test_a_cam_displays_the_sop_houdini_displays(mock_hou: MockHouModule) -> None:
+    cam = mock_hou.node("/obj").createNode("cam")
+
+    assert [child.name() for child in cam.children()] == ["camOrigin", "file1", "xform1"]
+    assert cam.displayNode().name() == "xform1"
+
+
+def test_a_locked_asset_and_any_network_inside_one_refuses_a_node_made_in_it(
+    mock_hou: MockHouModule,
+) -> None:
+    karma = mock_hou.node("/out").createNode("karma")
+    lopnet = mock_hou.node(f"{karma.path()}/lopnet")
+    count = len(karma.allSubChildren())
+
+    for network in (karma, lopnet):
+        with pytest.raises(
+            Exception, match=r"hou\.PermissionError: Cannot create a node inside a locked asset"
+        ):
+            network.createNode("merge")
+    with pytest.raises(Exception, match=r"hou\.PermissionError"):
+        mock_hou.add_node(
+            MockHouNode(path=f"{lopnet.path()}/extra", name="extra", node_type="merge")
+        )
+    assert len(karma.allSubChildren()) == count
+
+
+def test_a_destroyed_node_added_back_under_a_locked_network_is_refused(
+    mock_hou: MockHouModule,
+) -> None:
+    mountain = mock_hou.node("/obj").createNode("geo").createNode("mountain")
+    box = mock_hou.node("/obj").createNode("geo").createNode("box", "box1")
+    box.destroy()
+
+    with pytest.raises(Exception, match=r"hou\.PermissionError"):
+        mountain.attach(box)
+
+
+def test_a_destroyed_karma_added_back_holds_its_contents_and_wires(
+    mock_hou: MockHouModule,
+) -> None:
+    karma = mock_hou.node("/out").createNode("karma")
+    lopnet = mock_hou.node(f"{karma.path()}/lopnet")
+    wires = sorted(
+        (node.path(), connection.inputIndex(), connection.inputItem().path())
+        for node in lopnet.children()
+        for connection in node.inputConnections()
+    )
+    assert wires
+
+    karma.destroy()
+    mock_hou.add_node(karma)
+
+    assert len(mock_hou.node(karma.path()).allSubChildren()) == 41
+    assert (
+        sorted(
+            (node.path(), connection.inputIndex(), connection.inputItem().path())
+            for node in mock_hou.node(lopnet.path()).children()
+            for connection in node.inputConnections()
+        )
+        == wires
+    )
+
+
+def test_a_second_suboutput_is_refused_in_a_created_vop_subnet(mock_hou: MockHouModule) -> None:
+    """A Vop subnet holds suboutput1 and subinput1 when made, so Houdini refuses a first
+    suboutput there."""
+    subnet = mock_hou.node("/mat").createNode("subnet")
+
+    assert [child.type().name() for child in subnet.children()] == ["suboutput", "subinput"]
+    with pytest.raises(Exception, match=INVALID_TYPE):
+        subnet.createNode("suboutput")
+
+
+def test_the_root_holds_the_nine_contexts_a_fresh_scene_gives_it(mock_hou: MockHouModule) -> None:
+    root = mock_hou.node("/")
+
+    assert [child.name() for child in root.children()] == list(CATEGORIES["Manager"].types)
+    assert len(root.children()) == 9
+    assert all(child.parent() is root for child in root.children())

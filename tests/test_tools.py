@@ -1785,8 +1785,9 @@ class TestListChildren:
             MockHouNode(path="/obj/dopnet1", name="dopnet1", node_type="dopnet", children=[child])
         )
         result = list_children("/obj/dopnet1", compact=True, host="localhost", port=18811)
-        assert result["returned"] == 1
-        assert result["children"][0]["flags"][1] == "-"
+        # beside the file_output Houdini builds in a dopnet
+        flags = {child["name"]: child["flags"] for child in result["children"]}
+        assert (result["returned"], flags["solver"][1]) == (2, "-")
 
     def test_list_children_compact_preserves_pagination_and_cap(self, mock_connection):
         from houdini_mcp.tools import list_children
@@ -2014,9 +2015,26 @@ class TestFindNodes:
         assert result2.get("offset") == 10
 
         # Verify different nodes returned
-        names1 = {m["name"] for m in result1["matches"]}
-        names2 = {m["name"] for m in result2["matches"]}
-        assert len(names1 & names2) == 0  # No overlap
+        # by path: each null holds a control1 and a point1 of its own
+        paths1 = {m["path"] for m in result1["matches"]}
+        paths2 = {m["path"] for m in result2["matches"]}
+        assert len(paths1 & paths2) == 0  # No overlap
+
+    def test_find_nodes_meets_the_nodes_a_locked_asset_builds(self, mock_connection):
+        """Houdini 22.0.466: under a fresh /out karma, 17 sceneimports (both versions)
+        and 7 editproperties, which find_nodes descends into the locked asset to find."""
+        from houdini_mcp.tools import find_nodes
+
+        mock_connection.node("/out").createNode("karma")
+
+        found = {
+            type_name: find_nodes("/out", "*", type_name, limit=100, host="localhost", port=18811)[
+                "returned"
+            ]
+            for type_name in ("sceneimport", "editproperties")
+        }
+
+        assert found == {"sceneimport": 17, "editproperties": 7}
 
     def test_find_nodes_pattern_cannot_inject_code(self, mock_connection):
         """A pattern shaped like Python source is matched as text, never executed.
