@@ -14,10 +14,10 @@ from typing import Any
 import pytest
 
 from tests.conftest import (
+    PERMISSION_ERROR,
     HouInvalidInput,
     HouPermissionError,
     MockHouModule,
-    PERMISSION_ERROR,
     MockHouNode,
     raised_inside_houdini,
 )

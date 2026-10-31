@@ -1086,7 +1086,7 @@ def test_a_node_in_a_locked_asset_is_refused_each_edit_houdini_refuses(
         r"specified permissions"
     )
 
-    for node in lopnet.children()[:2]:
+    for node in nodes:
         with pytest.raises(Exception, match=r"hou\.PermissionError: Cannot delete a node inside"):
             node.destroy()
         with pytest.raises(Exception, match=permission):
