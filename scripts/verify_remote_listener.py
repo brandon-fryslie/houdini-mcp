@@ -48,7 +48,7 @@ from houdini_mcp.settings import InvalidSetting, houdini_target, rpc_token, sett
 
 
 def _tcp_probe(host: str, port: int, timeout: float = 3.0) -> bool:
-    connect_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    connect_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host  # nosec B104 - connects, never binds
     try:
         with socket.create_connection((connect_host, port), timeout=timeout):
             return True

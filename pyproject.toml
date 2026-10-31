@@ -181,14 +181,11 @@ markers = [
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["houdini_mcp"]
+# Every gate covers the same roots: the server, the plugin tree, scripts (tests/test_gates.py)
+source = ["houdini_mcp", "houdini_plugin", "scripts"]
 branch = true
-omit = [
-    "*/tests/*",
-    "*/__main__.py",
-    "*/server.py",  # FastMCP registration - tested via integration tests
-    "*/tools/_common.py",  # Shared utilities - will be used in Phase 2
-]
+# The tests run scripts and programs as Python processes of their own; measure those too
+patch = ["subprocess"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -198,21 +195,20 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
 ]
-# CI runs the unit subset only (`-m 'not integration'`, since integration
-# tests need a live Houdini), which currently covers ~55%. Floor is set below
-# that to catch real regressions without failing on the integration gap; raise
-# it as unit coverage grows.
-fail_under = 50
+# CI measures the unit subset only (`-m 'not integration'`: the live tests need a
+# Houdini) on Linux, where it covers 93.5% to 93.8%; macOS covers 94.7% because the
+# App Nap tests run there. The floor sits under the Linux figure. pytest-cov compares
+# the total rounded to a whole number but prints it unrounded.
+fail_under = 93
 show_missing = true
 
 # Mypy configuration
 [tool.mypy]
 python_version = "3.11"
-files = ["houdini_mcp", "houdini_plugin/houdini_mcp/python", "scripts"]
+files = ["houdini_mcp", "houdini_plugin", "scripts"]
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
-no_strict_optional = true
 exclude = ["tests/", "build/"]
 # houdini_mcp_handshake and houdini_mcp_read ship from the plugin tree; the editable
 # install reaches them through an import hook mypy cannot follow.

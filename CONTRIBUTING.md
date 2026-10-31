@@ -35,7 +35,7 @@ uv run pre-commit install --hook-type pre-push
 uv run pytest
 
 # Run with coverage
-uv run pytest --cov=houdini_mcp --cov-report=term-missing
+uv run pytest --cov --cov-report=term-missing
 
 # Run specific test file
 uv run pytest tests/test_connection.py
@@ -60,7 +60,7 @@ uv run ruff check --fix .
 uv run mypy
 
 # Security scan
-uv run bandit -r houdini_mcp/ -c pyproject.toml
+uv run pre-commit run bandit --all-files
 ```
 
 ### Pre-commit Hooks

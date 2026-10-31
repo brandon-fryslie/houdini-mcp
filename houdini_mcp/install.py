@@ -170,8 +170,10 @@ def _entry(servers: object) -> Entry | None:
     """[LAW:single-enforcer] The one reading of this server's entry in a table of servers;
     None for a shape no client writes."""
     entry = servers.get(SERVER_NAME, {}) if isinstance(servers, dict) else None
-    env = entry.get("env", {}) if isinstance(entry, dict) else None
-    url = entry.get("url") if isinstance(entry, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    env = entry.get("env", {})
+    url = entry.get("url")
     if not (
         isinstance(env, dict)
         and all(isinstance(value, str) for value in env.values())
