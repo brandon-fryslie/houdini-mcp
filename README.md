@@ -80,16 +80,18 @@ entry that points at a URL, as for [Docker](#docker-houdini-on-another-machine),
 as it is.
 
 To upgrade, run `uv tool upgrade houdini-mcp`, then `houdini-mcp install` again. To
-stay on one version, add a tag or commit to the URL:
-`uv tool install git+https://github.com/brandon-fryslie/houdini-mcp@<tag-or-commit>`.
+stay on one version, add a commit or a release tag to the URL (`v1.0.0` predates this
+installer):
+`uv tool install git+https://github.com/brandon-fryslie/houdini-mcp@<commit-or-tag>`.
 The installer prints the version and plugin build it set up. From a clone of this
 repository, `uv run houdini-mcp install` points Houdini and the clients at the clone, so
 your edits take effect at their next restart.
 
 ### Installing into one project
 
-To give one project its own locked version, and leave every client's own config alone,
-add the server to the project and register it there:
+To give one project its own locked version in Claude Code, and leave every client's
+own config alone, add the server to the project and register it there. In a folder with
+no `pyproject.toml`, run `uv init --bare` first.
 
 ```bash
 cd your-project
@@ -99,9 +101,12 @@ uv run houdini-mcp install --project
 
 `uv.lock` holds the commit. The installer adds a `houdini` entry to the project's
 `.mcp.json`, keeping the entries already there, and that entry runs the project's
-`.venv` by its absolute path, so run the command again on each machine and after moving
-the project. Claude Code asks you to approve a new `.mcp.json` server the first time it
-opens the project.
+`.venv` by its absolute path, so keep `.mcp.json` out of version control, and run the
+command again on each machine and after moving the project. Claude Code asks you to
+approve a new `.mcp.json` server the first time it opens the project. If the project
+already has a local-scope `houdini` entry, which Claude Code would run instead, the
+step fails and names the command that removes it. Other clients do not read
+`.mcp.json`: give them the `houdini` entry the installer prints.
 
 Houdini has no notion of a project, so the plugin step still applies to the whole
 machine: Houdini loads the build of the last install, and a project on another build is
@@ -397,8 +402,10 @@ tests that run against a live Houdini.
 ### Houdini imports another build of the houdini_mcp plugin
 - The server refuses to connect, naming the plugin directory Houdini imported and
   both builds. Replace that install with the plugin the server was built with
-  (`houdini-mcp install` from the server's install; for a server in Docker, from a
-  clone at the commit its image was built from), then restart Houdini. Two
+  (`houdini-mcp install` from the server's install;
+  `uv run houdini-mcp install --project` in a project with its own install; for a
+  server in Docker, from a clone at the commit its image was built from), then
+  restart Houdini. Two
   installs from different commits are different builds even when both state the
   same release
 - An older `houdini-mcp install` left in Houdini's preferences `packages`

@@ -451,13 +451,41 @@ STEPS = (
 )
 
 
+@dataclass(frozen=True)
+class ProjectConfig:
+    """A project's ``.mcp.json``, the file Claude Code reads a project's servers from."""
+
+    project: Path
+
+    def __call__(self, machine: Machine, server: ServerEntry) -> Outcome:
+        outcome = JsonConfig(lambda _machine: self.project, ".mcp.json")(machine, server)
+        path = _claude_config(machine)
+        earlier = registered(path, json.loads, "mcpServers")
+        if isinstance(earlier, Failed):
+            return earlier
+        projects = _projects(earlier.config, path)
+        if isinstance(projects, Failed):
+            return projects
+        # A local-scope entry runs over .mcp.json, so this project would keep running it.
+        if isinstance(outcome, Installed) and str(self.project) in {
+            *projects.local,
+            *projects.at_url,
+        }:
+            return Failed(
+                f"registered in {outcome.where}, but Claude Code runs this project's own "
+                f"local-scope {SERVER_NAME!r} instead. In {self.project}, run: "
+                f"claude mcp remove --scope local {SERVER_NAME}"
+            )
+        return outcome
+
+
 def in_project(project: Path) -> tuple[Step, ...]:
     """The steps that serve one project and leave every client's own config alone.
 
     The plugin is still Houdini's, for the whole machine: Houdini reads its packages
     directory with no project in view, so the last install's build is the one it loads.
     """
-    return (PLUGIN, Step("Project", JsonConfig(lambda _machine: project, ".mcp.json")))
+    return (PLUGIN, Step("Project", ProjectConfig(project)))
 
 
 def install(
@@ -486,7 +514,7 @@ def report(results: list[tuple[str, Outcome]], server: ServerEntry) -> tuple[str
         f"Version: {houdini_mcp_handshake.RELEASE}, plugin build {BUILD}",
         "",
         "Restart Houdini: the plugin starts its listener once the UI is up.",
-        "Restart each MCP client above to load the server.",
+        "Restart each MCP client to load the server.",
         f"Any other MCP client's {SERVER_NAME!r} entry: {json.dumps(server.as_json())}",
     ]
     failed = any(isinstance(outcome, Failed) for _, outcome in results)

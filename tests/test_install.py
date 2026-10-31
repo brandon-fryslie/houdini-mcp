@@ -316,9 +316,9 @@ def test_the_command_installs_this_interpreters_server(tmp_path: Path) -> None:
     assert (tmp_path / "pref" / "houdini22.0" / "packages" / "houdini_mcp.json").is_file()
 
 
-def _project_install(tmp_path: Path, project: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _project_install(tmp_path: Path, *project: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "houdini_mcp", "install", "--project", project],
+        [sys.executable, "-m", "houdini_mcp", "install", "--project", *project],
         env={
             "HOME": str(tmp_path / "home"),
             "PATH": str(tmp_path / "bin"),
@@ -338,7 +338,7 @@ def test_a_project_install_registers_in_the_project_and_in_no_client(tmp_path: P
     project.mkdir()
     (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
 
-    done = _project_install(tmp_path, ".", project)
+    done = _project_install(tmp_path, cwd=project)
 
     assert done.returncode == 0, done.stdout + done.stderr
     servers = json.loads((project / ".mcp.json").read_text())["mcpServers"]
@@ -348,8 +348,32 @@ def test_a_project_install_registers_in_the_project_and_in_no_client(tmp_path: P
     assert not (claude_bin / "calls").exists()
 
 
+def test_a_project_named_from_elsewhere_is_the_one_registered(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    done = _project_install(tmp_path, str(project), cwd=tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (project / ".mcp.json").is_file()
+    assert not (tmp_path / ".mcp.json").exists()
+
+
+def test_a_local_scope_entry_that_runs_over_the_project_fails_the_step(tmp_path: Path) -> None:
+    local = {"mcpServers": {"houdini": {"command": "old", "args": []}}}
+    machine = _claude_json(tmp_path, {"projects": {"/project": local}})
+    project = tmp_path / "project"
+
+    outcome = dict(install(machine, SERVER, in_project(project)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert "claude mcp remove --scope local houdini" in outcome.why
+    # The project is registered: removing the local entry is all that is left to do.
+    assert "houdini" in json.loads((project / ".mcp.json").read_text())["mcpServers"]
+
+
 def test_a_project_that_is_not_a_folder_stops_the_command(tmp_path: Path) -> None:
-    done = _project_install(tmp_path, "missing", tmp_path)
+    done = _project_install(tmp_path, "missing", cwd=tmp_path)
 
     assert done.returncode == 2
     assert "is not a folder" in done.stderr
