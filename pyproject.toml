@@ -196,8 +196,10 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 # CI measures the unit subset only (`-m 'not integration'`: the live tests need a
-# Houdini); the floor sits just under what that subset covers.
-fail_under = 94
+# Houdini) on Linux, where it covers 93.5% to 93.8%; macOS covers 94.7% because the
+# App Nap tests run there. The floor sits under the Linux figure. pytest-cov compares
+# the total rounded to a whole number but prints it unrounded.
+fail_under = 93
 show_missing = true
 
 # Mypy configuration
