@@ -52,8 +52,7 @@ elif sys.argv[1:3] == ["mcp", "get"]:
     if os.path.exists("unanswered"):
         print("no answer", file=sys.stderr)
         sys.exit(1)
-    local = os.path.exists("local-scope")
-    print("  Scope: " + ("Local config (private)" if local else "Project config (shared)"))
+    print(open("answer").read() if os.path.exists("answer") else "  Scope: Project config")
 """
 
 
@@ -369,7 +368,7 @@ def test_a_local_scope_entry_that_runs_over_the_project_fails_the_step(tmp_path:
     _cli(tmp_path / "bin", "claude")
     project = tmp_path / "project"
     project.mkdir()
-    (project / "local-scope").write_text("")
+    (project / "answer").write_text("  Scope: Local config (private to you in this project)")
 
     outcome = dict(install(_machine(tmp_path), SERVER, in_project(project)))["Project"]
 
@@ -383,7 +382,7 @@ def test_a_kept_project_entry_that_a_local_scope_entry_runs_over_fails_the_step(
     tmp_path: Path,
 ) -> None:
     _cli(tmp_path / "bin", "claude")
-    (tmp_path / "local-scope").write_text("")
+    (tmp_path / "answer").write_text("  Scope: Local config (private to you in this project)")
     config = {"mcpServers": {"houdini": {"url": "http://docker:8000/mcp"}}}
     (tmp_path / ".mcp.json").write_text(json.dumps(config))
 
@@ -391,6 +390,35 @@ def test_a_kept_project_entry_that_a_local_scope_entry_runs_over_fails_the_step(
 
     assert isinstance(outcome, Failed)
     assert "kept its entry" in outcome.why
+
+
+@pytest.mark.parametrize(
+    ("answer", "remedy"),
+    [
+        ("  Status: ✘ Rejected", "claude mcp reset-project-choices"),
+        ("  Status: ⊘ Disabled for this project", "/mcp"),
+    ],
+)
+def test_a_project_entry_claude_code_will_not_run_fails_the_step(
+    tmp_path: Path, answer: str, remedy: str
+) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "answer").write_text(answer)
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Failed)
+    assert remedy in outcome.why
+
+
+def test_a_user_scope_entry_is_named_as_what_runs_until_approval(tmp_path: Path) -> None:
+    _cli(tmp_path / "bin", "claude")
+    (tmp_path / "answer").write_text("  Scope: User config (available in all your projects)")
+
+    outcome = dict(install(_machine(tmp_path), SERVER, in_project(tmp_path)))["Project"]
+
+    assert isinstance(outcome, Installed)
+    assert "until you approve" in outcome.where
 
 
 def test_a_claude_code_that_cannot_say_which_entry_runs_fails_the_step(tmp_path: Path) -> None:

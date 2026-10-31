@@ -458,8 +458,19 @@ STEPS = (
 )
 
 
-# How `claude mcp get` names a project's local scope (Claude Code 2.1.299).
-_LOCAL_SCOPE = "Scope: Local config"
+# What `claude mcp get` prints when a project's .mcp.json entry will not run, and what
+# the user does about it (Claude Code 2.1.299).
+_NOT_RUN = (
+    (
+        "Scope: Local config",
+        f"Claude Code runs a local-scope {SERVER_NAME!r} instead; "
+        f"run: claude mcp remove --scope local {SERVER_NAME}",
+    ),
+    ("Status: ✘ Rejected", "it was declined; run: claude mcp reset-project-choices"),
+    ("Status: ⊘ Disabled", "it is disabled here; enable it with /mcp in Claude Code"),
+)
+# An entry pending approval and a declined one print alike beside a user-scope entry.
+_USER_SCOPE = "Scope: User config"
 
 
 @dataclass(frozen=True)
@@ -480,10 +491,13 @@ class ProjectConfig:
             return Failed(f"{_described(outcome)}, but claude mcp get: {running.why}")
         if running.returncode != 0:
             return Failed(f"{_described(outcome)}, but claude mcp get: {_said(running)}")
-        if _LOCAL_SCOPE in running.stdout:
-            return Failed(
-                f"{_described(outcome)}, but Claude Code runs a local-scope {SERVER_NAME!r} "
-                f"instead. In {self.project}, run: claude mcp remove --scope local {SERVER_NAME}"
+        for line, remedy in _NOT_RUN:
+            if line in running.stdout:
+                return Failed(f"{_described(outcome)}, but {remedy}, in {self.project}")
+        if isinstance(outcome, Installed) and _USER_SCOPE in running.stdout:
+            return Installed(
+                f"{outcome.where} (Claude Code runs your user-scope entry until you approve "
+                "this one; if you declined it, run: claude mcp reset-project-choices)"
             )
         return outcome
 
