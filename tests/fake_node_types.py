@@ -381,6 +381,16 @@ class _Reader:
             name: {own for order in registry["namespace_orders"] for own in order}
             for name, registry in self._registries.items()
         }
+        # [LAW:no-silent-failure] a type named for a category with a registry that
+        # Houdini does not register is a typo, not a type to read
+        unregistered = sorted(
+            f"{name}/{own}"
+            for name, types in ((n, table[n]["types"]) for n in table)
+            for own in types
+            if self._registered[name] and own not in self._registered[name]
+        )
+        if unregistered:
+            raise LookupError(f"Houdini registers no type {unregistered}")
         # the types of each category the fake has; none of one the table holds no entry for
         self._types: dict[str, dict[str, Any]] = {
             name: table[name]["types"] if name in table else {} for name in self._registries

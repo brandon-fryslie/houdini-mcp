@@ -484,6 +484,16 @@ def test_the_reader_refuses_a_category_houdini_does_not_have(mock_hou: MockHouMo
         read_node_types(mock_hou, table)
 
 
+def test_the_reader_refuses_a_type_houdini_does_not_register(mock_hou: MockHouModule) -> None:
+    """A misspelt type to add (``Vop/subouput``) is named as one Houdini registers none
+    of, not reported as a node the scene could not make."""
+    table = load_table()
+    table["Vop"]["types"]["subouput"] = {"parms": {}}
+
+    with pytest.raises(LookupError, match=r"registers no type \['Vop/subouput'\]"):
+        read_node_types(mock_hou, table)
+
+
 def test_the_table_holds_create_node_answers_for_an_unlocked_context_root_alone() -> None:
     table = load_table()
     del table["Manager"]["types"]["mat"]["create_node"]
